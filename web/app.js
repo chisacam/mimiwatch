@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
-  backend: "local-m2m100", asr: "local-hayamimi", refine: true,
+  backend: "local-m2m100", asr: "local-hayamimi", refine: true, delay: 0,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   live: null,          // { id, es, byId } while a broadcast is running
 };
@@ -64,11 +64,31 @@ function cueAt(t) {
   // until the next one takes over, which is how live captioning reads
   // anyway. The offset slider still shifts the whole track.
   if (isLiveDoc()) {
-    // Media time is the wrong axis here. A refined line carries the START of
-    // the group it absorbed, which can be half a minute behind the player,
-    // so ordering by timestamp would bury the line that just arrived. What
-    // the viewer wants is the most recent thing recognised, held until the
-    // next one lands or the speaker falls silent.
+    // 지연 시청을 켜면 자막도 그만큼 붙잡아 둡니다.
+    //
+    // 미디어 시각으로 맞추려 했다가 접었습니다. 유튜브 라이브의
+    // getCurrentTime()은 DVR 창 안의 초를 돌려주는데 우리 media_base는 방송
+    // 시작부터의 절대 위치라, 두 값이 같은 축에 있지 않습니다.
+    //
+    // 축을 맞출 필요는 없습니다. 전사는 라이브 최전선에서 돌고 있으므로,
+    // 방금 도착한 줄은 지연만큼 뒤에 있는 시청자가 곧 듣게 될 말입니다.
+    // 도착 시각에 지연을 더해 그때 띄우면 제자리에 붙습니다.
+    //
+    // 정제본이 확정본을 밀어내는 것도 표시 전에 끝납니다. 거친 줄이 떴다가
+    // 눈앞에서 바뀌는 일이 없어지는 것이 이 옵션의 진짜 이득입니다.
+    if (state.delay > 0) {
+      const now = Date.now();
+      let i = -1;
+      for (let k = 0; k < c.length; k++) {
+        if ((now - (c[k].arrived || 0)) / 1000 >= state.delay - state.offset) i = k;
+      }
+      if (i < 0) return -1;
+      const age = (now - (c[i].arrived || 0)) / 1000 - state.delay;
+      return age > 20 ? -1 : i;
+    }
+    // 지연이 꺼져 있으면 자막은 언제나 영상보다 늦게 도착합니다. 시각으로
+    // 맞추면 아무것도 보이지 않으므로, 가장 최근에 알아들은 것을 다음 줄이
+    // 올 때까지 붙잡아 둡니다.
     const i = c.length - 1;
     const age = (Date.now() - (c[i].arrived || 0)) / 1000;
     return age > 20 ? -1 : i;
@@ -347,6 +367,21 @@ function bind() {
   $("pos").addEventListener("input", e => { $("overlay").style.bottom = e.target.value + "%"; persist(); });
   $("show-prev").addEventListener("change", e => { state.showPrev = e.target.checked; persist(); renderCue(); });
   $("follow").addEventListener("change", e => { state.follow = e.target.checked; });
+  // 영상을 라이브 최전선에서 뒤로 물립니다. 전사는 최전선에서 계속 돌고
+  // 있으므로, 시청자가 늦게 볼수록 그 지점의 자막은 이미 정제까지 끝나
+  // 기다리고 있습니다. 지연을 켜면 자막을 도착 순서가 아니라 미디어 시각으로
+  // 맞출 수 있게 되는 것이 진짜 이득입니다.
+  $("delay").addEventListener("input", e => {
+    const want = +e.target.value;
+    const delta = want - state.delay;
+    state.delay = want;
+    $("delay-val").textContent = want ? `-${want}초` : "끔";
+    persist();
+    if (delta && state.player && state.player.seekTo && state.ready) {
+      try { state.player.seekTo(Math.max(state.player.getCurrentTime() - delta, 0), true); }
+      catch { /* 라이브 DVR 창 밖이면 무시합니다 */ }
+    }
+  });
   $("offset").addEventListener("input", e => {
     state.offset = +e.target.value;
     $("offset-val").textContent = state.offset.toFixed(1) + "s";
@@ -414,6 +449,7 @@ function persist() {
     size: +$("size").value, dim: +$("dim").value,
     pos: +$("pos").value, showPrev: $("show-prev").checked,
     offset: +$("offset").value, viewerLang: $("viewer-lang").value,
+    delay: state.delay,
     panelHidden: state.panelHidden, backend: state.backend,
     profile: (document.querySelector('#add-form select[name="profile"]') || {}).value,
     asr: state.asr, refine: state.refine,
@@ -427,6 +463,10 @@ function restore() {
   if (p.pos != null) $("pos").value = p.pos;
   if (p.showPrev != null) $("show-prev").checked = p.showPrev;
   if (p.offset != null) { $("offset").value = p.offset; state.offset = p.offset; }
+  if (p.delay != null) {
+    state.delay = p.delay; $("delay").value = p.delay;
+    $("delay-val").textContent = p.delay ? `-${p.delay}초` : "끔";
+  }
   state.showPrev = $("show-prev").checked;
   applySize(+$("size").value);
   document.documentElement.style.setProperty("--cue-bg", (+$("dim").value / 100).toFixed(2));
@@ -816,6 +856,22 @@ function askLiveRestart() {
   box.hidden = false;
 }
 
+/* 라이브 최전선에서 seconds만큼 뒤로 물립니다. 전사는 최전선에서 계속
+ * 돌고 있으므로, 물린 만큼이 곧 자막을 다듬을 여유가 됩니다. */
+function applyDelay(seconds) {
+  let tries = 0;
+  const seek = () => {
+    if (!state.player || !state.ready) {
+      if (++tries < 40) setTimeout(seek, 250);
+      return;
+    }
+    try {
+      state.player.seekTo(Math.max(state.player.getCurrentTime() - seconds, 0), true);
+    } catch { /* DVR 창을 벗어나면 무시합니다 */ }
+  };
+  seek();
+}
+
 /* ---------- live ---------- */
 /* 서버가 라이브 세션과 그 자막을 SQLite에 남기므로, 세션은 탭보다 오래 삽니다.
  * 상태 이름이 화면에 그대로 나오던 자리에 사람이 읽을 말을 붙입니다. */
@@ -854,7 +910,8 @@ async function startLive(url, lang, probe) {
   $("job").hidden = true;      // a stale re-translation box is not this session's
   state.jobId = null;
   $("live-badge").hidden = false;
-  $("offset-wrap").style.display = "flex";   // live needs the nudge
+  $("offset-wrap").style.display = "flex";
+  $("delay-wrap").style.display = "flex";   // live needs the nudge
   await attachLive(res.id, probe.id);
 }
 
@@ -890,6 +947,7 @@ async function resumeLive(sessionId) {
   state.jobId = null;
   $("live-badge").hidden = !running;
   $("offset-wrap").style.display = "flex";
+  $("delay-wrap").style.display = "flex";
   await attachLive(st.id, st.video_id);
 }
 
@@ -897,6 +955,7 @@ async function attachLive(sessionId, videoId) {
   // m3u8을 직접 넣은 세션에는 임베드할 영상이 없습니다. 그래도 스크립트 패널은
   // 읽을 수 있어야 하므로 플레이어만 건너뜁니다.
   if (videoId) await createPlayer(videoId);
+  if (videoId && state.delay > 0) applyDelay(state.delay);
   const es = new EventSource(`/api/live/events/${sessionId}`);
   state.live.es = es;
   es.onmessage = (ev) => {
@@ -1056,6 +1115,7 @@ function detachLive() {
   hideLiveNotice();
   $("live-badge").hidden = true;
   $("offset-wrap").style.display = "";
+  $("delay-wrap").style.display = "";
 }
 
 function stopLive() {
@@ -1069,7 +1129,8 @@ function stopLive() {
   }).catch(() => {});
   state.live = null;
   $("live-badge").hidden = true;
-  $("offset-wrap").style.display = "";   // nothing left to nudge
+  $("offset-wrap").style.display = "";
+  $("delay-wrap").style.display = "";   // nothing left to nudge
   markLiveStopped();
   const el = $("lang-status");
   el.className = "status";

@@ -68,7 +68,8 @@ def read_wav(path: str) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def transcribe(samples: np.ndarray, lang: str | None, on_progress=None) -> list[dict]:
+def transcribe(samples: np.ndarray, lang: str | None, on_progress=None,
+               speakers: bool = False) -> list[dict]:
     """VAD-segment the whole file and decode each segment.
 
     Segment.start is a sample index, which is exactly the media timestamp the
@@ -77,6 +78,13 @@ def transcribe(samples: np.ndarray, lang: str | None, on_progress=None) -> list[
     """
     asr = RoutedASR(threads=4, forced_lang=lang)
     vad = build_vad(min_silence=0.35, max_speech=12.0)
+    # CAM++ needs enough voice in a segment to place a speaker. The 12s
+    # splits here give it that; the live path splits at 3-4s to keep up with
+    # a talker and cannot, which is why tagging lives on this side.
+    labeler = None
+    if speakers:
+        from speaker_id import SpeakerLabeler
+        labeler = SpeakerLabeler()
     cues: list[dict] = []
     total = len(samples)
 
@@ -90,8 +98,11 @@ def transcribe(samples: np.ndarray, lang: str | None, on_progress=None) -> list[
             res = asr.transcribe(buf, SAMPLE_RATE, speech_s=len(buf) / SAMPLE_RATE)
             text = res["text"].strip()
             if text:
-                cues.append({"start": round(start_s, 3), "end": round(end_s, 3),
-                             "lang": res["lang"], "text": text})
+                cue = {"start": round(start_s, 3), "end": round(end_s, 3),
+                       "lang": res["lang"], "text": text}
+                if labeler is not None:
+                    cue["speaker"] = labeler.label(buf, SAMPLE_RATE)
+                cues.append(cue)
 
     for i in range(0, total, CHUNK):
         vad.accept_waveform(samples[i:i + CHUNK])
@@ -110,6 +121,8 @@ def main():
     ap.add_argument("--viewer-lang", default="ko",
                     help="the viewer's language; translation is skipped when it matches")
     ap.add_argument("--no-translate", action="store_true")
+    ap.add_argument("--speakers", action="store_true",
+                    help="label each cue with a speaker id (S1, S2, ...)")
     ap.add_argument("--outdir", default="data")
     args = ap.parse_args()
 
@@ -126,7 +139,7 @@ def main():
     print(f"[vod] transcribing {audio_s:.0f}s of audio...", file=sys.stderr)
 
     t0 = time.time()
-    cues = transcribe(samples, args.lang,
+    cues = transcribe(samples, args.lang, speakers=args.speakers,
                       on_progress=lambda p: print(f"\r[vod] {p*100:5.1f}%",
                                                   end="", file=sys.stderr, flush=True))
     took = time.time() - t0

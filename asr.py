@@ -47,9 +47,10 @@ class LocalHayamimi(ASRBackend):
 
     name = "local-hayamimi"
 
-    def transcribe(self, samples, lang, on_progress=None):
+    def transcribe(self, samples, lang, on_progress=None, speakers=False):
         import transcribe_vod as vod
-        return vod.transcribe(samples, lang, on_progress=on_progress)
+        return vod.transcribe(samples, lang, on_progress=on_progress,
+                              speakers=speakers)
 
 
 class OpenAICompatibleASR(ASRBackend):

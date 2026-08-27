@@ -434,8 +434,12 @@ function renderBackendPicker() {
   state.backends.forEach(b => {
     const o = document.createElement("option");
     o.value = b.id;
+    // "(미번역)" means "this backend has not run over this file yet", which
+    // is a statement about a finished transcript. A live session translates
+    // as it goes, so the label would be wrong the moment the first line
+    // lands.
     const done = state.doc && (state.doc.backends_done || []).includes(b.id);
-    o.textContent = b.label + (state.doc && !done ? " (미번역)" : "");
+    o.textContent = b.label + (state.doc && !state.live && !done ? " (미번역)" : "");
     pick.appendChild(o);
   });
   pick.value = state.backend;
@@ -447,6 +451,17 @@ function renderBackendPicker() {
 async function selectBackend(id) {
   state.backend = id;
   persist();
+  if (state.live) {
+    // Nothing to re-translate: lines already on screen keep what they got,
+    // and everything from here uses the new backend.
+    state.doc.backends_done = [...new Set([...(state.doc.backends_done || []), id])];
+    await fetch("/api/live/backend", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: state.live.id, backend: id }),
+    }).catch(() => {});
+    renderBackendPicker();
+    return;
+  }
   const done = (state.doc.backends_done || []).includes(id);
   if (!done && state.doc.source_lang !== state.doc.viewer_lang) {
     await runTranslateJob(state.doc.id, id);
@@ -527,6 +542,7 @@ async function submitAdd(e) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url, lang: f.lang.value || null, asr: state.asr,
+      speakers: f.speakers.checked,
       viewer_lang: $("viewer-lang").value, backend: state.backend,
     }),
   })).json();
@@ -737,7 +753,6 @@ async function startLive(url, lang, probe) {
     body: JSON.stringify({
       url, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
       profile: document.querySelector('#add-form select[name="profile"]').value,
-      speakers: document.querySelector('#add-form input[name="speakers"]').checked,
     }),
   })).json();
   if (res.error) { jobError(res.error); return; }
@@ -755,6 +770,8 @@ async function startLive(url, lang, probe) {
   renderBackendPicker();
   applyModeForDoc();
   addLiveToPicker(probe);
+  $("job").hidden = true;      // a stale re-translation box is not this session's
+  state.jobId = null;
   $("live-badge").hidden = false;
   $("offset-wrap").style.display = "flex";   // live needs the nudge
   await createPlayer(probe.id);

@@ -72,10 +72,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._sse(sess)
 
         if path.startswith("/api/live/status/"):
-            sess = live.get(os.path.basename(path))
-            if sess is None:
+            st = live.status_of(os.path.basename(path))
+            if st is None:
                 return self._json({"error": "no such session"}, 404)
-            return self._json(sess.status())
+            return self._json(st)
 
         if path.startswith("/api/job/"):
             st = jobs.job_status(os.path.basename(path))
@@ -157,8 +157,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(live.start(url, body.get("lang") or None,
                                          body.get("viewer_lang") or "ko",
                                          body.get("backend") or "local-m2m100",
-                                         body.get("profile") or "broadcast",
-                                         bool(body.get("speakers"))))
+                                         body.get("profile") or "broadcast"))
+
+        if path == "/api/live/backend":
+            return self._json(live.set_backend(body.get("id", ""),
+                                               body.get("backend", "")))
 
         if path == "/api/live/stop":
             return self._json(live.stop(body.get("id", "")))
@@ -175,7 +178,8 @@ class Handler(BaseHTTPRequestHandler):
                 url, body.get("lang") or None,
                 body.get("viewer_lang") or "ko",
                 body.get("backend") or "local-m2m100",
-                body.get("asr") or "local-hayamimi"))
+                body.get("asr") or "local-hayamimi",
+                bool(body.get("speakers"))))
 
         if path == "/api/asr-backends":
             cfg = jobs.load_config()

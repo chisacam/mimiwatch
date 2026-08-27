@@ -48,7 +48,7 @@ CHUNK = 1600            # 0.1s per VAD feed
 # line -- which is exactly the "they are talking but no subtitle appears"
 # complaint. Splitting sooner produces more, shorter, more accurate finals;
 # the refine pass merges them back for the reading panel.
-LIVE_MAX_SPEECH = 6.0
+LIVE_MAX_SPEECH = 4.0
 LIVE_MIN_SILENCE = 0.30
 
 # How aggressively to force-split, by what the audio actually sounds like.
@@ -59,14 +59,18 @@ LIVE_MIN_SILENCE = 0.30
 PROFILES = {
     "talk":      {"max_speech": 12.0, "min_silence": 0.35,
                   "label": "발표·강연 (한 사람이 문장 사이에 쉼)"},
-    "broadcast": {"max_speech": 6.0,  "min_silence": 0.30,
+    "interview": {"max_speech": 6.0,  "min_silence": 0.35,
+                  "label": "대담·인터뷰 (번갈아 말하고 쉼이 있음)"},
+    "broadcast": {"max_speech": 4.0,  "min_silence": 0.30,
                   "label": "일반 방송 (한두 사람, 쉼이 짧음)"},
-    "collab":    {"max_speech": 4.0,  "min_silence": 0.25,
+    "collab":    {"max_speech": 3.0,  "min_silence": 0.25,
                   "label": "합방·다인 대화 (발화가 겹침)"},
 }
 
 _sessions: dict[str, "LiveSession"] = {}
+_finished: dict[str, dict] = {}     # id -> last status, so the UI can still ask
 _lock = threading.Lock()
+MAX_FINISHED = 20
 
 
 def resolve_audio(url: str) -> tuple[str, dict]:
@@ -162,8 +166,7 @@ class Sink:
 
 class LiveSession:
     def __init__(self, url: str, lang: str | None, viewer_lang: str,
-                 backend_id: str, profile: str = "broadcast",
-                 speakers: bool = False):
+                 backend_id: str, profile: str = "broadcast"):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         self.lang = lang
@@ -173,7 +176,6 @@ class LiveSession:
         self.profile = profile if profile in PROFILES else "broadcast"
         self.max_speech = prof["max_speech"]
         self.min_silence = prof["min_silence"]
-        self.speakers = speakers
         self.state = "starting"
         self.error: str | None = None
         self.title = ""
@@ -187,6 +189,8 @@ class LiveSession:
         self._subs: list[queue.Queue] = []
         self._stop = threading.Event()
         self._ff: subprocess.Popen | None = None
+        self._asr = None            # released on stop; see _release()
+        self._tr = None
         # Refine replaces the final that covered the same speech. Matching on
         # the text hayamimi already emitted is enough here because a refined
         # group repeats its members' words.
@@ -217,7 +221,6 @@ class LiveSession:
                 "backend": self.backend_id,
                 "media_base": round(self.media_base, 2),
                 "profile": self.profile, "max_speech": self.max_speech,
-                "speakers": self.speakers,
                 "window_s": round(self.window_s, 1),
                 "audio_s": round(self.audio_s, 1),
                 "elapsed": round(time.time() - self.started, 1),
@@ -282,6 +285,24 @@ class LiveSession:
         if self._ff:
             self._ff.terminate()
 
+    def _release(self):
+        """Drop the models this session loaded.
+
+        Each session builds its own RoutedASR and translator -- roughly 3GB
+        resident once the Japanese recogniser and M2M-100 are in. Holding a
+        finished session in the registry kept all of that alive: seven
+        sessions in one afternoon reached 23GB.
+        """
+        self._asr = None
+        self._tr = None
+        self._recent.clear()
+        if self._ff:
+            try:
+                self._ff.kill()
+            except Exception:
+                pass
+            self._ff = None
+
     def _chunks(self):
         assert self._ff and self._ff.stdout
         need = CHUNK * 2
@@ -330,15 +351,13 @@ class LiveSession:
                         spec = b
             self._tr = mw_translate.build(spec)
 
-            labeler = None
-            if self.speakers:
-                # CAM++ embeddings tag who is talking. It cannot separate two
-                # people speaking at once -- nothing here can -- but it does
-                # tell the reader that the line changed hands.
-                from speaker_id import SpeakerLabeler
-                labeler = SpeakerLabeler()
-
-            asr = RoutedASR(threads=4, forced_lang=self.lang)
+            # Speaker tags are a recorded-video feature. CAM++ needs enough
+            # voice in one segment to place it, and live splits at 3-4s to
+            # keep up with a talker who rarely finishes a long sentence: in
+            # 70 seconds that produced six speaker ids on a stream that did
+            # not have six people talking. A label that invents speakers is
+            # worse than no label.
+            asr = self._asr = RoutedASR(threads=4, forced_lang=self.lang)
             vad = build_vad(min_silence=self.min_silence,
                             max_speech=self.max_speech)
             sink = Sink(self)
@@ -359,28 +378,76 @@ class LiveSession:
             self.state = "running"
             self.emit({"type": "status", **self.status()})
             run_stream(self._chunks(), vad, SAMPLE_RATE, asr, SessionStats(),
-                       printer, refiner, history, speaker_labeler=labeler)
+                       printer, refiner, history)
             self.state = "stopped"
             self.emit({"type": "status", **self.status()})
         except Exception as exc:
             self.state = "error"
             self.error = str(exc)[:300]
             self.emit({"type": "status", **self.status()})
+        finally:
+            del asr, vad, printer, history, refiner
+            self._release()
+            _retire(self.id)
 
 
 def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
-          profile: str = "broadcast", speakers: bool = False) -> dict:
-    s = LiveSession(url, lang, viewer_lang, backend_id,
-                    profile=profile, speakers=speakers)
+          profile: str = "broadcast") -> dict:
+    # One viewer watches one broadcast. Leaving the previous session running
+    # would keep a second copy of every model resident for nothing.
+    for old_id in list(_sessions):
+        old = get(old_id)
+        if old is not None:
+            old.stop()
+
+    s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile)
     with _lock:
         _sessions[s.id] = s
     s.start()
     return {"id": s.id}
 
 
+def _retire(session_id: str):
+    """Move a finished session out of the live registry, keeping only its
+    final status so a late poll still gets an answer instead of a 404."""
+    with _lock:
+        s = _sessions.pop(session_id, None)
+        if s is not None:
+            _finished[session_id] = s.status()
+            for old in list(_finished)[:-MAX_FINISHED]:
+                _finished.pop(old, None)
+
+
 def get(session_id: str) -> LiveSession | None:
     with _lock:
         return _sessions.get(session_id)
+
+
+def status_of(session_id: str) -> dict | None:
+    s = get(session_id)
+    if s is not None:
+        return s.status()
+    with _lock:
+        return _finished.get(session_id)
+
+
+def set_backend(session_id: str, backend_id: str) -> dict:
+    """Swap the translator mid-session. Lines already published keep the text
+    they were given; everything after this uses the new backend."""
+    s = get(session_id)
+    if not s:
+        return {"error": "no such session"}
+    spec = None
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "backends.json"), encoding="utf-8") as f:
+        for b in json.load(f)["backends"]:
+            if b["id"] == backend_id:
+                spec = b
+    if spec is None:
+        return {"error": f"'{backend_id}' 백엔드가 없습니다"}
+    s._tr = mw_translate.build(spec)
+    s.backend_id = backend_id
+    return {"backend": backend_id}
 
 
 def stop(session_id: str) -> dict:

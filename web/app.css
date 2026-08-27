@@ -16,18 +16,21 @@ body{
 }
 
 .bar{
-  flex:none; display:flex; align-items:center; gap:1.1rem;
-  padding:.7rem 1.2rem; border-bottom:1px solid var(--line); background:var(--panel);
+  flex:none; display:flex; align-items:center; gap:.7rem; flex-wrap:nowrap;
+  padding:.55rem 1rem; border-bottom:1px solid var(--line); background:var(--panel);
+  overflow:hidden;   /* the video title yields before the controls wrap */
 }
+.bar > *{flex:none}
 .brand{font-weight:800; letter-spacing:-.02em; font-size:1.1rem}
 .brand em{font-style:normal; color:var(--accent)}
 .spacer{flex:1}
-.field{display:flex; align-items:center; gap:.45rem; font-size:.82rem; color:var(--dim)}
+.field{display:flex; align-items:center; gap:.35rem; font-size:.76rem; color:var(--dim); white-space:nowrap}
 select{
   background:#0d1017; color:var(--text); border:1px solid var(--line);
   border-radius:6px; padding:.35rem .6rem; font-size:.85rem; font-family:inherit;
 }
-.field-select{max-width:min(46vw,520px)}
+/* The title is the one thing that can afford to be cut short. */
+.field-select{flex:1 1 auto; min-width:120px; max-width:none}
 .status{font-family:var(--mono); font-size:.74rem; color:var(--dim)}
 .status b{color:var(--accent); font-weight:600}
 .status.warn b{color:var(--warn)}
@@ -263,4 +266,11 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   font-weight:700; border-radius:6px; padding:.45rem 1.1rem; font-size:.82rem;
   cursor:pointer; font-family:inherit;
 }
-#asr-field select{max-width:190px}
+#asr-field select,#backend-field select{max-width:170px}
+@media (max-width:1280px){
+  #asr-field span,#backend-field span{display:none}
+  #asr-field select,#backend-field select{max-width:130px}
+}
+@media (max-width:1040px){
+  .bar .brand{display:none}
+}

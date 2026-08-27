@@ -166,7 +166,8 @@ def start(vid: str, backend_id: str) -> dict:
 
 def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                      backend_id: str = "local-m2m100",
-                     asr_id: str = "local-hayamimi") -> dict:
+                     asr_id: str = "local-hayamimi",
+                     speakers: bool = False) -> dict:
     """Take a URL from the UI all the way to a playable cue file.
 
     Everything the CLI does, driven from the browser, with the phase reported
@@ -183,14 +184,15 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                          "by_remote": 0, "by_local": 0, "degraded": False,
                          "failures": 0, "asr": asr_id}
     threading.Thread(target=_run_transcribe,
-                     args=(job_id, url, lang, viewer_lang, backend_id, asr_id),
+                     args=(job_id, url, lang, viewer_lang, backend_id, asr_id,
+                           speakers),
                      daemon=True).start()
     return {"id": job_id}
 
 
 def _run_transcribe(job_id: str, url: str, lang: str | None,
                     viewer_lang: str, backend_id: str,
-                    asr_id: str = "local-hayamimi"):
+                    asr_id: str = "local-hayamimi", speakers: bool = False):
     def note(**kw):
         with _lock:
             _jobs[job_id].update(kw)
@@ -218,7 +220,8 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         note(phase="transcribe", total=int(audio_s))
         engine = mw_asr.build(find_asr(asr_id))
         try:
-            cues = engine.transcribe(samples, lang,
+            kw = {"speakers": speakers} if engine.name == "local-hayamimi" else {}
+            cues = engine.transcribe(samples, lang, **kw,
                                      on_progress=lambda p: note(done=int(p * audio_s)))
         except Exception as exc:
             if engine.name == "local-hayamimi":

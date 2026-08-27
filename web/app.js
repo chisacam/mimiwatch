@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
-  backend: "local-m2m100", asr: "local-hayamimi", refine: true, delay: 0,
+  backend: "local-gemma", asr: "tcpp-best", refine: true, delay: 0,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   live: null,          // { id, es, byId } while a broadcast is running
   liveRef: null,       // 되감기 직전의 최전선 위치 (지연 실측 기준)
@@ -472,7 +472,7 @@ async function loadBackends() {
   state.asrBackends = cfg.asr_backends || [];
   const p0 = loadPrefs();
   const asrIds = state.asrBackends.map(b => b.id);
-  state.asr = asrIds.includes(p0.asr) ? p0.asr : (cfg.asr_active || "local-hayamimi");
+  state.asr = asrIds.includes(p0.asr) ? p0.asr : (cfg.asr_active || "tcpp-best");
   if (p0.refine != null) state.refine = !!p0.refine;
   document.querySelector('#add-form input[name="refine"]').checked = state.refine;
   renderAsrPicker();
@@ -692,7 +692,8 @@ function showEngineList() {
   renderEngineList("tr");
 }
 
-const LOCKED = { asr: "local-hayamimi", tr: "local-m2m100" };
+// 지울 수 없는 기본 엔진. 목록에서 사라지면 고를 것이 없어집니다.
+const LOCKED = { asr: "tcpp-best", tr: "local-m2m100" };
 
 function enginesOf(kind) {
   return kind === "asr" ? state.asrBackends : state.backends;

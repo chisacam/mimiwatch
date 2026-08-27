@@ -26,13 +26,8 @@
  "asr_active": "tcpp-best",
  "asr_backends": [
   {
-   "id": "local-hayamimi",
-   "label": "hayamimi 로컬",
-   "backend": "local"
-  },
-  {
    "id": "tcpp-best",
-   "label": "transcribe.cpp Whisper v3 turbo (기본)",
+   "label": "Whisper large-v3-turbo (기본)",
    "backend": "tcpp",
    "threads": 4
   }

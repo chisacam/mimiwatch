@@ -10,10 +10,9 @@ const $ = (id) => document.getElementById(id);
 const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
-  backend: "local-gemma", asr: "tcpp-best", refine: true, delay: 0,
+  backend: "local-gemma", asr: "tcpp-best", refine: true,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   live: null,          // { id, es, byId } while a broadcast is running
-  liveRef: null,       // 되감기 직전의 최전선 위치 (지연 실측 기준)
 };
 
 /* A cue can hold one translation per backend, so switching backends is a
@@ -90,10 +89,7 @@ function cueAt(t) {
   return i;
 }
 
-let _lagTick = 0;
-
 function renderCue() {
-  if (++_lagTick % 10 === 0) showLiveLag();
   if (!state.player || !state.ready) return;
   const t = state.player.getCurrentTime() + state.offset;
   const i = cueAt(t);
@@ -356,19 +352,6 @@ function bind() {
   $("pos").addEventListener("input", e => { $("overlay").style.bottom = e.target.value + "%"; persist(); });
   $("show-prev").addEventListener("change", e => { state.showPrev = e.target.checked; persist(); renderCue(); });
   $("follow").addEventListener("change", e => { state.follow = e.target.checked; });
-  // 영상을 라이브 최전선에서 뒤로 물립니다. 전사는 최전선에서 계속 돌고
-  // 있으므로, 시청자가 늦게 볼수록 그 지점의 자막은 이미 정제까지 끝나
-  // 기다리고 있습니다. 지연을 켜면 자막을 도착 순서가 아니라 미디어 시각으로
-  // 맞출 수 있게 되는 것이 진짜 이득입니다.
-  $("delay").addEventListener("input", e => {
-    const want = +e.target.value;
-    state.delay = want;
-    $("delay-val").textContent = want ? `-${want}초` : "끔";
-    persist();
-    // 차이만큼 상대적으로 되감지 않습니다. 최전선을 기준으로 다시 잡아야
-    // 값을 여러 번 만져도 어긋나지 않습니다.
-    if (state.live) applyDelay(want);
-  });
   $("offset").addEventListener("input", e => {
     state.offset = +e.target.value;
     $("offset-val").textContent = state.offset.toFixed(1) + "s";
@@ -436,7 +419,6 @@ function persist() {
     size: +$("size").value, dim: +$("dim").value,
     pos: +$("pos").value, showPrev: $("show-prev").checked,
     offset: +$("offset").value, viewerLang: $("viewer-lang").value,
-    delay: state.delay,
     panelHidden: state.panelHidden, backend: state.backend,
     profile: (document.querySelector('#add-form select[name="profile"]') || {}).value,
     asr: state.asr, refine: state.refine,
@@ -450,10 +432,6 @@ function restore() {
   if (p.pos != null) $("pos").value = p.pos;
   if (p.showPrev != null) $("show-prev").checked = p.showPrev;
   if (p.offset != null) { $("offset").value = p.offset; state.offset = p.offset; }
-  if (p.delay != null) {
-    state.delay = p.delay; $("delay").value = p.delay;
-    $("delay-val").textContent = p.delay ? `-${p.delay}초` : "끔";
-  }
   state.showPrev = $("show-prev").checked;
   applySize(+$("size").value);
   document.documentElement.style.setProperty("--cue-bg", (+$("dim").value / 100).toFixed(2));
@@ -844,57 +822,6 @@ function askLiveRestart() {
   box.hidden = false;
 }
 
-/* 라이브 최전선에서 seconds만큼 뒤로 물립니다. 전사는 최전선에서 계속
- * 돌고 있으므로, 물린 만큼이 곧 자막을 다듬을 여유가 됩니다. */
-function playerClock() {
-  try {
-    if (!state.player || !state.ready) return null;
-    return { cur: state.player.getCurrentTime(), dur: state.player.getDuration() };
-  } catch { return null; }
-}
-window.__mwClock = playerClock;   // 되감기가 먹었는지 밖에서 확인할 때 씁니다
-
-function liveLagSeconds() {
-  // 되감기 직전 위치가 최전선이었으므로, 거기서 흐른 실시간을 더하면 지금의
-  // 최전선입니다. 현재 위치를 빼면 얼마나 뒤에 있는지가 나옵니다.
-  try {
-    const ref = state.liveRef;
-    if (!ref || !state.player || !state.ready) return null;
-    const edge = ref.pos + (Date.now() - ref.at) / 1000;
-    const cur = state.player.getCurrentTime();
-    if (!isFinite(cur)) return null;
-    return Math.max(edge - cur, 0);
-  } catch { return null; }
-}
-
-function showLiveLag() {
-  const el = $("delay-lag");
-  if (!el) return;
-  const lag = liveLagSeconds();
-  el.textContent = (state.delay > 0 && lag != null) ? `실측 -${lag.toFixed(0)}초` : "";
-}
-
-function applyDelay(seconds) {
-  let tries = 0;
-  const seek = () => {
-    if (!state.player || !state.ready) {
-      if (++tries < 40) setTimeout(seek, 250);
-      return;
-    }
-    try {
-      // 현재 위치에서 뺍니다. getDuration()을 최전선으로 삼아 봤지만 라이브
-      // 스트림에서 그 값은 자라지 않았습니다(실측: 14962로 고정인데 현재
-      // 위치는 11393에서 1배속 진행). 최전선의 기준이 되지 못합니다.
-      const before = state.player.getCurrentTime();
-      // 되감기 직전 위치가 최전선이었습니다. 실제로 얼마나 뒤에 있는지는
-      // 이 기준에서 흐른 실시간으로만 정직하게 잴 수 있습니다.
-      state.liveRef = { pos: before, at: Date.now() };
-      state.player.seekTo(Math.max(before - seconds, 0), true);
-    } catch { /* DVR 창을 벗어나면 무시합니다 */ }
-  };
-  seek();
-}
-
 /* ---------- live ---------- */
 /* 서버가 라이브 세션과 그 자막을 SQLite에 남기므로, 세션은 탭보다 오래 삽니다.
  * 상태 이름이 화면에 그대로 나오던 자리에 사람이 읽을 말을 붙입니다. */
@@ -934,7 +861,6 @@ async function startLive(url, lang, probe) {
   state.jobId = null;
   $("live-badge").hidden = false;
   $("offset-wrap").style.display = "flex";
-  $("delay-wrap").style.display = "flex";   // live needs the nudge
   await attachLive(res.id, probe.id);
 }
 
@@ -970,7 +896,6 @@ async function resumeLive(sessionId) {
   state.jobId = null;
   $("live-badge").hidden = !running;
   $("offset-wrap").style.display = "flex";
-  $("delay-wrap").style.display = "flex";
   await attachLive(st.id, st.video_id);
 }
 
@@ -978,7 +903,6 @@ async function attachLive(sessionId, videoId) {
   // m3u8을 직접 넣은 세션에는 임베드할 영상이 없습니다. 그래도 스크립트 패널은
   // 읽을 수 있어야 하므로 플레이어만 건너뜁니다.
   if (videoId) await createPlayer(videoId);
-  if (videoId && state.delay > 0) applyDelay(state.delay);
   const es = new EventSource(`/api/live/events/${sessionId}`);
   state.live.es = es;
   es.onmessage = (ev) => {
@@ -1138,7 +1062,6 @@ function detachLive() {
   hideLiveNotice();
   $("live-badge").hidden = true;
   $("offset-wrap").style.display = "";
-  $("delay-wrap").style.display = "";
 }
 
 function stopLive() {
@@ -1153,7 +1076,6 @@ function stopLive() {
   state.live = null;
   $("live-badge").hidden = true;
   $("offset-wrap").style.display = "";
-  $("delay-wrap").style.display = "";   // nothing left to nudge
   markLiveStopped();
   const el = $("lang-status");
   el.className = "status";

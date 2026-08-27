@@ -46,6 +46,16 @@ DEFAULT_MIN_CHARS = 0
 BROKEN_MARKERS = ("⁇", "\ufffd")
 
 
+class TranslationFailed(RuntimeError):
+    """번역 결과를 쓸 수 없습니다.
+
+    한동안 이 자리에서 원문을 그대로 돌려주었습니다. 그러면 부르는 쪽이
+    "번역이 원문과 같다"와 "번역이 실패했다"를 구분할 수 없습니다. 실제로
+    라이브에서는 그 줄이 저장도 발행도 되지 않아 통째로 사라졌고, 대체
+    백엔드도 실패를 알아채지 못해 한 번도 발동하지 않았습니다.
+    """
+
+
 def looks_broken(out: str, src_text: str) -> bool:
     """True when a translation should be discarded in favour of the source."""
     if not out or not out.strip():
@@ -101,11 +111,13 @@ class LocalM2M(Translator):
         if not stripped or src == tgt:
             return text
         if not (self.supports(src) and self.supports(tgt)):
-            return text
+            # 이 언어쌍을 모릅니다. 원문을 돌려주면 부르는 쪽이 번역된 줄로
+            # 오해하므로 실패로 알립니다.
+            raise TranslationFailed(f"M2M-100이 {src}→{tgt}를 지원하지 않습니다")
         try:
             pieces = self._sp.encode(stripped, out_type=str)
             if not pieces:
-                return text
+                raise TranslationFailed("토큰이 나오지 않았습니다")
             # Cap the decode length against the source: a degenerate
             # hypothesis otherwise runs to the model's maximum and stalls the
             # whole queue on one bad line.
@@ -122,11 +134,13 @@ class LocalM2M(Translator):
                 out = out[1:]
             decoded = self._sp.decode(out).strip()
             if looks_broken(decoded, stripped):
-                return text
+                raise TranslationFailed(f"M2M-100: {decoded[:60]!r}")
             return decoded
+        except TranslationFailed:
+            raise
         except Exception as exc:
-            print(f"[translate] local backend failed: {exc}", file=sys.stderr)
-            return text
+            # 실패를 원문으로 바꿔 돌려주면 부르는 쪽이 알 길이 없습니다.
+            raise TranslationFailed(f"M2M-100: {exc}") from exc
 
 
 class OpenAICompatible(Translator):
@@ -184,7 +198,7 @@ class OpenAICompatible(Translator):
                 # answered; treat it as a failure so the fallback runs.
                 raise RuntimeError("model returned reasoning but no answer")
             if looks_broken(out, stripped):
-                return text
+                raise TranslationFailed(f"{self.model}: {out[:60]!r}")
             return out
         except Exception as exc:
             print(f"[translate] remote backend failed: {exc}", file=sys.stderr)
@@ -252,7 +266,7 @@ class LocalGemma(Translator):
         if "</think>" in answer:
             answer = answer.rsplit("</think>", 1)[-1].strip()
         if looks_broken(answer, stripped):
-            return text
+            raise TranslationFailed(f"Gemma: {answer[:60]!r}")
         return answer
 
 

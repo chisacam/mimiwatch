@@ -164,10 +164,12 @@ def main():
             if not tr.should_translate(c["text"], source_lang, args.viewer_lang):
                 skipped += 1
                 continue
-            out = tr.translate(c["text"], source_lang, args.viewer_lang)
-            # Only carry a translation that actually says something new; a
-            # line that came back as its own source just doubles the overlay.
-            if out and out.strip() != c["text"].strip():
+            try:
+                out = tr.translate(c["text"], source_lang, args.viewer_lang)
+            except Exception as exc:
+                print(f"\n[vod] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
+                out = c["text"]
+            if (out or "").strip():
                 c["translation"] = out
             if i % 50 == 0:
                 print(f"\r[vod] {i}/{len(cues)}", end="", file=sys.stderr, flush=True)

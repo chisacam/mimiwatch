@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 import uuid
@@ -332,9 +333,17 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             elif not tr.should_translate(c["text"], source_lang, viewer_lang):
                 skipped += 1
             else:
-                out = tr.translate(c["text"], source_lang, viewer_lang)
+                try:
+                    out = tr.translate(c["text"], source_lang, viewer_lang)
+                except Exception as exc:
+                    # 실패했다고 줄을 버리면 그 발화가 없었던 것처럼 보입니다.
+                    # 원문을 남기고 왜 실패했는지만 적습니다.
+                    print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
+                    out = c["text"]
                 from_primary = getattr(tr, "last_used", "primary") == "primary"
-                if out and out.strip() != c["text"].strip():
+                # 번역이 원문과 같아도 저장합니다. 고유명사나 짧은 감탄사는
+                # 그대로 두는 것이 옳은 번역입니다.
+                if (out or "").strip():
                     c["translations"][bid if from_primary else "local-m2m100"] = out
                 with _lock:
                     _jobs[job_id]["by_remote" if from_primary else "by_local"] += 1
@@ -368,12 +377,15 @@ def _run(job_id: str, vid: str, spec: dict, doc: dict):
             if not tr.should_translate(c["text"], src, tgt):
                 skipped += 1
             else:
-                out = tr.translate(c["text"], src, tgt)
-                # Only record the result under this backend when this backend
-                # actually produced it; a fallback line belongs to the local
-                # model, not to the endpoint that was unreachable.
+                try:
+                    out = tr.translate(c["text"], src, tgt)
+                except Exception as exc:
+                    print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
+                    out = c["text"]
+                # 대체 백엔드가 낸 줄은 그 백엔드 이름으로 남깁니다. 닿지 않은
+                # 엔드포인트가 만든 것처럼 기록하면 비교가 성립하지 않습니다.
                 from_primary = getattr(tr, "last_used", "primary") == "primary"
-                if out and out.strip() != c["text"].strip():
+                if (out or "").strip():
                     c["translations"][bid if from_primary else "local-m2m100"] = out
                 with _lock:
                     key = "by_remote" if from_primary else "by_local"

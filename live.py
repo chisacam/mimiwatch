@@ -337,20 +337,28 @@ class LiveSession:
         threading.Thread(target=self._translate, args=(cue,), daemon=True).start()
 
     def _translate(self, cue: dict):
+        src = cue.get("lang") or self.lang or ""
+        if not src or src == self.viewer_lang:
+            return
+        if not self._tr.should_translate(cue["text"], src, self.viewer_lang):
+            return
         try:
-            src = cue.get("lang") or self.lang or ""
-            if not src or src == self.viewer_lang:
-                return
-            if not self._tr.should_translate(cue["text"], src, self.viewer_lang):
-                return
             out = self._tr.translate(cue["text"], src, self.viewer_lang)
-            if out and out.strip() != cue["text"].strip():
-                self.translated += 1
-                store.save_translation(self.id, cue["id"], self.backend_id, out)
-                self.emit({"type": "translation", "id": cue["id"],
-                           "kind": cue["kind"], "text": out})
         except Exception as exc:
-            print(f"[live] translate failed: {exc}", file=sys.stderr)
+            # 실패했다고 줄을 버리지 않습니다. 그러면 시청자에게는 그 발화가
+            # 아예 없었던 것처럼 보입니다. 번역할 수 없었다는 사실이 남도록
+            # 원문을 그 자리에 넣고, 왜 실패했는지는 로그에 적습니다.
+            print(f"[live] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
+            out = cue["text"]
+        if not (out or "").strip():
+            return
+        # 번역이 원문과 같아도 저장합니다. 고유명사나 짧은 감탄사는 그대로
+        # 두는 것이 옳은 번역이고, 예전에는 이 경우를 실패로 보아 줄이
+        # 사라졌습니다.
+        self.translated += 1
+        store.save_translation(self.id, cue["id"], self.backend_id, out)
+        self.emit({"type": "translation", "id": cue["id"],
+                   "kind": cue["kind"], "text": out})
 
     # ---- pipeline ---------------------------------------------------------
     def start(self):

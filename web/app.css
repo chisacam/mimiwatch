@@ -290,5 +290,3 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   .bar .brand{display:none}
 }
 
-/* 지연 실측값. 설정값과 다르면 되감기가 먹지 않은 것입니다. */
-.lag{margin-left:.4rem; color:var(--dim); font-weight:400}

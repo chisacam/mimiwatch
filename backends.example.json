@@ -17,16 +17,16 @@
    "min_chars": 0
   }
  ],
- "asr_active": "local-hayamimi",
+ "asr_active": "tcpp-best",
  "asr_backends": [
   {
    "id": "local-hayamimi",
-   "label": "hayamimi 로컬 (기본)",
+   "label": "hayamimi 로컬",
    "backend": "local"
   },
   {
    "id": "tcpp-best",
-   "label": "transcribe.cpp Whisper v3 turbo (일/한)",
+   "label": "transcribe.cpp Whisper v3 turbo (기본)",
    "backend": "tcpp",
    "models": {
     "ja": "/Users/chiyak/models/transcribe-cpp/whisper-large-v3-turbo-Q8_0.gguf",

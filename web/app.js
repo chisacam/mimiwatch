@@ -366,6 +366,7 @@ function bind() {
     b.addEventListener("click", () => showEngineForm(b.dataset.add, null)));
   $("asr-picker").addEventListener("change", e => {
     state.asr = e.target.value; persist();
+    if (state.live) askLiveRestart();
   });
   $("job-cancel").addEventListener("click", cancelJob);
   $("add-video").addEventListener("click", () => $("add-dialog").showModal());
@@ -760,6 +761,28 @@ function renderAsrPicker() {
   state.asr = sel.value;
 }
 
+const esc = (t) => String(t).replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/* 돌고 있는 세션에는 새 엔진을 끼워 넣을 수 없습니다. hayamimi의
+ * run_stream은 시작할 때 인식기 객체를 받아 붙잡고 있으므로, 바꾸려면
+ * 읽기 루프 자체를 다시 세워야 합니다. 그래서 "다시 시작"입니다. */
+function askLiveRestart() {
+  if (!state.live || state.live.asr === state.asr) return;
+  const el = $("lang-status");
+  el.className = "status warn";
+  el.textContent = "전사 엔진은 진행 중인 세션에 적용되지 않습니다 — ";
+  const b = document.createElement("button");
+  b.className = "seg";
+  b.textContent = "새 엔진으로 다시 시작";
+  b.onclick = () => {
+    const { url, lang, probe } = state.live;
+    stopLive();
+    startLive(url, lang, probe);
+  };
+  el.appendChild(b);
+}
+
 /* ---------- live ---------- */
 async function startLive(url, lang, probe) {
   stopLive();
@@ -781,7 +804,8 @@ async function startLive(url, lang, probe) {
                 backends_done: [state.backend], live: true };
   state.cues = [];
   state.idx = -1;
-  state.live = { id: res.id, byId: new Map(), es: null, speakers: new Set() };
+  state.live = { id: res.id, byId: new Map(), es: null, speakers: new Set(),
+                 url, lang, probe, asr: state.asr };
   buildScript();
   renderBackendPicker();
   applyModeForDoc();
@@ -917,7 +941,9 @@ function onLiveStatus(m) {
   }
   el.className = "status";
   const src = m.source_lang || "auto";
+  const eng = (m.asr || "").replace(/-Q8_0$|\.gguf$/g, "");
   el.innerHTML = `${m.state} · 원본 <b>${src}</b> → <b>${m.viewer_lang}</b>`
+    + (eng ? ` · 전사 <b>${esc(eng)}</b>` : "")
     + (m.lines ? ` · ${m.lines}줄` : "");
 }
 

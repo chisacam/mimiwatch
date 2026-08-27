@@ -841,7 +841,8 @@ async function startLive(url, lang, probe) {
  * 접속 직후에 그대로 되돌려 주므로, 여기서는 라이브를 새로 시작할 때와 같은
  * 그릇만 만들어 두면 나머지는 같은 이벤트 경로를 탑니다. */
 async function resumeLive(sessionId) {
-  stopLive();
+  if (state.live && state.live.id === sessionId) return;   // 이미 보고 있음
+  detachLive();
   const st = await (await fetch(`/api/live/status/${sessionId}`)).json();
   if (!st.id) { jobError(st.error || "세션을 찾을 수 없습니다"); return; }
   const running = LIVE_RUNNING.includes(st.state);
@@ -912,6 +913,11 @@ function addLiveToPicker(probe, sessionId) {
   pick.prepend(o);
   pick.value = o.value;
 }
+
+/* 목록에 걸리는 라이브 항목의 이름. 자막이 끝나도 항목은 남기므로, 지금
+ * 받아 적는 중인지 끝났는지를 이 한 줄이 구분합니다. */
+const liveOptionLabel = (title, stopped) =>
+  `${stopped ? "○ LIVE · 자막 중단" : "● LIVE"}  ${(title || "").slice(0, 58)}`;
 
 /* Removing the entry on stop was the mismatch: the player went on showing a
  * broadcast the list no longer had. Keep the entry, say the subtitles ended. */
@@ -1019,6 +1025,16 @@ function onLiveStatus(m) {
  * broadcast to. The cues already received stay in the panel and in
  * state.mode -- they cost nothing and re-reading them is the whole point of
  * the panel. */
+/* 화면에서만 손을 뗍니다. 서버 세션은 그대로 두므로 받아 적기가 이어집니다. */
+function detachLive() {
+  const live = state.live;
+  if (!live) return;
+  if (live.es) live.es.close();
+  state.live = null;
+  $("live-badge").hidden = true;
+  $("offset-wrap").style.display = "";
+}
+
 function stopLive() {
   const live = state.live;
   if (!live) return;

@@ -35,6 +35,14 @@ select{
 .status b{color:var(--accent); font-weight:600}
 .status.warn b{color:var(--warn)}
 
+/* 재시작 안내는 상태줄과 자리를 나눕니다. 같은 칸에 쓰면 자막 한 줄마다
+   오는 상태 갱신이 덮어써서, 누르기도 전에 사라집니다. */
+.live-notice{
+  display:flex; align-items:center; gap:.5rem;
+  font-size:.74rem; color:var(--warn);
+}
+.live-notice[hidden]{display:none}
+
 main{
   flex:1; display:grid; grid-template-columns:minmax(0,1fr) 380px; min-height:0;
   transition:grid-template-columns .22s ease;

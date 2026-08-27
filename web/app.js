@@ -776,22 +776,32 @@ const esc = (t) => String(t).replace(/[&<>"]/g,
 /* 돌고 있는 세션에는 새 엔진을 끼워 넣을 수 없습니다. hayamimi의
  * run_stream은 시작할 때 인식기 객체를 받아 붙잡고 있으므로, 바꾸려면
  * 읽기 루프 자체를 다시 세워야 합니다. 그래서 "다시 시작"입니다. */
+function hideLiveNotice() {
+  const box = $("live-notice");
+  box.hidden = true;
+  box.textContent = "";
+}
+
 function askLiveRestart() {
-  if (!state.live || state.live.asr === state.asr) return;
-  if (state.live.state && !LIVE_RUNNING.includes(state.live.state)) return;
-  if (!state.live.url) return;
-  const el = $("lang-status");
-  el.className = "status warn";
-  el.textContent = "전사 엔진은 진행 중인 세션에 적용되지 않습니다 — ";
+  const stale = state.live && state.live.state
+                && !LIVE_RUNNING.includes(state.live.state);
+  if (!state.live || state.live.asr === state.asr || stale || !state.live.url) {
+    hideLiveNotice();
+    return;
+  }
+  const box = $("live-notice");
+  box.textContent = "전사 엔진은 진행 중인 세션에 적용되지 않습니다 — ";
   const b = document.createElement("button");
   b.className = "seg";
   b.textContent = "새 엔진으로 다시 시작";
   b.onclick = () => {
     const { url, lang, probe } = state.live;
+    hideLiveNotice();
     stopLive();
     startLive(url, lang, probe);
   };
-  el.appendChild(b);
+  box.appendChild(b);
+  box.hidden = false;
 }
 
 /* ---------- live ---------- */
@@ -1031,6 +1041,7 @@ function detachLive() {
   if (!live) return;
   if (live.es) live.es.close();
   state.live = null;
+  hideLiveNotice();
   $("live-badge").hidden = true;
   $("offset-wrap").style.display = "";
 }
@@ -1039,6 +1050,7 @@ function stopLive() {
   const live = state.live;
   if (!live) return;
   if (live.es) live.es.close();
+  hideLiveNotice();
   fetch("/api/live/stop", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: live.id }),

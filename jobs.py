@@ -16,6 +16,7 @@ import uuid
 import translate as mw_translate
 import transcribe_vod as vod
 import asr as mw_asr
+import store
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(BASE, "data")
@@ -23,6 +24,44 @@ CONFIG = os.path.join(BASE, "backends.json")
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
+
+
+def _note(job_id: str, **kw):
+    """진행 상태를 고치고 곧바로 디스크에 밀어 넣습니다.
+
+    메모리 사본을 없애고 SQLite만 보게 할 수도 있지만, 폴링이 0.7초마다 들어오는
+    경로라 조회는 메모리에서 답하는 편이 낫습니다. 쓰기는 레코드 통째로 하므로
+    이 사이에 락 안에서 증가한 카운터도 함께 실려 나갑니다.
+    """
+    with _lock:
+        j = _jobs.get(job_id)
+        if j is None:
+            return
+        j.update(kw)
+        snapshot = dict(j)
+    store.save_job(snapshot)
+
+
+def restore() -> int:
+    """재시작 전에 돌던 작업을 되살립니다 -- 상태만.
+
+    작업을 굴리던 스레드는 프로세스와 함께 사라졌으므로 그 전사는 다시
+    진행되지 않습니다. `running`인 채로 두면 UI가 끝나지 않을 폴링을 계속하게
+    되니, 중단되었다고 정직하게 적습니다. 어디까지 갔었는지는 그대로 남습니다.
+    """
+    hit = 0
+    with _lock:
+        for job in store.all_jobs():
+            if job.get("state") == "running":
+                job["state"] = "interrupted"
+                job["error"] = "서버가 재시작되어 중단되었습니다"
+                hit += 1
+            _jobs[job["id"]] = job
+    for job in list(_jobs.values()):
+        if job.get("state") == "interrupted":
+            store.save_job(job)
+    store.prune_jobs()
+    return hit
 
 
 EXAMPLE_CONFIG = os.path.join(BASE, "backends.example.json")
@@ -123,6 +162,8 @@ def cancel(job_id: str) -> dict:
         if j["state"] != "running":
             return {"state": j["state"]}
         j["cancel"] = True
+        snapshot = dict(j)
+    store.save_job(snapshot)
     return {"state": "cancelling"}
 
 
@@ -159,6 +200,8 @@ def start(vid: str, backend_id: str) -> dict:
                          # is actually producing text, not just that a
                          # fallback happened at some point.
                          "by_remote": 0, "by_local": 0, "cancel": False}
+        snapshot = dict(_jobs[job_id])
+    store.save_job(snapshot)
 
     threading.Thread(target=_run, args=(job_id, vid, spec, doc), daemon=True).start()
     return {"id": job_id}
@@ -183,6 +226,8 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                          "title": "", "video": None, "skipped": 0,
                          "by_remote": 0, "by_local": 0, "degraded": False,
                          "failures": 0, "asr": asr_id}
+        snapshot = dict(_jobs[job_id])
+    store.save_job(snapshot)
     threading.Thread(target=_run_transcribe,
                      args=(job_id, url, lang, viewer_lang, backend_id, asr_id,
                            speakers),
@@ -194,8 +239,7 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
                     viewer_lang: str, backend_id: str,
                     asr_id: str = "local-hayamimi", speakers: bool = False):
     def note(**kw):
-        with _lock:
-            _jobs[job_id].update(kw)
+        _note(job_id, **kw)
 
     def cancelled() -> bool:
         with _lock:
@@ -308,8 +352,7 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
 
 def _run(job_id: str, vid: str, spec: dict, doc: dict):
     def note(**kw):
-        with _lock:
-            _jobs[job_id].update(kw)
+        _note(job_id, **kw)
 
     try:
         tr = mw_translate.build(spec)

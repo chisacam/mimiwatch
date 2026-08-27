@@ -344,7 +344,15 @@ function bind() {
     persist();
   });
   $("viewer-lang").addEventListener("change", () => { updateLangStatus(); persist(); });
-  $("video-picker").addEventListener("change", e => { stopLive(); loadVideo(e.target.value); });
+  $("video-picker").addEventListener("change", e => {
+    // 어느 항목인지 먼저 읽습니다. stopLive()가 진행 중인 라이브 항목을
+    // 목록에서 지우기 때문입니다.
+    const opt = e.target.selectedOptions[0];
+    const sid = opt && opt.dataset.session;
+    if (sid) { resumeLive(sid); return; }
+    stopLive();
+    loadVideo(e.target.value);
+  });
   $("toggle-panel").addEventListener("click", () => setPanel(!state.panelHidden));
   $("backend-picker").addEventListener("change", e => selectBackend(e.target.value));
   $("open-settings").addEventListener("click", openSettings);
@@ -497,7 +505,9 @@ async function runTranslateJob(video, backend) {
       ? `원격 응답 없음 (실패 ${st.failures}회) · 로컬 대체 ${st.by_local}건`
       : `원격 번역 ${st.by_remote}건` + (st.by_local ? ` · 로컬 대체 ${st.by_local}건` : "");
     box.classList.toggle("error", !!st.degraded);
-    if (st.state === "error") { jobError(st.error); return; }
+    // 서버가 재시작되면 작업 스레드는 사라지고 상태만 남습니다. 계속 폴링하면
+    // 영원히 끝나지 않으므로 종료 상태로 취급합니다.
+    if (st.state === "error" || st.state === "interrupted") { jobError(st.error); return; }
     if (st.state === "cancelled") {
       $("job-count").textContent = `중단됨 · ${st.done}/${st.total}까지 저장`;
       setTimeout(() => { box.hidden = true; }, 3000);
@@ -578,7 +588,7 @@ async function watchTranscribe(jobId) {
         ? `원격 응답 없음 · 로컬 대체 ${st.by_local}건`
         : `원격 번역 ${st.by_remote}건`;
     }
-    if (st.state === "error") { jobError(st.error); return; }
+    if (st.state === "error" || st.state === "interrupted") { jobError(st.error); return; }
     if (st.state === "cancelled") {
       $("job-count").textContent = "중단됨";
       setTimeout(() => { box.hidden = true; }, 3000);
@@ -746,6 +756,14 @@ function renderAsrPicker() {
 }
 
 /* ---------- live ---------- */
+/* 서버가 라이브 세션과 그 자막을 SQLite에 남기므로, 세션은 탭보다 오래 삽니다.
+ * 상태 이름이 화면에 그대로 나오던 자리에 사람이 읽을 말을 붙입니다. */
+const LIVE_RUNNING = ["starting", "loading", "running"];
+const LIVE_STATE = {
+  starting: "시작하는 중", loading: "모델 여는 중", running: "수신 중",
+  stopped: "종료됨", interrupted: "중단됨 (서버 재시작)", error: "오류",
+};
+
 async function startLive(url, lang, probe) {
   stopLive();
   const res = await (await fetch("/api/live/start", {
@@ -769,14 +787,50 @@ async function startLive(url, lang, probe) {
   buildScript();
   renderBackendPicker();
   applyModeForDoc();
-  addLiveToPicker(probe);
+  addLiveToPicker(probe, res.id);
   $("job").hidden = true;      // a stale re-translation box is not this session's
   state.jobId = null;
   $("live-badge").hidden = false;
   $("offset-wrap").style.display = "flex";   // live needs the nudge
-  await createPlayer(probe.id);
+  await attachLive(res.id, probe.id);
+}
 
-  const es = new EventSource(`/api/live/events/${res.id}`);
+/* 이미 있는 세션을 다시 엽니다 -- 탭을 새로고침했거나, 서버가 재시작되어
+ * 수신은 끊겼지만 받아 적은 자막은 남아 있는 경우입니다. 자막은 서버가 SSE
+ * 접속 직후에 그대로 되돌려 주므로, 여기서는 라이브를 새로 시작할 때와 같은
+ * 그릇만 만들어 두면 나머지는 같은 이벤트 경로를 탑니다. */
+async function resumeLive(sessionId) {
+  stopLive();
+  const st = await (await fetch(`/api/live/status/${sessionId}`)).json();
+  if (!st.id) { jobError(st.error || "세션을 찾을 수 없습니다"); return; }
+  const running = LIVE_RUNNING.includes(st.state);
+
+  // 그때 쓰던 번역 백엔드로 맞춥니다. 저장된 번역문은 그 백엔드가 만든 것이라,
+  // 지금 고른 백엔드 칸에 넣으면 하지 않은 일을 했다고 표시하게 됩니다.
+  if (st.backend && state.backends.some(b => b.id === st.backend)) {
+    state.backend = st.backend;
+  }
+  state.doc = { id: st.video_id || "", title: st.title || st.url,
+                source_lang: st.source_lang || "", viewer_lang: st.viewer_lang,
+                translated: false, backends_done: [st.backend], live: true };
+  state.cues = [];
+  state.idx = -1;
+  state.live = { id: st.id, byId: new Map(), es: null, speakers: new Set() };
+  buildScript();
+  renderBackendPicker();
+  applyModeForDoc();
+  $("job").hidden = true;
+  state.jobId = null;
+  $("live-badge").hidden = !running;
+  $("offset-wrap").style.display = "flex";
+  await attachLive(st.id, st.video_id);
+}
+
+async function attachLive(sessionId, videoId) {
+  // m3u8을 직접 넣은 세션에는 임베드할 영상이 없습니다. 그래도 스크립트 패널은
+  // 읽을 수 있어야 하므로 플레이어만 건너뜁니다.
+  if (videoId) await createPlayer(videoId);
+  const es = new EventSource(`/api/live/events/${sessionId}`);
   state.live.es = es;
   es.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
@@ -784,21 +838,32 @@ async function startLive(url, lang, probe) {
     else if (m.type === "translation") onLiveTranslation(m);
     else if (m.type === "status") onLiveStatus(m);
   };
-  es.onerror = () => { $("lang-status").innerHTML = "라이브 연결 끊김"; };
+  es.onerror = () => {
+    // 끝난 세션은 서버가 백로그를 다 보내고 스트림을 닫습니다. 그것은 끊김이
+    // 아니라 정상 종료이고, EventSource는 끊기면 알아서 다시 붙으므로 여기서
+    // 닫지 않으면 몇 초마다 자막 전체를 다시 받게 됩니다. 진행 중인 세션은
+    // 반대로 그 자동 재접속이 필요하니 그대로 둡니다.
+    const st = state.live && state.live.state;
+    if (st && !LIVE_RUNNING.includes(st)) { es.close(); return; }
+    $("lang-status").innerHTML = "라이브 연결 끊김";
+  };
 }
 
-function addLiveToPicker(probe) {
+function addLiveToPicker(probe, sessionId) {
   // The picker was still naming whichever recording was open, while the
   // screen showed a broadcast. A live session is not a saved video, so it
   // gets a temporary entry that goes away when the session ends.
   const pick = $("video-picker");
   pick.querySelectorAll("option[data-live]").forEach(o => o.remove());
   const o = document.createElement("option");
-  o.value = probe.id;
+  // 세션 id로 값을 잡습니다. 같은 방송을 두 번 켜면 영상 id가 겹쳐서, 뒤에서
+  // 영상 하나를 고르려다 세션 항목이 잡히던 자리입니다.
+  o.value = "live:" + sessionId;
   o.dataset.live = "1";
+  o.dataset.session = sessionId;
   o.textContent = `● LIVE  ${(probe.title || "").slice(0, 58)}`;
   pick.prepend(o);
-  pick.value = probe.id;
+  pick.value = o.value;
 }
 
 function onLiveCue(m) {
@@ -859,15 +924,24 @@ function onLiveTranslation(m) {
 
 function onLiveStatus(m) {
   const el = $("lang-status");
+  if (state.live) state.live.state = m.state;
   if (m.state === "error") {
     el.className = "status warn";
     el.textContent = m.error || "라이브 오류";
     stopLive();
     return;
   }
+  // 중단된 세션은 오류가 아닙니다. 수신은 끊겼지만 여기 떠 있는 자막은 진짜로
+  // 받아 적은 것이므로, 세션을 접지 않고 왜 멈췄는지만 알립니다.
+  if (m.state === "interrupted") {
+    el.className = "status warn";
+    el.innerHTML = `${LIVE_STATE.interrupted} · ${m.lines || 0}줄까지 남아 있습니다`;
+    $("live-badge").hidden = true;
+    return;
+  }
   el.className = "status";
   const src = m.source_lang || "auto";
-  el.innerHTML = `${m.state} · 원본 <b>${src}</b> → <b>${m.viewer_lang}</b>`
+  el.innerHTML = `${LIVE_STATE[m.state] || m.state} · 원본 <b>${src}</b> → <b>${m.viewer_lang}</b>`
     + (m.lines ? ` · ${m.lines}줄` : "");
 }
 
@@ -902,8 +976,22 @@ async function deleteVideo() {
 
 async function refreshVideoList(selectId) {
   const list = await (await fetch("/api/videos")).json();
+  const sessions = await (await fetch("/api/live/sessions")).json();
   const pick = $("video-picker");
   pick.textContent = "";
+  // 라이브 세션에는 큐 파일이 없어서, 예전에는 탭을 닫으면 그 방송의 자막이
+  // 통째로 사라졌습니다. 이제 서버가 들고 있으므로 목록에 올려 다시 엽니다.
+  // 한 줄도 못 받은 세션은 열어 봐야 볼 것이 없으니 뺍니다.
+  sessions.filter(s => s.cues).forEach(s => {
+    const o = document.createElement("option");
+    o.value = "live:" + s.id;
+    o.dataset.session = s.id;
+    const running = LIVE_RUNNING.includes(s.state);
+    o.textContent = (running ? "● LIVE  " : "○ 지난 라이브  ")
+      + `${(s.title || s.url).slice(0, 50)}  ·  ${s.cues}줄`
+      + (running ? "" : `  ·  ${LIVE_STATE[s.state] || s.state}`);
+    pick.appendChild(o);
+  });
   list.forEach(v => {
     const o = document.createElement("option");
     o.value = v.id;
@@ -942,9 +1030,17 @@ function jobError(msg) {
   restore(); bind();
   await loadBackends();
   const list = await (await fetch("/api/videos")).json();
-  if (!list.length) {
+  const sessions = await (await fetch("/api/live/sessions")).json();
+  if (!list.length && !sessions.some(s => s.cues)) {
     $("video-picker").innerHTML = "<option>＋ 영상 추가로 시작하세요</option>";
     return;
   }
-  await refreshVideoList(list[0].id);
+  // 서버는 멀쩡한데 탭만 새로고침한 경우입니다. 보고 있던 방송으로 그대로
+  // 돌아갑니다 -- 그 자막을 다시 만들 방법은 없으니까요.
+  const running = sessions.find(s => LIVE_RUNNING.includes(s.state));
+  await refreshVideoList(running ? null : (list[0] || {}).id);
+  if (running) {
+    $("video-picker").value = "live:" + running.id;
+    await resumeLive(running.id);
+  }
 })();

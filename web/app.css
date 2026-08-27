@@ -200,6 +200,9 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   border:1px solid #52201d; background:#2a1210; border-radius:100px;
   padding:.22rem .5rem .22rem .7rem; letter-spacing:.06em;
 }
+/* display:flex 가 [hidden] 을 이깁니다. 라이브가 아닐 때도 배지가 떠 있었는데,
+   이제 세션 상태에 따라 감추는 자리가 생겨서 눈에 띄었습니다. */
+.live-badge[hidden]{display:none}
 .live-badge button{
   background:transparent; border:1px solid #52201d; color:#e8a09b;
   border-radius:100px; padding:.1rem .5rem; font-size:.7rem; cursor:pointer;

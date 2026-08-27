@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import jobs
 import live
+import store
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(BASE, "web")
@@ -65,11 +66,15 @@ class Handler(BaseHTTPRequestHandler):
             cfg["live_profiles"] = [{"id": k, **v} for k, v in live.PROFILES.items()]
             return self._json(cfg)
 
+        if path == "/api/live/sessions":
+            return self._json(live.recent())
+
         if path.startswith("/api/live/events/"):
-            sess = live.get(os.path.basename(path))
-            if sess is None:
+            sid = os.path.basename(path)
+            sess = live.get(sid)
+            if sess is None and live.status_of(sid) is None:
                 return self._send(b'{"error":"no such session"}', "application/json", 404)
-            return self._sse(sess)
+            return self._sse(sid, sess)
 
         if path.startswith("/api/live/status/"):
             st = live.status_of(os.path.basename(path))
@@ -91,18 +96,39 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(b"not found", "text/plain", 404)
 
-    def _sse(self, sess):
+    def _sse(self, sid, sess):
         """Stream a live session's cues. Chosen over the WebSocket mirror in
-        ws_ingest.py, which dropped events under the same load."""
+        ws_ingest.py, which dropped events under the same load.
+
+        The stored subtitles go out first, so a reloaded tab -- or a tab
+        opening a session that outlived a restart -- sees the whole broadcast
+        instead of only what is said from now on. Subscribing BEFORE reading
+        the backlog is deliberate: the other order drops whatever is published
+        in between, and a line arriving twice is harmless because the browser
+        keys cues by id and updates in place.
+        """
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
-        q = sess.subscribe()
+        q = sess.subscribe() if sess is not None else None
         try:
-            self.wfile.write(f"data: {json.dumps(sess.status())}\n\n".encode())
+            # 첫 프레임에 type이 없어서 브라우저가 그냥 흘려보내고 있었습니다.
+            # 재시작으로 끊긴 세션은 이 한 번이 "왜 멈췄는지"를 말할 유일한
+            # 기회이므로, 나머지 상태 알림과 같은 모양으로 맞춥니다.
+            status = sess.status() if sess is not None else live.status_of(sid)
+            for event in [{"type": "status", **status}, *live.backlog(sid)]:
+                self.wfile.write(
+                    f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode())
             self.wfile.flush()
+            if q is None:
+                # 끝난 세션은 보낼 것을 다 보냈습니다. Content-Length가 없는
+                # 응답이라 소켓을 닫아 주지 않으면 클라이언트는 끝을 알 수
+                # 없습니다 -- 위의 keep-alive 헤더가 그 소켓을 살려 두므로
+                # 여기서 되돌립니다.
+                self.close_connection = True
+                return
             while True:
                 try:
                     data = q.get(timeout=15)
@@ -115,7 +141,8 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         finally:
-            sess.unsubscribe(q)
+            if q is not None:
+                sess.unsubscribe(q)
 
     def _json(self, obj, code: int = 200):
         self._send(json.dumps(obj, ensure_ascii=False).encode("utf-8"),
@@ -241,6 +268,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8900)
     args = ap.parse_args()
+
+    # 스키마 생성과 복구를 요청을 받기 전에 끝냅니다. 재시작 전에 돌던 작업과
+    # 세션은 이어질 수 없으므로, 계속 도는 척하지 않고 중단됨으로 적습니다.
+    store.init()
+    stale_jobs, stale_live = jobs.restore(), live.restore()
+    if stale_jobs or stale_live:
+        print(f"mimiwatch: 재시작 전 작업 {stale_jobs}건, 라이브 세션 "
+              f"{stale_live}건을 중단됨으로 표시했습니다", flush=True)
+
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"mimiwatch: http://localhost:{args.port}/")
     srv.serve_forever()

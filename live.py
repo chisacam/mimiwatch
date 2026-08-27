@@ -37,6 +37,7 @@ from realtime_transcribe import (AudioHistory, PartialPrinter,  # noqa: E402
                                  Refiner, SessionStats, build_vad, run_stream)
 
 import translate as mw_translate                      # noqa: E402
+import store                                          # noqa: E402
 
 SAMPLE_RATE = 16000
 CHUNK = 1600            # 0.1s per VAD feed
@@ -68,9 +69,11 @@ PROFILES = {
 }
 
 _sessions: dict[str, "LiveSession"] = {}
-_finished: dict[str, dict] = {}     # id -> last status, so the UI can still ask
 _lock = threading.Lock()
-MAX_FINISHED = 20
+
+# 끝난 세션의 마지막 상태는 SQLite가 들고 있습니다. 예전에는 메모리 딕셔너리에
+# 최근 20개만 남겨 두었는데, 재시작하면 그마저 사라지는 데다 상한을 넘긴 세션은
+# 살아 있는 서버에서도 404가 되었습니다.
 
 
 def resolve_audio(url: str) -> tuple[str, dict]:
@@ -179,6 +182,9 @@ class LiveSession:
         self.state = "starting"
         self.error: str | None = None
         self.title = ""
+        # 재시작 뒤 이 세션을 다시 열려면 임베드할 영상 id가 필요합니다.
+        # 세션 id는 우리가 만든 것이라 플레이어에 넣을 수 없습니다.
+        self.video_id = ""
         self.media_base = 0.0        # media seconds at the first sample we get
         self.window_s = 0.0          # DVR window we skipped to reach live
         self.audio_s = 0.0           # seconds fed so far
@@ -216,7 +222,7 @@ class LiveSession:
 
     def status(self) -> dict:
         return {"id": self.id, "state": self.state, "error": self.error,
-                "title": self.title, "url": self.url,
+                "title": self.title, "url": self.url, "video_id": self.video_id,
                 "source_lang": self.lang, "viewer_lang": self.viewer_lang,
                 "backend": self.backend_id,
                 "media_base": round(self.media_base, 2),
@@ -225,6 +231,9 @@ class LiveSession:
                 "audio_s": round(self.audio_s, 1),
                 "elapsed": round(time.time() - self.started, 1),
                 "lines": self.lines, "translated": self.translated}
+
+    def _persist(self):
+        store.save_session(self.status(), self.video_id)
 
     # ---- publishing -------------------------------------------------------
     def publish_line(self, kind: str, text: str, lang: str, speaker: str):
@@ -240,7 +249,12 @@ class LiveSession:
                    "lang": lang, "speaker": speaker}
             self._recent.append(cue)
             del self._recent[:-40]
+            store.save_cue(self.id, cue)
             self.emit(cue)
+            # 줄 수는 상태에 들어 있으므로 자막 한 줄마다 상태도 같이 적습니다.
+            # 몇 초에 한 번이라 비용이 없고, 어디까지 받아 적었는지가 재시작
+            # 뒤에 정확해집니다.
+            self._persist()
             self._translate_async(cue)
         else:
             # A refined group supersedes the finals whose words it contains.
@@ -253,6 +267,11 @@ class LiveSession:
                    "replaces": [c["id"] for c in covered]}
             for c in covered:
                 self._recent.remove(c)
+            # 정제본이 흡수한 줄은 화면에서 사라지므로 저장분에서도 지웁니다.
+            # 자기 id를 물려받은 한 줄만 남기고 그 자리를 정제본으로 덮습니다.
+            store.drop_cues(self.id, [c["id"] for c in covered
+                                      if c["id"] != cue["id"]])
+            store.save_cue(self.id, cue)
             self.emit(cue)
             self._translate_async(cue)
 
@@ -271,6 +290,7 @@ class LiveSession:
             out = self._tr.translate(cue["text"], src, self.viewer_lang)
             if out and out.strip() != cue["text"].strip():
                 self.translated += 1
+                store.save_translation(self.id, cue["id"], self.backend_id, out)
                 self.emit({"type": "translation", "id": cue["id"],
                            "kind": cue["kind"], "text": out})
         except Exception as exc:
@@ -322,9 +342,11 @@ class LiveSession:
             if meta.returncode == 0:
                 d = json.loads(meta.stdout)
                 self.title = d.get("title", "")
+                self.video_id = d.get("id", "") or ""
                 if not d.get("is_live"):
                     self.state = "error"
                     self.error = "라이브가 아닙니다. 녹화본은 영상 추가로 처리하십시오."
+                    self._persist()
                     self.emit({"type": "status", **self.status()})
                     return
 
@@ -341,6 +363,7 @@ class LiveSession:
                   f"{self.window_s:.0f}s window, media_base={self.media_base:.0f}s",
                   flush=True)
             self.state = "loading"
+            self._persist()
             self.emit({"type": "status", **self.status()})
 
             spec = None
@@ -376,14 +399,17 @@ class LiveSession:
                 stdout=subprocess.PIPE)
 
             self.state = "running"
+            self._persist()
             self.emit({"type": "status", **self.status()})
             run_stream(self._chunks(), vad, SAMPLE_RATE, asr, SessionStats(),
                        printer, refiner, history)
             self.state = "stopped"
+            self._persist()
             self.emit({"type": "status", **self.status()})
         except Exception as exc:
             self.state = "error"
             self.error = str(exc)[:300]
+            self._persist()
             self.emit({"type": "status", **self.status()})
         finally:
             del asr, vad, printer, history, refiner
@@ -403,19 +429,20 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
     s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile)
     with _lock:
         _sessions[s.id] = s
+    # 첫 자막이 나오기 전에 서버가 죽어도 세션이 있었다는 사실은 남습니다.
+    s._persist()
     s.start()
     return {"id": s.id}
 
 
 def _retire(session_id: str):
-    """Move a finished session out of the live registry, keeping only its
-    final status so a late poll still gets an answer instead of a 404."""
+    """Move a finished session out of the live registry. Its final status and
+    its subtitles stay in SQLite, so a late poll -- or a poll after the next
+    restart -- still gets an answer instead of a 404."""
     with _lock:
         s = _sessions.pop(session_id, None)
-        if s is not None:
-            _finished[session_id] = s.status()
-            for old in list(_finished)[:-MAX_FINISHED]:
-                _finished.pop(old, None)
+    if s is not None:
+        s._persist()
 
 
 def get(session_id: str) -> LiveSession | None:
@@ -427,8 +454,59 @@ def status_of(session_id: str) -> dict | None:
     s = get(session_id)
     if s is not None:
         return s.status()
-    with _lock:
-        return _finished.get(session_id)
+    return store.session(session_id)
+
+
+def recent(limit: int = 20) -> list[dict]:
+    """Sessions the viewer can go back to, newest first.
+
+    A live session leaves no cue file, so before this it existed only for as
+    long as the tab stayed open. The picker needs a list to offer.
+    """
+    live_now = {sid: s.status() for sid, s in _sessions.items()}
+    out = []
+    for row in store.sessions(limit):
+        out.append({**row, **live_now.get(row["id"], {})})
+    return out
+
+
+def backlog(session_id: str) -> list[dict]:
+    """Everything already published on this session, as the events the
+    browser would have received. Replayed on SSE connect, which is what makes
+    a reload -- or a restart -- keep the transcript so far.
+
+    Translations ride behind their cue because the browser attaches them by
+    id: a translation for a line it has not seen is dropped.
+    """
+    st = store.session(session_id) or {}
+    backend = st.get("backend") or ""
+    events = []
+    for c in store.cues(session_id):
+        tr = c.pop("translations", {})
+        events.append({"type": "cue", **c})
+        text = tr.get(backend) or next(iter(tr.values()), None)
+        if text:
+            events.append({"type": "translation", "id": c["id"],
+                           "kind": c["kind"], "text": text})
+    return events
+
+
+def restore() -> int:
+    """Sessions that were running when the server went down.
+
+    Their ffmpeg child died with the process, so capture cannot continue and
+    saying "running" would be a lie -- the UI would attach to a broadcast
+    that is not being received. Mark them interrupted; the subtitles they
+    already collected stay readable.
+    """
+    hit = 0
+    for session_id in store.running_session_ids():
+        st = store.session(session_id) or {}
+        st["state"] = "interrupted"
+        st["error"] = "서버가 재시작되어 수신이 끊겼습니다. 여기까지 받아 적은 자막입니다."
+        store.save_session(st, st.get("video_id", ""))
+        hit += 1
+    return hit
 
 
 def set_backend(session_id: str, backend_id: str) -> dict:

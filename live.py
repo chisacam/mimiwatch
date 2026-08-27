@@ -219,6 +219,10 @@ class LiveSession:
         self._stop = threading.Event()
         self._ff: subprocess.Popen | None = None
         self._asr = None            # released on stop; see _release()
+        # 인식기 객체는 세션이 끝나면 놓아주지만 어떤 엔진이었는지는
+        # 남아야 합니다. 객체에서 그때그때 읽으면, 놓아준 뒤에 쓰이는
+        # 마지막 상태 저장이 기본값으로 덮어써서 기록이 거짓말을 합니다.
+        self.asr_label = ""
         self._tr = None
         # Refine replaces the final that covered the same speech. Matching on
         # the text hayamimi already emitted is enough here because a refined
@@ -249,7 +253,7 @@ class LiveSession:
                 "source_lang": self.lang, "viewer_lang": self.viewer_lang,
                 "backend": self.backend_id,
                 "asr_backend": self.asr_backend_id,
-                "asr": getattr(self._asr, "label", "hayamimi"),
+                "asr": self.asr_label,
                 "media_base": round(self.media_base, 2),
                 "profile": self.profile, "max_speech": self.max_speech,
                 "window_s": round(self.window_s, 1),
@@ -410,6 +414,7 @@ class LiveSession:
             # not have six people talking. A label that invents speakers is
             # worse than no label.
             asr = self._asr = build_live_asr(asr_spec, self.lang, threads=4)
+            self.asr_label = getattr(asr, "label", "hayamimi")
             vad = build_vad(min_silence=self.min_silence,
                             max_speech=self.max_speech)
             sink = Sink(self)

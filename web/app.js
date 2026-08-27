@@ -19,6 +19,15 @@ const state = {
  * lookup when the work has already been done and a job when it has not. */
 const trOf = (c) => c && c.translations ? c.translations[state.backend] : null;
 
+/* Two different questions get asked about live, and conflating them is what
+ * made "중단" leave the screen inconsistent with itself:
+ *   state.live  -- a transcription session is running right now
+ *   isLiveDoc() -- what the player is showing is a broadcast
+ * Stopping subtitles answers only the first. The broadcast keeps playing, so
+ * everything that reads "this is not a recording" -- cue lookup, script rows
+ * keyed by id, the picker entry -- has to keep saying yes afterwards. */
+const isLiveDoc = () => !!(state.doc && state.doc.live);
+
 /* A speaker chip is only information when it distinguishes someone. CAM++
  * gives one embedding per segment, so a four-way collab mixed into a single
  * stream comes back as S1 for every line -- a label that decorates without
@@ -54,7 +63,7 @@ function cueAt(t) {
   // window would show nothing, always. Hold the newest line that has started
   // until the next one takes over, which is how live captioning reads
   // anyway. The offset slider still shifts the whole track.
-  if (state.live) {
+  if (isLiveDoc()) {
     // Media time is the wrong axis here. A refined line carries the START of
     // the group it absorbed, which can be half a minute behind the player,
     // so ordering by timestamp would bury the line that just arrived. What
@@ -191,7 +200,7 @@ function appendScriptLine(c) {
 }
 
 function markScript(i) {
-  if (state.live) return;   // live rows are keyed by cue id, not position
+  if (isLiveDoc()) return;  // live rows are keyed by cue id, not position
   const box = $("script");
   box.querySelectorAll(".line.on").forEach(el => el.classList.remove("on"));
   if (i < 0) return;
@@ -344,7 +353,9 @@ function bind() {
     persist();
   });
   $("viewer-lang").addEventListener("change", () => { updateLangStatus(); persist(); });
-  $("video-picker").addEventListener("change", e => { stopLive(); loadVideo(e.target.value); });
+  $("video-picker").addEventListener("change", e => {
+    stopLive(); dropLiveOption(e.target.value); loadVideo(e.target.value);
+  });
   $("toggle-panel").addEventListener("click", () => setPanel(!state.panelHidden));
   $("backend-picker").addEventListener("change", e => selectBackend(e.target.value));
   $("open-settings").addEventListener("click", openSettings);
@@ -439,7 +450,7 @@ function renderBackendPicker() {
     // as it goes, so the label would be wrong the moment the first line
     // lands.
     const done = state.doc && (state.doc.backends_done || []).includes(b.id);
-    o.textContent = b.label + (state.doc && !state.live && !done ? " (미번역)" : "");
+    o.textContent = b.label + (state.doc && !isLiveDoc() && !done ? " (미번역)" : "");
     pick.appendChild(o);
   });
   pick.value = state.backend;
@@ -451,14 +462,18 @@ function renderBackendPicker() {
 async function selectBackend(id) {
   state.backend = id;
   persist();
-  if (state.live) {
+  if (isLiveDoc()) {
     // Nothing to re-translate: lines already on screen keep what they got,
-    // and everything from here uses the new backend.
+    // and everything from here uses the new backend. A broadcast whose
+    // subtitles were stopped has no session left to tell, and it is no saved
+    // video either, so the picker is all there is to update.
     state.doc.backends_done = [...new Set([...(state.doc.backends_done || []), id])];
-    await fetch("/api/live/backend", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: state.live.id, backend: id }),
-    }).catch(() => {});
+    if (state.live) {
+      await fetch("/api/live/backend", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: state.live.id, backend: id }),
+      }).catch(() => {});
+    }
     renderBackendPicker();
     return;
   }
@@ -784,21 +799,48 @@ async function startLive(url, lang, probe) {
     else if (m.type === "translation") onLiveTranslation(m);
     else if (m.type === "status") onLiveStatus(m);
   };
-  es.onerror = () => { $("lang-status").innerHTML = "라이브 연결 끊김"; };
+  // Closing the stream ourselves also lands here in some browsers; only an
+  // unasked-for drop is news, and only while the session is still supposed
+  // to be running.
+  es.onerror = () => {
+    if (state.live && state.live.es === es) $("lang-status").innerHTML = "라이브 연결 끊김";
+  };
 }
+
+const liveOptionLabel = (title, stopped) =>
+  `${stopped ? "○ LIVE · 자막 중단" : "● LIVE"}  ${(title || "").slice(0, 58)}`;
 
 function addLiveToPicker(probe) {
   // The picker was still naming whichever recording was open, while the
   // screen showed a broadcast. A live session is not a saved video, so it
-  // gets a temporary entry that goes away when the session ends.
+  // gets a temporary entry that lasts as long as the broadcast is on screen.
+  // Dropping every earlier live entry first is also what keeps re-adding the
+  // same broadcast from stacking a second row on top of a stopped one.
   const pick = $("video-picker");
   pick.querySelectorAll("option[data-live]").forEach(o => o.remove());
   const o = document.createElement("option");
   o.value = probe.id;
   o.dataset.live = "1";
-  o.textContent = `● LIVE  ${(probe.title || "").slice(0, 58)}`;
+  o.dataset.title = probe.title || "";
+  o.textContent = liveOptionLabel(o.dataset.title, false);
   pick.prepend(o);
   pick.value = probe.id;
+}
+
+/* Removing the entry on stop was the mismatch: the player went on showing a
+ * broadcast the list no longer had. Keep the entry, say the subtitles ended. */
+function markLiveStopped() {
+  const o = $("video-picker").querySelector("option[data-live]");
+  if (!o) return;
+  o.textContent = liveOptionLabel(o.dataset.title, true);
+}
+
+/* The stopped entry stands for what the player is showing. Once the viewer
+ * picks something else the player moves on, and so does the entry. */
+function dropLiveOption(keepValue) {
+  $("video-picker").querySelectorAll("option[data-live]").forEach(o => {
+    if (o.value !== keepValue) o.remove();
+  });
 }
 
 function onLiveCue(m) {
@@ -859,10 +901,17 @@ function onLiveTranslation(m) {
 
 function onLiveStatus(m) {
   const el = $("lang-status");
-  if (m.state === "error") {
-    el.className = "status warn";
-    el.textContent = m.error || "라이브 오류";
+  // A session can end without anyone pressing 중단 -- the broadcast finished,
+  // or the reader died. Either way the subtitles are over while the player
+  // may still have video, which is exactly the state the button produces, so
+  // it is settled the same way. stopLive() writes its own note, so an error
+  // has to say its piece afterwards.
+  if (m.state === "error" || m.state === "stopped") {
     stopLive();
+    if (m.state === "error") {
+      el.className = "status warn";
+      el.textContent = m.error || "라이브 오류";
+    }
     return;
   }
   el.className = "status";
@@ -871,6 +920,11 @@ function onLiveStatus(m) {
     + (m.lines ? ` · ${m.lines}줄` : "");
 }
 
+/* "중단" ends the transcription session, not the viewing. Nothing here
+ * touches the player: the viewer asked for the subtitles to stop, not for the
+ * broadcast to. The cues already received stay in the panel and in
+ * state.mode -- they cost nothing and re-reading them is the whole point of
+ * the panel. */
 function stopLive() {
   const live = state.live;
   if (!live) return;
@@ -881,13 +935,18 @@ function stopLive() {
   }).catch(() => {});
   state.live = null;
   $("live-badge").hidden = true;
-  $("offset-wrap").style.display = "";
-  $("video-picker").querySelectorAll("option[data-live]").forEach(o => o.remove());
+  $("offset-wrap").style.display = "";   // nothing left to nudge
+  markLiveStopped();
+  const el = $("lang-status");
+  el.className = "status";
+  el.textContent = "자막 중단됨 · 방송은 계속 재생됩니다";
 }
 
 async function deleteVideo() {
   if (!state.doc) return;
-  if (state.live) { alert("라이브 세션은 삭제할 수 없습니다. 중단 후 다시 시도하십시오."); return; }
+  // A broadcast is nothing on disk, stopped or not; there is no transcript
+  // to delete and no audio file behind it.
+  if (isLiveDoc()) { alert("라이브 방송은 저장된 영상이 아니라 삭제할 수 없습니다."); return; }
   const title = state.doc.title.slice(0, 50);
   if (!confirm(`'${title}' 전사를 삭제할까요?\n내려받은 오디오도 함께 지웁니다.`)) return;
   const res = await (await fetch("/api/video/delete", {

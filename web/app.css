@@ -194,6 +194,10 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 
 #add-form button.ghost{border-style:dashed}
 
+/* An author `display` beats the UA rule behind the hidden attribute, so the
+ * badge announced a broadcast on every page load and kept announcing one
+ * after the session was stopped. */
+.live-badge[hidden]{display:none}
 .live-badge{
   display:flex; align-items:center; gap:.6rem;
   font-family:var(--mono); font-size:.72rem; font-weight:700; color:#ff5f56;

@@ -1,0 +1,28 @@
+{
+ "active": "local-m2m100",
+ "backends": [
+  {
+   "id": "local-m2m100",
+   "label": "로컬 M2M-100 (기본)",
+   "backend": "local",
+   "min_chars": 0
+  },
+  {
+   "id": "gemma4-e4b",
+   "label": "Gemma 4 E4B (Backend.AI GO)",
+   "backend": "openai",
+   "base_url": "http://localhost:1234",
+   "model": "google/gemma-4-E4B_q4_0-it",
+   "api_key": "",
+   "min_chars": 0
+  }
+ ],
+ "asr_active": "local-hayamimi",
+ "asr_backends": [
+  {
+   "id": "local-hayamimi",
+   "label": "hayamimi 로컬 (기본)",
+   "backend": "local"
+  }
+ ]
+}

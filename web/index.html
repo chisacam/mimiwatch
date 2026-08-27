@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mimiwatch</title>
+<link rel="stylesheet" href="/static/app.css">
+<body>
+
+<header class="bar">
+  <div class="brand">mimi<em>watch</em></div>
+  <label class="field">
+    <span>내 언어</span>
+    <select id="viewer-lang">
+      <option value="ko">한국어</option>
+      <option value="en">English</option>
+      <option value="ja">日本語</option>
+      <option value="zh">中文</option>
+    </select>
+  </label>
+  <select id="video-picker" class="field-select"><option>불러오는 중…</option></select>
+  <button id="add-video" class="seg primary-seg" title="YouTube 주소로 새 영상 추가">＋ 영상 추가</button>
+  <button id="del-video" class="seg" title="선택한 영상 삭제">🗑</button>
+  <label class="field" id="asr-field">
+    <span>전사</span>
+    <select id="asr-picker"></select>
+  </label>
+  <label class="field" id="backend-field">
+    <span>번역</span>
+    <select id="backend-picker"></select>
+  </label>
+  <button id="open-settings" class="seg" title="엔진 관리">⚙</button>
+  <div class="spacer"></div>
+  <div id="live-badge" class="live-badge" hidden>● LIVE <button id="live-stop">중단</button></div>
+  <div id="lang-status" class="status"></div>
+  <button id="toggle-panel" class="seg" title="스크립트 영역 접기/펼치기 (S)">스크립트 ▸</button>
+</header>
+
+<main id="layout">
+  <section class="stage">
+    <div id="player-wrap">
+      <div id="player"></div>
+      <div id="overlay" class="overlay">
+        <div id="cue-prev" class="cue-prev"></div>
+        <div id="cue-main" class="cue-main"></div>
+        <div id="cue-src" class="cue-src"></div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="group">
+        <span class="glabel">자막</span>
+        <button class="seg" data-mode="off">끄기</button>
+        <button class="seg" data-mode="both" data-needs-translation>둘 다</button>
+        <button class="seg" data-mode="translation" data-needs-translation>번역만</button>
+        <button class="seg" data-mode="source">원문만</button>
+      </div>
+      <label class="slider">글자 크기 <input id="size" type="range" min="16" max="56" value="30"></label>
+      <label class="slider">배경 <input id="dim" type="range" min="0" max="100" value="55"></label>
+      <label class="slider">위치 <input id="pos" type="range" min="0" max="40" value="6"></label>
+      <label class="check"><input id="show-prev" type="checkbox" checked> 직전 문장 남기기</label>
+      <label class="slider" id="offset-wrap">오프셋 <input id="offset" type="range" min="-3" max="3" step="0.1" value="0"><b id="offset-val">0.0s</b></label>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="panel-head">
+      <h2>스크립트</h2>
+      <label class="check"><input id="follow" type="checkbox" checked> 따라가기</label>
+    </div>
+    <div id="script" class="script"></div>
+  </aside>
+</main>
+
+<div id="job" class="job" hidden>
+  <div class="job-head">
+    <div class="job-label">재번역 중…</div>
+    <button id="job-cancel" class="seg">중단</button>
+  </div>
+  <div class="job-bar"><i id="job-fill"></i></div>
+  <div id="job-count" class="job-count"></div>
+  <div id="job-source" class="job-count"></div>
+</div>
+
+<dialog id="add-dialog">
+  <form method="dialog" id="add-form">
+    <h3>영상 추가</h3>
+    <p class="hint">YouTube 주소나 m3u8 주소를 넣으면 오디오를 받아 전사하고, 원본 언어가 내 언어와 다르면 번역까지 진행합니다.</p>
+    <label>주소 <input name="url" placeholder="https://youtu.be/... 또는 https://.../index.m3u8" required></label>
+    <label>콘텐츠 유형 <small class="tag">라이브 전용</small>
+      <select name="profile"></select>
+      <small>발화를 얼마나 자주 끊을지 정합니다. 여러 사람이 겹쳐 말하면 짧게 끊어야 누락이 줄어듭니다.</small>
+    </label>
+    <label class="inline"><input type="checkbox" name="speakers"> 화자 태그 붙이기 <small class="tag">라이브 전용</small></label>
+    <label>원본 언어
+      <select name="lang">
+        <option value="">자동 판별</option>
+        <option value="ko">한국어</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="zh">中文</option>
+      </select>
+      <small>단일 언어 영상이라면 지정하는 편이 안전합니다. 자동 판별은 잡음 구간에서 다른 언어로 고착될 수 있습니다.</small>
+    </label>
+    <div class="row">
+      <span class="grow"></span>
+      <button value="cancel" formnovalidate>취소</button>
+      <button value="save" class="primary">시작</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings-dialog">
+  <div id="settings-body">
+    <div class="dlg-head">
+      <h3>엔진 관리</h3>
+      <button id="settings-close" class="seg">닫기</button>
+    </div>
+
+    <section class="engine-group">
+      <div class="group-head">
+        <h4>전사 엔진</h4>
+        <button class="seg ghost" data-add="asr">＋ 추가</button>
+      </div>
+      <p class="hint">음성을 글자로 옮깁니다. 기본은 hayamimi 로컬입니다. 외부 엔진은 OpenAI 호환 <code>/v1/audio/transcriptions</code> 규약을 씁니다. <b>현재 녹화본 전사에만 적용되며 라이브는 항상 로컬을 씁니다.</b></p>
+      <div id="asr-list" class="engine-list"></div>
+    </section>
+
+    <section class="engine-group">
+      <div class="group-head">
+        <h4>번역 백엔드</h4>
+        <button class="seg ghost" data-add="tr">＋ 추가</button>
+      </div>
+      <p class="hint">인식한 문장을 시청자 언어로 옮깁니다. OpenAI 호환 <code>/v1/chat/completions</code> 규약을 씁니다.</p>
+      <div id="tr-list" class="engine-list"></div>
+    </section>
+  </div>
+
+  <form id="engine-form" hidden>
+    <div class="dlg-head">
+      <h3 id="form-title">엔진 추가</h3>
+      <button type="button" id="form-back" class="seg">뒤로</button>
+    </div>
+    <label>표시 이름 <input name="label" required></label>
+    <label>엔진 ID <input name="id" required pattern="[a-z0-9-]+"></label>
+    <label>주소 <input name="base_url" placeholder="http://localhost:1234" required></label>
+    <label>모델 <input name="model" required></label>
+    <label>API 키 <input name="api_key" placeholder="(선택)"></label>
+    <label id="field-window">창 길이(초)
+      <input name="window_s" type="number" min="30" max="900" value="240">
+      <small>한 번에 보낼 오디오 길이입니다. 서버의 요청 크기 제한에 맞추십시오.</small>
+    </label>
+    <label id="field-minchars">짧은 발화 건너뛰기
+      <input name="min_chars" type="number" min="0" max="20" value="0">
+      <small>0이면 모두 번역합니다. 호출당 요금이 붙는 유료 API에서만 올리십시오.</small>
+    </label>
+    <div class="row">
+      <span class="grow"></span>
+      <button type="submit" class="primary">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -23,6 +23,16 @@
    "id": "local-hayamimi",
    "label": "hayamimi 로컬 (기본)",
    "backend": "local"
+  },
+  {
+   "id": "tcpp-best",
+   "label": "transcribe.cpp Whisper v3 turbo (일/한)",
+   "backend": "tcpp",
+   "models": {
+    "ja": "/Users/chiyak/models/transcribe-cpp/whisper-large-v3-turbo-Q8_0.gguf",
+    "ko": "/Users/chiyak/models/transcribe-cpp/whisper-large-v3-turbo-Q8_0.gguf"
+   },
+   "threads": 4
   }
  ]
 }

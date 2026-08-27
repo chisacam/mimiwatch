@@ -69,14 +69,15 @@ def read_wav(path: str) -> np.ndarray:
 
 
 def transcribe(samples: np.ndarray, lang: str | None, on_progress=None,
-               speakers: bool = False) -> list[dict]:
+               speakers: bool = False, asr=None) -> list[dict]:
     """VAD-segment the whole file and decode each segment.
 
     Segment.start is a sample index, which is exactly the media timestamp the
     player needs -- the realtime pipeline throws this away because it only
     ever cared about "now".
     """
-    asr = RoutedASR(threads=4, forced_lang=lang)
+    if asr is None:
+        asr = RoutedASR(threads=4, forced_lang=lang)
     vad = build_vad(min_silence=0.35, max_speech=12.0)
     # CAM++ needs enough voice in a segment to place a speaker. The 12s
     # splits here give it that; the live path splits at 3-4s to keep up with

@@ -53,6 +53,27 @@ class LocalHayamimi(ASRBackend):
                               speakers=speakers)
 
 
+class TranscribeCpp(ASRBackend):
+    """transcribe.cpp의 GGUF 모델로 구간을 해독합니다.
+
+    구간 분할과 시각 계산은 로컬 경로와 똑같이 hayamimi의 VAD가 맡고,
+    해독만 갈아 끼웁니다. 배치된 모델이 없는 언어면 build_live_asr가
+    RoutedASR을 돌려주므로 이 경로도 자동으로 기본 엔진으로 돌아갑니다.
+    """
+
+    name = "tcpp"
+
+    def __init__(self, spec: dict):
+        self.spec = spec
+
+    def transcribe(self, samples, lang, on_progress=None, speakers=False):
+        import transcribe_vod as vod
+        from tcpp_asr import build_live_asr
+        engine = build_live_asr(self.spec, lang, threads=4)
+        return vod.transcribe(samples, lang, on_progress=on_progress,
+                              speakers=speakers, asr=engine)
+
+
 class OpenAICompatibleASR(ASRBackend):
     """POST windows of audio to /v1/audio/transcriptions.
 
@@ -164,6 +185,8 @@ class OpenAICompatibleASR(ASRBackend):
 
 def build(spec: dict | None) -> ASRBackend:
     spec = spec or {}
+    if spec.get("backend") == "tcpp":
+        return TranscribeCpp(spec)
     if spec.get("backend") == "openai":
         return OpenAICompatibleASR(spec["base_url"], spec["model"],
                                    spec.get("api_key", ""),

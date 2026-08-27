@@ -37,6 +37,7 @@ from realtime_transcribe import (AudioHistory, PartialPrinter,  # noqa: E402
                                  Refiner, SessionStats, build_vad, run_stream)
 
 import translate as mw_translate                      # noqa: E402
+from tcpp_asr import build_live_asr                   # noqa: E402
 
 SAMPLE_RATE = 16000
 CHUNK = 1600            # 0.1s per VAD feed
@@ -166,12 +167,14 @@ class Sink:
 
 class LiveSession:
     def __init__(self, url: str, lang: str | None, viewer_lang: str,
-                 backend_id: str, profile: str = "broadcast"):
+                 backend_id: str, profile: str = "broadcast",
+                 asr_backend_id: str = ""):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         self.lang = lang
         self.viewer_lang = viewer_lang
         self.backend_id = backend_id
+        self.asr_backend_id = asr_backend_id
         prof = PROFILES.get(profile, PROFILES["broadcast"])
         self.profile = profile if profile in PROFILES else "broadcast"
         self.max_speech = prof["max_speech"]
@@ -219,6 +222,8 @@ class LiveSession:
                 "title": self.title, "url": self.url,
                 "source_lang": self.lang, "viewer_lang": self.viewer_lang,
                 "backend": self.backend_id,
+                "asr_backend": self.asr_backend_id,
+                "asr": getattr(self._asr, "label", "hayamimi"),
                 "media_base": round(self.media_base, 2),
                 "profile": self.profile, "max_speech": self.max_speech,
                 "window_s": round(self.window_s, 1),
@@ -343,12 +348,16 @@ class LiveSession:
             self.state = "loading"
             self.emit({"type": "status", **self.status()})
 
-            spec = None
+            spec = asr_spec = None
             with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "backends.json"), encoding="utf-8") as f:
-                for b in json.load(f)["backends"]:
-                    if b["id"] == self.backend_id:
-                        spec = b
+                cfg = json.load(f)
+            for b in cfg["backends"]:
+                if b["id"] == self.backend_id:
+                    spec = b
+            for b in cfg.get("asr_backends", []):
+                if b["id"] == self.asr_backend_id:
+                    asr_spec = b
             self._tr = mw_translate.build(spec)
 
             # Speaker tags are a recorded-video feature. CAM++ needs enough
@@ -357,7 +366,7 @@ class LiveSession:
             # 70 seconds that produced six speaker ids on a stream that did
             # not have six people talking. A label that invents speakers is
             # worse than no label.
-            asr = self._asr = RoutedASR(threads=4, forced_lang=self.lang)
+            asr = self._asr = build_live_asr(asr_spec, self.lang, threads=4)
             vad = build_vad(min_silence=self.min_silence,
                             max_speech=self.max_speech)
             sink = Sink(self)
@@ -392,7 +401,7 @@ class LiveSession:
 
 
 def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
-          profile: str = "broadcast") -> dict:
+          profile: str = "broadcast", asr_backend_id: str = "") -> dict:
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
     for old_id in list(_sessions):
@@ -400,7 +409,8 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
         if old is not None:
             old.stop()
 
-    s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile)
+    s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile,
+                    asr_backend_id=asr_backend_id)
     with _lock:
         _sessions[s.id] = s
     s.start()

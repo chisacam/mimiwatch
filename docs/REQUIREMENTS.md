@@ -195,7 +195,7 @@ YouTube 라이브 HLS는 `EXT-X-PROGRAM-DATE-TIME`을 2초 세그먼트마다 �
 | R2.1 hayamimi 로컬 전사 | ✅ | 녹화본 38~88배속 |
 | R2.2 미디어 타임스탬프 부여 | ✅ | VAD 세그먼트의 샘플 위치를 그대로 사용합니다 |
 | R2.3 원본 언어 고정 | ✅ | `--mode single` 상당 |
-| R2.5 외부 전사 엔진 | ⚠️ **녹화본 한정** | 라이브는 항상 로컬을 씁니다. UI에 명시했습니다 |
+| R2.5 외부 전사 엔진 | ✅ | 녹화본과 라이브 양쪽. OpenAI 호환 HTTP와 transcribe.cpp 로컬 GGUF 두 갈래입니다 |
 | R3.1 임의 원본 언어 번역 | ✅ | `translate.py`에서 원본 언어를 매개변수로 받습니다 |
 | R3.3 OpenAI 호환 엔드포인트 | ✅ | Backend.AI GO에서 Gemma 4 E4B로 검증 |
 | R3.5 실패 시 로컬 대체 | ✅ | 연속 3회 실패 시 차단기 작동 |
@@ -216,13 +216,26 @@ YouTube 라이브 HLS는 `EXT-X-PROGRAM-DATE-TIME`을 2초 세그먼트마다 �
 
 **전사 라우팅 확인**: 일본어는 ReazonSpeech(`rz`)로 갑니다. whisper-tiny는 언어 판별 전용이며 언어를 고정하면 호출되지 않습니다.
 
-### 8-3. 남은 과제
+### 8-3. 전사 엔진 (2026-08-28 완료)
 
-- 라이브 경로의 외부 전사 엔진 연결
+transcribe.cpp의 GGUF 모델을 파이썬 바인딩으로 붙였습니다. CLI를 구간마다
+부르면 매번 모델을 다시 읽어야 하므로 라이브에 쓸 수 없어, 모델을 한 번만
+올리고 재사용하는 방식을 택했습니다.
+
+`tcpp_asr.TranscribeCppASR`가 hayamimi `RoutedASR`의 표면을 흉내 내므로
+`run_stream`과 `Refiner`를 그대로 쓸 수 있습니다. 언어를 고정하면 정제
+단계의 언어 재판정 분기가 스스로 닫히는 점을 이용했습니다.
+
+- **일본어·한국어**: whisper-large-v3-turbo Q8_0
+- **그 외**: hayamimi RoutedASR로 자동 복귀
+- 근거와 탈락한 후보(Fun-ASR, SenseVoice, Voxtral, Moonshine, Qwen3, Cohere)의
+  실측은 `measurements/RESULTS.md` 11~14장에 있습니다
+
+### 8-4. 남은 과제
+
 - 라이브 자막과 영상의 정렬 정확도 실사용 검증 (현재 수동 오프셋 제공)
 - 겹친 발화 분리 (화자 태그로는 해결되지 않음)
 - 작업 상태의 영속화. 라이브가 몇 시간씩 이어지는데 서버를 재시작하면 진행 상태가 사라집니다. SQLite 도입은 이 시점에 검토하는 것이 적절합니다
-- 전사 모델 검토 (Moonshine의 동적 구간 처리 대 언어별 전문 모델의 정확도)
 
 ---
 

@@ -767,6 +767,7 @@ async function startLive(url, lang, probe) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
+      asr: state.asr,
       profile: document.querySelector('#add-form select[name="profile"]').value,
     }),
   })).json();

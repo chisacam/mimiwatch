@@ -157,7 +157,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(live.start(url, body.get("lang") or None,
                                          body.get("viewer_lang") or "ko",
                                          body.get("backend") or "local-m2m100",
-                                         body.get("profile") or "broadcast"))
+                                         body.get("profile") or "broadcast",
+                                         body.get("asr") or ""))
 
         if path == "/api/live/backend":
             return self._json(live.set_backend(body.get("id", ""),

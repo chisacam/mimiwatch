@@ -28,9 +28,6 @@ import wave
 
 import numpy as np
 
-HAYAMIMI = os.environ.get("HAYAMIMI_DIR", "/Users/chiyak/hobby/hayamimi")
-sys.path.insert(0, os.path.join(HAYAMIMI, "scripts"))
-
 SAMPLE_RATE = 16000
 
 

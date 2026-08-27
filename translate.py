@@ -21,11 +21,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import urllib.error
 import urllib.request
 
-HAYAMIMI = os.environ.get("HAYAMIMI_DIR", "/Users/chiyak/hobby/hayamimi")
-M2M_DIR = os.path.join(HAYAMIMI, "models", "mojicast-m2m100-ct2")
+import stream
+
+M2M_DIR = os.path.join(stream.model_dir(), "mojicast-m2m100-ct2")
 
 EOS_TOKEN = "</s>"
 # Beam sizes hayamimi measured per target; anything else falls back to 2.
@@ -189,6 +191,71 @@ class OpenAICompatible(Translator):
             raise
 
 
+class LocalGemma(Translator):
+    """Gemma를 이 프로세스 안에서 직접 돌립니다.
+
+    전사 모델을 스스로 서빙하게 되면서 번역만 다른 앱에 맡길 이유가
+    없어졌습니다. LM Studio 같은 별도 서버 없이 같은 GGUF를 그대로 씁니다.
+    OpenAICompatible 경로는 그대로 두었으므로, 더 큰 모델을 다른 기계에서
+    돌리고 싶을 때는 그쪽을 쓰면 됩니다.
+
+    프롬프트는 원격 경로와 같은 것을 씁니다. 같은 모델을 두 경로로 부를 때
+    결과가 달라지면 비교가 성립하지 않습니다.
+    """
+
+    name = "local-gemma"
+
+    def __init__(self, model_path: str | None = None, n_ctx: int = 2048,
+                 threads: int = 4, prompt: str | None = None,
+                 max_tokens: int = 256):
+        import stream
+
+        self.model_path = model_path or os.path.join(
+            stream.model_dir(), "gemma-4-E4B_q4_0-it.gguf")
+        self.prompt = prompt or OpenAICompatible.DEFAULT_PROMPT
+        self.max_tokens = max_tokens
+        self._n_ctx = n_ctx
+        self._threads = threads
+        self._llm = None
+        # llama.cpp의 컨텍스트는 동시 호출을 견디지 못합니다. 자막 한 줄마다
+        # 번역 스레드가 뜨므로 직렬화합니다.
+        self._lock = threading.Lock()
+
+    def _ensure(self):
+        if self._llm is not None:
+            return
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(
+                f"Gemma 모델이 없습니다: {self.model_path}\n"
+                "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+        from llama_cpp import Llama
+        # 4GB짜리를 세션 시작마다 올리면 첫 자막이 그만큼 늦습니다. 처음
+        # 번역할 때 올리고 그 뒤로는 재사용합니다.
+        self._llm = Llama(model_path=self.model_path, n_ctx=self._n_ctx,
+                          n_threads=self._threads, n_gpu_layers=-1,
+                          verbose=False)
+
+    def translate(self, text: str, src: str, tgt: str) -> str:
+        stripped = (text or "").strip()
+        if not stripped or src == tgt:
+            return text
+        self._ensure()
+        msg = self.prompt.format(src=src, tgt=tgt, text=stripped)
+        with self._lock:
+            out = self._llm.create_chat_completion(
+                messages=[{"role": "user", "content": msg}],
+                temperature=0.2, max_tokens=self.max_tokens)
+        answer = (out["choices"][0]["message"].get("content") or "").strip()
+        # 생각을 적고 나오는 모델이면 그 부분을 걷어냅니다. 자막 한 줄에
+        # 추론을 붙이면 지연만 늘고 답은 나아지지 않는다는 것을 원격 경로에서
+        # 이미 확인했습니다.
+        if "</think>" in answer:
+            answer = answer.rsplit("</think>", 1)[-1].strip()
+        if looks_broken(answer, stripped):
+            return text
+        return answer
+
+
 class WithFallback(Translator):
     """Try the remote backend, fall back to local when it errors out.
 
@@ -249,6 +316,15 @@ def build(spec: dict | None) -> Translator:
        {"backend": "openai", "base_url": ..., "model": ..., "api_key": ...}"""
     spec = spec or {}
     min_chars = int(spec.get("min_chars", DEFAULT_MIN_CHARS) or 0)
+    if spec.get("backend") == "gemma":
+        gemma = LocalGemma(spec.get("model_path"),
+                           n_ctx=int(spec.get("n_ctx", 2048)),
+                           threads=int(spec.get("threads", 4)),
+                           prompt=spec.get("prompt"))
+        gemma.min_chars = min_chars
+        # 모델 파일이 없거나 적재가 실패해도 자막이 원문으로 남지는 않도록
+        # M2M-100을 뒤에 둡니다. 어느 쪽이 실제로 답했는지는 기록됩니다.
+        return WithFallback(gemma, LocalM2M())
     if spec.get("backend") == "openai":
         remote = OpenAICompatible(spec["base_url"], spec["model"],
                                   spec.get("api_key", ""), spec.get("prompt"),

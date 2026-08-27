@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
-  backend: "local-m2m100", asr: "local-hayamimi",
+  backend: "local-m2m100", asr: "local-hayamimi", refine: true,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   live: null,          // { id, es, byId } while a broadcast is running
 };
@@ -377,6 +377,8 @@ function bind() {
   });
   $("job-cancel").addEventListener("click", cancelJob);
   $("add-video").addEventListener("click", () => $("add-dialog").showModal());
+  document.querySelector('#add-form input[name="refine"]')
+    .addEventListener("change", e => { state.refine = e.target.checked; persist(); });
   $("add-form").addEventListener("submit", submitAdd);
   $("del-video").addEventListener("click", deleteVideo);
   $("live-stop").addEventListener("click", stopLive);
@@ -396,7 +398,14 @@ function setPanel(hidden) {
   $("toggle-panel").classList.toggle("on", hidden);
   persist();
 }
+/* 설정을 서버에서 받아 맞추기 전에는 저장하지 않습니다. 부팅 순서가
+ * restore() → loadBackends()라서, 그 사이에 한 번이라도 저장하면 state에
+ * 박아 둔 초기값이 사용자가 고른 값을 덮어씁니다. 그 뒤 loadBackends는
+ * 방금 덮어쓴 값을 읽으므로 서버 기본값도 영영 이기지 못합니다. */
+let booted = false;
+
 function persist() {
+  if (!booted) return;
   const translated = !!(state.doc && state.doc.translated);
   const prev = loadPrefs();
   savePrefs({
@@ -407,7 +416,7 @@ function persist() {
     offset: +$("offset").value, viewerLang: $("viewer-lang").value,
     panelHidden: state.panelHidden, backend: state.backend,
     profile: (document.querySelector('#add-form select[name="profile"]') || {}).value,
-    asr: state.asr,
+    asr: state.asr, refine: state.refine,
   });
 }
 function restore() {
@@ -437,7 +446,10 @@ async function loadBackends() {
   const p0 = loadPrefs();
   const asrIds = state.asrBackends.map(b => b.id);
   state.asr = asrIds.includes(p0.asr) ? p0.asr : (cfg.asr_active || "local-hayamimi");
+  if (p0.refine != null) state.refine = !!p0.refine;
+  document.querySelector('#add-form input[name="refine"]').checked = state.refine;
   renderAsrPicker();
+  booted = true;      // 여기부터는 state가 설정과 맞춰졌으므로 저장해도 됩니다
   const ids = cfg.backends.map(b => b.id);
   // A remembered backend can disappear when the config is edited or renamed.
   // Falling back keeps a stale preference from asking the server for a
@@ -819,7 +831,7 @@ async function startLive(url, lang, probe) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
-      asr: state.asr,
+      asr: state.asr, refine: state.refine,
       profile: document.querySelector('#add-form select[name="profile"]').value,
     }),
   })).json();

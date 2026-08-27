@@ -30,18 +30,12 @@ import uuid
 
 import numpy as np
 
-HAYAMIMI = os.environ.get("HAYAMIMI_DIR", "/Users/chiyak/hobby/hayamimi")
-sys.path.insert(0, os.path.join(HAYAMIMI, "scripts"))
+import store
+import translate as mw_translate
+from stream import (SAMPLE_RATE, AudioHistory, Refiner, build_vad,  # noqa: F401
+                    run_stream)
+from tcpp_asr import build_live_asr
 
-from asr_engine import RoutedASR                      # noqa: E402
-from realtime_transcribe import (AudioHistory, PartialPrinter,  # noqa: E402
-                                 Refiner, SessionStats, build_vad, run_stream)
-
-import translate as mw_translate                      # noqa: E402
-from tcpp_asr import build_live_asr                   # noqa: E402
-import store                                          # noqa: E402
-
-SAMPLE_RATE = 16000
 CHUNK = 1600            # 0.1s per VAD feed
 
 # hayamimi's 12s force-split suits a single speaker who eventually pauses.
@@ -153,6 +147,14 @@ def media_base_from(pdt: str | None, release_ts: float | None,
 # 화면에서는 눈에 덜 띄지만 저장분에 둘 다 쌓여, 새로고침하면 같은 발화가
 # 두 번 나옵니다. 그래서 글자 일치가 아니라 겹치는 정도로 봅니다.
 COVER_RATIO = 0.6
+# 정제는 한 무리의 발화를 합쳐 다시 해독한 것이므로, 그 무리보다 훨씬 오래된
+# 줄까지 거슬러 올라가 흡수할 일은 없습니다.
+COVER_WINDOW_S = 30.0
+# 짧은 줄은 유사도로 보면 안 됩니다. `はい` 두 글자는 어떤 정제본에나 들어
+# 있어서, 느슨하게 보면 관계없는 것까지 삼킵니다.
+COVER_EXACT_BELOW = 4
+# 무리 한가운데에서 못 알아본 줄이 이만큼까지 이어져도 같은 무리로 봅니다.
+COVER_GAP = 2
 
 
 def _covers(final_text: str, refined: str) -> bool:
@@ -160,44 +162,41 @@ def _covers(final_text: str, refined: str) -> bool:
     a = final_text.strip()
     if not a:
         return False
+    if len(a) < COVER_EXACT_BELOW:
+        return a in refined
     matched = sum(b.size for b in
                   difflib.SequenceMatcher(None, a, refined).get_matching_blocks())
     return matched / len(a) >= COVER_RATIO
 
 
 class Sink:
-    """Stands in for hayamimi's SubtitleServer.
-
-    run_stream and Refiner publish through `printer.server`, so implementing
-    its three methods is enough to divert the whole pipeline into a queue
-    without touching hayamimi.
-    """
+    """전사 루프가 내놓는 줄을 세션의 발행 경로로 넘깁니다."""
 
     def __init__(self, session: "LiveSession"):
         self.s = session
 
-    def partial(self, text: str):
-        self.s.emit({"type": "partial", "text": text})
-
-    def final(self, text, lang="", speaker="", latency_ms=None, tier=""):
+    def final(self, text: str, lang: str = "", speaker: str = ""):
         self.s.publish_line("final", text, lang, speaker)
 
-    def publish(self, event: dict):
-        if event.get("type") == "refine":
-            self.s.publish_line("refine", event.get("text", ""),
-                                event.get("lang", ""), event.get("speaker", ""))
+    def refine(self, text: str, lang: str = "", speaker: str = ""):
+        self.s.publish_line("refine", text, lang, speaker)
 
 
 class LiveSession:
     def __init__(self, url: str, lang: str | None, viewer_lang: str,
                  backend_id: str, profile: str = "broadcast",
-                 asr_backend_id: str = ""):
+                 asr_backend_id: str = "", refine: bool = True):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         self.lang = lang
         self.viewer_lang = viewer_lang
         self.backend_id = backend_id
         self.asr_backend_id = asr_backend_id
+        # 정제는 발화 한 무리가 끝나기를 2초 기다렸다 합쳐서 다시 해독합니다.
+        # 문맥이 길어져 결과가 좋아지지만, 그만큼 자막이 늦게 자리를 잡고
+        # 이미 뜬 줄이 통째로 바뀝니다. 말이 빠르게 오가는 방송에서는 짧게
+        # 끊어 바로 내보내는 편이 따라가기 쉬울 수 있어 끌 수 있게 둡니다.
+        self.refine = refine
         prof = PROFILES.get(profile, PROFILES["broadcast"])
         self.profile = profile if profile in PROFILES else "broadcast"
         self.max_speech = prof["max_speech"]
@@ -253,6 +252,7 @@ class LiveSession:
                 "source_lang": self.lang, "viewer_lang": self.viewer_lang,
                 "backend": self.backend_id,
                 "asr_backend": self.asr_backend_id,
+                "refine": self.refine,
                 "asr": self.asr_label,
                 "media_base": round(self.media_base, 2),
                 "profile": self.profile, "max_speech": self.max_speech,
@@ -287,8 +287,35 @@ class LiveSession:
             self._translate_async(cue)
         else:
             # A refined group supersedes the finals whose words it contains.
-            covered = [c for c in self._recent
-                       if c["kind"] == "final" and _covers(c["text"], text)]
+            # 정제는 한 무리의 발화를 합친 것이므로, 흡수 대상도 그 무리처럼
+            # 이어져 있어야 합니다. 아무 데서나 고르면 `はい` 같은 짧은
+            # 맞장구가 한참 전 것까지 걸려, 정제본이 그 옛 줄의 시각과 id를
+            # 물려받아 과거 자막 자리에 끼어듭니다.
+            #
+            # 다만 꼬리에서부터 훑으면 안 됩니다. 정제는 무음 2초를 기다렸다
+            # 오므로 그 사이에 다음 발화의 확정본이 먼저 들어와 있고, 거기서
+            # 멈춰 버리면 아무것도 흡수하지 못해 같은 말이 두 줄로 남습니다.
+            # 그래서 위치에 관계없이 가장 긴 연속 구간을 찾습니다.
+            hits = [i for i, c in enumerate(self._recent)
+                    if c["kind"] == "final"
+                    and media_t - c["t"] <= COVER_WINDOW_S
+                    and _covers(c["text"], text)]
+            # 걸린 줄들을 덩어리로 묶습니다. 무리 한가운데 한둘이 판정에서
+            # 빠지는 일은 흔합니다 -- 정제 재해독에서 글자가 크게 갈리면
+            # (`いや空込みだ`가 `川上だ`가 되는 식) 그 줄만 못 알아봅니다.
+            # 거기서 무리를 쪼개면 한쪽만 흡수되고 나머지가 중복으로 남으므로,
+            # 그 정도 틈은 건너뜁니다.
+            groups: list[list[int]] = []
+            for i in hits:
+                if groups and i - groups[-1][-1] <= COVER_GAP + 1:
+                    groups[-1].append(i)
+                else:
+                    groups.append([i])
+            best = max(groups, key=len) if groups else []
+            # 가장 큰 덩어리는 그 안의 빠진 줄까지 통째로 대체합니다. 정제본은
+            # 무리 하나를 통째로 다시 받아 적은 것이니까요.
+            covered = ([self._recent[i] for i in range(best[0], best[-1] + 1)]
+                       if best else [])
             target = covered[0] if covered else None
             cue = {"type": "cue", "id": target["id"] if target else self._seq,
                    "kind": "refine", "t": round(target["t"] if target else media_t, 2),
@@ -414,13 +441,12 @@ class LiveSession:
             # not have six people talking. A label that invents speakers is
             # worse than no label.
             asr = self._asr = build_live_asr(asr_spec, self.lang, threads=4)
-            self.asr_label = getattr(asr, "label", "hayamimi")
+            self.asr_label = asr.label
             vad = build_vad(min_silence=self.min_silence,
                             max_speech=self.max_speech)
             sink = Sink(self)
-            printer = PartialPrinter(enabled=True, server=sink)
             history = AudioHistory(SAMPLE_RATE)
-            refiner = Refiner(asr, history, SAMPLE_RATE, printer)
+            refiner = Refiner(asr, history, sink) if self.refine else None
 
             # -live_start_index -2 starts two segments from the end of the
             # playlist. Without it ffmpeg reads a full-DVR playlist from the
@@ -435,8 +461,7 @@ class LiveSession:
             self.state = "running"
             self._persist()
             self.emit({"type": "status", **self.status()})
-            run_stream(self._chunks(), vad, SAMPLE_RATE, asr, SessionStats(),
-                       printer, refiner, history)
+            run_stream(self._chunks(), vad, asr, sink, history, refiner)
             self.state = "stopped"
             self._persist()
             self.emit({"type": "status", **self.status()})
@@ -446,13 +471,14 @@ class LiveSession:
             self._persist()
             self.emit({"type": "status", **self.status()})
         finally:
-            del asr, vad, printer, history, refiner
+            del asr, vad, history, refiner
             self._release()
             _retire(self.id)
 
 
 def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
-          profile: str = "broadcast", asr_backend_id: str = "") -> dict:
+          profile: str = "broadcast", asr_backend_id: str = "",
+          refine: bool = True) -> dict:
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
     for old_id in list(_sessions):
@@ -461,7 +487,7 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
             old.stop()
 
     s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile,
-                    asr_backend_id=asr_backend_id)
+                    asr_backend_id=asr_backend_id, refine=refine)
     with _lock:
         _sessions[s.id] = s
     # 첫 자막이 나오기 전에 서버가 죽어도 세션이 있었다는 사실은 남습니다.

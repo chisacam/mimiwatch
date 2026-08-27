@@ -21,14 +21,11 @@ import wave
 
 import numpy as np
 
-HAYAMIMI = os.environ.get("HAYAMIMI_DIR", "/Users/chiyak/hobby/hayamimi")
-sys.path.insert(0, os.path.join(HAYAMIMI, "scripts"))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from asr_engine import RoutedASR  # noqa: E402
-from realtime_transcribe import build_vad  # noqa: E402
-
-import translate as mw_translate  # noqa: E402
+import translate as mw_translate
+from stream import build_vad
+from tcpp_asr import build_live_asr
 
 SAMPLE_RATE = 16000
 CHUNK = 1600  # 0.1s per VAD feed
@@ -77,7 +74,7 @@ def transcribe(samples: np.ndarray, lang: str | None, on_progress=None,
     ever cared about "now".
     """
     if asr is None:
-        asr = RoutedASR(threads=4, forced_lang=lang)
+        asr = build_live_asr(None, lang, threads=4)
     vad = build_vad(min_silence=0.35, max_speech=12.0)
     # CAM++ needs enough voice in a segment to place a speaker. The 12s
     # splits here give it that; the live path splits at 3-4s to keep up with

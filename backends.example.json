@@ -1,9 +1,9 @@
 {
- "active": "local-m2m100",
+ "active": "local-gemma",
  "backends": [
   {
    "id": "local-m2m100",
-   "label": "로컬 M2M-100 (기본)",
+   "label": "M2M-100 (가벼움 · 대체용)",
    "backend": "local",
    "min_chars": 0
   },
@@ -14,6 +14,12 @@
    "base_url": "http://localhost:1234",
    "model": "google/gemma-4-E4B_q4_0-it",
    "api_key": "",
+   "min_chars": 0
+  },
+  {
+   "id": "local-gemma",
+   "label": "Gemma 4 E4B (기본)",
+   "backend": "gemma",
    "min_chars": 0
   }
  ],
@@ -28,10 +34,6 @@
    "id": "tcpp-best",
    "label": "transcribe.cpp Whisper v3 turbo (기본)",
    "backend": "tcpp",
-   "models": {
-    "ja": "/Users/chiyak/models/transcribe-cpp/whisper-large-v3-turbo-Q8_0.gguf",
-    "ko": "/Users/chiyak/models/transcribe-cpp/whisper-large-v3-turbo-Q8_0.gguf"
-   },
    "threads": 4
   }
  ]

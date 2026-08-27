@@ -1,0 +1,229 @@
+"""오디오를 발화 단위로 잘라 받아 적고, 끝난 무리를 다시 해독하는 루프.
+
+구조는 hayamimi(MIT, oboroge0)의 `realtime_transcribe`에서 가져왔습니다.
+다만 그쪽은 언어를 모른 채 들어오는 소리를 상대하므로 언어 판별, 언어별
+모델 라우팅, 무리 안에서 언어가 바뀔 때의 분할, 재해독 뒤 언어 재판정까지
+짊어지고 있습니다. 이 프로젝트는 세션마다 언어를 하나로 고정하고 다국어
+모델 하나(whisper-large-v3-turbo)로 처리하므로 그 절반이 죽은 코드입니다.
+그래서 옮겨 오면서 걷어냈습니다.
+
+남긴 것은 세 가지입니다.
+
+- **선행 오디오**: VAD가 잡아낸 발화 시작점보다 조금 앞에서부터 잘라
+  넘깁니다. 말머리가 잘려 나가는 것을 막습니다.
+- **2패스 정제**: 짧게 끊어 즉시 내보낸 확정본과 별개로, 발화 한 무리가
+  끝나면 합쳐서 다시 해독합니다. 문맥이 길어져 결과가 좋아집니다.
+- **순서 보장**: 정제는 한 개의 작업 스레드가 넣은 순서대로 처리합니다.
+  호출마다 스레드를 띄우면 시작 순서와 실행 순서가 달라져 자막이 뒤섞입니다.
+"""
+from __future__ import annotations
+
+import os
+import queue
+import threading
+import time
+
+import numpy as np
+import sherpa_onnx
+
+SAMPLE_RATE = 16000
+WINDOW_SIZE = 512      # VAD가 한 번에 보는 표본 수 (16kHz에서 약 32ms)
+
+# VAD가 잡은 발화 시작점보다 이만큼 앞에서부터 넘깁니다. 자음 하나가 잘리면
+# 첫 단어가 통째로 달라지므로, 여유를 두는 편이 낫습니다.
+PREROLL_S = 1.0
+
+GROUP_GAP_S = 2.0      # 이만큼 조용하면 발화 한 무리가 끝난 것으로 봅니다
+GROUP_MAX_S = 25.0     # 쉬지 않고 말해도 여기서 끊습니다 (오디오 보관 한도)
+
+# 재해독이 확정본을 합친 것보다 이만큼 짧으면 믿지 않습니다. 재해독은 내용을
+# 다듬는 것이지 잃는 것이 아니므로, 크게 줄었다면 무언가 잘못된 것입니다.
+REFINE_MIN_KEEP = 0.7
+
+
+def model_dir() -> str:
+    return os.environ.get(
+        "MIMIWATCH_MODEL_DIR",
+        os.path.join(os.path.expanduser("~"), ".local", "share",
+                     "mimiwatch", "models"))
+
+
+def build_vad(min_silence: float = 0.35,
+              max_speech: float = 12.0) -> sherpa_onnx.VoiceActivityDetector:
+    """발화를 잘라 주는 Silero VAD.
+
+    min_silence는 얼마나 조용해야 발화가 끝났다고 볼지, max_speech는 쉬지
+    않고 말할 때 강제로 끊는 길이입니다. 짧게 끊을수록 자막이 빨리 나오지만
+    문맥이 짧아지므로, 그 손해는 정제 단계가 되돌립니다.
+    """
+    vad_model = os.path.join(model_dir(), "silero_vad.onnx")
+    if not os.path.exists(vad_model):
+        raise FileNotFoundError(
+            f"silero_vad.onnx가 없습니다: {vad_model}\n"
+            "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+    cfg = sherpa_onnx.VadModelConfig(
+        silero_vad=sherpa_onnx.SileroVadModelConfig(
+            model=vad_model,
+            min_silence_duration=min_silence,
+            min_speech_duration=0.25,
+            window_size=WINDOW_SIZE,
+            max_speech_duration=max_speech,
+        ),
+        sample_rate=SAMPLE_RATE,
+        num_threads=1,
+    )
+    return sherpa_onnx.VoiceActivityDetector(cfg, buffer_size_in_seconds=30)
+
+
+class AudioHistory:
+    """최근 오디오를 들고 있다가 선행 구간과 정제용 원본을 떼어 줍니다."""
+
+    def __init__(self, sample_rate: int = SAMPLE_RATE, keep_s: float = 30.0):
+        self.sr = sample_rate
+        self.keep = int(keep_s * sample_rate)
+        self.buf = np.zeros(0, dtype=np.float32)
+        self.offset = 0          # buf[0]이 전체에서 몇 번째 표본인지
+        self.last_seg_end = 0    # 선행 구간이 앞 발화를 침범하지 않도록
+
+    def push(self, chunk: np.ndarray):
+        self.buf = np.concatenate([self.buf, chunk])
+        if len(self.buf) > self.keep:
+            drop = len(self.buf) - self.keep
+            self.buf = self.buf[drop:]
+            self.offset += drop
+
+    def with_preroll(self, seg_start: int, seg_samples: np.ndarray) -> np.ndarray:
+        want = max(seg_start - int(PREROLL_S * self.sr),
+                   self.last_seg_end, self.offset)
+        pre = self.buf[want - self.offset:seg_start - self.offset]
+        self.last_seg_end = seg_start + len(seg_samples)
+        return seg_samples if len(pre) == 0 else np.concatenate([pre, seg_samples])
+
+    def slice(self, start: int, end: int) -> np.ndarray:
+        lo = max(start - int(PREROLL_S * self.sr), self.offset)
+        return self.buf[lo - self.offset:end - self.offset].copy()
+
+
+class Refiner:
+    """끝난 발화 무리를 합쳐 다시 해독합니다.
+
+    확정본은 2~4초짜리 조각을 따로따로 해독한 것이라 문맥이 없습니다. 한
+    무리가 끝나면 그 구간의 원본 오디오를 통째로 다시 넘겨, 앞뒤를 아는
+    상태로 받아 적게 합니다.
+    """
+
+    def __init__(self, asr, history: AudioHistory, sink,
+                 sample_rate: int = SAMPLE_RATE):
+        self.asr = asr
+        self.history = history
+        self.sink = sink
+        self.sr = sample_rate
+        self.spans: list[tuple[int, int, str, str]] = []   # start, end, text, speaker
+        # 작업 스레드는 하나입니다. 호출마다 스레드를 띄우면 start() 순서와
+        # 실제 실행 순서가 달라져, 무음으로 닫힌 무리와 강제로 닫힌 무리가
+        # 뒤바뀐 채 출력됩니다. 큐 하나를 한 소비자가 비우면 넣은 순서가
+        # 곧 오디오의 시간 순서이므로 그럴 수 없습니다.
+        self._tasks: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self):
+        while True:
+            task = self._tasks.get()
+            try:
+                task()
+            except Exception as exc:                      # 한 무리의 실패가
+                print(f"[refine] 실패: {exc}", flush=True)  # 세션을 죽이면 안 됩니다
+            finally:
+                self._tasks.task_done()
+
+    def add_span(self, seg_start: int, seg_end: int, text: str, speaker: str):
+        self.spans.append((seg_start, seg_end, text, speaker))
+
+    def maybe_refine(self, now_sample: int, force: bool = False):
+        if not self.spans:
+            return
+        first_start, last_end = self.spans[0][0], self.spans[-1][1]
+        due = (force
+               or now_sample - last_end >= int(GROUP_GAP_S * self.sr)
+               or last_end - first_start >= int(GROUP_MAX_S * self.sr))
+        if not due:
+            return
+
+        buf = self.history.slice(first_start, last_end)
+        speakers = [sp for _, _, _, sp in self.spans if sp]
+        speaker = max(set(speakers), key=speakers.count) if speakers else ""
+        fast_joined = " ".join(t for _, _, t, _ in self.spans if t.strip())
+        self.spans = []
+        if len(buf) < self.sr // 2:
+            return
+
+        def work():
+            # 25초짜리 무리의 재해독은 0.5~1초가 걸립니다. 수신 경로에서
+            # 그대로 돌리면 다음 발화의 확정본이 그만큼 늦어지므로 여기서
+            # 처리합니다.
+            text = self.asr.transcribe(buf, self.sr,
+                                       speech_s=len(buf) / self.sr,
+                                       live=False)["text"].strip()
+            if len(text) < REFINE_MIN_KEEP * len(fast_joined):
+                text = fast_joined
+            if not text.strip():
+                return
+            tag = f"{speaker}|{self.asr.forced_lang}" if speaker else self.asr.forced_lang
+            print(f"[refine/{tag}] {text}", flush=True)
+            self.sink.refine(text, self.asr.forced_lang, speaker)
+
+        self._tasks.put(work)
+
+
+def run_stream(chunks, vad, asr, sink, history: AudioHistory,
+               refiner: Refiner | None = None, speaker_labeler=None,
+               sample_rate: int = SAMPLE_RATE):
+    """오디오 조각을 받아 VAD로 자르고, 잘린 발화를 받아 적습니다.
+
+    chunks가 ndarray가 아니면 "지금 비우라"는 신호입니다. 방송이 끊겨
+    영영 오지 않을 무음을 기다리는 대신 진행 중인 발화를 확정합니다.
+    """
+    audio_pos = 0.0
+    for chunk in chunks:
+        if not isinstance(chunk, np.ndarray):
+            vad.flush()
+            _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate)
+            if refiner is not None:
+                refiner.maybe_refine(int(audio_pos * sample_rate), force=True)
+            continue
+
+        vad.accept_waveform(chunk)
+        history.push(chunk)
+        audio_pos += len(chunk) / sample_rate
+
+        _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate)
+        if refiner is not None and not vad.is_speech_detected():
+            refiner.maybe_refine(int(audio_pos * sample_rate))
+
+
+def _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate):
+    while not vad.empty():
+        seg = vad.front
+        t0 = time.perf_counter()
+        samples = np.asarray(seg.samples, dtype=np.float32)
+        seg_start, seg_end = seg.start, seg.start + len(samples)
+        raw_speech_s = len(samples) / sample_rate
+        samples = history.with_preroll(seg_start, samples)
+        vad.pop()
+
+        result = asr.transcribe(samples, sample_rate, speech_s=raw_speech_s)
+        latency_ms = (time.perf_counter() - t0) * 1000
+        text = result["text"].strip()
+        if not text:
+            continue          # 효과음이나 잡음: 자막도 화자도 남기지 않습니다
+
+        speaker = speaker_labeler.label(samples, sample_rate) if speaker_labeler else ""
+        print(f"[{speaker + '|' if speaker else ''}{result['lang']}/"
+              f"{result.get('tier', '?')}] {text}  "
+              f"(seg={len(samples) / sample_rate:.1f}s, "
+              f"decode={result['decode_ms']:.0f}ms, latency={latency_ms:.0f}ms)",
+              flush=True)
+        sink.final(text, result["lang"], speaker)
+        if refiner is not None:
+            refiner.add_span(seg_start, seg_end, text, speaker)

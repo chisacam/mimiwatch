@@ -1,0 +1,9 @@
+# 전사 구간 분할과 화자 임베딩 (Silero VAD, CAM++)
+sherpa-onnx>=1.13
+# 로컬 번역 (Gemma 4 E4B, 대체용 M2M-100)
+llama-cpp-python>=0.3.30
+ctranslate2>=4.8
+sentencepiece>=0.2
+numpy>=2.0
+# 여러 파일로 된 모델을 받을 때만 씁니다 (install.sh)
+huggingface_hub>=0.30

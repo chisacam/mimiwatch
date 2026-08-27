@@ -8,6 +8,7 @@ _identify_lang이 고정 언어를 그대로 돌려주므로 Refiner의 언어 �
 """
 from __future__ import annotations
 
+import os
 import threading
 
 import numpy as np
@@ -125,35 +126,36 @@ class TranscribeCppASR:
                 "lid_ms": 0.0, "decode_ms": decode_ms, "probe_ms": 0.0}
 
 
-# 언어별 기본 배치. 라이브 방송 4개(각 180초)를 녹음해 같은 음성에 여러
-# 모델을 물려 정한 값입니다.
+# 언어별 기본 배치.
 #
-# 일본어에서 Fun-ASR는 솔로 방송을 가장 많이 받아 적었지만(Whisper 대비
-# +7%), 합방 방송에서 -l ja 고정을 무시하고 베트남어·인도네시아어를 뱉고
-# 내부 토큰(!sil)을 흘렸습니다. Whisper는 세 방송 모두에서 언어가 새지
-# 않았고 합방에서는 오히려 가장 많이 받아 적었습니다. 솔로의 7%보다
-# 합방에서 무너지지 않는 쪽을 택합니다.
-MODEL_DIR = "/Users/chiyak/models/transcribe-cpp"
-WHISPER = f"{MODEL_DIR}/whisper-large-v3-turbo-Q8_0.gguf"
-DEFAULT_MODELS = {"ja": WHISPER, "ko": WHISPER}
+# whisper-large-v3-turbo 하나로 전부 처리합니다. 다국어 모델이라 언어를
+# 골라 넣을 수도, 비워 두고 스스로 판별하게 할 수도 있습니다.
+#
+# 언어별 전문 모델을 붙이는 안은 실측으로 접었습니다. 일본어에서 Fun-ASR는
+# 솔로 방송을 7% 더 받아 적었지만, 합방에서 -l ja 고정을 무시하고
+# 베트남어·인도네시아어를 뱉고 내부 토큰(!sil)까지 흘렸습니다. 한국어에서
+# SenseVoice는 `데이터독`을 `데이터`로 줄였고, 양자화를 F32까지 올려도
+# 그대로였습니다. 한 종류의 방송만 잘 보는 모델보다 전부 견디는 모델이
+# 낫습니다. 근거는 measurements/RESULTS.md 11~14장에 있습니다.
+MODEL_DIR = os.environ.get(
+    "MIMIWATCH_MODEL_DIR",
+    os.path.join(os.path.expanduser("~"), ".local", "share",
+                 "mimiwatch", "models"))
+WHISPER = os.path.join(MODEL_DIR, "whisper-large-v3-turbo-Q8_0.gguf")
 
 
 def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4):
-    """라이브 세션이 쓸 인식기를 만듭니다.
+    """세션이 쓸 인식기를 만듭니다.
 
-    transcribe.cpp 모델은 언어를 고정해 쓰므로, 언어가 정해지지 않았거나
-    그 언어에 배치된 모델이 없으면 hayamimi의 RoutedASR로 돌아갑니다.
+    lang이 비어 있으면 모델이 스스로 판별합니다. 다만 방송 언어를 알고
+    있다면 지정하는 편이 낫습니다 -- 판별이 흔들리면 문장 하나가 통째로
+    다른 언어로 나옵니다.
     """
-    from asr_engine import RoutedASR
-
     spec = spec or {}
-    if spec.get("backend") != "tcpp" or not lang:
-        return RoutedASR(threads=threads, forced_lang=lang)
-
-    models = {**DEFAULT_MODELS, **(spec.get("models") or {})}
-    path = models.get(lang)
-    if not path:
-        return RoutedASR(threads=threads, forced_lang=lang)
-
+    path = (spec.get("models") or {}).get(lang or "") or spec.get("model") or WHISPER
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"전사 모델이 없습니다: {path}\n"
+            "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
     return TranscribeCppASR(path, lang, threads=int(spec.get("threads", threads)),
-                            label=path.rsplit("/", 1)[-1].replace(".gguf", ""))
+                            label=os.path.basename(path).replace(".gguf", ""))

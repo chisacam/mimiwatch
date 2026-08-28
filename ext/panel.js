@@ -174,8 +174,15 @@
     mount, unmount, render,
     mounted: () => !!(node && node.isConnected),
     setSeek: (fn) => { onSeek = fn; },
-    // 유튜브가 화면을 갈아 끼우면 우리가 넣은 것이 사라집니다. 그때 다시
-    // 세우려면 줄 지도도 비워야 합니다 -- 옛 요소를 가리키고 있습니다.
-    reset: () => { rows = new Map(); },
+    /* 들고 있던 줄을 전부 버립니다.
+     *
+     * **화면에서도 지웁니다.** 지도만 비우면 그 다음 render 가 이미 붙어
+     * 있는 줄 위에 같은 것을 다시 붙입니다 -- 녹화본을 고르면 자막이 한
+     * 벌 더 얹혀 두 번씩 나왔습니다. 세션을 바꿀 때, 다른 영상으로 옮길
+     * 때, 유튜브가 화면을 갈아 끼울 때 부릅니다. */
+    reset: () => {
+      rows = new Map();
+      if (list) list.textContent = "";
+    },
   };
 })(typeof window !== "undefined" ? window : globalThis);

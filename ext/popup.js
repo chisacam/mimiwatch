@@ -151,9 +151,12 @@ async function pushPrefs() {
 
 $("pick").addEventListener("change", async (e) => {
   const r = await send({ type: "watch", tabId, value: e.target.value });
-  if (r && !r.ok) fail(r.error || "붙이지 못했습니다");
+  if (r && !r.ok) { fail(r.error || "붙이지 못했습니다"); return; }
+  // 페이지가 아직 우리 것을 들고 있지 않아 새로고침했습니다. 조용히 하면
+  // 화면이 저 혼자 다시 뜬 것처럼 보이므로 그렇다고 적어 둡니다.
+  if (r && r.reloaded) $("state").textContent = "페이지를 새로고침해 얹었습니다.";
   await syncHideButton();
-  setTimeout(refreshState, 600);
+  setTimeout(refreshState, r && r.reloaded ? 1800 : 600);
 });
 
 document.querySelectorAll("[data-mode]").forEach((b) =>
@@ -244,7 +247,13 @@ async function startWith(type) {
     $("start-hint").textContent = "";
     return;
   }
-  $("start-hint").textContent = "받는 중입니다.";
+  $("start-hint").textContent = r.reloaded
+    ? "받는 중입니다. 페이지를 새로고침해 얹었습니다."
+    : r.skippedReload
+      // 탭 소리를 잡는 중이라 새로고침하지 않았습니다. 그러면 자막이
+      // 화면에 붙지 않으므로, 무엇을 해야 하는지 적어 둡니다.
+      ? "받는 중입니다. 화면에 얹으려면 이 탭을 새로고침하십시오."
+      : "받는 중입니다.";
   $("pick").length = 1;
   await fillPicker();
   $("pick").value = "live:" + r.id;

@@ -57,8 +57,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await chrome.storage.local.set({ [BASE_KEY]: msg.base });
         reply({ ok: true });
       } else if (msg.type === "watch") {
-        await setWatch(msg.tabId, msg.value || "");
-        reply({ ok: true });
+        reply({ ok: true, ...(await setWatch(msg.tabId, msg.value || "")) });
       } else if (msg.type === "whatToWatch") {
         // content script 가 방금 떠서 스스로 묻습니다. 자기 탭 번호는
         // 모르지만 우리는 sender 로 압니다.
@@ -84,14 +83,34 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   return true;            // 비동기로 답합니다
 });
 
-async function setWatch(tabId, value) {
+/* 이 탭이 무엇을 볼지 정하고, 그것을 content script 에 알립니다.
+ *
+ * **닿았는지 확인합니다.** content script 가 없을 수 있습니다 -- 확장을 다시
+ * 로드한 직후(열려 있던 탭은 옛 것을 계속 씁니다), 유튜브가 아닌 탭, 방금
+ * 열려 아직 뜨지 않은 탭. 예전에는 조용히 실패하고 끝이라, 사용자에게는
+ * 「골랐는데 아무 일도 안 난다」로 보였고 페이지를 새로고침해야 나왔습니다.
+ *
+ * 닿지 않았으면 우리가 새로고침합니다. 저장은 이미 되어 있으므로 새로 뜬
+ * content script 가 스스로 읽어 갑니다(whatToWatch). **닿았으면 하지
+ * 않습니다** -- 보고 있던 자리가 튀는 것은 그 자체로 손해입니다. */
+async function setWatch(tabId, value, opts) {
   await chrome.storage.local.set({ ["tab:" + tabId]: value });
   try {
-    await chrome.tabs.sendMessage(tabId, value ? { type: "attach", value }
-                                                : { type: "detach" });
-  } catch (_) {
-    // content script 가 아직 없습니다(유튜브가 아닌 탭이거나 방금 열린 탭).
-    // 저장은 해 두었으니 붙을 때 스스로 읽어 갑니다.
+    const r = await chrome.tabs.sendMessage(
+      tabId, value ? { type: "attach", value } : { type: "detach" });
+    if (r && r.ok) return { delivered: true };
+  } catch (_) { /* 아래에서 다룹니다 */ }
+  if (!value) return { delivered: false };   // 내리는 것은 새로고침할 일이 아닙니다
+  // 탭 소리를 잡는 중에는 새로고침하지 않습니다. 잡아 둔 스트림은 그 탭에
+  // 매여 있어서, 새로고침하면 방금 시작한 받아 적기가 끊깁니다. 자막은
+  // 곧 오는데 화면에만 안 붙는 것과, 받는 것 자체가 끊기는 것은 다른
+  // 이야기입니다.
+  if (opts && opts.noReload) return { delivered: false, skippedReload: true };
+  try {
+    await chrome.tabs.reload(tabId);
+    return { delivered: false, reloaded: true };
+  } catch (e) {
+    return { delivered: false, error: String(e.message || e) };
   }
 }
 
@@ -112,8 +131,8 @@ async function startFromUrl(msg) {
     genre: msg.genre || "general", profile: msg.profile || "broadcast",
   });
   if (res.error) return { ok: false, error: res.error };
-  await setWatch(msg.tabId, "live:" + res.id);
-  return { ok: true, id: res.id };
+  const w = await setWatch(msg.tabId, "live:" + res.id);
+  return { ok: true, id: res.id, ...w };
 }
 
 /* 이 탭에서 나는 소리로 시작합니다. 멤버십 전용 방송처럼 서버가 받을 수
@@ -140,8 +159,8 @@ async function startFromTab(msg) {
     await post("/api/live/stop", { id: res.id });
     return { ok: false, error: (started && started.error) || "소리를 잡지 못했습니다" };
   }
-  await setWatch(msg.tabId, "live:" + res.id);
-  return { ok: true, id: res.id };
+  const w = await setWatch(msg.tabId, "live:" + res.id, { noReload: true });
+  return { ok: true, id: res.id, ...w };
 }
 
 async function ensureOffscreen() {

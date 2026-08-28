@@ -233,7 +233,13 @@
   </form>
 </dialog>
 
-<script src="https://www.youtube.com/iframe_api"></script>
+<!-- `async` 입니다. 이것을 동기로 두면 파서가 여기서 멈춰, 구글에서
+     스크립트를 받아 오는 동안 화면에 아무것도 그려지지 않습니다. 실측에서
+     이 한 줄이 4396ms 를 잡아먹었고 domInteractive 가 4435ms 였습니다 --
+     우리 CSS·JS 는 각 10ms, API 응답은 각 1~10ms 였는데도 그랬습니다.
+     app.js 의 whenApiReady() 가 onYouTubeIframeAPIReady 와 폴링으로 늦게
+     오는 경우를 이미 다루므로, 막아 세울 이유가 없습니다. -->
+<script async src="https://www.youtube.com/iframe_api"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

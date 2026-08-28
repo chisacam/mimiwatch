@@ -699,7 +699,12 @@ function restore() {
 
 /* ---------- translation backends ---------- */
 async function loadBackends() {
-  const cfg = await (await fetch("/api/backends")).json();
+  applyBackends(await (await fetch("/api/backends")).json());
+}
+
+/* 받아 온 설정을 화면에 앉힙니다. 시작할 때는 세 요청을 나란히 보내므로
+ * 받는 것과 적용하는 것을 나눠 두어야 합니다. */
+function applyBackends(cfg) {
   state.backends = cfg.backends;
   const p = loadPrefs();
   state.liveProfiles = cfg.live_profiles || [];
@@ -1555,6 +1560,9 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   th.className = "vth";
   th.alt = "";
   th.decoding = "async";
+  // 플레이어 임베드가 먼저입니다. 목록 그림 열넉 장이 같은 호스트로
+  // 몰리면 그 뒤에 줄을 서게 됩니다.
+  th.fetchPriority = "low";
   // `loading="lazy"` 는 쓰지 않습니다. 이 요소는 DOM에 붙기 전에 src를
   // 받는데, 그러면 브라우저가 지연을 풀 시점을 제대로 잡지 못해 22장 중
   // 한 장만 뜨고 나머지는 매달려 있었습니다. 한 장이 10KB 남짓이라
@@ -1622,9 +1630,13 @@ function setNowTitle(title) {
   el.title = title || "";
 }
 
-async function refreshVideoList(selectId) {
-  const list = await (await fetch("/api/videos")).json();
-  const sessions = await (await fetch("/api/live/sessions")).json();
+async function refreshVideoList(selectId, pre) {
+  // 시작할 때는 이미 받아 둔 것을 넘겨받습니다. 예전에는 init 이 두 요청을
+  // 보내고 여기서 같은 둘을 또 보냈습니다.
+  const [list, sessions] = pre || await Promise.all([
+    fetch("/api/videos").then(r => r.json()),
+    fetch("/api/live/sessions").then(r => r.json()),
+  ]);
   const box = $("video-list");
   const current = box.querySelector(".video-row.on");
   const keep = current && current.dataset.value;
@@ -1698,18 +1710,23 @@ function jobError(msg) {
 
 (async function init() {
   restore(); bind();
-  await loadBackends();
-  const list = await (await fetch("/api/videos")).json();
-  const sessions = await (await fetch("/api/live/sessions")).json();
+  // 셋을 나란히 보냅니다. 서로 기다릴 이유가 없고, 예전에는 이 뒤에서
+  // 같은 둘을 한 번 더 보냈습니다.
+  const [cfg, list, sessions] = await Promise.all([
+    fetch("/api/backends").then(r => r.json()),
+    fetch("/api/videos").then(r => r.json()),
+    fetch("/api/live/sessions").then(r => r.json()),
+  ]);
+  applyBackends(cfg);
   if (!list.length && !sessions.some(s => s.cues)) {
-    await refreshVideoList();       // 빈 목록 안내를 그립니다
+    await refreshVideoList(undefined, [list, sessions]);   // 빈 목록 안내
     setLibrary(false);              // 처음 온 사람에게는 목록을 펼쳐 둡니다
     return;
   }
   // 서버는 멀쩡한데 탭만 새로고침한 경우입니다. 보고 있던 방송으로 그대로
   // 돌아갑니다 -- 그 자막을 다시 만들 방법은 없으니까요.
   const running = sessions.find(s => LIVE_RUNNING.includes(s.state));
-  await refreshVideoList(running ? null : (list[0] || {}).id);
+  await refreshVideoList(running ? null : (list[0] || {}).id, [list, sessions]);
   if (running) {
     markVideoRow("live:" + running.id);
     await resumeLive(running.id);

@@ -10,6 +10,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
+  libraryHidden: false,
   genres: [],
   // 전체화면에 들어가기 직전의 플레이어 높이. 자막 크기 배율의 기준입니다.
   fsBaseHeight: 0, cuePx: 0,
@@ -269,6 +270,7 @@ async function loadVideo(id) {
   updateLangStatus();
   renderBackendPicker();
   syncGenreToDoc();
+  setNowTitle(doc.title);
   applyModeForDoc();
   if (state.player && state.ready) state.player.loadVideoById(id);
   else await createPlayer(id);
@@ -531,19 +533,20 @@ function bind() {
     persist();
   });
   $("viewer-lang").addEventListener("change", () => { updateLangStatus(); persist(); });
-  $("video-picker").addEventListener("change", e => {
-    // 어느 항목인지 먼저 읽습니다. stopLive()가 진행 중인 라이브 항목을
-    // 목록에서 지우기 때문입니다.
-    const opt = e.target.selectedOptions[0];
-    const sid = opt && opt.dataset.session;
-    if (sid) { resumeLive(sid); return; }
-    stopLive();
-    dropLiveOption(e.target.value);
-    loadVideo(e.target.value);
-  });
   $("toggle-panel").addEventListener("click", () => setPanel(!state.panelHidden));
+  $("toggle-library").addEventListener("click", () => setLibrary(!state.libraryHidden));
   $("backend-picker").addEventListener("change", e => selectBackend(e.target.value));
-  $("open-settings").addEventListener("click", openSettings);
+  $("open-manage").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleManage($("manage-menu").hidden);
+  });
+  // 바깥을 누르면 닫습니다. 메뉴 안을 누르는 것은 여닫기가 아닙니다.
+  $("manage-menu").addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => toggleManage(false));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") toggleManage(false);
+  });
+  $("open-settings").addEventListener("click", () => { toggleManage(false); openSettings(); });
   $("settings-close").addEventListener("click", () => $("settings-dialog").close());
   $("shutdown").addEventListener("click", shutdownServer);
   $("form-back").addEventListener("click", showEngineList);
@@ -551,21 +554,33 @@ function bind() {
   document.querySelectorAll("[data-add]").forEach(b =>
     b.addEventListener("click", () => showEngineForm(b.dataset.add, null)));
   $("asr-picker").addEventListener("change", e => {
-    state.asr = e.target.value; persist();
+    setAsr(e.target.value);
     if (state.live) askLiveRestart();
   });
+  document.querySelector('#add-form select[name="asr"]')
+    .addEventListener("change", e => setAsr(e.target.value));
+  document.querySelector('#add-form select[name="backend"]')
+    .addEventListener("change", e => { state.backend = e.target.value;
+                                       setBackendPickers(state.backend); persist(); });
   $("job-cancel").addEventListener("click", cancelJob);
-  $("add-video").addEventListener("click", () => $("add-dialog").showModal());
+  $("add-video").addEventListener("click", () => {
+    // 열 때마다 지금 값으로 맞춥니다. 엔진을 지웠거나 「관리」에서 바꾼
+    // 것이 대화상자에 반영되어 있어야 합니다.
+    renderAsrPicker();
+    fillEngineSelect(document.querySelector('#add-form select[name="backend"]'),
+                     state.backends, state.backend, LOCKED.tr);
+    $("add-dialog").showModal();
+  });
   document.querySelector('#add-form input[name="refine"]')
     .addEventListener("change", e => { state.refine = e.target.checked; persist(); });
   $("add-form").addEventListener("submit", submitAdd);
-  $("del-video").addEventListener("click", deleteVideo);
   $("live-stop").addEventListener("click", stopLive);
   // Watching is a full-screen activity; reaching for the mouse to reclaim
   // width breaks it, so the toggle also answers to a key.
   document.addEventListener("keydown", (e) => {
     if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
     if (e.key === "s") setPanel(!state.panelHidden);
+    if (e.key === "v") setLibrary(!state.libraryHidden);
     // 유튜브의 f 단축키는 iframe 안에서만 듣습니다. 영상을 클릭한 뒤에는
     // 초점이 그 안에 있어 이 처리기까지 오지 않으므로, 겹칠 걱정은
     // 없습니다 -- 대신 그때는 fs:0 이 막아 줍니다.
@@ -596,6 +611,20 @@ function setPanel(hidden) {
   $("toggle-panel").classList.toggle("on", hidden);
   persist();
 }
+
+function toggleManage(open) {
+  $("manage-menu").hidden = !open;
+  $("open-manage").classList.toggle("on", open);
+  $("open-manage").setAttribute("aria-expanded", String(!!open));
+}
+
+function setLibrary(hidden) {
+  state.libraryHidden = hidden;
+  $("layout").classList.toggle("library-hidden", hidden);
+  $("toggle-library").textContent = hidden ? "▸ 영상" : "◧ 영상";
+  $("toggle-library").classList.toggle("on", hidden);
+  persist();
+}
 /* 설정을 서버에서 받아 맞추기 전에는 저장하지 않습니다. 부팅 순서가
  * restore() → loadBackends()라서, 그 사이에 한 번이라도 저장하면 state에
  * 박아 둔 초기값이 사용자가 고른 값을 덮어씁니다. 그 뒤 loadBackends는
@@ -612,7 +641,8 @@ function persist() {
     size: +$("size").value, dim: +$("dim").value,
     pos: +$("pos").value, showPrev: $("show-prev").checked,
     offset: +$("offset").value, viewerLang: $("viewer-lang").value,
-    panelHidden: state.panelHidden, backend: state.backend,
+    panelHidden: state.panelHidden, libraryHidden: state.libraryHidden,
+    backend: state.backend,
     profile: (document.querySelector('#add-form select[name="profile"]') || {}).value,
     genre: (document.querySelector('#add-form select[name="genre"]') || {}).value,
     asr: state.asr, refine: state.refine,
@@ -633,6 +663,7 @@ function restore() {
   $("offset-val").textContent = state.offset.toFixed(1) + "s";
   syncControlInputs();
   setPanel(!!p.panelHidden);
+  setLibrary(!!p.libraryHidden);
 }
 
 /* ---------- translation backends ---------- */
@@ -676,6 +707,11 @@ function renderBackendPicker() {
     pick.appendChild(o);
   });
   pick.value = state.backend;
+  // 대화상자 쪽도 같은 값을 가리켜야 합니다. "(미번역)" 표시는 열려 있는
+  // 영상에 대한 말이라 대화상자에는 붙이지 않습니다 -- 거기서 고르는 것은
+  // 아직 없는 영상의 엔진입니다.
+  fillEngineSelect(document.querySelector('#add-form select[name="backend"]'),
+                   state.backends, state.backend, LOCKED.tr);
   // Nothing to translate when the speaker already uses the viewer's language.
   const same = state.doc && state.doc.source_lang === state.doc.viewer_lang;
   $("backend-field").hidden = !!same;
@@ -1070,16 +1106,44 @@ function adoptConfig(cfg) {
   renderBackendPicker();
 }
 
-function renderAsrPicker() {
-  const sel = $("asr-picker");
+/* 엔진 선택기는 두 자리에 있습니다 -- 「관리」 메뉴와 「영상 추가」 대화상자.
+ *
+ * 넣는 순간 그 엔진으로 전사가 시작되므로, 넣기 전에 고를 수 있어야 합니다.
+ * 예전에는 헤더에서만 고를 수 있어서, 대화상자를 열어 둔 채로는 바꿀 수
+ * 없었습니다. 두 자리가 같은 값을 가리키므로 어느 쪽에서 고르든 같습니다. */
+function fillEngineSelect(sel, entries, current, fallback) {
+  if (!sel) return current;
   sel.textContent = "";
-  state.asrBackends.forEach(b => {
+  entries.forEach(b => {
     const o = document.createElement("option");
     o.value = b.id; o.textContent = b.label || b.id;
     sel.appendChild(o);
   });
-  sel.value = state.asrBackends.some(b => b.id === state.asr) ? state.asr : LOCKED.asr;
-  state.asr = sel.value;
+  sel.value = entries.some(b => b.id === current) ? current : fallback;
+  return sel.value;
+}
+
+function renderAsrPicker() {
+  state.asr = fillEngineSelect($("asr-picker"), state.asrBackends,
+                               state.asr, LOCKED.asr);
+  fillEngineSelect(document.querySelector('#add-form select[name="asr"]'),
+                   state.asrBackends, state.asr, LOCKED.asr);
+}
+
+function setAsr(id) {
+  state.asr = id;
+  const a = $("asr-picker");
+  const b = document.querySelector('#add-form select[name="asr"]');
+  if (a) a.value = id;
+  if (b) b.value = id;
+  persist();
+}
+
+function setBackendPickers(id) {
+  const a = $("backend-picker");
+  const b = document.querySelector('#add-form select[name="backend"]');
+  if (a && [...a.options].some(o => o.value === id)) a.value = id;
+  if (b) b.value = id;
 }
 
 const esc = (t) => String(t).replace(/[&<>"]/g,
@@ -1222,38 +1286,37 @@ function addLiveToPicker(probe, sessionId) {
   // gets a temporary entry that lasts as long as the broadcast is on screen.
   // Dropping every earlier live entry first is also what keeps re-adding the
   // same broadcast from stacking a second row on top of a stopped one.
-  const pick = $("video-picker");
-  pick.querySelectorAll("option[data-live]").forEach(o => o.remove());
-  const o = document.createElement("option");
+  const box = $("video-list");
+  box.querySelectorAll(".video-row.live.pending").forEach(r => r.remove());
+  const empty = box.querySelector(".empty");
+  if (empty) empty.remove();
   // 세션 id로 값을 잡습니다. 같은 방송을 두 번 켜면 영상 id가 겹쳐서, 뒤에서
   // 영상 하나를 고르려다 세션 항목이 잡히던 자리입니다.
-  o.value = "live:" + sessionId;
-  o.dataset.live = "1";
-  o.dataset.session = sessionId;
-  o.dataset.title = probe.title || "";
-  o.textContent = liveOptionLabel(o.dataset.title, false);
-  pick.prepend(o);
-  pick.value = o.value;
+  const value = "live:" + sessionId;
+  const row = videoRow({
+    value, session: sessionId, title: probe.title || "",
+    meta: "받는 중", live: true, deletable: false,
+  });
+  row.classList.add("pending");     // 새로고침 전까지의 임시 항목입니다
+  box.prepend(row);
+  markVideoRow(value);
 }
-
-/* 목록에 걸리는 라이브 항목의 이름. 자막이 끝나도 항목은 남기므로, 지금
- * 받아 적는 중인지 끝났는지를 이 한 줄이 구분합니다. */
-const liveOptionLabel = (title, stopped) =>
-  `${stopped ? "○ LIVE · 자막 중단" : "● LIVE"}  ${(title || "").slice(0, 58)}`;
 
 /* Removing the entry on stop was the mismatch: the player went on showing a
  * broadcast the list no longer had. Keep the entry, say the subtitles ended. */
 function markLiveStopped() {
-  const o = $("video-picker").querySelector("option[data-live]");
-  if (!o) return;
-  o.textContent = liveOptionLabel(o.dataset.title, true);
+  const row = $("video-list").querySelector(".video-row.live.pending");
+  if (!row) return;
+  row.classList.add("stopped");
+  const m = row.querySelector(".vm");
+  if (m) m.textContent = "자막 중단";
 }
 
 /* The stopped entry stands for what the player is showing. Once the viewer
  * picks something else the player moves on, and so does the entry. */
 function dropLiveOption(keepValue) {
-  $("video-picker").querySelectorAll("option[data-live]").forEach(o => {
-    if (o.value !== keepValue) o.remove();
+  $("video-list").querySelectorAll(".video-row.live.pending").forEach(r => {
+    if (r.dataset.value !== keepValue) r.remove();
   });
 }
 
@@ -1378,52 +1441,135 @@ function stopLive() {
   el.textContent = "자막 중단됨 · 방송은 계속 재생됩니다";
 }
 
-async function deleteVideo() {
-  if (!state.doc) return;
-  // A broadcast is nothing on disk, stopped or not; there is no transcript
-  // to delete and no audio file behind it.
-  if (isLiveDoc()) { alert("라이브 방송은 저장된 영상이 아니라 삭제할 수 없습니다."); return; }
-  const title = state.doc.title.slice(0, 50);
-  if (!confirm(`'${title}' 전사를 삭제할까요?\n내려받은 오디오도 함께 지웁니다.`)) return;
+/* 목록의 행에서 부릅니다. 예전에는 헤더의 단추가 "지금 열려 있는 것"만
+ * 지울 수 있었는데, 그러면 목록에서 보는 것과 지워지는 것이 어긋납니다. */
+async function deleteVideo(id, title) {
+  if (!confirm(`'${(title || "").slice(0, 50)}' 전사를 삭제할까요?\n`
+               + "내려받은 오디오도 함께 지웁니다.")) return;
   const res = await (await fetch("/api/video/delete", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: state.doc.id }),
+    body: JSON.stringify({ id }),
   })).json();
   if (res.error) { alert(res.error); return; }
+  // 지운 것이 지금 보고 있는 것이면 다른 것을 엽니다. 아니면 목록만
+  // 다시 그리고 화면은 그대로 둡니다.
+  const open = state.doc && state.doc.id === id && !isLiveDoc();
   const list = await (await fetch("/api/videos")).json();
-  if (!list.length) { location.reload(); return; }
-  await refreshVideoList(list[0].id);
+  if (open && !list.length) { location.reload(); return; }
+  await refreshVideoList(open ? list[0].id : undefined);
+}
+
+/* 목록은 <select>가 아니라 행으로 그립니다.
+ *
+ * 고르기만 하던 때는 select로 충분했지만, 지우기와 상태 표시가 같은 자리에
+ * 있어야 하고 제목도 한 줄로 잘리지 않아야 합니다. 삭제 단추가 헤더에
+ * 따로 있으면 "지금 열려 있는 것"만 지울 수 있어, 목록에서 보이는 것과
+ * 지워지는 것이 어긋납니다. */
+function videoRow({ value, session, title, meta, live, stopped, deletable }) {
+  const row = document.createElement("div");
+  row.className = "video-row" + (live ? " live" : "") + (stopped ? " stopped" : "");
+  row.dataset.value = value;
+  if (session) row.dataset.session = session;
+  row.dataset.title = title;
+
+  const body = document.createElement("div");
+  const t = document.createElement("div");
+  t.className = "vt";
+  t.textContent = title;
+  body.appendChild(t);
+  if (meta) {
+    const m = document.createElement("div");
+    m.className = "vm";
+    m.textContent = meta;
+    body.appendChild(m);
+  }
+  row.appendChild(body);
+
+  if (deletable) {
+    const del = document.createElement("button");
+    del.className = "vdel";
+    del.title = "이 전사를 삭제합니다";
+    del.textContent = "🗑";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();          // 지우려다 열리면 안 됩니다
+      deleteVideo(value, title);
+    });
+    row.appendChild(del);
+  } else {
+    row.appendChild(document.createElement("span"));
+  }
+
+  row.addEventListener("click", () => openFromList(value));
+  return row;
+}
+
+function openFromList(value) {
+  const row = $("video-list").querySelector(`.video-row[data-value="${CSS.escape(value)}"]`);
+  const sid = row && row.dataset.session;
+  markVideoRow(value);
+  if (sid) { resumeLive(sid); return; }
+  stopLive();
+  dropLiveOption(value);
+  loadVideo(value);
+}
+
+function markVideoRow(value) {
+  $("video-list").querySelectorAll(".video-row").forEach(r =>
+    r.classList.toggle("on", r.dataset.value === value));
+  const row = value && $("video-list").querySelector(
+    `.video-row[data-value="${CSS.escape(value)}"]`);
+  setNowTitle(row ? row.dataset.title : null);
+}
+
+/* 위쪽 막대는 "지금 무엇을 보고 있는가"를 답하는 자리입니다. */
+function setNowTitle(title) {
+  const el = $("now-title");
+  el.textContent = title || "영상을 고르거나 추가하십시오";
+  el.classList.toggle("empty", !title);
+  el.title = title || "";
 }
 
 async function refreshVideoList(selectId) {
   const list = await (await fetch("/api/videos")).json();
   const sessions = await (await fetch("/api/live/sessions")).json();
-  const pick = $("video-picker");
-  pick.textContent = "";
+  const box = $("video-list");
+  const current = box.querySelector(".video-row.on");
+  const keep = current && current.dataset.value;
+  box.textContent = "";
+
   // 라이브 세션에는 큐 파일이 없어서, 예전에는 탭을 닫으면 그 방송의 자막이
   // 통째로 사라졌습니다. 이제 서버가 들고 있으므로 목록에 올려 다시 엽니다.
   // 한 줄도 못 받은 세션은 열어 봐야 볼 것이 없으니 뺍니다.
   sessions.filter(s => s.cues).forEach(s => {
-    const o = document.createElement("option");
-    o.value = "live:" + s.id;
-    o.dataset.session = s.id;
     const running = LIVE_RUNNING.includes(s.state);
-    o.textContent = (running ? "● LIVE  " : "○ 지난 라이브  ")
-      + `${(s.title || s.url).slice(0, 50)}  ·  ${s.cues}줄`
-      + (running ? "" : `  ·  ${LIVE_STATE[s.state] || s.state}`);
-    pick.appendChild(o);
+    box.appendChild(videoRow({
+      value: "live:" + s.id, session: s.id,
+      title: s.title || s.url,
+      meta: `${s.cues}줄` + (running ? "" : `  ·  ${LIVE_STATE[s.state] || s.state}`),
+      live: true, stopped: !running, deletable: false,
+    }));
   });
   list.forEach(v => {
-    const o = document.createElement("option");
-    o.value = v.id;
     const mins = v.duration ? `${Math.round(v.duration / 60)}분` : "";
-    o.textContent = `${v.title.slice(0, 62)}  ·  ${v.source_lang}`
-      + (v.translated ? `→${v.viewer_lang}` : "") + (mins ? `  ·  ${mins}` : "");
-    pick.appendChild(o);
+    box.appendChild(videoRow({
+      value: v.id, title: v.title,
+      meta: [v.source_lang + (v.translated ? `→${v.viewer_lang}` : ""), mins]
+        .filter(Boolean).join("  ·  "),
+      deletable: true,
+    }));
   });
+  if (!box.children.length) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = "아직 없습니다. 「＋ 추가」로 주소를 넣으십시오.";
+    box.appendChild(e);
+  }
+
   if (selectId && list.some(v => v.id === selectId)) {
-    pick.value = selectId;
+    markVideoRow(selectId);
     await loadVideo(selectId);
+  } else if (keep) {
+    markVideoRow(keep);
   }
 }
 
@@ -1438,12 +1584,22 @@ async function cancelJob() {
 }
 
 
+/* 실패를 위쪽 막대에 띄웁니다.
+ *
+ * 예전에는 hidden을 풀지 않아서, 진행 상자가 이미 떠 있을 때만 보였습니다.
+ * 주소를 잘못 넣는 것처럼 시작도 못 한 실패는 그래서 조용히 묻혔습니다.
+ * 라벨도 "재번역 실패"로 고정되어 있었는데, 이 함수는 전사·주소 해석
+ * 실패에도 쓰입니다. */
 function jobError(msg) {
   const box = $("job");
+  box.hidden = false;
   box.classList.add("error");
-  box.querySelector(".job-label").textContent = "재번역 실패";
+  box.querySelector(".job-label").textContent = "실패";
+  $("job-fill").style.width = "0%";
   $("job-count").textContent = msg;
-  setTimeout(() => { box.hidden = true; }, 6000);
+  $("job-source").textContent = "";
+  $("job-cancel").hidden = true;
+  setTimeout(() => { box.hidden = true; $("job-cancel").hidden = false; }, 8000);
 }
 
 
@@ -1453,7 +1609,8 @@ function jobError(msg) {
   const list = await (await fetch("/api/videos")).json();
   const sessions = await (await fetch("/api/live/sessions")).json();
   if (!list.length && !sessions.some(s => s.cues)) {
-    $("video-picker").innerHTML = "<option>＋ 영상 추가로 시작하세요</option>";
+    await refreshVideoList();       // 빈 목록 안내를 그립니다
+    setLibrary(false);              // 처음 온 사람에게는 목록을 펼쳐 둡니다
     return;
   }
   // 서버는 멀쩡한데 탭만 새로고침한 경우입니다. 보고 있던 방송으로 그대로
@@ -1461,7 +1618,7 @@ function jobError(msg) {
   const running = sessions.find(s => LIVE_RUNNING.includes(s.state));
   await refreshVideoList(running ? null : (list[0] || {}).id);
   if (running) {
-    $("video-picker").value = "live:" + running.id;
+    markVideoRow("live:" + running.id);
     await resumeLive(running.id);
   }
 })();

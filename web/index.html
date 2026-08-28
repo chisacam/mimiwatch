@@ -6,37 +6,70 @@
 <link rel="stylesheet" href="/static/app.css">
 <body>
 
+<!-- 위쪽에는 지금 무엇을 보고 있고 무엇이 돌고 있는지만 둡니다.
+     영상 목록과 추가·삭제는 왼쪽 패널로 옮겼고, 엔진과 언어 설정은
+     「관리」 아래로 모았습니다. -->
 <header class="bar">
   <div class="brand">mimi<em>watch</em></div>
-  <label class="field">
-    <span>내 언어</span>
-    <select id="viewer-lang">
-      <option value="ko">한국어</option>
-      <option value="en">English</option>
-      <option value="ja">日本語</option>
-      <option value="zh">中文</option>
-    </select>
-  </label>
-  <select id="video-picker" class="field-select"><option>불러오는 중…</option></select>
-  <button id="add-video" class="seg primary-seg" title="YouTube 주소로 새 영상 추가">＋ 영상 추가</button>
-  <button id="del-video" class="seg" title="선택한 영상 삭제">🗑</button>
-  <label class="field" id="asr-field">
-    <span>전사</span>
-    <select id="asr-picker"></select>
-  </label>
-  <label class="field" id="backend-field">
-    <span>번역</span>
-    <select id="backend-picker"></select>
-  </label>
-  <button id="open-settings" class="seg" title="엔진 관리">⚙</button>
-  <div class="spacer"></div>
-  <div id="live-badge" class="live-badge" hidden>● LIVE <button id="live-stop">중단</button></div>
+  <button id="toggle-library" class="seg" title="영상 목록 접기·펼치기 (V)">◧ 영상</button>
+
+  <div class="now">
+    <b id="now-title">영상을 고르거나 추가하십시오</b>
+    <div id="live-badge" class="live-badge" hidden>● LIVE <button id="live-stop">중단</button></div>
+  </div>
+
+  <!-- 처리 상태는 위쪽에 둡니다. 예전에는 우하단에 떠 있어서, 전사가
+       도는지도 중단 단추가 어디 있는지도 눈에 잘 띄지 않았습니다. -->
+  <div id="job" class="job" hidden>
+    <span class="job-label">재번역 중…</span>
+    <span class="job-bar"><i id="job-fill"></i></span>
+    <span id="job-count" class="job-count"></span>
+    <span id="job-source" class="job-count"></span>
+    <button id="job-cancel" class="seg">중단</button>
+  </div>
+
   <div id="live-notice" class="live-notice" hidden></div>
   <div id="lang-status" class="status"></div>
-  <button id="toggle-panel" class="seg" title="스크립트 영역 접기/펼치기 (S)">스크립트 ▸</button>
+  <div class="spacer"></div>
+
+  <div class="menu-wrap">
+    <button id="open-manage" class="seg" aria-haspopup="true" aria-expanded="false">관리 ▾</button>
+    <div id="manage-menu" class="menu" hidden>
+      <label class="field col">
+        <span>내 언어</span>
+        <select id="viewer-lang">
+          <option value="ko">한국어</option>
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+          <option value="zh">中文</option>
+        </select>
+      </label>
+      <label class="field col" id="asr-field">
+        <span>전사</span>
+        <select id="asr-picker"></select>
+      </label>
+      <label class="field col" id="backend-field">
+        <span>번역</span>
+        <select id="backend-picker"></select>
+      </label>
+      <hr>
+      <button id="open-settings" class="seg wide">⚙ 엔진 관리</button>
+    </div>
+  </div>
+
+  <button id="toggle-panel" class="seg" title="스크립트 영역 접기·펼치기 (S)">스크립트 ▸</button>
 </header>
 
 <main id="layout">
+  <!-- 영상 관리. 스크립트 패널과 같은 방식으로 접고 펼칩니다. -->
+  <aside class="library" id="library">
+    <div class="panel-head">
+      <h2>영상</h2>
+      <button id="add-video" class="seg primary-seg" title="YouTube 주소로 새 영상 추가">＋ 추가</button>
+    </div>
+    <div id="video-list" class="video-list"></div>
+  </aside>
+
   <section class="stage">
     <div id="player-wrap">
       <div id="player"></div>
@@ -100,16 +133,6 @@
   </aside>
 </main>
 
-<div id="job" class="job" hidden>
-  <div class="job-head">
-    <div class="job-label">재번역 중…</div>
-    <button id="job-cancel" class="seg">중단</button>
-  </div>
-  <div class="job-bar"><i id="job-fill"></i></div>
-  <div id="job-count" class="job-count"></div>
-  <div id="job-source" class="job-count"></div>
-</div>
-
 <dialog id="add-dialog">
   <form method="dialog" id="add-form">
     <h3>영상 추가</h3>
@@ -126,6 +149,13 @@
     <label class="inline"><input type="checkbox" name="refine" checked> 정제본으로 다듬기 <small class="tag">라이브 전용</small></label>
     <small class="hint">켜면 발화 한 무리가 끝나기를 기다렸다 합쳐서 다시 받아 적습니다. 문맥이 길어져 정확해지지만 자막이 늦게 자리를 잡고 이미 뜬 줄이 바뀝니다. 끄면 짧게 끊어 바로 내보냅니다.</small>
     <label class="inline"><input type="checkbox" name="speakers"> 화자 태그 붙이기 <small class="tag">녹화본 전용</small></label>
+    <label>전사 엔진
+      <select name="asr"></select>
+      <small>넣는 순간 이 엔진으로 시작합니다. 낮은 사양이라면 가벼운 쪽을 고르십시오.</small>
+    </label>
+    <label>번역 엔진
+      <select name="backend"></select>
+    </label>
     <label>원본 언어
       <select name="lang">
         <option value="">자동 판별</option>

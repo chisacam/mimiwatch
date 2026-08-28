@@ -1,0 +1,43 @@
+/* 유튜브 페이지에 얹는 자막의 모양.
+ *
+ * mimiwatch 페이지의 app.css 와 같은 값을 쓰되 이름을 따로 둡니다. 유튜브
+ * 페이지에는 우리 것이 아닌 규칙이 잔뜩 있고, `.cue-main` 같은 흔한 이름은
+ * 언제 부딪칠지 모릅니다. 자리와 끌기는 overlay.js 가 인라인으로 넣으므로
+ * 여기에는 모양만 있습니다.
+ *
+ * `.cue-*` 이름을 함께 다는 것은 overlay.js 가 그 이름으로 세 줄을 찾기
+ * 때문입니다. 부딪침을 막는 것은 앞의 `.mw-overlay` 한정입니다. */
+.mw-overlay{
+  position:absolute; left:50%; bottom:6%; transform:translateX(-50%);
+  width:max-content; max-width:88%;
+  display:flex; flex-direction:column; align-items:center; gap:.3rem;
+  pointer-events:none; text-align:center;
+  /* 유튜브 컨트롤 바(z-index 60 언저리)보다 아래입니다. 자막이 재생
+     단추를 덮으면 영상을 조작할 수 없습니다. */
+  z-index:30;
+  font-family:"Pretendard","Apple SD Gothic Neo",system-ui,sans-serif;
+  --mw-dim:.55;
+}
+.mw-overlay > div:empty{display:none}
+/* 포인터를 가져가는 것은 실제로 보이는 글자줄뿐입니다. 덩어리 전체가
+   가져가면 자막 옆의 빈 자리를 눌러도 영상에 닿지 않아, 재생·일시정지가
+   죽는 구역이 생깁니다. */
+.mw-overlay > div{pointer-events:auto; cursor:grab}
+.mw-overlay.dragging > div{cursor:grabbing}
+
+.mw-overlay .mw-main,
+.mw-overlay .mw-src,
+.mw-overlay .mw-prev{
+  max-width:100%; text-wrap:balance;
+  padding:.12em .5em; border-radius:.28em;
+  background:rgba(6,8,12,var(--mw-dim));
+  text-shadow:0 1px 3px rgba(0,0,0,.9);
+}
+.mw-overlay .mw-main{ font-weight:700; line-height:1.34; color:#eef2ff }
+.mw-overlay .mw-src{ font-size:.62em; line-height:1.4; color:#9fe8d5; opacity:.95 }
+.mw-overlay .mw-prev{ font-size:.52em; line-height:1.35; color:#c9cede; opacity:.62 }
+.mw-overlay .spk-chip{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:.4em; color:#04211b; background:#5eead4;
+  border-radius:3px; padding:.08em .3em; margin-right:.35em; vertical-align:.15em;
+}

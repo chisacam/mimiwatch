@@ -1,0 +1,26 @@
+:root{color-scheme:dark}
+body{margin:0; background:#0e1117; color:#e6e9f0;
+  font:13px/1.5 "Pretendard","Apple SD Gothic Neo",system-ui,sans-serif}
+.wrap{display:flex; flex-direction:column; gap:.6rem; padding:.8rem; width:19rem}
+h1{margin:0; font-size:1rem; font-weight:800; letter-spacing:-.02em}
+h1 em{font-style:normal; color:#5eead4}
+label{display:flex; flex-direction:column; gap:.25rem; font-size:.74rem; color:#8b95a7}
+label.slider,label.check{flex-direction:row; align-items:center; gap:.45rem}
+label.slider input[type=range]{flex:1; accent-color:#5eead4}
+select,input[type=text]{
+  background:#0d1017; color:#e6e9f0; border:1px solid #222836;
+  border-radius:6px; padding:.3rem .45rem; font:inherit; font-size:.8rem;
+}
+.row{display:flex; gap:.3rem; align-items:center}
+.row .grow{flex:1}
+.seg{
+  background:#151a24; color:#c9cede; border:1px solid #222836;
+  border-radius:7px; padding:.25rem .5rem; font:inherit; font-size:.74rem;
+  cursor:pointer;
+}
+.seg:hover{border-color:#5eead4}
+.seg.on{background:#5eead4; border-color:#5eead4; color:#04211b; font-weight:700}
+.seg.danger{color:#ff8b84; border-color:#52201d}
+.hint{margin:0; font-size:.7rem; color:#8b95a7}
+.err{margin:0; font-size:.72rem; color:#ff8b84}
+.err[hidden]{display:none}

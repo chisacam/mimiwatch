@@ -708,6 +708,42 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     return {"backend": backend_id}
 
 
+def set_asr(session_id: str, asr_backend_id: str) -> dict:
+    """돌아가는 세션의 전사 엔진을 갈아 끼웁니다.
+
+    예전에는 세션을 다시 시작해야 했습니다. 그러면 세션 id가 바뀌고 자막은
+    세션 id로 저장되므로 **그때까지의 스크립트가 화면에서 사라졌습니다.**
+    번역기는 이미 세션 안에서 갈아 끼우고 있었으니(set_backend) 전사기만
+    그럴 이유가 없습니다. 한 영상 안에서 자막은 이어져야 합니다.
+
+    이미 나간 줄은 그것을 받아 적은 엔진의 것으로 남고, 이후만 새 엔진이
+    맡습니다 -- 번역기 쪽과 같은 규칙입니다.
+    """
+    s = get(session_id)
+    if not s:
+        return {"error": "no such session"}
+    spec = None
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "backends.json"), encoding="utf-8") as f:
+        for b in json.load(f).get("asr_backends", []):
+            if b["id"] == asr_backend_id:
+                spec = b
+    if spec is None:
+        return {"error": f"'{asr_backend_id}' 전사 엔진이 없습니다"}
+    if not hasattr(s._asr, "swap"):
+        return {"error": "이 세션의 전사기는 갈아 끼울 수 없습니다"}
+    try:
+        info = s._asr.swap(spec)
+    except Exception as exc:
+        # 실패하면 쓰던 것이 그대로 남습니다. 바꾸려다 방송을 잃지 않습니다.
+        return {"error": f"{exc}"}
+    s.asr_backend_id = asr_backend_id
+    s.asr_label = info["label"]
+    s._persist()
+    s.emit({"type": "status", **s.status()})
+    return {"asr": asr_backend_id, **info}
+
+
 def stop(session_id: str) -> dict:
     s = get(session_id)
     if not s:

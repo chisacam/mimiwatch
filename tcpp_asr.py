@@ -95,6 +95,37 @@ class TranscribeCppASR:
         # 직렬화합니다.
         self._lock = threading.Lock()
 
+    def swap(self, spec: dict | None):
+        """돌아가는 세션에서 전사 모델을 갈아 끼웁니다.
+
+        **객체를 바꾸지 않고 속만 바꿉니다.** `run_stream` 은 asr 을 지역
+        변수로 받아 들고 있고 `Refiner` 도 따로 참조를 쥐고 있어서, 세션의
+        `_asr` 을 새 객체로 갈아 끼워 봐야 돌고 있는 루프는 옛 것을 계속
+        씁니다. 속을 바꾸면 그 참조들이 저절로 새 모델을 가리킵니다.
+
+        예전에는 이 자리에서 세션을 통째로 다시 시작했습니다. 그러면 세션
+        id가 바뀌고, 자막은 세션 id로 저장되므로 **그때까지의 스크립트가
+        화면에서 사라졌습니다.** 한 영상 안에서 자막은 이어져야 합니다.
+
+        새 모델을 다 세우고 나서 바꿉니다. 언어를 지원하지 않는 등으로
+        실패하면 쓰던 것이 그대로 남습니다 -- 바꾸려다 방송을 잃는 것이
+        가장 나쁩니다.
+        """
+        import transcribe_cpp as tc
+
+        r = resolve_asr(spec, self.forced_lang)
+        model = tc.Model(r["path"], backend=r["device"])
+        session = model.session(n_threads=r["threads"])
+        self._probe_language(session, r["label"])
+        # 해독 한 번이 끝나기를 기다렸다 바꿉니다. transcribe 도 같은 자물쇠를
+        # 쥐므로, 반쯤 바뀐 상태로 해독이 들어가는 일은 없습니다.
+        with self._lock:
+            self._model, self._session = model, session
+            self.device, self.threads, self.label = r["device"], r["threads"], r["label"]
+        print(f"[asr] 갈아 끼움 -> {self.label} · {self.device} · {self.threads}스레드",
+              file=sys.stderr, flush=True)
+        return {"label": self.label, "device": self.device, "threads": self.threads}
+
     def _check_language(self):
         """이 모델이 이 언어를 아는지 시작할 때 물어봅니다.
 
@@ -106,14 +137,17 @@ class TranscribeCppASR:
 
         무음 0.1초면 충분합니다. moonshine 기준 50밀리초쯤 듭니다.
         """
+        self._probe_language(self._session, self.label)
+
+    def _probe_language(self, session, label: str):
         if not self.forced_lang:
             return              # 자동 판별에 맡긴 경우는 물어볼 것이 없습니다
         try:
-            self._session.run(np.zeros(1600, dtype=np.float32),
-                              language=self.forced_lang)
+            session.run(np.zeros(1600, dtype=np.float32),
+                        language=self.forced_lang)
         except UnsupportedRequest as exc:
             raise RuntimeError(
-                f"{self.label} 모델은 '{self.forced_lang}' 언어를 "
+                f"{label} 모델은 '{self.forced_lang}' 언어를 "
                 f"지원하지 않습니다. 원본 언어를 바꾸거나 다른 전사 엔진을 "
                 f"고르십시오. ({exc})") from exc
         except Exception:
@@ -209,12 +243,11 @@ MODEL_DIR = os.environ.get(
 WHISPER = os.path.join(MODEL_DIR, "whisper-large-v3-turbo-Q8_0.gguf")
 
 
-def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4):
-    """세션이 쓸 인식기를 만듭니다.
+def resolve_asr(spec: dict | None, lang: str | None) -> dict:
+    """설정 한 덩어리에서 실제로 쓸 모델·장치·스레드를 뽑아냅니다.
 
-    lang이 비어 있으면 모델이 스스로 판별합니다. 다만 방송 언어를 알고
-    있다면 지정하는 편이 낫습니다 -- 판별이 흔들리면 문장 하나가 통째로
-    다른 언어로 나옵니다.
+    새로 만들 때(`build_live_asr`)와 돌아가는 세션에서 갈아 끼울 때
+    (`TranscribeCppASR.swap`)가 같은 규칙을 써야 하므로 떼어 두었습니다.
     """
     spec = spec or {}
     path = (spec.get("models") or {}).get(lang or "") or spec.get("model") or WHISPER
@@ -229,7 +262,18 @@ def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4):
     device = resolve_device(spec.get("device", "auto"))
     # 설정에 스레드 수가 적혀 있으면 그것이 우선입니다. 없으면 어디서
     # 도는지에 맞춰 정합니다.
-    n_threads = int(spec.get("threads") or stream.default_threads(device))
-    return TranscribeCppASR(path, lang, threads=n_threads,
-                            label=os.path.basename(path).replace(".gguf", ""),
-                            device=device)
+    return {"path": path, "device": device,
+            "threads": int(spec.get("threads") or stream.default_threads(device)),
+            "label": os.path.basename(path).replace(".gguf", "")}
+
+
+def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4):
+    """세션이 쓸 인식기를 만듭니다.
+
+    lang이 비어 있으면 모델이 스스로 판별합니다. 다만 방송 언어를 알고
+    있다면 지정하는 편이 낫습니다 -- 판별이 흔들리면 문장 하나가 통째로
+    다른 언어로 나옵니다.
+    """
+    r = resolve_asr(spec, lang)
+    return TranscribeCppASR(r["path"], lang, threads=r["threads"],
+                            label=r["label"], device=r["device"])

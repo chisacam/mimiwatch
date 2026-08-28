@@ -1159,35 +1159,44 @@ function setBackendPickers(id) {
 const esc = (t) => String(t).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-/* 돌고 있는 세션에는 새 엔진을 끼워 넣을 수 없습니다. hayamimi의
- * run_stream은 시작할 때 인식기 객체를 받아 붙잡고 있으므로, 바꾸려면
- * 읽기 루프 자체를 다시 세워야 합니다. 그래서 "다시 시작"입니다. */
 function hideLiveNotice() {
   const box = $("live-notice");
   box.hidden = true;
   box.textContent = "";
 }
 
-function askLiveRestart() {
+function showLiveNotice(text) {
+  const box = $("live-notice");
+  box.textContent = text;
+  box.hidden = false;
+}
+
+/* 돌아가는 세션의 전사 엔진을 그 자리에서 갈아 끼웁니다.
+ *
+ * 예전에는 「새 엔진으로 다시 시작」을 눌러야 했습니다. 그러면 세션 id가
+ * 바뀌고 자막은 세션 id로 저장되므로, **그때까지의 스크립트가 통째로
+ * 사라졌습니다.** 번역기는 이미 세션 안에서 갈아 끼우고 있었으니 전사기만
+ * 그럴 이유가 없습니다. */
+async function askLiveRestart() {
   const stale = state.live && state.live.state
                 && !LIVE_RUNNING.includes(state.live.state);
-  if (!state.live || state.live.asr === state.asr || stale || !state.live.url) {
+  if (!state.live || state.live.asr === state.asr || stale) {
     hideLiveNotice();
     return;
   }
-  const box = $("live-notice");
-  box.textContent = "전사 엔진은 진행 중인 세션에 적용되지 않습니다 — ";
-  const b = document.createElement("button");
-  b.className = "seg";
-  b.textContent = "새 엔진으로 다시 시작";
-  b.onclick = () => {
-    const { url, lang, probe } = state.live;
-    hideLiveNotice();
-    stopLive();
-    startLive(url, lang, probe);
-  };
-  box.appendChild(b);
-  box.hidden = false;
+  const res = await (await fetch("/api/live/asr", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: state.live.id, asr: state.asr }),
+  })).json();
+  if (res.error) {
+    // 실패하면 서버는 쓰던 엔진을 그대로 씁니다. 화면의 선택기도
+    // 되돌려 놓아야 둘이 어긋나지 않습니다.
+    setAsr(state.live.asr);
+    showLiveNotice(`전사 엔진을 바꾸지 못했습니다 — ${res.error}`);
+    return;
+  }
+  state.live.asr = state.asr;
+  hideLiveNotice();
 }
 
 /* ---------- live ---------- */
@@ -1247,6 +1256,11 @@ async function resumeLive(sessionId) {
   // 지금 고른 백엔드 칸에 넣으면 하지 않은 일을 했다고 표시하게 됩니다.
   if (st.backend && state.backends.some(b => b.id === st.backend)) {
     state.backend = st.backend;
+  }
+  // 전사 엔진도 마찬가지입니다. 세션이 실제로 쓰는 것과 선택기가 가리키는
+  // 것이 다르면, 다음에 무엇을 바꿔도 화면과 서버가 어긋난 채로 갑니다.
+  if (st.asr_backend && state.asrBackends.some(b => b.id === st.asr_backend)) {
+    setAsr(st.asr_backend);
   }
   state.doc = { id: st.video_id || "", title: st.title || st.url,
                 source_lang: st.source_lang || "", viewer_lang: st.viewer_lang,

@@ -218,6 +218,10 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_stop_server, daemon=True).start()
             return
 
+        if path == "/api/live/asr":
+            return self._json(live.set_asr(body.get("id", ""),
+                                           body.get("asr", "")))
+
         if path == "/api/live/stop":
             return self._json(live.stop(body.get("id", "")))
 

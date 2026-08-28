@@ -44,6 +44,7 @@ def make_session():
         setattr(s, k, v)
     s._persist = lambda: None
     s.emit = lambda e: None
+    s._subs = []
     return s
 
 
@@ -106,6 +107,67 @@ def main():
     check("requested format is not available" in msg,
           "yt-dlp 가 한 말이 그대로 실린다")
     check("234" in msg, "어느 포맷을 시도했는지도 남는다")
+
+    print("\n[4] 전사 엔진을 갈아 끼워도 세션과 자막이 유지되는가")
+    # 이것이 요점입니다. 예전에는 엔진을 바꾸려면 세션을 다시 시작해야
+    # 했고, 자막은 세션 id로 저장되므로 그때까지의 스크립트가 사라졌습니다.
+    swapped = {}
+
+    class FakeAsr:
+        label = "old-model"
+        def swap(self, spec):
+            swapped["spec"] = spec
+            self.label = "new-model"
+            return {"label": self.label, "device": "cpu", "threads": 8}
+
+    s = make_session()
+    s._asr = FakeAsr()
+    s.asr_label = "old-model"
+    s._recent = [{"t": 1.0, "text": "이미 받아 적은 줄"}]
+    before_id = s.id
+    live._sessions[s.id] = s
+    cfg = {"asr_backends": [{"id": "tcpp-lite", "backend": "tcpp",
+                             "model": "SenseVoiceSmall-Q8_0.gguf"}]}
+    import json as _json, io, builtins
+    real_open = builtins.open
+    builtins.open = lambda *a, **k: (io.StringIO(_json.dumps(cfg))
+                                     if str(a[0]).endswith("backends.json")
+                                     else real_open(*a, **k))
+    try:
+        res = live.set_asr(s.id, "tcpp-lite")
+    finally:
+        builtins.open = real_open
+        live._sessions.pop(s.id, None)
+
+    check(not res.get("error"), f"갈아 끼웠다 ({res})")
+    check(s.id == before_id, f"세션 id가 그대로다 ({s.id})")
+    check(s._recent == [{"t": 1.0, "text": "이미 받아 적은 줄"}],
+          "이미 받아 적은 줄이 남아 있다")
+    check(s.asr_backend_id == "tcpp-lite" and s.asr_label == "new-model",
+          f"엔진 이름이 바뀌었다 ({s.asr_label})")
+    check(swapped.get("spec", {}).get("model") == "SenseVoiceSmall-Q8_0.gguf",
+          "설정이 그대로 전달됐다")
+
+    print("\n[5] 갈아 끼우기가 실패하면 쓰던 것이 남는가")
+    class Refuses(FakeAsr):
+        def swap(self, spec):
+            raise RuntimeError("이 모델은 'ja' 언어를 지원하지 않습니다")
+    s2 = make_session()
+    s2._asr = Refuses()
+    s2.asr_backend_id = "tcpp-best"
+    s2.asr_label = "old-model"
+    live._sessions[s2.id] = s2
+    builtins.open = lambda *a, **k: (io.StringIO(_json.dumps(cfg))
+                                     if str(a[0]).endswith("backends.json")
+                                     else real_open(*a, **k))
+    try:
+        res2 = live.set_asr(s2.id, "tcpp-lite")
+    finally:
+        builtins.open = real_open
+        live._sessions.pop(s2.id, None)
+    check("error" in res2, f"실패를 알린다 ({res2.get('error', '')[:40]})")
+    check(s2.asr_backend_id == "tcpp-best" and s2.asr_label == "old-model",
+          "쓰던 엔진이 그대로다")
 
     print()
     if FAIL:

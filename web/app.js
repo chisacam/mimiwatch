@@ -11,6 +11,8 @@ const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
   genres: [],
+  // 전체화면에 들어가기 직전의 플레이어 높이. 자막 크기 배율의 기준입니다.
+  fsBaseHeight: 0, cuePx: 0,
   backend: "local-gemma", asr: "tcpp-best", refine: true,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   live: null,          // { id, es, byId } while a broadcast is running
@@ -332,10 +334,20 @@ async function createPlayer(videoId) {
   if (state.player) { state.player.loadVideoById(videoId); return; }
   state.player = new YT.Player("player", {
     videoId,
-    playerVars: { rel: 0, modestbranding: 1, playsinline: 1 },
+    // fs:0 은 유튜브의 전체화면 단추를 지웁니다. 그 단추는 **iframe**을
+    // 전체화면 요소로 만드는데, 브라우저는 전체화면 요소의 하위 트리만
+    // 그리므로 iframe 밖에 있는 자막 오버레이가 통째로 사라집니다.
+    // iframe 안은 교차 출처라 그 단추를 가로챌 수 없으니, 지우고 우리
+    // 단추를 대신 둡니다.
+    playerVars: { rel: 0, modestbranding: 1, playsinline: 1, fs: 0 },
     events: {
       onReady: () => {
         state.ready = true;
+        // fs:0 은 단추를 지울 뿐입니다. allowfullscreen 을 떼면 iframe은
+        // 어떤 경로로도 전체화면 요소가 될 수 없습니다 -- 그래야 자막이
+        // 사라지는 상태 자체가 만들어지지 않습니다.
+        const f = document.querySelector("#player-wrap iframe");
+        if (f) f.removeAttribute("allowfullscreen");
         setInterval(renderCue, 100);
       },
       onError: (e) => playerError(`영상을 재생할 수 없습니다 (code ${e.data}). ` +
@@ -358,8 +370,69 @@ function playerError(msg) {
 
 /* ---------- controls ---------- */
 function applySize(px) {
-  $("overlay").style.fontSize = px + "px";
-  $("cue-main").style.fontSize = px + "px";
+  state.cuePx = px;
+  applyCueSize();
+}
+
+/* 자막 크기는 슬라이더 값 그대로가 아니라 **플레이어가 커진 만큼** 키웁니다.
+ *
+ * 창에서 고른 30px을 전체화면에서 그대로 쓰면 화면이 서너 배 커진 만큼
+ * 자막만 작아 보입니다. 전체화면에 들어갈 때의 상자 높이를 기준으로 잡아
+ * 두고 그 비율만큼 곱합니다. 창 모드에서는 기준이 없으므로 배율이 1이고,
+ * 지금까지와 똑같이 동작합니다. */
+function applyCueSize() {
+  const px = state.cuePx || +$("size").value;
+  const base = state.fsBaseHeight;
+  const h = $("player-wrap").clientHeight;
+  const scale = base && h ? h / base : 1;
+  const eff = Math.round(px * scale);
+  $("overlay").style.fontSize = eff + "px";
+  $("cue-main").style.fontSize = eff + "px";
+}
+
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+
+function toggleFullscreen() {
+  const wrap = $("player-wrap");
+  if (fsElement()) {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  } else {
+    // 전체화면에 들어가기 직전의 높이를 기억해 둡니다. 들어간 뒤에 재면
+    // 이미 커진 값이라 배율이 1이 됩니다.
+    state.fsBaseHeight = wrap.clientHeight;
+    const req = wrap.requestFullscreen || wrap.webkitRequestFullscreen;
+    if (!req) { fsFailed("이 브라우저는 전체화면을 지원하지 않습니다."); return; }
+    Promise.resolve(req.call(wrap)).catch(err => fsFailed(err.message));
+  }
+}
+
+/* 실패를 단추 자리에서 알립니다. jobError는 "재번역 실패"라고 적는
+ * 번역 작업용이라 여기에 맞지 않습니다. */
+function fsFailed(msg) {
+  state.fsBaseHeight = 0;
+  const b = $("fullscreen");
+  b.textContent = "⛶ 전체화면 불가";
+  b.title = msg;
+  console.error("[fullscreen]", msg);
+  setTimeout(() => { b.textContent = "⛶ 전체화면"; }, 4000);
+}
+
+function onFullscreenChange() {
+  const el = fsElement();
+  const on = !!el;
+  // iframe이 전체화면이 되면 자막은 그 하위 트리 밖이라 사라집니다. 여기까지
+  // 왔다면 위의 방어가 뚫린 것이므로, 조용히 두지 않고 되돌립니다.
+  if (el && el.tagName === "IFRAME") {
+    console.warn("[fullscreen] iframe이 전체화면이 되었습니다. 자막이 보이지 않습니다.");
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    fsFailed("유튜브 플레이어가 자체 전체화면을 열었습니다. 아래 「전체화면」 단추를 쓰십시오.");
+    return;
+  }
+  if (!on) state.fsBaseHeight = 0;
+  $("fullscreen").classList.toggle("on", on);
+  $("fullscreen").textContent = on ? "⛶ 창으로" : "⛶ 전체화면";
+  // 상자 크기가 바뀐 뒤에 재야 합니다. 전환 직후에는 아직 옛 크기입니다.
+  requestAnimationFrame(applyCueSize);
 }
 function bind() {
   document.querySelectorAll(".seg").forEach(b => {
@@ -419,10 +492,20 @@ function bind() {
   // Watching is a full-screen activity; reaching for the mouse to reclaim
   // width breaks it, so the toggle also answers to a key.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "s" && !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) {
-      setPanel(!state.panelHidden);
-    }
+    if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+    if (e.key === "s") setPanel(!state.panelHidden);
+    // 유튜브의 f 단축키는 iframe 안에서만 듣습니다. 영상을 클릭한 뒤에는
+    // 초점이 그 안에 있어 이 처리기까지 오지 않으므로, 겹칠 걱정은
+    // 없습니다 -- 대신 그때는 fs:0 이 막아 줍니다.
+    if (e.key === "f") toggleFullscreen();
   });
+  $("fullscreen").addEventListener("click", toggleFullscreen);
+  // 영상 위 더블클릭은 받을 수 없습니다. iframe이 상자를 꽉 채우고 있어
+  // letterbox 여백까지 iframe의 것이라, 그 두 번 누름은 유튜브가 가져갑니다.
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+  // 전체화면에서 창 크기가 바뀌면(다른 화면으로 옮기는 등) 배율도 바뀝니다.
+  window.addEventListener("resize", () => { if (fsElement()) applyCueSize(); });
 }
 
 function setPanel(hidden) {

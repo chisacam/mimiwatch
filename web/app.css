@@ -61,6 +61,15 @@ main.panel-hidden .panel{opacity:0; pointer-events:none}
 }
 #player,#player iframe{position:absolute; inset:0; width:100%; height:100%}
 
+/* 전체화면이 되는 것은 iframe이 아니라 이 상자입니다.
+ *
+ * 유튜브의 전체화면 단추를 누르면 **iframe**이 전체화면 요소가 되고,
+ * 브라우저는 그 요소의 하위 트리만 그립니다. 자막 오버레이는 iframe 밖에
+ * 있으므로 그대로 사라집니다. 상자째 키우면 영상과 자막이 같은 트리 안에
+ * 들어갑니다. */
+#player-wrap:fullscreen{ border:0; border-radius:0; background:#000 }
+#player-wrap:-webkit-full-screen{ border:0; border-radius:0; background:#000 }
+
 .overlay{
   position:absolute; left:0; right:0; bottom:6%;
   display:flex; flex-direction:column; align-items:center; gap:.3rem;

@@ -8,6 +8,10 @@
 #
 #   ./install.sh
 #
+# 윈도우는 install.ps1 을 쓰십시오. 거기서는 아무것도 빌드하지 않습니다 --
+# transcribe.cpp와 llama.cpp 모두 미리 만들어진 win_amd64 휠이 있습니다.
+# 자세한 것은 docs/WINDOWS.md.
+#
 # 환경변수로 위치를 바꿀 수 있습니다.
 #   TRANSCRIBE_CPP_DIR   transcribe.cpp 체크아웃 (기본: 이 저장소의 형제 디렉터리)
 #   MIMIWATCH_MODEL_DIR  모델 (기본: ~/.local/share/mimiwatch/models)

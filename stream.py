@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import queue
+import sys
 import threading
 import time
 
@@ -42,10 +43,21 @@ REFINE_MIN_KEEP = 0.7
 
 
 def model_dir() -> str:
-    return os.environ.get(
-        "MIMIWATCH_MODEL_DIR",
-        os.path.join(os.path.expanduser("~"), ".local", "share",
-                     "mimiwatch", "models"))
+    """모델을 두는 곳. `MIMIWATCH_MODEL_DIR`로 바꿀 수 있습니다.
+
+    윈도우는 `%LOCALAPPDATA%`를 씁니다. `~/.local/share`도 동작하기는
+    하지만, 그 자리에 수 GB를 두면 사용자가 찾지 못합니다 -- 윈도우에서
+    프로그램 데이터를 찾는 곳이 아닙니다.
+    """
+    env = os.environ.get("MIMIWATCH_MODEL_DIR")
+    if env:
+        return env
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Local")
+        return os.path.join(base, "mimiwatch", "models")
+    return os.path.join(os.path.expanduser("~"), ".local", "share",
+                        "mimiwatch", "models")
 
 
 def build_vad(min_silence: float = 0.35,

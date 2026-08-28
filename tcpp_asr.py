@@ -46,7 +46,9 @@ class TranscribeCppASR:
 
         self.forced_lang = lang
         self.min_switch_s = 0.0
-        self.label = label or model_path.rsplit("/", 1)[-1]
+        # os.path.basename을 씁니다. "/"로만 자르면 윈도우의 역슬래시
+        # 경로에서 전체 경로가 통째로 화면의 엔진 이름이 됩니다.
+        self.label = label or os.path.basename(model_path)
         self.hallucinations = 0
 
         self._model = tc.Model(model_path)

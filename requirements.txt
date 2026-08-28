@@ -1,6 +1,9 @@
 # 전사 구간 분할과 화자 임베딩 (Silero VAD, CAM++)
 sherpa-onnx>=1.13
 # 로컬 번역 (Gemma 4 E4B, 대체용 M2M-100)
+# 윈도우에는 PyPI 휠이 없습니다. install.ps1 이 만든 쪽의 인덱스
+# (https://abetlen.github.io/llama-cpp-python/whl/{cpu,vulkan})를 함께
+# 봅니다. 맥/리눅스는 PyPI에서 그냥 받습니다.
 llama-cpp-python>=0.3.30
 ctranslate2>=4.8
 sentencepiece>=0.2

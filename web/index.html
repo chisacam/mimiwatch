@@ -328,6 +328,8 @@
      app.js 의 whenApiReady() 가 onYouTubeIframeAPIReady 와 폴링으로 늦게
      오는 경우를 이미 다루므로, 막아 세울 이유가 없습니다. -->
 <script async src="https://www.youtube.com/iframe_api"></script>
+<!-- 자막을 그리는 한 벌. 확장의 content script 도 같은 파일을 읽습니다. -->
+<script src="/static/overlay.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

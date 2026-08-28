@@ -333,6 +333,27 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 }
 .script-modes .seg{flex:1; font-size:.74rem; padding:.25rem .4rem}
 
+/* 번역 모드의 아래 띠. 고른 줄 수와 할 일. */
+.tr-bar{
+  flex:none; display:flex; align-items:center; gap:.4rem;
+  padding:.45rem 1rem; border-bottom:1px solid var(--line);
+  background:#12161f; font-size:.76rem;
+}
+.tr-bar[hidden]{display:none}
+.tr-bar .grow{flex:1}
+.tr-bar .seg{font-size:.72rem; padding:.2rem .5rem}
+.tr-bar b{color:var(--accent)}
+/* 고르는 동안에는 글자를 끌어 선택하는 것이 방해가 됩니다. */
+.script.mode-tr .line{cursor:pointer; user-select:none}
+.script.mode-tr .line::before{
+  content:"☐"; position:absolute; right:.5rem; top:.35rem;
+  font-size:.8rem; color:var(--dim);
+}
+.script.mode-tr .line.picked::before{content:"☑"; color:var(--accent)}
+.script.mode-tr .line.picked{background:#15202b}
+/* 사람이 고친 번역은 건너뜁니다. 고를 수는 있게 두되 그렇다고 알립니다. */
+.script.mode-tr .line.kept::before{content:"✎"; color:var(--warn)}
+
 /* ---------- 자막 고치기 ---------- */
 /* 줄마다 달려 있지만 얹어 놓기만 합니다. 늘 보이면 스크립트가 단추밭이
    되고, 읽는 것이 이 패널의 본래 일입니다. */

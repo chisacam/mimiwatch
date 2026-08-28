@@ -112,7 +112,26 @@ def main():
               f"남은 번호는 다시 매기지 않는다 ({ids})")
         check(not store.delete_cue(OWNER, 2), "이미 없는 줄은 False")
 
-        print("\n[8] 없는 것")
+        print("\n[8] 기계 번역은 「원문과 다름」을 걷는다")
+        store.replace_cues(OWNER + "-b", [
+            {"start": 0.0, "end": 1.0, "text": "もと", "lang": "ja",
+             "translations": {"g": "옛 번역"}},
+        ])
+        o2 = OWNER + "-b"
+        store.edit_cue(o2, 1, text="고친 원문")
+        check("text" in store.cues(o2)[0]["edited"], "원문을 고쳐 어긋남 표시를 만든다")
+        store.save_translation(o2, 1, "g", "새 번역")
+        got = store.cues(o2)[0]
+        check("text" not in got["edited"],
+              f"기계 번역 뒤 표시가 걷힌다 ({got['edited']!r})")
+        check(got["translations"]["g"] == "새 번역", "번역이 갈렸다")
+        # 사람이 고친 표시는 기계 번역이 지우지 않습니다.
+        store.edit_cue(o2, 1, tr="사람 번역", backend="g")
+        store.save_translation(o2, 1, "g", "기계가 또 씀")
+        check("tr" in store.cues(o2)[0]["edited"],
+              "사람이 고쳤다는 표시는 기계 번역이 지우지 않는다")
+
+        print("\n[9] 없는 것")
         check(store.edit_cue(OWNER, 999, text="x") is None, "없는 줄은 None")
         check(store.edit_cue("no-such-owner", 1, text="x") is None,
               "없는 소유자도 None")

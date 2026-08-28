@@ -149,6 +149,16 @@
     <div class="script-modes" role="group" aria-label="스크립트 모드">
       <button class="seg" data-smode="read" title="줄을 누르면 그 지점으로 이동합니다">읽기</button>
       <button class="seg" data-smode="edit" title="줄을 누르면 원문·번역·시각을 고칩니다">✎ 편집</button>
+      <button class="seg" data-smode="tr" title="줄을 골라 다시 번역합니다. shift로 구간을 잡습니다">⟳ 번역</button>
+    </div>
+
+    <!-- 번역 모드에서만 보입니다. 고른 줄 수와 할 일. -->
+    <div id="tr-bar" class="tr-bar" hidden>
+      <b id="tr-count">0줄 선택</b>
+      <span class="grow"></span>
+      <button id="tr-all" class="seg">전체</button>
+      <button id="tr-none" class="seg">해제</button>
+      <button id="tr-go" class="seg primary-seg">⟳ 재번역</button>
     </div>
 
     <!-- 대본 창에서만 보이는 조절기. 영상이 없으므로 화면 위 자막 대신

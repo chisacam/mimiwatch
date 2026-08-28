@@ -258,6 +258,15 @@ class Handler(BaseHTTPRequestHandler):
                 source="tab",
                 title=(body.get("title") or "").strip() or "탭 오디오"))
 
+        if path == "/api/retranslate":
+            # 고른 자막만 다시 번역합니다. cues 를 빼면 전부입니다.
+            cues = body.get("cues")
+            return self._json(jobs.start_retranslate(
+                (body.get("id") or "").strip(),
+                body.get("backend") or "",
+                cue_ids=cues if cues else None,
+                genre=body.get("genre")))
+
         if path == "/api/cue":
             # 자막 한 줄을 사람이 고칩니다. 녹화본이든 라이브든 같은 길입니다 --
             # 저장소를 하나로 모은 값이 여기서 돌아옵니다.

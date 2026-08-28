@@ -237,14 +237,21 @@ def save_translation(session_id: str, cue_id: int, backend: str, text: str):
     # 필요가 없는 의존입니다.
     with _lock:
         db = _connect()
-        row = db.execute("SELECT tr FROM cues WHERE owner = ? AND cue_id = ?",
+        row = db.execute("SELECT tr, edited FROM cues WHERE owner = ? AND cue_id = ?",
                          (session_id, int(cue_id))).fetchone()
         if row is None:
             return
         tr = json.loads(row["tr"] or "{}")
         tr[backend] = text
-        db.execute("UPDATE cues SET tr = ? WHERE owner = ? AND cue_id = ?",
-                   (json.dumps(tr, ensure_ascii=False), session_id, int(cue_id)))
+        # 기계가 방금 번역했으니 「원문과 다름」 표시는 걷습니다. 이 번역은
+        # 지금 있는 원문의 것입니다. 사람이 손댔다는 표시("tr")는 남깁니다 --
+        # 그 줄은 애초에 재번역이 건너뛰므로 여기 오지 않지만, 라이브에서
+        # 늦게 도착한 번역이 덮는 경우가 있습니다.
+        flags = {f for f in (row["edited"] or "").split(",") if f} - {"text"}
+        db.execute("UPDATE cues SET tr = ?, edited = ? "
+                   "WHERE owner = ? AND cue_id = ?",
+                   (json.dumps(tr, ensure_ascii=False), ",".join(sorted(flags)),
+                    session_id, int(cue_id)))
         db.commit()
 
 

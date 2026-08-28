@@ -818,6 +818,15 @@ def notify_edit(owner: str, cue: dict, backend: str = ""):
                 "kind": cue["kind"], "text": text})
 
 
+def notify_translation(owner: str, cue_id: int, kind: str, text: str):
+    """다시 번역한 줄을 보고 있는 창들에 흘려보냅니다. 받는 중인 세션이
+    아니면 구독자가 없으므로 조용히 지나갑니다."""
+    s = get(owner)
+    if s is not None:
+        s.emit({"type": "translation", "id": int(cue_id),
+                "kind": kind or "final", "text": text})
+
+
 def notify_drop(owner: str, cue_id: int):
     s = get(owner)
     if s is not None:

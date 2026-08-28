@@ -18,6 +18,7 @@ import translate as mw_translate
 import transcribe_vod as vod
 import asr as mw_asr
 import stream as mw_stream
+import live
 import store
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -269,6 +270,108 @@ def start(vid: str, backend_id: str, genre: str | None = None) -> dict:
     threading.Thread(target=_run, args=(job_id, vid, spec, doc, genre),
                      daemon=True).start()
     return {"id": job_id}
+
+
+def start_retranslate(value: str, backend_id: str, cue_ids=None,
+                      genre: str | None = None) -> dict:
+    """골라 둔 자막을 다시 번역합니다.
+
+    녹화본이든 라이브든 같은 길입니다. 예전 `start()` 는 녹화본 파일 하나를
+    통째로 읽어 통째로 다시 쓰는 것이었는데, 자막이 표로 모인 뒤로는 고른
+    줄만 한 줄씩 갱신하면 됩니다.
+
+    `cue_ids` 가 None 이면 전부입니다.
+    """
+    spec = find_backend(backend_id)
+    if spec is None:
+        known = ", ".join(b["id"] for b in load_config()["backends"])
+        return {"error": f"'{backend_id}' 백엔드가 없습니다. 사용 가능: {known}"}
+    owner = store.owner_of(value)
+    meta = store.doc(owner) or store.session(owner)
+    if not meta:
+        return {"error": "no such video or session"}
+    cues = store.cues(owner)
+    if not cues:
+        return {"error": "번역할 자막이 없습니다"}
+    want = None if cue_ids is None else {int(i) for i in cue_ids}
+    picked = [c for c in cues if want is None or c["id"] in want]
+    if not picked:
+        return {"error": "고른 자막이 없습니다"}
+
+    # 사람이 고친 번역은 건드리지 않습니다. 뭉텅이로 다시 돌리다가 손으로
+    # 맞춰 둔 줄을 덮으면, 그 일은 되돌릴 수도 없습니다.
+    kept = [c for c in picked if "tr" in (c.get("edited") or "")]
+    todo = [c for c in picked if "tr" not in (c.get("edited") or "")]
+    if not todo:
+        return {"error": f"고른 {len(picked)}줄이 모두 손으로 고친 번역입니다"}
+
+    genre = genre or meta.get("genre")
+    job_id = uuid.uuid4().hex[:12]
+    with _lock:
+        _jobs[job_id] = {"id": job_id, "kind": "retranslate", "video": value,
+                         "owner": owner, "backend": backend_id,
+                         "genre": genre or mw_translate.DEFAULT_GENRE,
+                         "done": 0, "total": len(todo), "state": "running",
+                         "started": time.time(), "error": None, "skipped": 0,
+                         "kept": len(kept), "degraded": False, "failures": 0,
+                         "by_remote": 0, "by_local": 0, "cancel": False}
+        snapshot = dict(_jobs[job_id])
+    store.save_job(snapshot)
+    threading.Thread(target=_run_retranslate,
+                     args=(job_id, owner, spec, meta, cues, todo, genre),
+                     daemon=True).start()
+    return {"id": job_id, "total": len(todo), "kept": len(kept)}
+
+
+def _run_retranslate(job_id, owner, spec, meta, cues, todo, genre):
+    def note(**kw):
+        _note(job_id, **kw)
+
+    try:
+        tr = mw_translate.build(spec, genre)
+        bid = spec["id"]
+        tgt = meta.get("viewer_lang") or "ko"
+        by_id = {c["id"]: i for i, c in enumerate(cues)}
+        skipped = 0
+        for n, c in enumerate(todo):
+            with _lock:
+                if _jobs[job_id]["cancel"]:
+                    note(state="cancelled", done=n)
+                    return
+            # 원본 언어는 그 줄이 들고 있는 것을 먼저 씁니다. 「자동 판별」로
+            # 켠 세션은 메타의 source_lang 이 비어 있습니다.
+            src = c.get("lang") or meta.get("source_lang") or ""
+            if not src or src == tgt or not tr.should_translate(c["text"], src, tgt):
+                skipped += 1
+            else:
+                try:
+                    out = tr.translate(c["text"], src, tgt,
+                                       _context(cues, by_id.get(c["id"], 0)))
+                except Exception as exc:
+                    print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
+                    out = c["text"]
+                from_primary = getattr(tr, "last_used", "primary") == "primary"
+                if (out or "").strip():
+                    key = bid if from_primary else "local-m2m100"
+                    store.save_translation(owner, c["id"], key, out)
+                    # 보고 있는 창에도 바로 닿게 합니다.
+                    live.notify_translation(owner, c["id"], c["kind"], out)
+                with _lock:
+                    _jobs[job_id]["by_remote" if from_primary else "by_local"] += 1
+            if n % 5 == 0:
+                note(done=n, skipped=skipped,
+                     degraded=bool(getattr(tr, "tripped", False)),
+                     failures=getattr(tr, "failures", 0))
+        note(done=len(todo), skipped=skipped,
+             degraded=bool(getattr(tr, "tripped", False)),
+             failures=getattr(tr, "failures", 0))
+        if store.doc(owner) is not None:
+            d = store.doc(owner)
+            d["translated"] = True
+            store.save_doc(owner, d)
+        note(state="done", elapsed=round(time.time() - _jobs[job_id]["started"], 1))
+    except Exception as exc:
+        note(state="error", error=str(exc)[:300])
 
 
 def start_transcribe(url: str, lang: str | None, viewer_lang: str,

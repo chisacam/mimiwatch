@@ -15,6 +15,9 @@ const state = {
   // 「그 지점으로 이동」입니다. 켤 때마다 정합니다 -- 남겨 두면 다음에
   // 읽으러 왔다가 잘못 눌러 편집기가 열립니다.
   scriptMode: "read",
+  // 번역 모드에서 고른 자막 번호. Set 입니다 -- 순서는 스크립트가 들고
+  // 있으므로 여기서는 들었는지만 알면 됩니다.
+  picked: new Set(), pickAnchor: null,
   genres: [],
   // 전체화면에 들어가기 직전의 플레이어 높이. 자막 크기 배율의 기준입니다.
   fsBaseHeight: 0, cuePx: 0,
@@ -185,6 +188,13 @@ function scriptRow(c, i) {
     if (row.classList.contains("editing")) return;
     if (state.scriptMode === "edit") { openCueEditor(row, c); return; }
     if (state.player) { state.player.seekTo(cueStart(c), true); state.player.playVideo(); }
+  });
+  // 번역 모드의 고르기. click 이 아니라 pointerdown 에 거는 것은 shift+click 이
+  // 글자 선택을 함께 일으키기 때문입니다 -- 그쪽을 먼저 막아야 합니다.
+  row.addEventListener("pointerdown", (e) => {
+    if (state.scriptMode !== "tr") return;
+    e.preventDefault();
+    pickRow(c.id, e.shiftKey);
   });
   return row;
 }
@@ -873,6 +883,9 @@ function bind() {
     b.addEventListener("click", () => setScriptView(b.dataset.sview)));
   document.querySelectorAll("[data-smode]").forEach(b =>
     b.addEventListener("click", () => setScriptMode(b.dataset.smode)));
+  $("tr-all").addEventListener("click", pickAll);
+  $("tr-none").addEventListener("click", clearPicks);
+  $("tr-go").addEventListener("click", runRetranslate);
   $("script-size").addEventListener("input", e => {
     $("script").style.setProperty("--script-size", e.target.value + "px");
     savePrefs({ ...loadPrefs(), scriptSize: +e.target.value });
@@ -2592,6 +2605,10 @@ function setScriptMode(m) {
   state.scriptMode = m;
   const box = $("script");
   box.classList.toggle("mode-edit", m === "edit");
+  box.classList.toggle("mode-tr", m === "tr");
+  $("tr-bar").hidden = m !== "tr";
+  if (m !== "tr") clearPicks();
+  else markKeptRows();
   document.querySelectorAll("[data-smode]").forEach(b =>
     b.classList.toggle("on", b.dataset.smode === m));
   // 모드를 옮기면 열려 있던 편집기는 닫습니다. 읽기로 돌아갔는데 편집기가
@@ -2602,6 +2619,125 @@ function setScriptMode(m) {
 function closeAllCueEditors() {
   $("script").querySelectorAll(".line.editing .ce-bar button:last-child")
     .forEach(b => b.click());          // 각 편집기의 「취소」
+}
+
+/* ---------- 다시 번역할 줄 고르기 ----------
+ *
+ * 파일 탐색기와 같은 규칙입니다. 누르면 그 줄만 뒤집히고, shift 로 누르면
+ * 직전에 누른 줄부터 여기까지가 한꺼번에 들어옵니다. 긴 방송에서 한 대목만
+ * 다시 돌리고 싶을 때 한 줄씩 스물세 번 누르게 할 수는 없습니다. */
+function pickRow(id, extend) {
+  const ids = state.cues.map(c => c.id);
+  if (extend && state.pickAnchor != null) {
+    const a = ids.indexOf(state.pickAnchor), b = ids.indexOf(id);
+    if (a >= 0 && b >= 0) {
+      for (let i = Math.min(a, b); i <= Math.max(a, b); i++) state.picked.add(ids[i]);
+    }
+  } else {
+    if (state.picked.has(id)) state.picked.delete(id);
+    else state.picked.add(id);
+    state.pickAnchor = id;
+  }
+  syncPicks();
+}
+
+function clearPicks() {
+  state.picked.clear();
+  state.pickAnchor = null;
+  syncPicks();
+}
+
+function pickAll() {
+  state.cues.forEach(c => state.picked.add(c.id));
+  syncPicks();
+}
+
+/* 사람이 고친 번역은 재번역이 건너뜁니다. 고르기 전에 그렇다고 보여 줍니다 --
+ * 열두 줄을 골랐는데 둘이 조용히 빠지면 왜 안 바뀌었는지 알 수 없습니다. */
+function markKeptRows() {
+  state.cues.forEach(c => {
+    const row = rowOf(c.id);
+    if (row) row.classList.toggle("kept", String(c.edited || "").includes("tr"));
+  });
+}
+
+const rowOf = (id) =>
+  $("script").querySelector(`.line[data-id="${CSS.escape(String(id))}"]`);
+
+function syncPicks() {
+  state.cues.forEach(c => {
+    const row = rowOf(c.id);
+    if (row) row.classList.toggle("picked", state.picked.has(c.id));
+  });
+  const n = state.picked.size;
+  const kept = [...state.picked].filter(id => {
+    const c = state.cues.find(x => x.id === id);
+    return c && String(c.edited || "").includes("tr");
+  }).length;
+  $("tr-count").textContent = n === 0 ? "고른 줄 없음"
+    : `${n}줄 선택` + (kept ? ` (손으로 고친 ${kept}줄은 건너뜁니다)` : "");
+  $("tr-go").disabled = n === 0 || n === kept;
+}
+
+async function runRetranslate() {
+  const owner = editOwner();
+  if (!owner || !state.picked.size) return;
+  const ids = state.cues.filter(c => state.picked.has(c.id)).map(c => c.id);
+  $("tr-go").disabled = true;
+  const res = await (await fetch("/api/retranslate", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: owner, backend: state.backend, cues: ids,
+                           genre: currentGenre() }),
+  })).json();
+  if (res.error) { jobError(res.error); $("tr-go").disabled = false; return; }
+  await watchRetranslate(res.id, res.kept || 0);
+}
+
+/* 진행률은 기존 작업 상자를 그대로 씁니다. 재번역은 줄당 0.15초라 스무 줄만
+ * 골라도 몇 초씩 걸리고, 그동안 아무것도 없으면 멈춘 것처럼 보입니다. */
+async function watchRetranslate(jobId, kept) {
+  const box = $("job");
+  box.hidden = false;
+  box.classList.remove("error");
+  $("job-cancel").disabled = false;
+  state.jobId = jobId;
+  while (true) {
+    await new Promise(r => setTimeout(r, 500));
+    const st = await (await fetch(`/api/job/${jobId}`)).json();
+    document.querySelector(".job-label").textContent = "다시 번역하는 중…";
+    const pct = st.total ? Math.round(st.done / st.total * 100) : 0;
+    $("job-fill").style.width = pct + "%";
+    $("job-count").textContent = `${st.done}/${st.total}`
+      + (kept ? ` · 건너뜀 ${kept}줄(손으로 고침)` : "");
+    if (st.state === "error") { jobError(st.error); return; }
+    if (st.state === "cancelled") { box.hidden = true; state.jobId = null; return; }
+    if (st.state === "done") {
+      $("job-count").textContent = `${st.done}줄 다시 번역했습니다`
+        + (kept ? ` · 건너뜀 ${kept}줄(손으로 고침)` : "")
+        + (st.skipped ? ` · 옮길 것 없음 ${st.skipped}줄` : "");
+      setTimeout(() => { box.hidden = true; }, 5000);
+      state.jobId = null;
+      await reloadCues();
+      clearPicks();
+      return;
+    }
+  }
+}
+
+/* 다시 번역한 줄을 화면에 되받습니다. 라이브는 SSE 로 이미 왔지만, 녹화본은
+ * 흘려보낼 통로가 없으므로 여기서 한 번 더 읽습니다. */
+async function reloadCues() {
+  if (state.live) { markKeptRows(); return; }
+  if (!state.doc || isLiveDoc()) return;
+  const doc = await (await fetch(`/api/video/${encodeURIComponent(state.doc.id)}`)).json();
+  if (doc.error) return;
+  state.cues = doc.cues;
+  state.doc.backends_done = doc.backends_done;
+  buildScript();
+  markKeptRows();
+  syncPicks();
+  renderBackendPicker();
+  renderCue();
 }
 
 /* 스크립트 줄에서 무엇을 보일지. 화면 위 자막 모드와는 다른 축입니다 --

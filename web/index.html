@@ -127,8 +127,24 @@
   <aside class="panel">
     <div class="panel-head">
       <h2>스크립트</h2>
+      <button id="open-script-window" class="seg"
+              title="대본만 따로 띄웁니다. 임베드가 막힌 방송을 유튜브에서 보며 읽을 때 씁니다">⧉ 대본 창</button>
       <label class="check"><input id="follow" type="checkbox" checked> 따라가기</label>
     </div>
+
+    <!-- 대본 창에서만 보이는 조절기. 영상이 없으므로 화면 위 자막 대신
+         스크립트 자체를 읽기 좋게 만드는 것들만 둡니다. -->
+    <div id="script-tools" class="script-tools">
+      <div class="fs-row seg-row">
+        <button class="seg" data-sview="both">둘 다</button>
+        <button class="seg" data-sview="tr">번역만</button>
+        <button class="seg" data-sview="src">원문만</button>
+      </div>
+      <label class="slider">글자 크기
+        <input id="script-size" type="range" min="11" max="24" value="13">
+      </label>
+    </div>
+
     <div id="script" class="script"></div>
   </aside>
 </main>

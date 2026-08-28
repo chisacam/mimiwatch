@@ -246,7 +246,47 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   padding:.75rem 1rem; border-bottom:1px solid var(--line);
 }
 .panel-head h2{margin:0; font-size:.72rem; letter-spacing:.22em; color:var(--dim); font-weight:700}
-.script{flex:1; overflow-y:auto; padding:.5rem 0 3rem; scrollbar-width:thin}
+.script{
+  flex:1; overflow-y:auto; padding:.5rem 0 3rem; scrollbar-width:thin;
+  --script-size:13px;
+}
+/* 대본 창에서 원문·번역 중 한쪽만 읽고 싶을 때. 자막 모드와는 다른
+ * 축입니다 -- 저쪽은 화면 위 자막, 이쪽은 스크립트 자체입니다. */
+.script.hide-src .tx{display:none}
+.script.hide-tr .tr{display:none}
+.script.hide-src .line,.script.hide-tr .line{padding-top:.4rem; padding-bottom:.4rem}
+
+/* ---------- 대본 창 ----------
+ *
+ * 임베드가 막힌 방송(멤버십 등)은 유튜브에서 보고 대본만 여기서 읽습니다.
+ * 별도 페이지를 새로 쓰지 않고 같은 앱을 이 모드로 띄웁니다 -- SSE, 정제본
+ * 흡수, 번역 도착 처리를 복사하면 고칠 곳이 두 군데가 됩니다. */
+.script-tools{display:none}
+body.script-only .bar > *:not(.now):not(#live-notice):not(#lang-status):not(.spacer),
+body.script-only .library,
+body.script-only .stage,
+body.script-only #open-script-window,
+body.script-only #job{display:none}
+/* 그리드를 그대로 두고 칸을 0으로 만들려 했더니 두 가지가 걸렸습니다.
+ * `main` 에 걸린 grid-template-columns 전환이 값을 붙들고 놓지 않았고,
+ * `display:none` 인 항목은 그리드에서 아예 빠지므로 남은 패널이 첫 칸
+ * (0px)으로 밀려났습니다. 이 모드에서는 칸이 하나뿐이니 그리드를 쓸
+ * 이유가 없습니다. */
+body.script-only main{display:flex; transition:none}
+body.script-only .panel{border-left:0; flex:1; min-width:0}
+body.script-only .script-tools{
+  display:flex; flex-direction:column; gap:.5rem; flex:none;
+  padding:.6rem 1rem; border-bottom:1px solid var(--line);
+  font-size:.74rem; color:var(--dim);
+}
+body.script-only .script-tools .seg{flex:1 1 auto}
+body.script-only .script .tx{font-size:var(--script-size)}
+body.script-only .script .tr{font-size:calc(var(--script-size) - 1px)}
+body.script-only .bar{padding:.45rem .8rem}
+/* 팝업은 세로로 길게 열리지만 늘리는 것을 막을 수는 없습니다. 넓힌 창에서
+ * 한 줄이 화면 끝까지 뻗으면 읽기가 나빠지므로 글줄 길이만 묶어 둡니다. */
+body.script-only .line,
+body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 .line{
   display:grid; grid-template-columns:52px 1fr; gap:.6rem;
   padding:.5rem 1rem; cursor:pointer; border-left:2px solid transparent;

@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
-  libraryHidden: false,
+  libraryHidden: false, scriptOnly: false,
   genres: [],
   // 전체화면에 들어가기 직전의 플레이어 높이. 자막 크기 배율의 기준입니다.
   fsBaseHeight: 0, cuePx: 0,
@@ -349,6 +349,9 @@ function whenApiReady() {
 }
 
 async function createPlayer(videoId) {
+  // 대본 창에는 영상이 없습니다. 유튜브 API를 부르지도, iframe을 얹지도
+  // 않습니다 -- 그 창의 일은 읽는 것뿐입니다.
+  if (state.scriptOnly) return;
   await whenApiReady();
   if (!(window.YT && window.YT.Player)) {
     playerError("YouTube IFrame API를 불러오지 못했습니다. 네트워크를 확인해 주세요.");
@@ -581,6 +584,13 @@ function bind() {
     persist();
   });
   $("viewer-lang").addEventListener("change", () => { updateLangStatus(); persist(); });
+  $("open-script-window").addEventListener("click", openScriptWindow);
+  document.querySelectorAll("[data-sview]").forEach(b =>
+    b.addEventListener("click", () => setScriptView(b.dataset.sview)));
+  $("script-size").addEventListener("input", e => {
+    $("script").style.setProperty("--script-size", e.target.value + "px");
+    savePrefs({ ...loadPrefs(), scriptSize: +e.target.value });
+  });
   $("toggle-panel").addEventListener("click", () => setPanel(!state.panelHidden));
   $("toggle-library").addEventListener("click", () => setLibrary(!state.libraryHidden));
   $("backend-picker").addEventListener("change", e => selectBackend(e.target.value));
@@ -720,6 +730,11 @@ function restore() {
   $("overlay").style.bottom = $("pos").value + "%";
   $("offset-val").textContent = state.offset.toFixed(1) + "s";
   syncControlInputs();
+  setScriptView(p.scriptView || "both");
+  if (p.scriptSize) {
+    $("script-size").value = p.scriptSize;
+    $("script").style.setProperty("--script-size", p.scriptSize + "px");
+  }
   setPanel(!!p.panelHidden);
   setLibrary(!!p.libraryHidden);
 }
@@ -1735,8 +1750,46 @@ function jobError(msg) {
 }
 
 
+/* 대본 창 모드.
+ *
+ * `?script=<열쇠>` 로 열면 같은 앱이 대본만 그립니다. 임베드가 막힌 방송
+ * (멤버십 등)을 유튜브에서 보면서 이 창으로 대본을 읽는 용도입니다.
+ *
+ * 별도 페이지를 새로 쓰지 않은 이유가 있습니다. SSE, 정제본 흡수, 번역
+ * 도착 처리를 복사하면 고칠 곳이 두 군데가 되고, 그 값을 이미 여러 번
+ * 치렀습니다. 여기서는 플레이어를 만들지 않고 나머지 껍데기를 감출
+ * 뿐입니다 -- 자막을 받아 그리는 길은 같은 하나입니다. */
+function scriptWindowKey() {
+  return new URLSearchParams(location.search).get("script") || "";
+}
+
+function openScriptWindow() {
+  const key = state.live ? "live:" + state.live.id
+            : (state.doc && !isLiveDoc() ? state.doc.id : "");
+  if (!key) { alert("먼저 영상이나 방송을 여십시오."); return; }
+  window.open(`/?script=${encodeURIComponent(key)}`, "mimiwatch-script-" + key,
+              "width=460,height=860,menubar=no,toolbar=no");
+}
+
+/* 스크립트 줄에서 무엇을 보일지. 화면 위 자막 모드와는 다른 축입니다 --
+ * 저쪽은 영상 위, 이쪽은 대본 자체입니다. */
+function setScriptView(v) {
+  const box = $("script");
+  box.classList.toggle("hide-src", v === "tr");
+  box.classList.toggle("hide-tr", v === "src");
+  document.querySelectorAll("[data-sview]").forEach(b =>
+    b.classList.toggle("on", b.dataset.sview === v));
+  const p = loadPrefs(); savePrefs({ ...p, scriptView: v });
+  pinScriptToBottom();
+}
+
 (async function init() {
   restore(); bind();
+  const key = scriptWindowKey();
+  if (key) {
+    state.scriptOnly = true;
+    document.body.classList.add("script-only");
+  }
   // 셋을 나란히 보냅니다. 서로 기다릴 이유가 없고, 예전에는 이 뒤에서
   // 같은 둘을 한 번 더 보냈습니다.
   const [cfg, list, sessions] = await Promise.all([
@@ -1745,6 +1798,21 @@ function jobError(msg) {
     fetch("/api/live/sessions").then(r => r.json()),
   ]);
   applyBackends(cfg);
+  if (state.scriptOnly) {
+    // 목록도 플레이어도 없습니다. 지목된 것 하나만 엽니다.
+    await refreshVideoList(undefined, [list, sessions]);
+    // 팝업 주소는 살아남습니다 -- 즐겨찾기에 들어가거나, 지운 영상을
+    // 가리킨 채 다시 열립니다. 그대로 openFromList에 넘기면 없는 것을
+    // 받으러 갔다가 조용히 빈 화면이 됩니다.
+    if (!$("video-list").querySelector(`.video-row[data-value="${CSS.escape(key)}"]`)) {
+      setNowTitle(null);
+      $("script").innerHTML =
+        '<div class="empty">이 대본은 더 이상 없습니다. 본 창에서 다시 여십시오.</div>';
+      return;
+    }
+    openFromList(key);
+    return;
+  }
   if (!list.length && !sessions.some(s => s.cues)) {
     await refreshVideoList(undefined, [list, sessions]);   // 빈 목록 안내
     setLibrary(false);              // 처음 온 사람에게는 목록을 펼쳐 둡니다

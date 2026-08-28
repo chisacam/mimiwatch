@@ -75,7 +75,51 @@ def load_config() -> dict:
         import shutil
         shutil.copy(EXAMPLE_CONFIG, CONFIG)
     with open(CONFIG, encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    return _seed_new_entries(cfg)
+
+
+def _seed_new_entries(cfg: dict) -> dict:
+    """예시에 새로 생긴 엔진을 사용자 설정에 들여옵니다.
+
+    backends.json은 첫 실행 때 한 번 복사되고 그 뒤로는 손대지 않습니다 --
+    실제 주소와 API 키가 들어 있어 덮어쓸 수 없기 때문입니다. 그런데 그러면
+    나중에 추가된 기본 엔진이 기존 사용자에게 영영 닿지 않습니다. 경량
+    전사기를 넣고도 아무도 못 보는 일이 실제로 있었습니다.
+
+    한 번 들여온 id는 `seeded`에 적어 둡니다. 그래서 사용자가 지운 엔진은
+    다시 살아나지 않고, **정말로 새로 생긴 것만** 들어옵니다.
+
+    처음 이 코드를 만나는 설정에는 `seeded`가 없습니다. 그때는 지금 가지고
+    있는 것을 이미 본 것으로 치고, 예시에만 있는 것을 들여옵니다.
+    """
+    if not os.path.exists(EXAMPLE_CONFIG):
+        return cfg
+    try:
+        with open(EXAMPLE_CONFIG, encoding="utf-8") as f:
+            example = json.load(f)
+    except Exception:
+        return cfg
+
+    seen = set(cfg.get("seeded") or [])
+    added = []
+    for key in ("backends", "asr_backends"):
+        have = {b["id"] for b in cfg.get(key, [])}
+        seen |= have                      # 지금 가진 것은 이미 본 것입니다
+        for entry in example.get(key, []):
+            if entry["id"] in have or entry["id"] in seen:
+                continue
+            cfg.setdefault(key, []).append(dict(entry))
+            seen.add(entry["id"])
+            added.append(entry["id"])
+
+    if added or set(cfg.get("seeded") or []) != seen:
+        cfg["seeded"] = sorted(seen)
+        save_config(cfg)
+    if added:
+        print(f"[설정] 새 엔진을 들여왔습니다: {', '.join(added)}",
+              file=sys.stderr, flush=True)
+    return cfg
 
 
 def save_config(cfg: dict):

@@ -601,7 +601,10 @@ function bind() {
   document.addEventListener("fullscreenchange", onFullscreenChange);
   document.addEventListener("webkitfullscreenchange", onFullscreenChange);
   // 전체화면에서 창 크기가 바뀌면(다른 화면으로 옮기는 등) 배율도 바뀝니다.
-  window.addEventListener("resize", () => { if (fsElement()) applyCueSize(); });
+  window.addEventListener("resize", () => {
+    if (fsElement()) applyCueSize();
+    if (!$("manage-menu").hidden) toggleManage(true);
+  });
 }
 
 function setPanel(hidden) {
@@ -613,9 +616,16 @@ function setPanel(hidden) {
 }
 
 function toggleManage(open) {
-  $("manage-menu").hidden = !open;
-  $("open-manage").classList.toggle("on", open);
-  $("open-manage").setAttribute("aria-expanded", String(!!open));
+  const menu = $("manage-menu"), btn = $("open-manage");
+  menu.hidden = !open;
+  btn.classList.toggle("on", open);
+  btn.setAttribute("aria-expanded", String(!!open));
+  if (!open) return;
+  // fixed 라 자리를 직접 잡아 줍니다. 단추 아래, 오른쪽 끝을 맞춥니다.
+  const r = btn.getBoundingClientRect();
+  menu.style.top = `${Math.round(r.bottom + 6)}px`;
+  menu.style.left = "auto";
+  menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
 }
 
 function setLibrary(hidden) {
@@ -1295,7 +1305,7 @@ function addLiveToPicker(probe, sessionId) {
   const value = "live:" + sessionId;
   const row = videoRow({
     value, session: sessionId, title: probe.title || "",
-    meta: "받는 중", live: true, deletable: false,
+    videoId: probe.id || "", meta: "받는 중", live: true, deletable: false,
   });
   row.classList.add("pending");     // 새로고침 전까지의 임시 항목입니다
   box.prepend(row);
@@ -1465,12 +1475,29 @@ async function deleteVideo(id, title) {
  * 있어야 하고 제목도 한 줄로 잘리지 않아야 합니다. 삭제 단추가 헤더에
  * 따로 있으면 "지금 열려 있는 것"만 지울 수 있어, 목록에서 보이는 것과
  * 지워지는 것이 어긋납니다. */
-function videoRow({ value, session, title, meta, live, stopped, deletable }) {
+function videoRow({ value, session, title, meta, live, stopped, deletable, videoId }) {
   const row = document.createElement("div");
   row.className = "video-row" + (live ? " live" : "") + (stopped ? " stopped" : "");
   row.dataset.value = value;
   if (session) row.dataset.session = session;
   row.dataset.title = title;
+
+  // 제목만 있는 목록에서는 어느 방송인지 한눈에 오지 않습니다. 유튜브가
+  // 주는 썸네일을 그대로 씁니다 -- 플레이어를 이미 임베드하고 있으므로
+  // 브라우저는 어차피 구글과 통신합니다.
+  const th = document.createElement("img");
+  th.className = "vth";
+  th.alt = "";
+  th.decoding = "async";
+  // `loading="lazy"` 는 쓰지 않습니다. 이 요소는 DOM에 붙기 전에 src를
+  // 받는데, 그러면 브라우저가 지연을 풀 시점을 제대로 잡지 못해 22장 중
+  // 한 장만 뜨고 나머지는 매달려 있었습니다. 한 장이 10KB 남짓이라
+  // 미루어서 얻는 것도 없습니다.
+  if (videoId) th.src = `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/mqdefault.jpg`;
+  else th.classList.add("blank");
+  // 못 받아도 자리는 남깁니다. 줄 높이가 들쭉날쭉하면 목록이 읽기 나빠집니다.
+  th.addEventListener("error", () => { th.removeAttribute("src"); th.classList.add("blank"); });
+  row.appendChild(th);
 
   const body = document.createElement("div");
   const t = document.createElement("div");
@@ -1544,7 +1571,7 @@ async function refreshVideoList(selectId) {
     const running = LIVE_RUNNING.includes(s.state);
     box.appendChild(videoRow({
       value: "live:" + s.id, session: s.id,
-      title: s.title || s.url,
+      title: s.title || s.url, videoId: s.video_id || "",
       meta: `${s.cues}줄` + (running ? "" : `  ·  ${LIVE_STATE[s.state] || s.state}`),
       live: true, stopped: !running, deletable: false,
     }));
@@ -1552,7 +1579,7 @@ async function refreshVideoList(selectId) {
   list.forEach(v => {
     const mins = v.duration ? `${Math.round(v.duration / 60)}분` : "";
     box.appendChild(videoRow({
-      value: v.id, title: v.title,
+      value: v.id, title: v.title, videoId: v.id,
       meta: [v.source_lang + (v.translated ? `→${v.viewer_lang}` : ""), mins]
         .filter(Boolean).join("  ·  "),
       deletable: true,

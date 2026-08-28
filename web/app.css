@@ -78,8 +78,12 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 /* 「관리」는 눌러야 열립니다. 위쪽은 지금 상태를 읽는 자리이지
  * 설정을 만지는 자리가 아닙니다. */
 .menu-wrap{position:relative}
+/* `position:fixed` 입니다. absolute 로 두면 헤더의 `overflow:hidden` 이
+ * 메뉴를 잘라 냅니다 -- 헤더 높이 밖으로 나가는 부분이 통째로 안 보입니다.
+ * z-index 문제가 아니라 잘라내기 문제라 쌓임 순서를 올려도 소용없습니다.
+ * fixed 는 그 조상의 overflow에 걸리지 않으므로, 자리만 JS로 잡아 줍니다. */
 .menu{
-  position:absolute; right:0; top:calc(100% + .45rem); z-index:50;
+  position:fixed; z-index:50;
   display:flex; flex-direction:column; gap:.55rem;
   min-width:14rem; padding:.75rem;
   background:var(--panel); border:1px solid var(--line); border-radius:10px;
@@ -98,9 +102,17 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 }
 .video-list{flex:1; overflow-y:auto; padding:.35rem 0 2rem; scrollbar-width:thin}
 .video-row{
-  display:grid; grid-template-columns:1fr auto; align-items:center; gap:.4rem;
+  display:grid; grid-template-columns:76px 1fr auto; align-items:center; gap:.55rem;
   padding:.55rem .8rem; cursor:pointer; border-left:2px solid transparent;
 }
+/* 유튜브가 주는 썸네일입니다. 플레이어를 이미 임베드하고 있으므로 브라우저는
+ * 어차피 구글과 통신합니다 -- 새로 생기는 통신 상대가 아닙니다. 실패하면
+ * 자리만 남기고 조용히 빕니다(m3u8 직접 입력에는 영상 id가 없습니다). */
+.video-row .vth{
+  width:76px; aspect-ratio:16/9; border-radius:5px; background:#0d1017;
+  object-fit:cover; display:block;
+}
+.video-row .vth.blank{background:#0d1017}
 .video-row:hover{background:#171b25}
 .video-row.on{background:#16221f; border-left-color:var(--accent)}
 .video-row .vt{

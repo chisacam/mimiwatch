@@ -227,6 +227,10 @@ class Handler(BaseHTTPRequestHandler):
                 source="tab",
                 title=(body.get("title") or "").strip() or "탭 오디오"))
 
+        if path == "/api/live/title":
+            return self._json(live.set_title(body.get("id", ""),
+                                             body.get("title", "")))
+
         if path == "/api/live/backend":
             return self._json(live.set_backend(body.get("id", ""),
                                                body.get("backend", "")))

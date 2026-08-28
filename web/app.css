@@ -74,6 +74,15 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 #now-title.empty{color:var(--dim); font-weight:400}
+/* 제목 자리를 그대로 물려받습니다. 크기가 달라지면 고치는 동안 막대가
+   출렁이고, 좁은 창에서는 줄까지 바뀝니다. */
+.title-edit{
+  flex:1 1 auto; min-width:8rem; max-width:32rem;
+  font:600 .86rem/1.4 inherit; font-family:inherit;
+  color:var(--text); background:#0d1017;
+  border:1px solid var(--accent); border-radius:6px; padding:.15rem .4rem;
+}
+#rename-live{font-size:.72rem; padding:.2rem .45rem}
 
 /* 「관리」는 눌러야 열립니다. 위쪽은 지금 상태를 읽는 자리이지
  * 설정을 만지는 자리가 아닙니다. */
@@ -266,6 +275,7 @@ body.script-only .bar > *:not(.now):not(#live-notice):not(#lang-status):not(.spa
 body.script-only .library,
 body.script-only .stage,
 body.script-only #open-script-window,
+body.script-only #rename-live,
 body.script-only #job{display:none}
 /* 그리드를 그대로 두고 칸을 0으로 만들려 했더니 두 가지가 걸렸습니다.
  * `main` 에 걸린 grid-template-columns 전환이 값을 붙들고 놓지 않았고,

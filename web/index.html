@@ -15,6 +15,11 @@
 
   <div class="now">
     <b id="now-title">영상을 고르거나 추가하십시오</b>
+    <!-- 탭 소리에는 가져올 제목이 없습니다. 크롬이 트랙 label 에 탭 제목이
+         아니라 불투명한 식별자를 주기 때문입니다(실측). 그래서 이름은
+         나중에 고칠 수 있어야 합니다. -->
+    <button id="rename-live" class="seg" hidden
+            title="이 세션의 이름을 바꿉니다">✎ 이름</button>
     <div id="live-badge" class="live-badge" hidden>● LIVE <button id="live-stop">중단</button></div>
   </div>
 
@@ -161,9 +166,10 @@
       <small id="source-hint">서버가 yt-dlp로 오디오를 직접 받습니다.</small>
     </label>
     <label id="url-field">주소 <input name="url" placeholder="https://youtu.be/... 또는 https://.../index.m3u8"></label>
-    <label id="tab-title-field" hidden>이름 <small class="tag">비워도 됩니다</small>
-      <input name="tab_title" placeholder="비우면 고른 탭의 제목을 씁니다">
-      <small>목록에 이 이름으로 남습니다. 비우면 공유한 탭의 제목을 가져옵니다.</small>
+    <label id="tab-title-field" hidden>이름
+      <input name="tab_title" placeholder="무엇을 듣는지 (목록에 이 이름으로 남습니다)">
+      <small>크롬은 공유한 탭의 제목을 알려 주지 않습니다 — 직접 적으십시오.
+             비우면 「탭 오디오」가 되고, 나중에 위쪽 「✎ 이름」으로 고칠 수 있습니다.</small>
     </label>
     <label>장르
       <select name="genre"></select>

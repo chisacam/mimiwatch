@@ -764,6 +764,37 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
     return {"id": s.id, "source": s.source}
 
 
+def set_title(session_id: str, title: str) -> dict:
+    """세션 이름을 고칩니다.
+
+    탭 소리에는 가져올 제목이 없습니다. 크롬은 캡처 트랙의 label 에 탭 제목이
+    아니라 불투명한 식별자를 넣습니다 -- 실측한 값이
+    `web-contents-media-stream://8D6F…` 입니다. 시작할 때 이름을 못 적었거나
+    잘못 적었으면 나중에 고치는 수밖에 없습니다.
+
+    끝난 세션도 고칠 수 있어야 합니다. 무엇을 들었는지는 대개 다 듣고 나서
+    목록을 볼 때 문제가 되니까요.
+    """
+    title = (title or "").strip()[:200]
+    if not title:
+        return {"error": "이름을 입력해 주세요"}
+    s = get(session_id)
+    if s is not None:
+        s.title = title
+        s._persist()
+        s.emit({"type": "status", **s.status()})
+        return {"ok": True, "title": title}
+    st = store.session(session_id)
+    if not st:
+        return {"error": "no such session"}
+    # store.session 은 doc 에 video_id 를 얹어 돌려줍니다. 그대로 다시 넣으면
+    # doc 안에 그 열이 한 번 더 들어가므로 떼어 내고 저장합니다.
+    video_id = st.pop("video_id", "") or ""
+    st["title"] = title
+    store.save_session(st, video_id)
+    return {"ok": True, "title": title}
+
+
 def feed(session_id: str, raw: bytes) -> dict:
     """브라우저가 올린 탭 오디오 한 덩어리를 세션에 넣습니다."""
     s = get(session_id)

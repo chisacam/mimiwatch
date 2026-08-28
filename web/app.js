@@ -594,6 +594,7 @@ function bind() {
   });
   $("viewer-lang").addEventListener("change", () => { updateLangStatus(); persist(); });
   $("open-script-window").addEventListener("click", openScriptWindow);
+  $("rename-live").addEventListener("click", renameLive);
   document.querySelectorAll("[data-sview]").forEach(b =>
     b.addEventListener("click", () => setScriptView(b.dataset.sview)));
   $("script-size").addEventListener("input", e => {
@@ -1412,15 +1413,72 @@ async function requestTabAudio() {
   return media;
 }
 
-/* 공유받은 탭의 제목.
+/* 이름 고치기.
  *
- * 크롬은 캡처 트랙의 label 에 고른 대상의 이름을 넣습니다 -- 탭이면 그 탭의
- * 제목입니다. 이름 칸을 비웠을 때 「탭 오디오」라고만 적히던 자리를 이것으로
- * 채웁니다. 무엇을 듣고 있었는지는 목록에서 그 한 줄로만 알 수 있습니다.
+ * 탭 소리에만 답니다. 주소로 받는 세션은 yt-dlp 가 제목을 가져오고, 이어받을
+ * 때 다시 가져오므로 여기서 고쳐 봐야 되돌아갑니다. */
+function syncRenameButton() {
+  const live = state.live;
+  $("rename-live").hidden = !(live && live.source === "tab");
+}
+
+function renameLive() {
+  const live = state.live;
+  if (!live) return;
+  const box = $("now-title");
+  const cur = box.textContent.trim();
+  const input = document.createElement("input");
+  input.className = "title-edit";
+  input.value = cur === "탭 오디오" ? "" : cur;
+  input.placeholder = "무엇을 듣고 있는지";
+  box.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let closed = false;
+  const done = async (save) => {
+    if (closed) return;          // blur 와 Enter 가 겹쳐 두 번 들어옵니다
+    closed = true;
+    const text = input.value.trim();
+    input.replaceWith(box);
+    if (!save || !text || text === cur) return;
+    const r = await (await fetch("/api/live/title", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: live.id, title: text }),
+    })).json();
+    if (r.error) { jobError(r.error); return; }
+    setNowTitle(text);
+    if (state.doc) state.doc.title = text;
+    if (live.probe) live.probe.title = text;
+    // 목록의 그 줄도 같이 고칩니다. 목록을 통째로 다시 그리면 받는 중인
+    // 세션의 임시 줄이 사라졌다 돌아오며 깜빡입니다.
+    const row = $("video-list").querySelector(
+      `.video-row[data-value="${CSS.escape("live:" + live.id)}"]`);
+    if (row) {
+      row.dataset.title = text;
+      const t = row.querySelector(".vt");
+      if (t) t.textContent = text;
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); done(true); }
+    if (e.key === "Escape") { e.preventDefault(); done(false); }
+  });
+  input.addEventListener("blur", () => done(true));
+}
+
+/* 공유받은 대상의 이름 -- 쓸 수 있으면.
  *
- * 다만 label 은 구현이 정하는 값이라 늘 제목은 아닙니다. 화면 전체나 창을
- * 고르면 그쪽 이름이 오고, `screen:0:0` 같은 내부 식별자가 오기도 합니다.
- * 그런 것은 제목보다 나쁘므로 걸러 내고 빈 값을 돌려줍니다. */
+ * **탭에서는 못 씁니다.** 크롬은 탭을 캡처할 때 label 에 탭 제목이 아니라
+ * 불투명한 식별자를 넣습니다. 실제로 받은 값입니다:
+ *
+ *     web-contents-media-stream://8D6FD737C5BFC47DBCE78F63FA28FECB
+ *
+ * 그것을 제목으로 쓰면 「탭 오디오」보다 나쁘므로 걸러 내고 빈 값을
+ * 돌려줍니다. 이름은 「＋ 추가」에서 적거나 나중에 「✎ 이름」으로 고칩니다.
+ *
+ * 그래도 이 함수를 남겨 둡니다. 창이나 화면을 고르면 그쪽 이름이 오고,
+ * 다른 크로미움 판이 진짜 제목을 줄 수도 있습니다. 오면 씁니다. */
 function tabTitleFrom(media) {
   const v = media.getVideoTracks()[0];
   const raw = ((v && v.label) || "").trim();
@@ -1566,6 +1624,7 @@ async function startTabCapture(title, lang) {
   buildScript();
   renderBackendPicker();
   applyModeForDoc();
+  syncRenameButton();
   addLiveToPicker(probe, res.id);
   $("job").hidden = true;
   state.jobId = null;
@@ -1624,6 +1683,7 @@ async function startLive(url, lang, probe) {
   buildScript();
   renderBackendPicker();
   applyModeForDoc();
+  syncRenameButton();
   addLiveToPicker(probe, res.id);
   $("job").hidden = true;      // a stale re-translation box is not this session's
   state.jobId = null;
@@ -1661,17 +1721,23 @@ async function resumeLive(sessionId) {
   state.live = { id: st.id, byId: new Map(), es: null, speakers: new Set(),
                  url: st.url, lang: st.source_lang || null, state: st.state,
                  probe: { id: st.video_id, title: st.title },
+                 source: st.source || "hls",
                  asr: st.asr_backend || "" };
   buildScript();
   renderBackendPicker();
   applyModeForDoc();
+  syncRenameButton();
   $("job").hidden = true;
   state.jobId = null;
   $("live-badge").hidden = !running;
-  $("offset-wrap").style.display = "flex";
-  // 끊긴 세션이고 주소가 남아 있으면 이어받을 수 있습니다. 자동으로 하지
-  // 않습니다 -- 방송을 다시 받기 시작하는 것은 눌러서 시킬 일입니다.
-  if (!running && st.state === "interrupted" && st.url) offerResume(st.id);
+  // 탭 소리에는 맞출 영상이 없으므로 오프셋도 의미가 없습니다.
+  $("offset-wrap").style.display = st.source === "tab" ? "none" : "flex";
+  // 끊긴 세션은 이어받을 수 있습니다. 자동으로 하지 않습니다 -- 방송을 다시
+  // 받기 시작하는 것은 눌러서 시킬 일입니다. 탭 소리는 주소가 없는 대신
+  // 브라우저가 다시 들려주면 되므로, 주소 조건에서 빼 줍니다.
+  if (!running && st.state === "interrupted" && (st.url || st.source === "tab")) {
+    offerResume(st.id);
+  }
   await attachLive(st.id, st.video_id);
 }
 
@@ -1803,6 +1869,13 @@ function onLiveTranslation(m) {
 function onLiveStatus(m) {
   const el = $("lang-status");
   if (state.live) state.live.state = m.state;
+  // 이름이 바뀌면 따라갑니다. 「✎ 이름」으로 고치면 서버가 상태를 다시
+  // 보내므로, 본 창에서 고친 것이 대본 창에도 같은 경로로 도착합니다.
+  if (m.title && state.doc && m.title !== state.doc.title
+      && !document.querySelector(".title-edit")) {
+    state.doc.title = m.title;
+    setNowTitle(m.title);
+  }
   if (m.state === "error") {
     el.className = "status warn";
     el.textContent = m.error || "라이브 오류";
@@ -1859,6 +1932,7 @@ function stopLive() {
     body: JSON.stringify({ id: live.id }),
   }).catch(() => {});
   state.live = null;
+  syncRenameButton();
   $("live-badge").hidden = true;
   $("offset-wrap").style.display = "";
   markLiveStopped();

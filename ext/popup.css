@@ -24,3 +24,13 @@ select,input[type=text]{
 .hint{margin:0; font-size:.7rem; color:#8b95a7}
 .err{margin:0; font-size:.72rem; color:#ff8b84}
 .err[hidden]{display:none}
+
+fieldset{
+  margin:0; border:1px solid #222836; border-radius:8px;
+  padding:.5rem .6rem .6rem; display:flex; flex-direction:column; gap:.4rem;
+}
+legend{padding:0 .3rem; font-size:.7rem; color:#8b95a7}
+fieldset .row .seg{flex:1}
+fieldset .slider{flex:1; min-width:0}
+fieldset select{flex:1; min-width:0}
+.busy{opacity:.55; pointer-events:none}

@@ -99,9 +99,13 @@ def main():
     print("\n[3] 권한")
     hosts = m.get("host_permissions", [])
     check(any("8900" in h for h in hosts), f"로컬 서버에 닿을 수 있다 ({hosts})")
-    check(all(h.startswith("http://localhost") or h.startswith("http://127.0.0.1")
-              for h in hosts),
-          "로컬 밖으로는 열지 않는다")
+    # 유튜브 호스트 권한은 tabs.sendMessage 때문에 필요합니다 -- activeTab 은
+    # 팝업을 누른 그 순간에만 줍니다. 그 둘 말고는 아무 데도 닿지 않아야
+    # 합니다.
+    ALLOWED = ("http://localhost:8900/", "http://127.0.0.1:8900/",
+               "https://www.youtube.com/")
+    stray = [h for h in hosts if not any(h.startswith(a) for a in ALLOWED)]
+    check(not stray, f"허락한 곳 밖으로는 열지 않는다 ({stray or '없음'})")
     matches = [x for cs in m.get("content_scripts", []) for x in cs.get("matches", [])]
     check(matches and all("youtube.com" in x for x in matches),
           f"유튜브에서만 돈다 ({matches})")
@@ -123,7 +127,39 @@ def main():
         src = open(os.path.join(EXT, name), encoding="utf-8").read()
         check(balanced(src), f"{name} 괄호와 따옴표가 맞다")
 
-    print("\n[6] 공유 모듈이 확장에서 쓸 수 있는 모양인가")
+    print("\n[6] 탭 소리를 잡는 쪽")
+    # 서비스 워커에는 getUserMedia 도 AudioContext 도 없습니다. offscreen
+    # 문서가 그 일을 맡는데, 그러려면 권한과 파일이 함께 있어야 합니다.
+    if "tabCapture" in m.get("permissions", []):
+        check("offscreen" in m.get("permissions", []),
+              "tabCapture 를 쓰면 offscreen 권한도 있어야 한다")
+        for f in ("offscreen.html", "offscreen.js", "capture-worklet.js"):
+            check(os.path.exists(os.path.join(EXT, f)), f"{f} 가 있다")
+        off = open(os.path.join(EXT, "offscreen.js"), encoding="utf-8").read()
+        check("chromeMediaSource" in off,
+              "탭 캡처 제약(chromeMediaSource)을 쓴다")
+        check("source.connect(ctx.destination)" in off,
+              "잡은 소리를 사용자에게 되돌려 준다 (안 그러면 탭이 음소거됩니다)")
+        wl = open(os.path.join(EXT, "capture-worklet.js"), "rb").read()
+        webwl = os.path.join(WEB, "capture-worklet.js")
+        if os.path.exists(webwl):
+            check(wl == open(webwl, "rb").read(),
+                  "capture-worklet.js 가 페이지 쪽과 같다"
+                  "  →  cp web/capture-worklet.js ext/capture-worklet.js")
+        war = [r for w in m.get("web_accessible_resources", [])
+               for r in w.get("resources", [])]
+        check("capture-worklet.js" in war,
+              f"워클릿이 web_accessible_resources 에 있다 ({war})")
+
+    print("\n[7] 서비스 워커가 쓸 수 없는 것을 쓰지 않는가")
+    bg = open(os.path.join(EXT, "background.js"), encoding="utf-8").read()
+    # MV3 서비스 워커에는 EventSource 도 DOM 도 없습니다. 처음에 EventSource
+    # 로 짰다가 아무것도 오지 않았습니다.
+    for banned in ("new EventSource", "document.", "window."):
+        check(banned not in bg, f"background.js 가 {banned} 를 쓰지 않는다")
+    check("getReader()" in bg, "SSE 를 fetch 스트림으로 직접 푼다")
+
+    print("\n[8] 공유 모듈이 확장에서 쓸 수 있는 모양인가")
     ov = open(os.path.join(WEB, "overlay.js"), encoding="utf-8").read()
     check("export " not in ov and "import " not in ov,
           "모듈 문법을 쓰지 않는다 (content script 는 일반 스크립트로 읽습니다)")

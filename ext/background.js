@@ -7,6 +7,10 @@
  * fetch 는 확장의 출처로 나가고 `host_permissions` 가 CORS 를 건너뛰므로,
  * 서버는 아무것도 열어 줄 필요가 없습니다.
  *
+ * **EventSource 를 쓰지 않습니다.** MV3 서비스 워커에는 없습니다. 대신
+ * fetch 의 몸통을 흘려 읽으며 SSE 를 직접 풉니다 -- 형식이 단순하고
+ * (`data: ...\n\n`), 다시 붙는 규칙을 우리가 정할 수 있어 오히려 낫습니다.
+ *
  * **왜 워커가 안 죽는가.** MV3 서비스 워커는 가만히 두면 30초쯤 뒤에
  * 내려갑니다. 포트가 연결되어 있고 그 위로 메시지가 오가면 그 시계가
  * 다시 돕니다. 자막은 몇 초에 한 줄씩 오고, 조용한 동안에는 아래
@@ -15,9 +19,10 @@
 
 const BASE_KEY = "serverBase";
 const DEFAULT_BASE = "http://localhost:8900";
-// 자막이 뜸한 동안 포트를 살려 두는 간격. 서비스 워커의 유휴 시계(30초)보다
-// 넉넉히 짧아야 합니다.
 const KEEPALIVE_MS = 20000;
+// 끊겼을 때 다시 붙기까지. 서버를 재시작하는 동안 몇 번 실패하는 것이
+// 정상이므로 조용히 기다립니다.
+const RETRY_MS = 3000;
 
 async function base() {
   const got = await chrome.storage.local.get(BASE_KEY);
@@ -30,46 +35,161 @@ async function api(path, init) {
   return res.json();
 }
 
-/* 팝업과 content script 가 물어보는 것들. */
+const post = (path, body) => api(path, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+/* ---------- 팝업과 content script 가 물어보는 것 ---------- */
+
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   (async () => {
     try {
       if (msg.type === "sessions") reply({ ok: true, data: await api("/api/live/sessions") });
       else if (msg.type === "videos") reply({ ok: true, data: await api("/api/videos") });
+      else if (msg.type === "backends") reply({ ok: true, data: await api("/api/backends") });
       else if (msg.type === "base") reply({ ok: true, data: await base() });
       else if (msg.type === "setBase") {
         await chrome.storage.local.set({ [BASE_KEY]: msg.base });
         reply({ ok: true });
       } else if (msg.type === "watch") {
-        // 이 탭이 어느 자막을 볼지 정해 둡니다. content script 가 붙을 때
-        // 이것을 읽습니다.
-        await chrome.storage.local.set({ ["tab:" + msg.tabId]: msg.value || "" });
-        if (msg.value) chrome.tabs.sendMessage(msg.tabId, { type: "attach", value: msg.value });
-        else chrome.tabs.sendMessage(msg.tabId, { type: "detach" });
+        await setWatch(msg.tabId, msg.value || "");
         reply({ ok: true });
       } else if (msg.type === "watching") {
         const k = "tab:" + msg.tabId;
         reply({ ok: true, data: (await chrome.storage.local.get(k))[k] || "" });
+      } else if (msg.type === "startUrl") {
+        reply(await startFromUrl(msg));
+      } else if (msg.type === "startCapture") {
+        reply(await startFromTab(msg));
+      } else if (msg.type === "stopSession") {
+        await stopCapture();
+        if (msg.sessionId) await post("/api/live/stop", { id: msg.sessionId });
+        reply({ ok: true });
       } else reply({ ok: false, error: "모르는 요청: " + msg.type });
     } catch (e) {
-      reply({ ok: false, error: String(e.message || e) });
+      reply({ ok: false, error: String((e && e.message) || e) });
     }
   })();
   return true;            // 비동기로 답합니다
 });
 
-/* content script 가 자막을 받아 갈 통로. 한 탭에 하나입니다. */
+async function setWatch(tabId, value) {
+  await chrome.storage.local.set({ ["tab:" + tabId]: value });
+  try {
+    await chrome.tabs.sendMessage(tabId, value ? { type: "attach", value }
+                                                : { type: "detach" });
+  } catch (_) {
+    // content script 가 아직 없습니다(유튜브가 아닌 탭이거나 방금 열린 탭).
+    // 저장은 해 두었으니 붙을 때 스스로 읽어 갑니다.
+  }
+}
+
+/* ---------- 세션 시작 ---------- */
+
+/* 주소로 시작합니다. 서버가 yt-dlp 로 직접 받으므로 브라우저를 닫아도
+ * 계속 받아 적습니다. 멤버십 전용 방송은 이 길로 받지 못합니다. */
+async function startFromUrl(msg) {
+  const probe = await post("/api/probe", { url: msg.url });
+  if (probe.error) return { ok: false, error: probe.error };
+  if (!probe.is_live) {
+    return { ok: false, error: "라이브가 아닙니다. 녹화본은 mimiwatch 페이지에서 추가하십시오." };
+  }
+  const cfg = await api("/api/backends");
+  const res = await post("/api/live/start", {
+    url: msg.url, lang: msg.lang || null, viewer_lang: msg.viewerLang || "ko",
+    backend: cfg.active, asr: cfg.asr_active, refine: true,
+    genre: msg.genre || "general", profile: msg.profile || "broadcast",
+  });
+  if (res.error) return { ok: false, error: res.error };
+  await setWatch(msg.tabId, "live:" + res.id);
+  return { ok: true, id: res.id };
+}
+
+/* 이 탭에서 나는 소리로 시작합니다. 멤버십 전용 방송처럼 서버가 받을 수
+ * 없는 것을 위한 길입니다.
+ *
+ * 소리를 실제로 잡는 일은 offscreen 문서가 합니다 -- 서비스 워커에는
+ * getUserMedia 도 AudioContext 도 없습니다. */
+async function startFromTab(msg) {
+  const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
+  const cfg = await api("/api/backends");
+  const res = await post("/api/live/capture", {
+    title: msg.title || "", lang: msg.lang || null,
+    viewer_lang: msg.viewerLang || "ko",
+    backend: cfg.active, asr: cfg.asr_active, refine: true,
+    genre: msg.genre || "general", profile: msg.profile || "broadcast",
+  });
+  if (res.error) return { ok: false, error: res.error };
+  await ensureOffscreen();
+  const started = await chrome.runtime.sendMessage({
+    target: "offscreen", type: "capture",
+    streamId, sessionId: res.id, base: await base(),
+  });
+  if (!started || !started.ok) {
+    await post("/api/live/stop", { id: res.id });
+    return { ok: false, error: (started && started.error) || "소리를 잡지 못했습니다" };
+  }
+  await setWatch(msg.tabId, "live:" + res.id);
+  return { ok: true, id: res.id };
+}
+
+async function ensureOffscreen() {
+  const has = await chrome.offscreen.hasDocument();
+  if (has) return;
+  await chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["USER_MEDIA"],
+    justification: "탭에서 나는 소리를 받아 로컬 mimiwatch 서버로 보냅니다.",
+  });
+}
+
+async function stopCapture() {
+  if (await chrome.offscreen.hasDocument()) {
+    try { await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" }); }
+    catch (_) { /* 이미 내려갔습니다 */ }
+  }
+}
+
+/* ---------- 자막을 흘려보내는 통로 ---------- */
+
+/* SSE 를 직접 풉니다. 서버가 보내는 것은 `data: {...}` 한 줄과 빈 줄뿐이라
+ * 규격 전체를 다룰 필요가 없습니다. */
+async function pump(url, onEvent, signal) {
+  const res = await fetch(url, { signal });
+  if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buf += dec.decode(value, { stream: true });
+    let cut;
+    // 이벤트 하나는 빈 줄로 끝납니다. 서버가 조각내어 보낼 수 있으므로
+    // 완전한 덩어리가 모일 때까지 들고 있습니다.
+    while ((cut = buf.indexOf("\n\n")) >= 0) {
+      const chunk = buf.slice(0, cut);
+      buf = buf.slice(cut + 2);
+      for (const line of chunk.split("\n")) {
+        if (!line.startsWith("data:")) continue;   // `: keepalive` 는 흘립니다
+        try { onEvent(JSON.parse(line.slice(5).trim())); }
+        catch (_) { /* 형식이 깨진 프레임은 버립니다 */ }
+      }
+    }
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "cues") return;
-  let es = null, timer = null, closed = false;
+  let abort = null, timer = null, closed = false;
 
   const stop = () => {
     closed = true;
     if (timer) clearInterval(timer);
-    if (es) { try { es.close(); } catch (_) {} }
-    es = null;
+    if (abort) { try { abort.abort(); } catch (_) {} }
+    abort = null;
   };
-
   port.onDisconnect.addListener(stop);
 
   port.onMessage.addListener(async (msg) => {
@@ -79,33 +199,45 @@ chrome.runtime.onConnect.addListener((port) => {
     const b = await base();
     const value = msg.value || "";
     const sid = value.startsWith("live:") ? value.slice(5) : "";
-    try {
-      if (sid) {
-        // 라이브는 SSE 로 옵니다. 쌓인 것을 먼저 보내고 이어서 흘려보냅니다.
-        es = new EventSource(`${b}/api/live/events/${encodeURIComponent(sid)}`);
-        es.onmessage = (ev) => {
-          if (closed) return;
-          try { port.postMessage({ type: "event", data: JSON.parse(ev.data) }); }
-          catch (_) { /* 형식이 깨진 프레임은 버립니다 */ }
-        };
-        es.onerror = () => { if (!closed) port.postMessage({ type: "stalled" }); };
-      } else {
-        // 녹화본은 한 번에 다 옵니다.
-        const doc = await api(`/api/video/${encodeURIComponent(value)}`);
-        port.postMessage({ type: "doc", data: doc });
+
+    timer = setInterval(() => {
+      // 조용한 동안 워커를 살려 둡니다. 포트 위의 메시지가 유휴 시계를
+      // 다시 돌립니다.
+      if (!closed) { try { port.postMessage({ type: "tick" }); } catch (_) {} }
+    }, KEEPALIVE_MS);
+
+    if (!sid) {
+      try {
+        port.postMessage({ type: "doc",
+          data: await api(`/api/video/${encodeURIComponent(value)}`) });
+      } catch (e) {
+        port.postMessage({ type: "error", error: String(e.message || e) });
       }
-      timer = setInterval(() => {
-        // 조용한 동안 워커를 살려 둡니다. 포트 위의 메시지가 유휴 시계를
-        // 다시 돌립니다.
-        if (!closed) port.postMessage({ type: "tick" });
-      }, KEEPALIVE_MS);
-    } catch (e) {
-      port.postMessage({ type: "error", error: String(e.message || e) });
+      return;
+    }
+
+    // 라이브는 끊길 수 있습니다 -- 서버 재시작, 방송 종료, 잠자기. 조용히
+    // 다시 붙습니다. 서버가 쌓인 자막을 접속 직후에 다시 보내 주므로
+    // 되붙어도 빠지는 줄이 없습니다.
+    while (!closed) {
+      abort = new AbortController();
+      try {
+        await pump(`${b}/api/live/events/${encodeURIComponent(sid)}`,
+                   (e) => { if (!closed) port.postMessage({ type: "event", data: e }); },
+                   abort.signal);
+        if (closed) return;
+        // 끝난 세션은 서버가 백로그를 다 보내고 닫습니다. 정상 종료입니다.
+        port.postMessage({ type: "ended" });
+        return;
+      } catch (e) {
+        if (closed) return;
+        port.postMessage({ type: "stalled", error: String(e.message || e) });
+        await new Promise((r) => setTimeout(r, RETRY_MS));
+      }
     }
   });
 });
 
-/* 탭이 사라지면 기억해 둔 것도 지웁니다. */
 chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.storage.local.remove("tab:" + tabId);
 });

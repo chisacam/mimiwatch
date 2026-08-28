@@ -3,17 +3,48 @@
   "name": "mimiwatch 오버레이",
   "version": "0.1.0",
   "description": "로컬 mimiwatch 서버가 받아 적은 자막을 유튜브 페이지 위에 얹습니다.",
-  "permissions": ["storage", "tabCapture", "activeTab"],
-  "host_permissions": ["http://localhost:8900/*", "http://127.0.0.1:8900/*"],
-  "background": { "service_worker": "background.js" },
-  "action": { "default_popup": "popup.html", "default_title": "mimiwatch" },
+  "permissions": [
+    "storage",
+    "tabCapture",
+    "activeTab",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "http://localhost:8900/*",
+    "http://127.0.0.1:8900/*",
+    "https://www.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "mimiwatch"
+  },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["overlay.js", "content.js"],
-      "css": ["overlay.css"],
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "overlay.js",
+        "content.js"
+      ],
+      "css": [
+        "overlay.css"
+      ],
       "run_at": "document_idle",
       "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "capture-worklet.js"
+      ],
+      "matches": [
+        "https://www.youtube.com/*"
+      ]
     }
   ]
 }

@@ -7,6 +7,30 @@
   <label>무엇을 얹을까요
     <select id="pick"><option value="">— 고르지 않음 —</option></select>
   </label>
+
+  <!-- 지금 이 탭에서 바로 시작합니다. 주소를 다시 붙여 넣을 이유가 없습니다
+       -- 확장은 이미 어느 탭인지 압니다. -->
+  <fieldset id="start-box">
+    <legend>이 탭에서 새로 받아 적기</legend>
+    <div class="row">
+      <button id="start-url" class="seg">주소로</button>
+      <button id="start-tab" class="seg">이 탭 소리로</button>
+    </div>
+    <p class="hint" id="start-hint">주소로 받으면 브라우저를 닫아도 서버가 계속 받습니다.
+      멤버십 전용처럼 서버가 받지 못하는 방송은 탭 소리로 받으십시오.</p>
+    <div class="row">
+      <label class="slider">언어
+        <select id="lang">
+          <option value="">자동</option>
+          <option value="ja">日本語</option>
+          <option value="en">English</option>
+          <option value="ko">한국어</option>
+          <option value="zh">中文</option>
+        </select>
+      </label>
+      <label class="slider">장르 <select id="genre"></select></label>
+    </div>
+  </fieldset>
   <div class="row">
     <button class="seg" data-mode="both">둘 다</button>
     <button class="seg" data-mode="translation">번역만</button>

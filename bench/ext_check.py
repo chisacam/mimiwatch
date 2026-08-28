@@ -127,7 +127,21 @@ def main():
         src = open(os.path.join(EXT, name), encoding="utf-8").read()
         check(balanced(src), f"{name} 괄호와 따옴표가 맞다")
 
-    print("\n[6] 탭 소리를 잡는 쪽")
+    print("\n[6] 채팅 자리의 대본")
+    if os.path.exists(os.path.join(EXT, "panel.js")):
+        js = [x for cs in m.get("content_scripts", []) for x in cs.get("js", [])]
+        check("panel.js" in js, f"panel.js 가 content_scripts 에 있다 ({js})")
+        check(js.index("panel.js") < js.index("content.js"),
+              "content.js 보다 먼저 읽힌다 (MimiPanel 을 쓰기 때문)")
+        pan = open(os.path.join(EXT, "panel.js"), encoding="utf-8").read()
+        check("MimiPanel" in pan, "MimiPanel 을 내놓는다")
+        check("#secondary" in pan, "유튜브의 오른쪽 열을 찾는다")
+        check("hidden.style.display" in pan or 'hidden.style.display = ""' in pan,
+              "감춘 채팅을 되돌린다")
+        css = open(os.path.join(EXT, "overlay.css"), encoding="utf-8").read()
+        check(".mw-panel" in css, "대본 패널 모양이 있다")
+
+    print("\n[7-1] 탭 소리를 잡는 쪽")
     # 서비스 워커에는 getUserMedia 도 AudioContext 도 없습니다. offscreen
     # 문서가 그 일을 맡는데, 그러려면 권한과 파일이 함께 있어야 합니다.
     if "tabCapture" in m.get("permissions", []):
@@ -151,7 +165,17 @@ def main():
         check("capture-worklet.js" in war,
               f"워클릿이 web_accessible_resources 에 있다 ({war})")
 
-    print("\n[7] 서비스 워커가 쓸 수 없는 것을 쓰지 않는가")
+    print("\n[7] 유튜브 문서에서 쓸 수 없는 것을 쓰지 않는가")
+    # 유튜브는 Trusted Types 를 켜 두었습니다(`require-trusted-types-for
+    # 'script'`). 그 문서에서 innerHTML 에 문자열을 넣으면 거부됩니다 --
+    # 실제로 유튜브 페이지에서 확인했습니다. content script 가 면제되는지는
+    # 크롬 판에 따라 다르므로 아예 기대지 않습니다.
+    for name in ("content.js", "panel.js"):
+        src = open(os.path.join(EXT, name), encoding="utf-8").read()
+        used = re.findall(r"^\s*[^/*\n]*\.innerHTML\s*=", src, re.M)
+        check(not used, f"{name} 가 innerHTML 로 쓰지 않는다 ({len(used)}곳)")
+
+    print("\n[8] 서비스 워커가 쓸 수 없는 것을 쓰지 않는가")
     bg = open(os.path.join(EXT, "background.js"), encoding="utf-8").read()
     # MV3 서비스 워커에는 EventSource 도 DOM 도 없습니다. 처음에 EventSource
     # 로 짰다가 아무것도 오지 않았습니다.
@@ -159,7 +183,7 @@ def main():
         check(banned not in bg, f"background.js 가 {banned} 를 쓰지 않는다")
     check("getReader()" in bg, "SSE 를 fetch 스트림으로 직접 푼다")
 
-    print("\n[8] 공유 모듈이 확장에서 쓸 수 있는 모양인가")
+    print("\n[9] 공유 모듈이 확장에서 쓸 수 있는 모양인가")
     ov = open(os.path.join(WEB, "overlay.js"), encoding="utf-8").read()
     check("export " not in ov and "import " not in ov,
           "모듈 문법을 쓰지 않는다 (content script 는 일반 스크립트로 읽습니다)")

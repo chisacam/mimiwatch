@@ -18,7 +18,8 @@ const toTab = (tabId, msg) =>
   new Promise((r) => chrome.tabs.sendMessage(tabId, msg, () => r(chrome.runtime.lastError ? null : true)));
 
 let tabId = null;
-let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55, offset: 0 };
+let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55, offset: 0,
+              panel: false };
 /* 새 세션을 시작할 때 쓰는 값. 자막 모양(prefs)과 나눠 둡니다 -- 저쪽은
  * 지금 보이는 것을 바꾸고, 이쪽은 다음에 시작할 것을 정합니다. */
 /* 정제는 **꺼 둔 채로 시작합니다.** mimiwatch 페이지의 기본값과 다릅니다.
@@ -50,6 +51,7 @@ async function init() {
   $("offset").value = prefs.offset;
   $("offset-val").textContent = (+prefs.offset).toFixed(1) + "s";
   $("show-prev").checked = !!prefs.showPrev;
+  $("panel").checked = !!prefs.panel;
   syncModes();
 
   const sp = await chrome.storage.local.get(SKEY);
@@ -131,6 +133,7 @@ async function refreshState() {
     else if (!r.box || !r.box.w) bits.push("화면에 자리 없음");
     else if (!r.text) bits.push(r.mode === "off" ? "자막 끔" : "지금 구간에 자막 없음");
     if (!r.ticking) bits.push("시계 멈춤");
+    if (r.panel) bits.push(r.panelUp ? "대본 세움" : "대본 자리 못 찾음");
     $("state").textContent = bits.join(" · ");
   });
 }
@@ -162,6 +165,9 @@ $("offset").addEventListener("input", (e) => {
   pushPrefs();
 });
 $("show-prev").addEventListener("change", (e) => { prefs.showPrev = e.target.checked; pushPrefs(); });
+$("panel").addEventListener("change", (e) => {
+  prefs.panel = e.target.checked; pushPrefs(); setTimeout(refreshState, 500);
+});
 $("reset-pos").addEventListener("click", () => { prefs.pos = null; pushPrefs(); });
 $("stop").addEventListener("click", async () => {
   // 화면에서 치우기만 합니다. 세션은 서버에서 계속 돕니다 -- 받아 적던 것을

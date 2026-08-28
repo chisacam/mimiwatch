@@ -28,6 +28,7 @@
       ],
       "js": [
         "overlay.js",
+        "panel.js",
         "content.js"
       ],
       "css": [

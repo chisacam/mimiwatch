@@ -41,3 +41,37 @@
   font-size:.4em; color:#04211b; background:#5eead4;
   border-radius:3px; padding:.08em .3em; margin-right:.35em; vertical-align:.15em;
 }
+
+/* ---------- 채팅 자리에 세우는 대본 ---------- */
+.mw-panel{
+  display:flex; flex-direction:column; height:520px; margin-bottom:12px;
+  background:#0e1117; color:#e6e9f0; border:1px solid #222836; border-radius:12px;
+  overflow:hidden; resize:vertical;
+  font-family:"Pretendard","Apple SD Gothic Neo",system-ui,sans-serif;
+}
+.mw-panel-head{
+  flex:none; display:flex; align-items:center; gap:.5rem;
+  padding:.5rem .75rem; border-bottom:1px solid #222836; font-size:.78rem;
+}
+.mw-panel-head b{font-weight:700}
+.mw-panel-head .mw-count{color:#8b95a7; font-size:.72rem}
+.mw-panel-head .mw-follow{
+  margin-left:auto; display:flex; align-items:center; gap:.3rem;
+  color:#8b95a7; font-size:.72rem; cursor:pointer;
+}
+.mw-panel-head input{accent-color:#5eead4}
+.mw-panel-list{flex:1; overflow-y:auto; scrollbar-width:thin; padding:.25rem 0 1rem}
+.mw-panel-list .mw-line{
+  display:grid; grid-template-columns:48px 1fr; gap:.5rem;
+  padding:.35rem .75rem; cursor:pointer; border-left:2px solid transparent;
+}
+.mw-panel-list .mw-line:hover{background:#171b25; border-left-color:#5eead4}
+.mw-panel-list .mw-t{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:.68rem; color:#8b95a7; padding-top:.12rem;
+}
+.mw-panel-list .mw-tx{font-size:.8rem; line-height:1.45}
+.mw-panel-list .mw-tr{font-size:.76rem; line-height:1.45; color:#5eead4; opacity:.9}
+.mw-panel-list .mw-tr:empty{display:none}
+/* 우리가 적은 안내(못 받은 구간)는 발화가 아닙니다. */
+.mw-panel-list .mw-note .mw-tx{color:#ffb454; font-size:.72rem; font-style:italic}

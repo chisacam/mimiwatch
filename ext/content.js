@@ -46,7 +46,7 @@
   let live = false, receiving = false;
   let tickTimer = null;
   let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55,
-                pos: null, offset: 0 };
+                pos: null, offset: 0, panel: false };
 
   /* ---------- 화면에 자리 만들기 ---------- */
 
@@ -58,10 +58,16 @@
     node = document.createElement("div");
     node.id = ID;
     node.className = "mw-overlay";
-    node.innerHTML =
-      '<div class="mw-prev cue-prev"></div>' +
-      '<div class="mw-main cue-main"></div>' +
-      '<div class="mw-src cue-src"></div>';
+    // innerHTML 을 쓰지 않습니다. 유튜브는 Trusted Types 를 켜 두었고
+    // (`require-trusted-types-for 'script'`), 그 문서에서 innerHTML 에
+    // 문자열을 넣으면 거부됩니다. content script 가 면제되는지는 크롬 판에
+    // 따라 다르므로 아예 기대지 않습니다.
+    for (const [a, b] of [["mw-prev", "cue-prev"], ["mw-main", "cue-main"],
+                          ["mw-src", "cue-src"]]) {
+      const d = document.createElement("div");
+      d.className = a + " " + b;
+      node.appendChild(d);
+    }
     // 배치는 overlay.css 가 하지만 여기서도 박아 둡니다. 그 파일이 어떤
     // 이유로든 붙지 않으면 자막이 흐름 속의 평범한 블록이 되어 화면 밖으로
     // 밀려나고, 그러면 「아무것도 안 보인다」로만 보입니다.
@@ -84,9 +90,29 @@
 
   function unmount() {
     stopTick();
+    MimiPanel.unmount();
     if (ov) { ov.destroy(); ov = null; }
     if (node && node.parentElement) node.parentElement.removeChild(node);
     node = null;
+  }
+
+  /* 채팅 자리의 대본. 화면 위 자막과는 별개로 켜고 끕니다 -- 오버레이는
+   * 지금 한 줄이고, 이쪽은 지나간 것을 되짚는 자리입니다. */
+  function syncPanel() {
+    if (prefs.panel) {
+      if (!MimiPanel.mounted()) {
+        MimiPanel.reset();
+        if (!MimiPanel.mount()) return;
+        MimiPanel.setSeek((t) => {
+          const v = findVideo();
+          if (v) { v.currentTime = t; v.play().catch(() => {}); }
+        });
+        log("대본을 채팅 자리에 세웠습니다");
+      }
+      MimiPanel.render(cues, { trKey });
+    } else if (MimiPanel.mounted()) {
+      MimiPanel.unmount();
+    }
   }
 
   function apply() {
@@ -99,6 +125,7 @@
     ov.setSize(prefs.size, h ? Math.max(0.6, h / 480) : 1);
     if (prefs.pos) ov.setPos(prefs.pos);
     node.style.setProperty("--mw-dim", String(prefs.dim));
+    syncPanel();
   }
 
   /* ---------- 시계 ---------- */
@@ -138,7 +165,17 @@
     });
   }
 
+  /* 자막이 바뀔 때만 대본을 다시 그립니다. 렌더 루프(100ms)에 얹으면 초당
+   * 열 번씩 수백 줄을 훑게 되는데, 대본은 새 줄이 올 때만 바뀝니다. */
+  let panelDirty = false;
+  setInterval(() => {
+    if (!panelDirty) return;
+    panelDirty = false;
+    if (prefs.panel) syncPanel();
+  }, 400);
+
   function onEvent(e) {
+    panelDirty = true;
     if (e.type === "cue") upsert(e);
     else if (e.type === "translation") {
       const c = byId.get(e.id);
@@ -156,6 +193,7 @@
   function attach(value) {
     cues = []; byId = new Map(); live = false; receiving = false;
     trKey = LIVE_KEY;
+    MimiPanel.reset();
     if (!mount()) {
       log("플레이어를 찾지 못했습니다. 영상 페이지에서 다시 골라 주십시오.");
       return;
@@ -172,6 +210,8 @@
         cues = m.data.cues || [];
         byId = new Map(cues.map((c) => [c.id, c]));
         log(`녹화본 ${cues.length}줄, 번역 열쇠 ${trKey}`);
+        MimiPanel.reset();
+        panelDirty = true;
       } else if (m.type === "error") {
         console.warn("[mimiwatch] " + m.error);
       }
@@ -196,7 +236,8 @@
               box: r ? { w: Math.round(r.width), h: Math.round(r.height) } : null,
               text: node ? (node.textContent || "").slice(0, 40) : "",
               player: !!findPlayer(), video: !!findVideo(),
-              ticking: !!tickTimer, mode: prefs.mode });
+              ticking: !!tickTimer, mode: prefs.mode,
+              panel: prefs.panel, panelUp: MimiPanel.mounted() });
     }
     return true;
   });
@@ -234,7 +275,12 @@
    * 플레이어 요소도 새로 생기므로, 우리가 넣어 둔 것이 사라졌는지 살핍니다. */
   setInterval(() => {
     if (!port) { resume(); return; }
-    if (node && node.isConnected) return;
+    if (node && node.isConnected) {
+      // 오버레이는 살아 있는데 대본만 사라졌을 수 있습니다. 유튜브가
+      // 오른쪽 열을 통째로 갈아 끼우는 경우입니다.
+      if (prefs.panel && !MimiPanel.mounted()) { MimiPanel.reset(); syncPanel(); }
+      return;
+    }
     if (mount()) startTick();
   }, 1500);
 

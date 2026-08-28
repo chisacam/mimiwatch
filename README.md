@@ -70,6 +70,7 @@ SKIP_GEMMA=1 ./install.sh
 | 모델 | 크기 | 쓰임 |
 |---|---|---|
 | whisper-large-v3-turbo Q8_0 | 845MB | 전사 (모든 언어) |
+| SenseVoice Small Q8_0 | 241MB | 가벼운 전사 (낮은 사양용) |
 | Gemma 4 E4B q4_0 | 4.9GB | 번역 |
 | M2M-100 (CTranslate2) | 473MB | 번역 대체용 |
 | CAM++ | 27MB | 녹화본 화자 태그 |
@@ -259,6 +260,30 @@ CPU가 느릴 뿐 품질을 내주는 것은 아니고, 라이브에 필요한 1
 ```
 
 M2M-100은 이 설정과 무관합니다. CTranslate2를 CPU로 고정해 씁니다.
+
+### 기본 전사기가 버거우면
+
+`whisper-large-v3-turbo`(845MB)가 무거운 기계를 위해 **SenseVoice
+Small**(241MB)도 함께 받아 둡니다. `backends.json`의 `asr_backends`에 넣으면
+화면의 「전사」 선택기에 나타납니다.
+
+```json
+{ "id": "tcpp-lite", "label": "SenseVoice Small (가벼움 · CPU)",
+  "backend": "tcpp", "model": "SenseVoiceSmall-Q8_0.gguf", "device": "cpu" }
+```
+
+같은 20초 조각을 이 기계(M5 Pro)에서 잰 값입니다.
+
+| 모델 | GPU | **CPU** |
+|---|---|---|
+| whisper-large-v3-turbo | 56.8배속 | **7.7배속** |
+| SenseVoice Small | 272.8배속 | **62.4배속** |
+
+**CPU에서 8배 빠릅니다.** 품질도 일방적인 손해는 아닙니다 — 같은 조각에서
+`工場内`과 `できた銃で`를 whisper보다 정확히 받아 적었습니다. 대신 문장
+부호와 띄어쓰기를 넣지 않아 한 덩어리로 나오고, 한국어 고유명사를 줄이는
+버릇이 있습니다(`데이터독` → `데이터`). 기본을 바꾸지 않는 이유입니다.
+자세한 것은 [실측 33절][m]을 보십시오.
 
 ## 서버 종료
 

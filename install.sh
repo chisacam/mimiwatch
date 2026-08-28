@@ -101,6 +101,11 @@ fetch silero_vad.onnx \
 fetch whisper-large-v3-turbo-Q8_0.gguf \
   "$HF/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q8_0.gguf" \
   "Whisper large-v3-turbo Q8_0 (845MB · 전사)"
+# 낮은 사양용 대체 전사기. 3.5배 작고 훨씬 빠릅니다. 기본이 버거운
+# 기계에서 「전사」 선택기로 고를 수 있게 항상 받아 둡니다.
+fetch SenseVoiceSmall-Q8_0.gguf \
+  "$HF/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q8_0.gguf" \
+  "SenseVoice Small Q8_0 (241MB · 가벼운 전사)"
 if [ "${SKIP_GEMMA:-0}" != "1" ]; then
   fetch gemma-4-E4B_q4_0-it.gguf \
     "$HF/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf" \

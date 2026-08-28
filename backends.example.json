@@ -31,6 +31,13 @@
    "label": "Whisper large-v3-turbo (기본)",
    "backend": "tcpp",
    "device": "auto"
+  },
+  {
+   "id": "tcpp-lite",
+   "label": "SenseVoice Small (가벼움 · CPU)",
+   "backend": "tcpp",
+   "model": "SenseVoiceSmall-Q8_0.gguf",
+   "device": "cpu"
   }
  ]
 }

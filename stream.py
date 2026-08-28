@@ -238,10 +238,15 @@ def run_stream(chunks, vad, asr, sink, history: AudioHistory,
     영영 오지 않을 무음을 기다리는 대신 진행 중인 발화를 확정합니다.
     """
     audio_pos = 0.0
+    # 해독 한 번이 실패했다고 방송 전체를 놓지 않습니다. 다만 장치가
+    # 정말로 죽었으면 계속 시도해 봐야 소용이 없으므로, 연달아 실패하면
+    # 그때는 포기합니다. translate.py의 차단기와 같은 생각입니다.
+    fails = 0
     for chunk in chunks:
         if not isinstance(chunk, np.ndarray):
             vad.flush()
-            _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate)
+            fails = _drain(vad, asr, sink, history, refiner, speaker_labeler,
+                           sample_rate, fails)
             if refiner is not None:
                 refiner.maybe_refine(int(audio_pos * sample_rate), force=True)
             continue
@@ -250,12 +255,20 @@ def run_stream(chunks, vad, asr, sink, history: AudioHistory,
         history.push(chunk)
         audio_pos += len(chunk) / sample_rate
 
-        _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate)
+        fails = _drain(vad, asr, sink, history, refiner, speaker_labeler,
+                       sample_rate, fails)
         if refiner is not None and not vad.is_speech_detected():
             refiner.maybe_refine(int(audio_pos * sample_rate))
 
 
-def _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate):
+# 해독이 연달아 이만큼 실패하면 장치가 죽은 것으로 보고 세션을 놓습니다.
+# 한 번의 실패는 그 조각만 버리고 넘어갑니다 -- 라이브에서 한 줄을 잃는
+# 것과 방송 전체를 잃는 것은 다른 이야기입니다.
+DECODE_FAIL_LIMIT = 5
+
+
+def _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate,
+           fails: int = 0) -> int:
     while not vad.empty():
         seg = vad.front
         t0 = time.perf_counter()
@@ -265,7 +278,18 @@ def _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate):
         samples = history.with_preroll(seg_start, samples)
         vad.pop()
 
-        result = asr.transcribe(samples, sample_rate, speech_s=raw_speech_s)
+        try:
+            result = asr.transcribe(samples, sample_rate, speech_s=raw_speech_s)
+        except Exception as exc:
+            # GPU 드라이버가 조각 하나에서 넘어지는 일이 있습니다. 예전에는
+            # 이 예외가 run_stream을 뚫고 나가 세션을 통째로 끝냈습니다.
+            fails += 1
+            print(f"[전사 실패 {fails}/{DECODE_FAIL_LIMIT}] "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            if fails >= DECODE_FAIL_LIMIT:
+                raise
+            continue
+        fails = 0
         latency_ms = (time.perf_counter() - t0) * 1000
         text = result["text"].strip()
         if not text:
@@ -280,3 +304,4 @@ def _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate):
         sink.final(text, result["lang"], speaker)
         if refiner is not None:
             refiner.add_span(seg_start, seg_end, text, speaker)
+    return fails

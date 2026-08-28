@@ -191,6 +191,10 @@ def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4):
     """
     spec = spec or {}
     path = (spec.get("models") or {}).get(lang or "") or spec.get("model") or WHISPER
+    # 설정에는 파일 이름만 적을 수 있게 합니다. 전체 경로를 적으라고 하면
+    # 윈도우·맥의 모델 위치가 달라 예시를 그대로 쓸 수 없습니다.
+    if not os.path.isabs(path) and not os.path.exists(path):
+        path = os.path.join(stream.model_dir(), path)
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"전사 모델이 없습니다: {path}\n"

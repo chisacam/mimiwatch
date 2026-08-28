@@ -5,7 +5,12 @@
 하드웨어로 옮겨지지 않습니다 -- 노트북 내장 그래픽과 개별 GPU는 사정이
 전혀 다릅니다. 낮은 사양에서 고를 때는 그 기계에서 다시 재십시오.
 
-    .venv/bin/python bench/asr_device.py [wav경로] [초]
+    .venv/bin/python bench/asr_device.py [wav경로] [초] [모델파일]
+
+세 번째 인자로 다른 전사 모델을 지정할 수 있습니다. 기본 모델이 버거운
+기계에서 가벼운 쪽이 쓸 만한지 볼 때 씁니다.
+
+    .venv/bin/python bench/asr_device.py data/x.wav 20 SenseVoiceSmall-Q8_0.gguf
 """
 from __future__ import annotations
 
@@ -37,8 +42,12 @@ def main():
     pcm, sr = load(path, secs)
     print(f"표본: {path} {secs:.0f}초 · {sr}Hz · 논리 코어 {os.cpu_count()}\n")
 
+    model = sys.argv[3] if len(sys.argv) > 3 else None
     for device in ("auto", "cpu"):
-        asr = tcpp_asr.build_live_asr({"backend": "tcpp", "device": device}, "ja")
+        spec = {"backend": "tcpp", "device": device}
+        if model:
+            spec["model"] = model
+        asr = tcpp_asr.build_live_asr(spec, "ja")
         asr.transcribe(pcm[:sr], sr, speech_s=1.0, live=False)   # 예열
         t0 = time.time()
         out = asr.transcribe(pcm, sr, speech_s=secs, live=False)

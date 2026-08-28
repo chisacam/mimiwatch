@@ -1283,9 +1283,10 @@ function hideLiveNotice() {
  * 들려줘야 합니다. */
 function offerResume(sessionId, why) {
   const box = $("live-notice");
-  box.textContent = why === "tab"
-    ? "자막 수신이 멈춰 있습니다. 탭을 다시 공유하면 이어서 쌓입니다 — "
-    : "서버가 멈춰 수신이 끊겼습니다 — ";
+  box.textContent = {
+    tab: "자막 수신이 멈춰 있습니다. 탭을 다시 공유하면 이어서 쌓입니다 — ",
+    error: "오류로 멈췄습니다. 원인이 사라졌으면 이어서 받을 수 있습니다 — ",
+  }[why] || "서버가 멈춰 수신이 끊겼습니다 — ";
   const b = document.createElement("button");
   b.className = "seg";
   b.textContent = "이어받기";
@@ -1835,7 +1836,12 @@ async function resumeLive(sessionId) {
   // 이어야 스크립트가 한 줄기로 남습니다.
   if (!running) {
     if (st.source === "tab") offerResume(st.id, "tab");
-    else if (st.state === "interrupted" && st.url) offerResume(st.id);
+    // 오류로 끝난 세션도 이어받을 수 있어야 합니다. 모델 파일을 못 찾았다든가
+    // 하는 이유는 대개 고치고 나면 사라지는 것이고, 그때 이어붙일 자리가
+    // 없으면 받아 둔 자막을 버리고 새로 시작하는 수밖에 없습니다.
+    else if (st.url && (st.state === "interrupted" || st.state === "error")) {
+      offerResume(st.id, st.state);
+    }
   }
   await attachLive(st.id, st.video_id);
   // 탭 세션에는 끼워 넣을 영상이 없습니다. attachLive 가 앞서 본 것의
@@ -1983,11 +1989,22 @@ function onLiveStatus(m) {
   if (m.state === "error") {
     el.className = "status warn";
     el.textContent = m.error || "라이브 오류";
-    stopLive();
-    if (m.state === "error") {
-      el.className = "status warn";
-      el.textContent = m.error || "라이브 오류";
-    }
+    // 여기서 stopLive() 를 부르고 있었습니다. 그것이 state.live 를 비우는
+    // 바람에 두 가지가 무너졌습니다.
+    //
+    //   - SSE 는 상태를 **먼저** 보내고 쌓인 자막을 뒤에 보냅니다. 그래서
+    //     이 줄을 지날 때 state.live 가 비면, 곧이어 도착하는 백로그가
+    //     onLiveCue 의 첫 줄(`if (!live) return`)에서 전부 버려집니다.
+    //     312줄을 받아 둔 세션을 열어도 오류 한 줄만 보였습니다.
+    //   - hideLiveNotice() 가 방금 띄운 「이어받기」를 지웠습니다.
+    //
+    // 오류는 세션을 잊을 이유가 아닙니다. 받아 적어 둔 것은 진짜이고,
+    // 오류야말로 다시 시도하고 싶은 자리입니다. 그래서 「중단됨」과 같게
+    // 다룹니다 -- 왜 멈췄는지 적고, 받는 일만 멈춥니다.
+    stopCapture();
+    $("live-badge").hidden = true;
+    markLiveStopped();
+    if (state.live) state.live.state = "error";
     return;
   }
   // 중단된 세션은 오류가 아닙니다. 수신은 끊겼지만 여기 떠 있는 자막은 진짜로

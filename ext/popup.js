@@ -19,6 +19,10 @@ const toTab = (tabId, msg) =>
 
 let tabId = null;
 let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55, offset: 0 };
+/* 새 세션을 시작할 때 쓰는 값. 자막 모양(prefs)과 나눠 둡니다 -- 저쪽은
+ * 지금 보이는 것을 바꾸고, 이쪽은 다음에 시작할 것을 정합니다. */
+let start = { lang: "", genre: "general" };
+const SKEY = "startPrefs";
 
 function fail(text) {
   $("err").textContent = text;
@@ -43,8 +47,16 @@ async function init() {
   $("show-prev").checked = !!prefs.showPrev;
   syncModes();
 
+  const sp = await chrome.storage.local.get(SKEY);
+  if (sp[SKEY]) Object.assign(start, sp[SKEY]);
+
   await fillPicker();
   await fillGenres();
+  // 고르개를 채운 **뒤에** 값을 앉힙니다. 비어 있는 select 에 value 를 넣으면
+  // 그냥 버려집니다 -- 그래서 매번 처음으로 되돌아가 보였습니다.
+  $("lang").value = start.lang || "";
+  $("genre").value = start.genre || "general";
+  if (!$("genre").value) $("genre").selectedIndex = 0;
   await refreshState();
   // 유튜브 탭이 아니면 시작할 것도 없습니다.
   $("start-box").classList.toggle("busy", !onYouTube);
@@ -86,9 +98,16 @@ async function refreshState() {
       $("state").textContent = "이 탭에는 아직 붙지 않았습니다.";
       return;
     }
-    $("state").textContent = r.mounted
-      ? `자막 ${r.cues}줄` + (r.live ? (r.receiving ? " · 받는 중" : " · 종료된 방송") : " · 녹화본")
-      : "고르면 이 탭에 얹습니다.";
+    if (!r.mounted) { $("state").textContent = "고르면 이 탭에 얹습니다."; return; }
+    // 「안 보인다」는 여러 가지입니다. 붙었는지, 크기가 있는지, 그릴 자막이
+    // 있는지를 구별해 적습니다 -- 그래야 어디를 봐야 할지 알 수 있습니다.
+    const bits = [`자막 ${r.cues}줄`];
+    bits.push(r.live ? (r.receiving ? "받는 중" : "종료된 방송") : "녹화본");
+    if (!r.player) bits.push("플레이어 못 찾음");
+    else if (!r.box || !r.box.w) bits.push("화면에 자리 없음");
+    else if (!r.text) bits.push(r.mode === "off" ? "자막 끔" : "지금 구간에 자막 없음");
+    if (!r.ticking) bits.push("시계 멈춤");
+    $("state").textContent = bits.join(" · ");
   });
 }
 
@@ -141,7 +160,7 @@ async function startWith(type) {
     // 그냥 읽을 수 있습니다 -- 페이지 쪽에서는 트랙 label 이 불투명한
     // 식별자라 「탭 오디오」로만 남았습니다.
     title: (tab.title || "").replace(/\s+-\s+YouTube$/, ""),
-    lang: $("lang").value || null, genre: $("genre").value || "general",
+    lang: start.lang || null, genre: start.genre || "general",
     viewerLang: "ko",
   });
   $("start-box").classList.remove("busy");
@@ -156,6 +175,10 @@ async function startWith(type) {
   $("pick").value = "live:" + r.id;
   setTimeout(refreshState, 800);
 }
+
+function saveStart() { chrome.storage.local.set({ [SKEY]: start }); }
+$("lang").addEventListener("change", (e) => { start.lang = e.target.value; saveStart(); });
+$("genre").addEventListener("change", (e) => { start.genre = e.target.value; saveStart(); });
 
 $("start-url").addEventListener("click", () => startWith("startUrl"));
 $("start-tab").addEventListener("click", () => startWith("startCapture"));

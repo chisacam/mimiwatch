@@ -43,6 +43,10 @@ const post = (path, body) => api(path, {
 /* ---------- 팝업과 content script 가 물어보는 것 ---------- */
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  // offscreen 문서로 가는 것은 우리 것이 아닙니다. chrome.runtime.sendMessage 는
+  // 확장 안의 **모든** 수신자에게 갑니다. 이 자리에서 「모르는 요청」이라고
+  // 답해 버리면 offscreen 의 진짜 답과 경주가 되고, 먼저 닿는 쪽이 이깁니다.
+  if (msg && msg.target === "offscreen") return;
   (async () => {
     try {
       if (msg.type === "sessions") reply({ ok: true, data: await api("/api/live/sessions") });

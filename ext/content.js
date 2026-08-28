@@ -23,6 +23,21 @@
   const findVideo = () => document.querySelector("video.html5-main-video") ||
                           document.querySelector("video");
 
+  const log = (...a) => console.log("[mimiwatch]", ...a);
+
+  /* 번역을 어느 이름으로 넣고 어느 이름으로 읽을지.
+   *
+   * **prefs 에 두면 안 됩니다.** prefs 는 저장했다가 다음에 되읽는데, 그
+   * 되읽기가 세션의 status 이벤트보다 늦게 도착하면 옛 엔진 이름이 지금
+   * 값을 덮어씁니다. 그러면 넣는 이름과 읽는 이름이 어긋나 번역이 늘
+   * 빈 문자열이 되고, 화면에는 **아무것도 나오지 않습니다** -- 「둘 다」에서
+   * 원문 줄도 번역이 있을 때만 나오기 때문입니다.
+   *
+   * 라이브는 한 세션에 번역이 한 벌뿐이므로 이름이 무엇이든 상관없습니다.
+   * 붙박이 값을 씁니다. 녹화본만 서버가 준 이름을 그대로 씁니다. */
+  const LIVE_KEY = "_";
+  let trKey = LIVE_KEY;
+
   let ov = null;           // overlay 모듈의 조종기
   let node = null;         // 우리가 넣은 div
   let port = null;
@@ -47,9 +62,19 @@
       '<div class="mw-prev cue-prev"></div>' +
       '<div class="mw-main cue-main"></div>' +
       '<div class="mw-src cue-src"></div>';
+    // 배치는 overlay.css 가 하지만 여기서도 박아 둡니다. 그 파일이 어떤
+    // 이유로든 붙지 않으면 자막이 흐름 속의 평범한 블록이 되어 화면 밖으로
+    // 밀려나고, 그러면 「아무것도 안 보인다」로만 보입니다.
+    node.style.position = "absolute";
+    node.style.zIndex = "30";
+    node.style.pointerEvents = "none";
     // 유튜브의 컨트롤 바보다 아래에 둡니다. 자막이 재생 단추를 덮으면
     // 영상을 조작할 수 없습니다.
     player.appendChild(node);
+    // 우리가 붙는 상자가 자리를 잡고 있어야 absolute 가 그 안에서 셉니다.
+    if (getComputedStyle(player).position === "static") {
+      player.style.position = "relative";
+    }
 
     ov = MimiOverlay.attach({ overlay: node, box: () => findPlayer() });
     ov.onPos = (p) => { prefs.pos = p; savePrefs(); };
@@ -84,8 +109,7 @@
       if (!ov) return;
       const v = findVideo();
       if (!v) return;
-      ov.setData({ cues, backend: prefs.backend || "", live, receiving,
-                   speakers: false });
+      ov.setData({ cues, backend: trKey, live, receiving, speakers: false });
       ov.render(v.currentTime + (prefs.offset || 0));
     }, 100);
   }
@@ -118,30 +142,36 @@
     if (e.type === "cue") upsert(e);
     else if (e.type === "translation") {
       const c = byId.get(e.id);
-      if (c) c.translations[prefs.backend || "_"] = e.text;
+      if (c) c.translations[trKey] = e.text;
     } else if (e.type === "drop") {
       const c = byId.get(e.id);
       if (c) { const i = cues.indexOf(c); if (i >= 0) cues.splice(i, 1); byId.delete(e.id); }
     } else if (e.type === "status") {
       live = true;
       receiving = ["starting", "loading", "running"].includes(e.state);
-      // 번역은 그 세션이 쓰는 엔진의 이름으로 들어옵니다.
-      if (e.backend) prefs.backend = e.backend;
+
     }
   }
 
   function attach(value) {
     cues = []; byId = new Map(); live = false; receiving = false;
-    if (!mount()) return;
+    trKey = LIVE_KEY;
+    if (!mount()) {
+      log("플레이어를 찾지 못했습니다. 영상 페이지에서 다시 골라 주십시오.");
+      return;
+    }
+    log("붙었습니다:", value);
     if (port) { try { port.disconnect(); } catch (_) {} }
     port = chrome.runtime.connect({ name: "cues" });
     port.onMessage.addListener((m) => {
       if (m.type === "event") onEvent(m.data);
       else if (m.type === "doc") {
         live = false; receiving = false;
-        prefs.backend = (m.data.backends_done || []).slice(-1)[0] || "";
+        // 녹화본은 번역이 엔진별로 여러 벌일 수 있습니다. 마지막 것을 씁니다.
+        trKey = (m.data.backends_done || []).slice(-1)[0] || LIVE_KEY;
         cues = m.data.cues || [];
         byId = new Map(cues.map((c) => [c.id, c]));
+        log(`녹화본 ${cues.length}줄, 번역 열쇠 ${trKey}`);
       } else if (m.type === "error") {
         console.warn("[mimiwatch] " + m.error);
       }
@@ -158,7 +188,15 @@
       Object.assign(prefs, msg.prefs || {});
       savePrefs(); apply(); reply({ ok: true });
     } else if (msg.type === "state") {
-      reply({ ok: true, mounted: !!node, cues: cues.length, live, receiving });
+      const r = node ? node.getBoundingClientRect() : null;
+      reply({ ok: true, mounted: !!(node && node.isConnected),
+              cues: cues.length, live, receiving, trKey,
+              // 안 보인다는 말은 여러 가지입니다 -- 안 붙었거나, 붙었는데
+              // 크기가 0이거나, 그릴 자막이 없거나. 구별할 수 있게 냅니다.
+              box: r ? { w: Math.round(r.width), h: Math.round(r.height) } : null,
+              text: node ? (node.textContent || "").slice(0, 40) : "",
+              player: !!findPlayer(), video: !!findVideo(),
+              ticking: !!tickTimer, mode: prefs.mode });
     }
     return true;
   });

@@ -31,6 +31,16 @@ const trOf = (c) => c && c.translations ? c.translations[state.backend] : null;
  * everything that reads "this is not a recording" -- cue lookup, script rows
  * keyed by id, the picker entry -- has to keep saying yes afterwards. */
 const isLiveDoc = () => !!(state.doc && state.doc.live);
+/* **받는 중**인 라이브인가. 끝난 방송과는 다르게 다뤄야 합니다.
+ *
+ * 유튜브는 방송이 끝나면 그것을 녹화본으로 남깁니다. 그때부터 이 세션의
+ * 자막은 라이브 자막이 아니라 그 녹화본의 자막입니다 -- 시각으로 찾아야
+ * 하고, 시각은 맞습니다(미디어 기준으로 적어 두었으니까요).
+ *
+ * 상태를 아직 못 받았으면 받는 중으로 봅니다. 시작 직후 한순간 그런데,
+ * 그때 시각으로 찾으면 아직 도착하지 않은 자막을 찾는 셈이 됩니다. */
+const isLiveReceiving = () => !!state.live
+  && (!state.live.state || LIVE_RUNNING.includes(state.live.state));
 
 /* A speaker chip is only information when it distinguishes someone. CAM++
  * gives one embedding per segment, so a four-way collab mixed into a single
@@ -67,7 +77,10 @@ function cueAt(t) {
   // window would show nothing, always. Hold the newest line that has started
   // until the next one takes over, which is how live captioning reads
   // anyway. The offset slider still shifts the whole track.
-  if (isLiveDoc()) {
+  // 받는 중일 때만 이 규칙입니다. 방송이 끝나 녹화본이 되면 아래의
+  // 시각 기반 조회로 갑니다 -- 그렇게 하지 않으면 마지막 줄이 20초 지난
+  // 뒤로는 어느 자리에서도 자막이 뜨지 않습니다.
+  if (isLiveDoc() && isLiveReceiving()) {
     // 자막은 도착하는 대로 띄웁니다. 오른쪽 스크립트에 줄이 뜨는 순간과
     // 같은 시점입니다.
     //
@@ -226,17 +239,25 @@ function appendScriptLine(c) {
  * 스크롤은 쓰지 않습니다 -- 자막이 몇 백 밀리초마다 들어오므로 애니메이션이
  * 끝나기 전에 다음 것이 시작되어 영영 바닥에 닿지 못합니다. */
 function pinScriptToBottom() {
-  if (!state.follow || !isLiveDoc()) return;
+  // 받는 중일 때만 바닥을 좇습니다. 끝난 방송은 녹화본처럼 읽는 것이므로
+  // 지금 재생 중인 줄을 가운데에 두는 편이 맞습니다(markScript).
+  if (!state.follow || !isLiveDoc() || !isLiveReceiving()) return;
   const box = $("script");
   box.scrollTop = box.scrollHeight;
 }
 
 function markScript(i) {
-  if (isLiveDoc()) return;  // live rows are keyed by cue id, not position
+  // 받는 중에는 표시하지 않습니다. 그때는 늘 마지막 줄이고, 스크립트는
+  // 이미 바닥에 붙어 있습니다.
+  if (isLiveDoc() && isLiveReceiving()) return;
   const box = $("script");
   box.querySelectorAll(".line.on").forEach(el => el.classList.remove("on"));
   if (i < 0) return;
-  const el = box.querySelector(`.line[data-i="${i}"]`);
+  // 녹화본은 위치(data-i)로, 끝난 라이브는 자막 id(data-id)로 그려져
+  // 있습니다. 두 목록의 그리는 방식이 다르므로 찾는 방식도 다릅니다.
+  const el = isLiveDoc()
+    ? box.querySelector(`.line[data-id="${CSS.escape(String((state.cues[i] || {}).id))}"]`)
+    : box.querySelector(`.line[data-i="${i}"]`);
   if (!el) return;
   el.classList.add("on");
   if (state.follow) el.scrollIntoView({ block: "center", behavior: "smooth" });

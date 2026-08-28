@@ -373,13 +373,31 @@ async function createPlayer(videoId) {
         if (f) f.removeAttribute("allowfullscreen");
         setInterval(renderCue, 100);
       },
-      onError: (e) => playerError(`영상을 재생할 수 없습니다 (code ${e.data}). ` +
-                                  "임베드가 차단된 영상일 수 있습니다."),
+      onError: (e) => playerError(embedErrorText(e.data), videoId),
     },
   });
 }
 
-function playerError(msg) {
+/* 유튜브가 내주는 코드를 사람이 읽을 말로 옮깁니다.
+ *
+ * 「임베드가 차단된 영상일 수 있습니다」 하나로 뭉뚱그리면 손댈 곳을 알 수
+ * 없습니다. 특히 멤버십 전용 방송은 대개 임베드가 막혀 있어 101/150 으로
+ * 오는데, 그것은 우리가 고칠 수 있는 문제가 아니라 유튜브에서 봐야 하는
+ * 경우입니다. 자막은 서버가 따로 받아 적으므로 그때도 오른쪽 스크립트는
+ * 그대로 읽힙니다. */
+function embedErrorText(code) {
+  if (code === 101 || code === 150) {
+    return "이 영상은 다른 사이트에 끼워 넣을 수 없게 되어 있습니다 "
+         + "(멤버십 전용 방송이 대개 그렇습니다). 유튜브에서 열어 두고 "
+         + "오른쪽 스크립트를 읽으십시오 — 자막은 계속 쌓입니다.";
+  }
+  if (code === 100) return "영상을 찾을 수 없습니다. 비공개이거나 지워졌습니다.";
+  if (code === 5) return "브라우저의 재생기가 이 영상을 열지 못했습니다.";
+  if (code === 2) return "영상 주소가 올바르지 않습니다.";
+  return `영상을 재생할 수 없습니다 (code ${code}).`;
+}
+
+function playerError(msg, videoId) {
   const wrap = document.getElementById("player-wrap");
   let box = document.getElementById("player-error");
   if (!box) {
@@ -389,6 +407,15 @@ function playerError(msg) {
     wrap.appendChild(box);
   }
   box.textContent = msg;
+  if (videoId) {
+    const a = document.createElement("a");
+    a.href = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "유튜브에서 열기";
+    a.className = "seg";
+    box.append(document.createElement("br"), a);
+  }
 }
 
 /* ---------- controls ---------- */

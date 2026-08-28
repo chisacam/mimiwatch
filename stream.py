@@ -93,7 +93,34 @@ def ytdlp_cmd() -> list[str]:
         # 걸리는데, 이 함수는 자주 불립니다.
         found = importlib.util.find_spec("yt_dlp") is not None
         _YTDLP = [sys.executable, "-m", "yt_dlp"] if found else ["yt-dlp"]
+        _YTDLP += _cookie_args()
     return list(_YTDLP)
+
+
+def _cookie_args() -> list[str]:
+    """멤버십 전용 방송을 받으려면 로그인한 쿠키가 있어야 합니다.
+
+    유튜브는 아이디·비밀번호 로그인을 받지 않고 OAuth 도 더는 통하지
+    않습니다. 쿠키뿐입니다.
+
+      MIMIWATCH_YTDLP_COOKIES            쿠키 파일 (Netscape 형식)
+      MIMIWATCH_YTDLP_COOKIES_BROWSER    브라우저에서 바로 (chrome, firefox …)
+
+    **파일 쪽을 권합니다.** 유튜브는 열려 있는 탭의 계정 쿠키를 계속
+    갈아 치우므로, 평소 쓰는 브라우저 프로필에서 바로 읽으면 얼마 못 가
+    무효가 됩니다. 시크릿 창에서 로그인해 내보낸 뒤 그 창을 닫으면 그
+    쿠키는 회전되지 않습니다(README 참조).
+
+    둘 다 있으면 파일이 이깁니다. 함께 주면 yt-dlp 가 시크릿 세션이 아닌
+    평소 쿠키를 덮어써 버립니다.
+    """
+    path = (os.environ.get("MIMIWATCH_YTDLP_COOKIES") or "").strip()
+    if path:
+        return ["--cookies", path]
+    browser = (os.environ.get("MIMIWATCH_YTDLP_COOKIES_BROWSER") or "").strip()
+    if browser:
+        return ["--cookies-from-browser", browser]
+    return []
 
 
 def default_threads(device: str) -> int:

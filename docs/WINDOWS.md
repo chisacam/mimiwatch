@@ -121,6 +121,16 @@ transcribe.cpp가 NPU 백엔드를 갖거나, whisper.cpp-amd가 서버를 내�
 [wa]: https://github.com/lemonade-sdk/whisper.cpp-amd
 [tc]: https://github.com/handy-computer/transcribe.cpp
 
+## 멤버십 전용 방송
+
+쿠키 파일 경로를 환경변수로 주면 됩니다. 자세한 것과 쿠키를 안전하게
+내보내는 절차는 README의 「멤버십 전용 방송」을 보십시오.
+
+```powershell
+$env:MIMIWATCH_YTDLP_COOKIES = "C:\Users\USERNAME\cookies.txt"
+.\run.ps1
+```
+
 ## 모델 위치 바꾸기
 
 ```powershell

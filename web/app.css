@@ -265,6 +265,9 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   border-radius:6px; padding:.22rem .55rem; font-size:.72rem; cursor:pointer; font-family:inherit;
 }
 .engine-row button:hover{color:var(--text)}
+.group-head button.danger{border-color:#5a2b2b; color:#e07a7a}
+.group-head button.danger:hover{background:#2a1616}
+#shutdown-group.done .hint{color:var(--warn)}
 .engine-row button.danger{border-color:#5a2b2b; color:#e07a7a}
 .engine-row button.danger:hover{background:#2a1616}
 .engine-row.locked button.danger{opacity:.35; cursor:not-allowed}

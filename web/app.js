@@ -10,6 +10,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
+  genres: [],
   backend: "local-gemma", asr: "tcpp-best", refine: true,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   live: null,          // { id, es, byId } while a broadcast is running
@@ -187,7 +188,13 @@ function refreshScriptRow(row, c) {
 function appendScriptLine(c) {
   const box = $("script");
   const existing = box.querySelector(`.line[data-id="${c.id}"]`);
-  if (existing) { refreshScriptRow(existing, c); return; }
+  if (existing) {
+    // 정제본이 같은 id의 줄을 갈아 끼웁니다. 글자 수가 달라지므로 높이도
+    // 달라집니다.
+    refreshScriptRow(existing, c);
+    pinScriptToBottom();
+    return;
+  }
   const row = document.createElement("div");
   row.className = "line";
   row.dataset.id = c.id;
@@ -201,7 +208,24 @@ function appendScriptLine(c) {
     if (state.player) { state.player.seekTo(c.start, true); state.player.playVideo(); }
   });
   box.appendChild(row);
-  if (state.follow) row.scrollIntoView({ block: "end", behavior: "smooth" });
+  pinScriptToBottom();
+}
+
+/* 라이브에서 「따라가기」는 특정 줄이 아니라 **바닥**을 좇는 것입니다.
+ *
+ * 예전에는 새 줄에 scrollIntoView({block:"end"})를 걸었습니다. 그런데 줄은
+ * 붙은 뒤에도 높이가 계속 바뀝니다 -- 0.2초쯤 뒤에 번역이 도착해 한 줄이
+ * 늘고(refreshScriptRow가 `.tr`을 붙입니다), 정제본이 오면 여러 줄이 하나로
+ * 합쳐집니다. 그 자리들에서는 다시 맞추지 않았으므로, 맨 아래 줄이 조금씩
+ * 화면 밖으로 밀려 잘려 보였습니다.
+ *
+ * 컨테이너를 바닥에 붙이면 높이가 어떻게 바뀌든 상관이 없습니다. 부드러운
+ * 스크롤은 쓰지 않습니다 -- 자막이 몇 백 밀리초마다 들어오므로 애니메이션이
+ * 끝나기 전에 다음 것이 시작되어 영영 바닥에 닿지 못합니다. */
+function pinScriptToBottom() {
+  if (!state.follow || !isLiveDoc()) return;
+  const box = $("script");
+  box.scrollTop = box.scrollHeight;
 }
 
 function markScript(i) {
@@ -242,6 +266,7 @@ async function loadVideo(id) {
   buildScript();
   updateLangStatus();
   renderBackendPicker();
+  syncGenreToDoc();
   applyModeForDoc();
   if (state.player && state.ready) state.player.loadVideoById(id);
   else await createPlayer(id);
@@ -351,7 +376,10 @@ function bind() {
   });
   $("pos").addEventListener("input", e => { $("overlay").style.bottom = e.target.value + "%"; persist(); });
   $("show-prev").addEventListener("change", e => { state.showPrev = e.target.checked; persist(); renderCue(); });
-  $("follow").addEventListener("change", e => { state.follow = e.target.checked; });
+  $("follow").addEventListener("change", e => {
+    state.follow = e.target.checked;
+    pinScriptToBottom();
+  });
   $("offset").addEventListener("input", e => {
     state.offset = +e.target.value;
     $("offset-val").textContent = state.offset.toFixed(1) + "s";
@@ -372,6 +400,7 @@ function bind() {
   $("backend-picker").addEventListener("change", e => selectBackend(e.target.value));
   $("open-settings").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", () => $("settings-dialog").close());
+  $("shutdown").addEventListener("click", shutdownServer);
   $("form-back").addEventListener("click", showEngineList);
   $("engine-form").addEventListener("submit", saveEngine);
   document.querySelectorAll("[data-add]").forEach(b =>
@@ -421,6 +450,7 @@ function persist() {
     offset: +$("offset").value, viewerLang: $("viewer-lang").value,
     panelHidden: state.panelHidden, backend: state.backend,
     profile: (document.querySelector('#add-form select[name="profile"]') || {}).value,
+    genre: (document.querySelector('#add-form select[name="genre"]') || {}).value,
     asr: state.asr, refine: state.refine,
   });
 }
@@ -447,6 +477,8 @@ async function loadBackends() {
   const p = loadPrefs();
   state.liveProfiles = cfg.live_profiles || [];
   renderProfilePicker();
+  state.genres = cfg.genres || [];
+  renderGenrePicker();
   state.asrBackends = cfg.asr_backends || [];
   const p0 = loadPrefs();
   const asrIds = state.asrBackends.map(b => b.id);
@@ -518,7 +550,7 @@ async function runTranslateJob(video, backend) {
   $("job-source").textContent = "";
   const res = await (await fetch("/api/translate", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ video, backend }),
+    body: JSON.stringify({ video, backend, genre: currentGenre() }),
   })).json();
   if (res.error) { jobError(res.error); return; }
   state.jobId = res.id;
@@ -584,7 +616,7 @@ async function submitAdd(e) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url, lang: f.lang.value || null, asr: state.asr,
-      speakers: f.speakers.checked,
+      speakers: f.speakers.checked, genre: currentGenre(),
       viewer_lang: $("viewer-lang").value, backend: state.backend,
     }),
   })).json();
@@ -636,6 +668,48 @@ async function watchTranscribe(jobId) {
   }
 }
 
+/* 장르는 「콘텐츠 유형」과 다른 축입니다. 유형은 발화를 몇 초에 끊을지를
+ * 정하고(라이브 전용), 장르는 그 발화를 어떤 어휘로 옮길지를 정합니다 --
+ * 녹화본에도 필요합니다. */
+function renderGenrePicker() {
+  const sel = document.querySelector('#add-form select[name="genre"]');
+  if (!sel) return;
+  sel.textContent = "";
+  state.genres.forEach(g => {
+    const o = document.createElement("option");
+    o.value = g.id;
+    o.textContent = g.label;
+    sel.appendChild(o);
+  });
+  const saved = loadPrefs().genre;
+  sel.value = state.genres.some(g => g.id === saved) ? saved : "general";
+  sel.onchange = showGenreHint;
+  showGenreHint();
+}
+
+function showGenreHint() {
+  const sel = document.querySelector('#add-form select[name="genre"]');
+  const hint = $("genre-hint");
+  const g = state.genres.find(x => x.id === (sel || {}).value);
+  if (hint && g) hint.textContent = g.hint;
+}
+
+function currentGenre() {
+  const sel = document.querySelector('#add-form select[name="genre"]');
+  return (sel && sel.value) || "general";
+}
+
+/* 열려 있는 영상의 장르를 선택기에 되비칩니다. 되비치지 않으면 다른 영상에
+ * 마지막으로 고른 값이 남아, 다시 번역할 때 엉뚱한 프롬프트가 갑니다. */
+function syncGenreToDoc() {
+  const sel = document.querySelector('#add-form select[name="genre"]');
+  const g = (state.doc || {}).genre;
+  if (sel && g && state.genres.some(x => x.id === g)) {
+    sel.value = g;
+    showGenreHint();
+  }
+}
+
 function renderProfilePicker() {
   const sel = document.querySelector('#add-form select[name="profile"]');
   if (!sel) return;
@@ -661,6 +735,61 @@ function renderProfilePicker() {
 function openSettings() {
   showEngineList();
   $("settings-dialog").showModal();
+}
+
+/* 서버를 명시적으로 끕니다.
+ *
+ * 프로세스를 죽이는 것과 다릅니다. 서버가 받는 중인 방송을 먼저 닫아
+ * 「종료됨」으로 기록한 뒤에 멈추므로, 사용자가 스스로 끈 것과 서버가 죽은
+ * 것이 지난 방송 목록에서 구분됩니다. */
+async function shutdownServer() {
+  // 이 탭이 라이브를 보고 있지 않아도 서버는 받고 있을 수 있습니다 -- 다른
+  // 탭에서 시작했거나, 이 탭을 열기 전부터 돌고 있었거나. 그래서 여기서는
+  // 문구만 고르고, 실제로 몇 건을 닫았는지는 응답에서 받습니다.
+  const msg = state.live
+    ? "받는 중인 방송을 닫고 서버를 종료합니다. 여기까지 받아 적은 자막은 남습니다.\n\n계속할까요?"
+    : "서버를 종료합니다. 받는 중인 방송이 있으면 함께 닫습니다.\n\n계속할까요?";
+  if (!confirm(msg)) return;
+
+  const btn = $("shutdown");
+  const hint = $("shutdown-group").querySelector(".hint");
+  btn.disabled = true;
+  btn.textContent = "종료하는 중…";
+
+  let stopped = null;                     // null = 답을 못 받음
+  try {
+    const r = await fetch("/api/shutdown", { method: "POST" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    stopped = (await r.json()).sessions_stopped || 0;
+  } catch (e) {
+    // 답이 없다고 종료된 것은 아닙니다. 서버가 정말 멈췄으면 다음 요청도
+    // 실패하고, 살아 있으면 답합니다 -- 물어보고 나서 적습니다.
+    //
+    // 예전에는 여기서 곧바로 "종료됨"이라고 적었는데, 그러면 서버가 이
+    // 경로를 모르는 판(구버전이 돌고 있어 404가 나는 경우)에도 껐다고
+    // 말하게 됩니다. 껐다고 믿고 자리를 뜨면 방송은 계속 받아집니다.
+    const alive = await fetch("/api/backends", { cache: "no-store" })
+      .then(r => r.ok).catch(() => false);
+    if (alive) {
+      $("shutdown-group").classList.add("done");
+      hint.textContent =
+        `서버를 멈추지 못했습니다 (${e.message}). 서버가 이 기능을 모르는 ` +
+        "예전 판일 수 있습니다. 터미널에서 Ctrl-C 로 끄십시오.";
+      btn.disabled = false;
+      btn.textContent = "종료";
+      return;
+    }
+  }
+
+  // 여기까지 왔으면 서버는 멈췄습니다. 새로고침해도 돌아올 곳이 없으므로
+  // 화면을 그대로 두고 무엇이 끝났는지만 적습니다.
+  $("shutdown-group").classList.add("done");
+  hint.textContent =
+    (stopped ? `방송 ${stopped}건을 닫고 서버를 종료했습니다. `
+             : "서버를 종료했습니다. ") +
+    "이 탭은 더 이상 갱신되지 않습니다. 다시 켜려면 터미널에서 ./run.sh.";
+  btn.textContent = "종료됨";
+  stopLive();
 }
 
 function showEngineList() {
@@ -837,7 +966,7 @@ async function startLive(url, lang, probe) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
-      asr: state.asr, refine: state.refine,
+      asr: state.asr, refine: state.refine, genre: currentGenre(),
       profile: document.querySelector('#add-form select[name="profile"]').value,
     }),
   })).json();
@@ -1016,6 +1145,8 @@ function onLiveTranslation(m) {
   }
   const row = $("script").querySelector(`.line[data-id="${cue.id}"]`);
   if (row) refreshScriptRow(row, cue);
+  // 번역 한 줄이 붙으면서 이 줄이 높아졌습니다. 바닥을 다시 잡습니다.
+  pinScriptToBottom();
   renderCue();
 }
 

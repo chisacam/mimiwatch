@@ -87,6 +87,10 @@
     <h3>영상 추가</h3>
     <p class="hint">YouTube 주소나 m3u8 주소를 넣으면 오디오를 받아 전사하고, 원본 언어가 내 언어와 다르면 번역까지 진행합니다.</p>
     <label>주소 <input name="url" placeholder="https://youtu.be/... 또는 https://.../index.m3u8" required></label>
+    <label>장르
+      <select name="genre"></select>
+      <small id="genre-hint">번역 프롬프트를 발화의 성격에 맞춥니다. 기술 발표와 게임 방송은 쓰는 말이 다릅니다.</small>
+    </label>
     <label>콘텐츠 유형 <small class="tag">라이브 전용</small>
       <select name="profile"></select>
       <small>발화를 얼마나 자주 끊을지 정합니다. 여러 사람이 겹쳐 말하면 짧게 끊어야 누락이 줄어듭니다.</small>
@@ -135,6 +139,14 @@
       </div>
       <p class="hint">인식한 문장을 시청자 언어로 옮깁니다. OpenAI 호환 <code>/v1/chat/completions</code> 규약을 씁니다.</p>
       <div id="tr-list" class="engine-list"></div>
+    </section>
+
+    <section class="engine-group" id="shutdown-group">
+      <div class="group-head">
+        <h4>서버</h4>
+        <button id="shutdown" class="seg danger">종료</button>
+      </div>
+      <p class="hint">받는 중인 방송을 <b>먼저 제대로 닫고</b> 서버를 멈춥니다. 창을 그냥 닫거나 프로세스를 죽이면 그 세션은 「중단됨」으로 남습니다. 다시 켜려면 터미널에서 <code>./run.sh</code>.</p>
     </section>
   </div>
 

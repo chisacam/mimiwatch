@@ -22,15 +22,19 @@ YouTube 영상과 라이브 방송을 **자신의 언어로 이해하기 위한 
 
 ## 요구 사항
 
-- macOS 또는 Linux, Python 3.10 이상
-- `git`, `cmake`, `curl`, `ffmpeg`, `yt-dlp`
-- 디스크 약 7GB (모델 6.3GB + transcribe.cpp 빌드)
+- macOS, Linux, 또는 Windows 10 1803 이상. Python 3.10 이상
+- 디스크 약 7GB (모델 6.3GB + macOS/Linux는 transcribe.cpp 빌드분)
 
+macOS/Linux는 `git`, `cmake`, `curl`, `ffmpeg`, `yt-dlp`가 필요합니다.
 macOS라면 준비물은 이걸로 끝납니다.
 
 ```sh
 brew install git cmake ffmpeg yt-dlp
 ```
+
+**윈도우는 빌드 도구가 필요 없습니다** — 미리 만들어진 휠을 쓰므로
+`ffmpeg`와 `yt-dlp`만 있으면 됩니다. [docs/WINDOWS.md](docs/WINDOWS.md)를
+보십시오.
 
 ## 설치
 
@@ -39,6 +43,8 @@ git clone https://github.com/chisacam/mimiwatch.git
 cd mimiwatch
 ./install.sh
 ```
+
+윈도우는 `.\install.ps1` 입니다.
 
 한 번에 끝납니다. 스크립트가 하는 일은 이렇습니다.
 
@@ -67,16 +73,18 @@ SKIP_GEMMA=1 ./install.sh
 | CAM++ | 27MB | 녹화본 화자 태그 |
 | Silero VAD | 632KB | 발화 구간 분할 |
 
-기본 위치는 `~/.local/share/mimiwatch/models`입니다.
-`MIMIWATCH_MODEL_DIR`로 바꿀 수 있습니다.
+기본 위치는 `~/.local/share/mimiwatch/models`, 윈도우는
+`%LOCALAPPDATA%\mimiwatch\models`입니다. `MIMIWATCH_MODEL_DIR`로 바꿀 수
+있습니다(윈도우는 `.\install.ps1 -ModelDir`).
 
 ## 실행
 
 ```sh
-./run.sh
+./run.sh            # 윈도우: .\run.ps1
 ```
 
-http://localhost:8900 을 엽니다. 다른 포트를 쓰려면 `PORT=8951 ./run.sh`.
+http://localhost:8900 을 엽니다. 다른 포트를 쓰려면 `PORT=8951 ./run.sh`
+(윈도우는 `.\run.ps1 -Port 8951`).
 
 설치할 때와 다른 위치를 지정했다면 실행할 때도 같은 환경변수를 주십시오.
 
@@ -93,10 +101,37 @@ MIMIWATCH_MODEL_DIR=/path/to/models ./run.sh
 흔들리면 문장 하나가 통째로 다른 언어로 나옵니다. 방송 언어를 아신다면
 지정하는 편이 훨씬 안정적입니다.
 
+### 장르
+
+**번역 프롬프트를 발화의 성격에 맞춥니다.** 기술 발표의 화자와 게임 방송의
+화자는 쓰는 말이 다르므로, 한 벌의 프롬프트로 둘 다 잘하기는 어렵습니다.
+라이브와 녹화본 양쪽에 적용됩니다.
+
+| 장르 | 하는 일 |
+|---|---|
+| 일반 | 장르를 모르거나 섞여 있을 때 |
+| 기술 발표·세미나 | 전사기가 뭉갠 제품·서비스 이름을 문맥에 맞게 되살립니다 |
+| 게임 방송 | 끝나지 않은 말을 대신 끝내지 않습니다. 감탄사는 감탄사로 둡니다 |
+| 잡담·버라이어티 | 은어와 줄임말은 뜻을 지어내지 않고 음차합니다 |
+| 노래·가사 | 이미지와 어순을 지키고 없는 주어를 넣지 않습니다 |
+
+효과는 실측했습니다. 같은 모델·같은 63줄에서 47줄이 달라졌고, 발표 자막의
+`RAT fifty three`가 `Route 53`으로 되살아났습니다([실측 25절][m]).
+
+**직전 자막 세 줄이 함께 번역기로 갑니다.** 자막 한 줄만으로는 뜻이
+정해지지 않는 경우가 많습니다 — `束縛強め。`가 문맥 없이는 "구속 강함",
+문맥과 함께면 "집착 강해"가 됩니다.
+
+고른 장르는 전사 결과에 남습니다. 다른 엔진으로 다시 번역할 때 되묻지
+않으며, 영상을 열면 그 영상의 장르가 선택기에 다시 뜹니다.
+
+[m]: measurements/RESULTS.md
+
 ### 라이브 선택지
 
 **콘텐츠 유형** — 발화를 얼마나 자주 끊을지 정합니다. 여러 사람이 겹쳐
-말하면 짧게 끊어야 누락이 줄어듭니다.
+말하면 짧게 끊어야 누락이 줄어듭니다. **장르와는 다른 축입니다** — 이쪽은
+끊는 간격이고, 장르는 옮기는 어휘입니다.
 
 | 유형 | 최대 구간 | 쓸 곳 |
 |---|---|---|
@@ -146,6 +181,17 @@ MIMIWATCH_MODEL_DIR=/path/to/models ./run.sh
 
 설정은 `backends.json`에 있습니다. 직접 고쳐도 됩니다.
 
+## 서버 종료
+
+같은 ⚙ 창의 **「서버 · 종료」**로 끕니다. 프로세스를 죽이는 것과 다릅니다 —
+받는 중인 방송을 **먼저 제대로 닫고** 멈추므로, 그 세션이 지난 방송 목록에
+「종료됨」으로 남습니다. 그냥 죽이면 「중단됨」이 되어, 사용자가 스스로 끈
+것과 서버가 죽은 것을 나중에 구분할 수 없습니다.
+
+터미널의 `Ctrl-C`도 같은 경로를 탑니다.
+
+다시 켜려면 `./run.sh`.
+
 ## 실측 결과 요약
 
 근거는 [`measurements/RESULTS.md`](measurements/RESULTS.md)에 있습니다.
@@ -165,6 +211,17 @@ MIMIWATCH_MODEL_DIR=/path/to/models ./run.sh
 
 **라이브 지연은 평균 0.4초입니다.** 합방 방송에서 25줄을 받아 적어 잰
 값입니다.
+
+**GPU 가속은 플랫폼이 정합니다.** macOS는 Metal, 윈도우는 Vulkan입니다.
+AMD·NVIDIA·Intel 모두 윈도우에서는 Vulkan 한 경로로 갑니다 — 드라이버 말고
+따로 깔 것이 없습니다. AMD에서 `whisper.cpp-amd`를 쓰지 않는 이유는
+[docs/WINDOWS.md](docs/WINDOWS.md)에 적어 두었습니다.
+
+**번역 전용 모델로 바꾸지 않았습니다.** 구글의 TranslateGemma 4B는 절반
+크기로 조금 더 빠르고 온전한 문장에서는 대등하지만, 라이브 발화의 절반을
+차지하는 파편에서 말을 지어냅니다 — `なんも反応がないな。ゲームあっ。`를
+"게임은 끝났어"로 끝내 버립니다. 대신 **프롬프트를 장르에 맞추는 쪽**이
+훨씬 싸고 효과가 컸습니다.
 
 ## 알려진 한계
 

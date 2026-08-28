@@ -9,11 +9,14 @@ from __future__ import annotations
 import json
 import os
 import posixpath
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import jobs
 import live
 import store
+import translate
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(BASE, "web")
@@ -64,6 +67,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/backends":
             cfg = jobs.load_config()
             cfg["live_profiles"] = [{"id": k, **v} for k, v in live.PROFILES.items()]
+            # 장르는 프롬프트만 바꾸므로 라이브·녹화본 양쪽에 씁니다.
+            # 프롬프트 본문은 보내지 않습니다 -- 화면에 쓸 것은 이름과
+            # 한 줄 설명뿐입니다.
+            cfg["genres"] = [{"id": k, "label": v["label"], "hint": v["hint"]}
+                             for k, v in translate.GENRE_PROMPTS.items()]
             return self._json(cfg)
 
         if path == "/api/live/sessions":
@@ -160,7 +168,7 @@ class Handler(BaseHTTPRequestHandler):
             vid, backend = body.get("video"), body.get("backend")
             if not vid or not backend:
                 return self._json({"error": "video and backend are required"}, 400)
-            return self._json(jobs.start(vid, backend))
+            return self._json(jobs.start(vid, backend, body.get("genre")))
 
         if path == "/api/probe":
             # The UI needs to know which flow a URL belongs to before it
@@ -181,16 +189,29 @@ class Handler(BaseHTTPRequestHandler):
             url = (body.get("url") or "").strip()
             if not url:
                 return self._json({"error": "주소를 입력해 주세요"}, 400)
-            return self._json(live.start(url, body.get("lang") or None,
-                                         body.get("viewer_lang") or "ko",
-                                         body.get("backend") or "local-m2m100",
-                                         body.get("profile") or "broadcast",
-                                         body.get("asr") or "",
-                                         bool(body.get("refine", True))))
+            return self._json(live.start(
+                url, body.get("lang") or None,
+                body.get("viewer_lang") or "ko",
+                body.get("backend") or "local-m2m100",
+                profile=body.get("profile") or "broadcast",
+                asr_backend_id=body.get("asr") or "",
+                refine=bool(body.get("refine", True)),
+                genre=body.get("genre")))
 
         if path == "/api/live/backend":
             return self._json(live.set_backend(body.get("id", ""),
                                                body.get("backend", "")))
+
+        if path == "/api/shutdown":
+            # 라이브 세션을 먼저 제대로 닫습니다. 그래야 기록에 "종료됨"으로
+            # 남습니다 -- 그냥 죽이면 `running`인 채 남아, 다음 기동의 복구
+            # 스윕이 서버가 죽은 것과 똑같이 "중단됨"으로 적습니다.
+            stopped = live.shutdown()
+            self._json({"ok": True, "sessions_stopped": stopped})
+            # 응답을 다 흘려보낸 뒤에 멈춥니다. 핸들러 안에서 곧바로
+            # shutdown()을 부르면 브라우저는 답 대신 끊어진 연결을 봅니다.
+            threading.Thread(target=_stop_server, daemon=True).start()
+            return
 
         if path == "/api/live/stop":
             return self._json(live.stop(body.get("id", "")))
@@ -208,7 +229,8 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("viewer_lang") or "ko",
                 body.get("backend") or "local-m2m100",
                 body.get("asr") or "local-hayamimi",
-                bool(body.get("speakers"))))
+                bool(body.get("speakers")),
+                body.get("genre")))
 
         if path == "/api/asr-backends":
             cfg = jobs.load_config()
@@ -265,6 +287,17 @@ class Handler(BaseHTTPRequestHandler):
         pass  # the demo's own progress output is the interesting log
 
 
+# serve_forever()를 멈추려면 서버 객체가 있어야 하는데, 핸들러는 클래스라
+# 인스턴스를 알 방법이 없습니다. 모듈에 하나 둡니다.
+_srv: ThreadingHTTPServer | None = None
+
+
+def _stop_server():
+    time.sleep(0.3)          # 응답이 소켓을 빠져나갈 틈
+    if _srv is not None:
+        _srv.shutdown()
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser()
@@ -279,9 +312,18 @@ def main():
         print(f"mimiwatch: 재시작 전 작업 {stale_jobs}건, 라이브 세션 "
               f"{stale_live}건을 중단됨으로 표시했습니다", flush=True)
 
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    global _srv
+    _srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"mimiwatch: http://localhost:{args.port}/")
-    srv.serve_forever()
+    try:
+        _srv.serve_forever()
+    except KeyboardInterrupt:
+        # Ctrl-C도 화면의 종료 단추와 같은 자리로 모읍니다. 어느 쪽으로 끄든
+        # 세션은 "종료됨"으로 남아야 합니다.
+        print("\nmimiwatch: 종료합니다", flush=True)
+        live.shutdown()
+    _srv.server_close()
+    print("mimiwatch: 종료되었습니다", flush=True)
 
 
 if __name__ == "__main__":

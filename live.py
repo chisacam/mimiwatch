@@ -185,13 +185,20 @@ class Sink:
 class LiveSession:
     def __init__(self, url: str, lang: str | None, viewer_lang: str,
                  backend_id: str, profile: str = "broadcast",
-                 asr_backend_id: str = "", refine: bool = True):
+                 asr_backend_id: str = "", refine: bool = True,
+                 genre: str | None = None):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         self.lang = lang
         self.viewer_lang = viewer_lang
         self.backend_id = backend_id
         self.asr_backend_id = asr_backend_id
+        # 프로필(콘텐츠 유형)은 발화를 몇 초에 끊을지를 정하고, 장르는 그
+        # 발화를 어떤 어휘로 옮길지를 정합니다. 겹쳐 보이지만 다른 축입니다 --
+        # 게임 방송과 잡담 방송은 끊는 간격이 같아도 쓰는 말이 다르고,
+        # 기술 발표는 녹화본에도 있습니다.
+        self.genre = genre if genre in mw_translate.GENRE_PROMPTS \
+            else mw_translate.DEFAULT_GENRE
         # 정제는 발화 한 무리가 끝나기를 2초 기다렸다 합쳐서 다시 해독합니다.
         # 문맥이 길어져 결과가 좋아지지만, 그만큼 자막이 늦게 자리를 잡고
         # 이미 뜬 줄이 통째로 바뀝니다. 말이 빠르게 오가는 방송에서는 짧게
@@ -256,6 +263,7 @@ class LiveSession:
                 "asr": self.asr_label,
                 "media_base": round(self.media_base, 2),
                 "profile": self.profile, "max_speech": self.max_speech,
+                "genre": self.genre,
                 "window_s": round(self.window_s, 1),
                 "audio_s": round(self.audio_s, 1),
                 "elapsed": round(time.time() - self.started, 1),
@@ -331,19 +339,35 @@ class LiveSession:
             self.emit(cue)
             self._translate_async(cue)
 
+    def _context_for(self, cue: dict) -> list[str]:
+        """이 줄 직전의 자막 몇 줄. 번역기에 참고로 넘깁니다.
+
+        `self._recent`에서 **이 줄보다 이른 것만** 고릅니다. 확정 줄이면
+        방금 자기 자신이 맨 뒤에 붙어 있고, 정제본이면 흡수한 줄들이 이미
+        빠진 대신 기다리는 동안 들어온 뒤 줄이 남아 있습니다. 시각으로
+        거르면 두 경우가 한 규칙으로 처리됩니다.
+        """
+        older = [c["text"] for c in self._recent if c["t"] < cue["t"]]
+        return older[-mw_translate.CONTEXT_LINES:]
+
     def _translate_async(self, cue: dict):
         if self.lang and self.lang == self.viewer_lang:
             return
-        threading.Thread(target=self._translate, args=(cue,), daemon=True).start()
+        # 문맥은 여기서 붙잡습니다. 번역 스레드가 도는 사이에도 자막은 계속
+        # 들어오므로, 스레드 안에서 읽으면 그때의 `_recent`는 이 줄의 앞이
+        # 아닙니다.
+        ctx = self._context_for(cue)
+        threading.Thread(target=self._translate, args=(cue, ctx),
+                         daemon=True).start()
 
-    def _translate(self, cue: dict):
+    def _translate(self, cue: dict, context: list[str] | None = None):
         src = cue.get("lang") or self.lang or ""
         if not src or src == self.viewer_lang:
             return
         if not self._tr.should_translate(cue["text"], src, self.viewer_lang):
             return
         try:
-            out = self._tr.translate(cue["text"], src, self.viewer_lang)
+            out = self._tr.translate(cue["text"], src, self.viewer_lang, context)
         except Exception as exc:
             # 실패했다고 줄을 버리지 않습니다. 그러면 시청자에게는 그 발화가
             # 아예 없었던 것처럼 보입니다. 번역할 수 없었다는 사실이 남도록
@@ -440,7 +464,7 @@ class LiveSession:
             for b in cfg.get("asr_backends", []):
                 if b["id"] == self.asr_backend_id:
                     asr_spec = b
-            self._tr = mw_translate.build(spec)
+            self._tr = mw_translate.build(spec, self.genre)
 
             # Speaker tags are a recorded-video feature. CAM++ needs enough
             # voice in one segment to place it, and live splits at 3-4s to
@@ -486,7 +510,7 @@ class LiveSession:
 
 def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
           profile: str = "broadcast", asr_backend_id: str = "",
-          refine: bool = True) -> dict:
+          refine: bool = True, genre: str | None = None) -> dict:
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
     for old_id in list(_sessions):
@@ -495,13 +519,40 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
             old.stop()
 
     s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile,
-                    asr_backend_id=asr_backend_id, refine=refine)
+                    asr_backend_id=asr_backend_id, refine=refine, genre=genre)
     with _lock:
         _sessions[s.id] = s
     # 첫 자막이 나오기 전에 서버가 죽어도 세션이 있었다는 사실은 남습니다.
     s._persist()
     s.start()
     return {"id": s.id}
+
+
+def shutdown(timeout: float = 8.0) -> int:
+    """서버를 끄기 전에 세션을 제대로 닫습니다.
+
+    그냥 프로세스를 죽이면 DB에 `running`으로 남고, 다음 기동의 복구 스윕이
+    그것을 **중단됨**으로 표시합니다. 사용자가 스스로 끈 것과 서버가 죽은
+    것이 기록에서 구분되지 않는 셈입니다.
+
+    `stop()`은 신호만 보내므로 여기서 기다립니다 -- 수신 루프가 ffmpeg의
+    끊긴 파이프를 알아채고 상태를 `stopped`로 적을 때까지입니다. 기다리지
+    않으면 애써 부른 보람이 없습니다.
+    """
+    with _lock:
+        live_ids = list(_sessions)
+    for sid in live_ids:
+        s = get(sid)
+        if s is not None:
+            s.stop()
+    if not live_ids:
+        return 0
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not store.running_session_ids():
+            break
+        time.sleep(0.2)
+    return len(live_ids)
 
 
 def _retire(session_id: str):
@@ -592,7 +643,8 @@ def set_backend(session_id: str, backend_id: str) -> dict:
                 spec = b
     if spec is None:
         return {"error": f"'{backend_id}' 백엔드가 없습니다"}
-    s._tr = mw_translate.build(spec)
+    # 장르는 보고 있는 영상의 성질이므로 백엔드를 바꿔도 그대로입니다.
+    s._tr = mw_translate.build(spec, s.genre)
     s.backend_id = backend_id
     return {"backend": backend_id}
 

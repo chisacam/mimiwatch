@@ -75,13 +75,18 @@ CMake도, Vulkan SDK도, git 클론도 없습니다.
 코어가 넉넉한 노트북이라면 CPU 쪽이 더 빠르거나, 최소한 전사와 번역이 같은
 iGPU를 다투는 일을 피할 수 있습니다.
 
-**기본 전사기가 버거우면 가벼운 쪽도 있습니다.** `SenseVoice
-Small`(241MB)은 CPU에서 whisper보다 8배 빠릅니다.
+**기본 전사기가 버거우면 가벼운 쪽도 있습니다.**
 
 ```json
 { "id": "tcpp-lite", "label": "SenseVoice Small (가벼움 · CPU)",
   "backend": "tcpp", "model": "SenseVoiceSmall-Q8_0.gguf", "device": "cpu" }
+{ "id": "tcpp-lite-en", "label": "Moonshine base (가벼움 · 영어 전용)",
+  "backend": "tcpp", "model": "moonshine-base-Q8_0.gguf", "device": "cpu" }
 ```
+
+`SenseVoice Small`(241MB)은 CPU에서 whisper보다 8배, **영어 방송이라면
+`Moonshine base`(74MB)가 12배** 빠릅니다. Moonshine은 영어 품질이 기본과
+사실상 같지만 다른 언어는 거부합니다.
 
 `asr_backends`에 넣으면 화면의 「전사」 선택기에 나타납니다. 자세한 것은
 README의 「CPU로 돌리기」를 보십시오.

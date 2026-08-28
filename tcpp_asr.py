@@ -13,7 +13,7 @@ import sys
 import threading
 
 import numpy as np
-from transcribe_cpp.errors import OutputTruncated
+from transcribe_cpp.errors import OutputTruncated, UnsupportedRequest
 
 import stream
 
@@ -87,12 +87,39 @@ class TranscribeCppASR:
         self.threads = threads
         self._model = tc.Model(model_path, backend=self.device)
         self._session = self._model.session(n_threads=threads)
+        self._check_language()
         print(f"[asr] {self.label} · {self.device} · {threads}스레드",
               file=sys.stderr, flush=True)
         # 바인딩 세션은 동시 호출을 보장하지 않습니다. 라이브 경로는
         # 빠른 패스와 정제 패스가 서로 다른 스레드에서 들어오므로
         # 직렬화합니다.
         self._lock = threading.Lock()
+
+    def _check_language(self):
+        """이 모델이 이 언어를 아는지 시작할 때 물어봅니다.
+
+        영어 전용 모델(moonshine 등)에 일본어를 물리면 해독할 때마다
+        UnsupportedRequest 가 납니다. 그것을 그냥 두면 자막이 몇 줄 나오지
+        않다가 세션이 끝나고, 로그에는 같은 예외가 여러 줄 쌓입니다.
+        재시도해도 결과가 달라질 수 없는 실패이므로 여기서 잘라 냅니다 --
+        방송을 20초 받아 본 뒤가 아니라, 시작하는 순간에 압니다.
+
+        무음 0.1초면 충분합니다. moonshine 기준 50밀리초쯤 듭니다.
+        """
+        if not self.forced_lang:
+            return              # 자동 판별에 맡긴 경우는 물어볼 것이 없습니다
+        try:
+            self._session.run(np.zeros(1600, dtype=np.float32),
+                              language=self.forced_lang)
+        except UnsupportedRequest as exc:
+            raise RuntimeError(
+                f"{self.label} 모델은 '{self.forced_lang}' 언어를 "
+                f"지원하지 않습니다. 원본 언어를 바꾸거나 다른 전사 엔진을 "
+                f"고르십시오. ({exc})") from exc
+        except Exception:
+            # 다른 실패는 여기서 판단하지 않습니다. 무음 한 조각으로
+            # 모델 전체를 단정할 근거가 없습니다.
+            pass
 
     # --- RoutedASR가 노출하는 속성들 -------------------------------------
     @property

@@ -71,6 +71,7 @@ SKIP_GEMMA=1 ./install.sh
 |---|---|---|
 | whisper-large-v3-turbo Q8_0 | 845MB | 전사 (모든 언어) |
 | SenseVoice Small Q8_0 | 241MB | 가벼운 전사 (낮은 사양용) |
+| Moonshine base Q8_0 | 74MB | 가벼운 전사 (영어 전용) |
 | Gemma 4 E4B q4_0 | 4.9GB | 번역 |
 | M2M-100 (CTranslate2) | 473MB | 번역 대체용 |
 | CAM++ | 27MB | 녹화본 화자 태그 |
@@ -272,18 +273,36 @@ Small**(241MB)도 함께 받아 둡니다. `backends.json`의 `asr_backends`에 
   "backend": "tcpp", "model": "SenseVoiceSmall-Q8_0.gguf", "device": "cpu" }
 ```
 
+**영어 방송이라면 더 가벼운 것이 있습니다.** `Moonshine base`(74MB)는
+기본의 11분의 1인데 영어 품질이 사실상 같습니다.
+
+```json
+{ "id": "tcpp-lite-en", "label": "Moonshine base (가벼움 · 영어 전용)",
+  "backend": "tcpp", "model": "moonshine-base-Q8_0.gguf", "device": "cpu" }
+```
+
 같은 20초 조각을 이 기계(M5 Pro)에서 잰 값입니다.
 
-| 모델 | GPU | **CPU** |
-|---|---|---|
-| whisper-large-v3-turbo | 56.8배속 | **7.7배속** |
-| SenseVoice Small | 272.8배속 | **62.4배속** |
+| 모델 | 크기 | GPU | **CPU** |
+|---|---|---|---|
+| whisper-large-v3-turbo | 845MB | 56.8배속 | **7.7배속** |
+| SenseVoice Small | 241MB | 272.8배속 | **62.4배속** |
+| Moonshine base (영어) | 74MB | 89.7배속 | **91.8배속** |
 
-**CPU에서 8배 빠릅니다.** 품질도 일방적인 손해는 아닙니다 — 같은 조각에서
-`工場内`과 `できた銃で`를 whisper보다 정확히 받아 적었습니다. 대신 문장
-부호와 띄어쓰기를 넣지 않아 한 덩어리로 나오고, 한국어 고유명사를 줄이는
-버릇이 있습니다(`데이터독` → `데이터`). 기본을 바꾸지 않는 이유입니다.
-자세한 것은 [실측 33절][m]을 보십시오.
+**Moonshine은 CPU가 GPU보다 빠릅니다.** 모델이 작아 전송 비용이 계산
+비용을 넘습니다.
+
+품질은 이렇습니다.
+
+- **Moonshine base** — 영어 표본 60초 지점에서 whisper와 **문장부호까지 한
+  글자도 다르지 않았습니다.** 대신 영어 외의 언어는 아예 거부합니다.
+  세션을 만들 때 미리 확인하므로 시작하는 순간에 알 수 있습니다.
+- **SenseVoice Small** — 일본어 표본에서 `工場内`과 `できた銃で`를 whisper
+  보다 정확히 받아 적었습니다. 대신 문장부호와 띄어쓰기를 넣지 않아 한
+  덩어리로 나오고, 한국어 고유명사를 줄입니다(`데이터독` → `데이터`).
+
+기본을 바꾸지 않는 이유가 여기 있습니다. 자세한 것은 [실측 33~34절][m]을
+보십시오.
 
 ## 서버 종료
 

@@ -774,7 +774,54 @@ GPU로 돌 때보다 빠릅니다. 내장 그래픽이 버거운 기계에서 �
   "model": "SenseVoiceSmall-Q8_0.gguf", "device": "cpu" }
 ```
 
-## 34. 남은 것
+## 34. 영어는 74MB로 충분합니다
+
+영어 전용 경량 모델도 재 봤습니다. 표본은 Datadog 발표(`jrLVa1Md4GU`)의
+18초 조각 세 개입니다.
+
+| 모델 | 크기 | GPU | **CPU(8스레드)** |
+|---|---|---|---|
+| whisper-large-v3-turbo Q8_0 | 845 MB | 69.1배속 | 7.9배속 |
+| SenseVoice Small Q8_0 | 241 MB | 270.2배속 | 63.1배속 |
+| **moonshine-base Q8_0** | **74 MB** | 89.7배속 | **91.8배속** |
+| moonshine-tiny Q8_0 | 34 MB | 151.1배속 | 169.3배속 |
+
+**moonshine은 CPU가 GPU보다 빠릅니다.** 모델이 작아 전송 비용이 계산
+비용을 넘습니다. 이런 모델에는 `device: cpu`가 손해가 아니라 이득입니다.
+
+품질은 이렇습니다. 60초 지점에서 whisper와 moonshine-base는 **문장부호까지
+한 글자도 다르지 않았습니다.**
+
+| 모델 | 60초 지점 |
+|---|---|
+| whisper (845MB) | …find and communicate with both internal and external endpoints they're dependent on. |
+| moonshine-base (74MB) | …find and communicate with both internal and external endpoints they're dependent on. |
+| SenseVoice (241MB) | …find and communicate with both internal and external endpoints that they're dependent on |
+
+**SenseVoice는 영어에서 문장부호와 대문자를 넣지 않습니다.** `dns`가
+소문자로 나오고 마침표가 없어 한 덩어리가 됩니다. 180초 지점에서는
+moonshine-base가 오히려 쉼표를 정확히 넣었습니다(`approaches, there are`).
+
+moonshine-tiny(34MB)는 두 배 더 빠르지만 틀립니다 — `how it affects`를
+`how to affect`로, `before it affected`를 `before defective`로 냈습니다.
+**base를 고릅니다.**
+
+### 영어 전용이라는 것
+
+moonshine은 다른 언어를 아예 거부합니다.
+
+    UnsupportedRequest: transcribe_run: unsupported language (status 10)
+
+이것을 그냥 두면 자막이 나오지 않다가 세션이 끝나고 로그에 같은 예외가
+쌓입니다. 재시도해도 달라질 수 없는 실패이므로 **세션을 만들 때 무음
+0.1초로 미리 물어봅니다**(moonshine 기준 30밀리초). 방송을 20초 받아 본
+뒤가 아니라 시작하는 순간에 알게 됩니다.
+
+언어를 비워 두면(자동 판별) 묻지 않습니다. 대신 일본어를 물리면 영어로
+환청을 만드는데, 13절의 다양도 검사가 그것을 잡습니다 — 실제로 시험에서
+`I'm going to tell you.` 반복(다양도 0.07)이 차단되었습니다.
+
+## 35. 남은 것
 
 **3초 지연의 원인은 아직 모릅니다.** 780M에서 whisper 845MB를 Vulkan으로
 돌릴 때의 값인데, 이 기계에는 그 조합이 없어 재현할 수 없습니다. 죽은

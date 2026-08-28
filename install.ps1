@@ -313,6 +313,11 @@ Get-Model 'whisper-large-v3-turbo-Q8_0.gguf' `
 Get-Model 'SenseVoiceSmall-Q8_0.gguf' `
   "$HF/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q8_0.gguf" `
   'SenseVoice Small Q8_0 (241MB - 가벼운 전사)'
+# 영어 전용 경량 모델. 74MB로 기본의 11분의 1인데 영어 품질은 사실상
+# 같습니다(실측 35절). 다른 언어는 아예 거부하므로 영어 방송에만 씁니다.
+Get-Model 'moonshine-base-Q8_0.gguf' `
+  "$HF/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-Q8_0.gguf" `
+  'Moonshine base Q8_0 (74MB - 가벼운 영어 전사)'
 if (-not $SkipGemma) {
   Get-Model 'gemma-4-E4B_q4_0-it.gguf' `
     "$HF/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf" `

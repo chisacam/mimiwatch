@@ -38,6 +38,13 @@
    "backend": "tcpp",
    "model": "SenseVoiceSmall-Q8_0.gguf",
    "device": "cpu"
+  },
+  {
+   "id": "tcpp-lite-en",
+   "label": "Moonshine base (가벼움 · 영어 전용)",
+   "backend": "tcpp",
+   "model": "moonshine-base-Q8_0.gguf",
+   "device": "cpu"
   }
  ]
 }

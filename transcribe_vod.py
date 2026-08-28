@@ -23,6 +23,7 @@ import numpy as np
 
 sys.stdout.reconfigure(encoding="utf-8")
 
+import stream
 import translate as mw_translate
 from stream import build_vad
 from tcpp_asr import build_live_asr
@@ -32,7 +33,7 @@ CHUNK = 1600  # 0.1s per VAD feed
 
 
 def probe(url: str) -> dict:
-    out = subprocess.run(["yt-dlp", "--no-warnings", "-j", url],
+    out = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", url],
                          capture_output=True, text=True)
     if out.returncode != 0:
         raise SystemExit(f"yt-dlp failed: {out.stderr.strip()[:300]}")
@@ -48,7 +49,7 @@ def fetch_audio(url: str, dest: str) -> str:
         print(f"[vod] reusing cached audio {dest}", file=sys.stderr)
         return dest
     tmp = dest + ".src"
-    dl = subprocess.run(["yt-dlp", "--no-warnings", "-f", "bestaudio",
+    dl = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-f", "bestaudio",
                          "-o", tmp, url], capture_output=True, text=True)
     if dl.returncode != 0:
         raise SystemExit(f"yt-dlp download failed: {dl.stderr.strip()[:300]}")

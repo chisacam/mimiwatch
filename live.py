@@ -32,6 +32,7 @@ import uuid
 import numpy as np
 
 import store
+import stream
 import translate as mw_translate
 from stream import (SAMPLE_RATE, AudioHistory, Refiner, build_vad,  # noqa: F401
                     run_stream)
@@ -77,7 +78,7 @@ def resolve_audio(url: str) -> tuple[str, dict]:
     """Audio-only rendition plus what the manifest says about media time."""
     why = []
     for fmt in ("234", "233", "bestaudio"):
-        out = subprocess.run(["yt-dlp", "--no-warnings", "-f", fmt, "-g", url],
+        out = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-f", fmt, "-g", url],
                              capture_output=True, text=True)
         lines = out.stdout.strip().splitlines()
         if out.returncode == 0 and lines:
@@ -103,7 +104,7 @@ def resolve_audio(url: str) -> tuple[str, dict]:
 def ytdlp_version() -> str:
     """설치된 yt-dlp의 판. 못 물으면 빈 문자열."""
     try:
-        out = subprocess.run(["yt-dlp", "--version"], capture_output=True,
+        out = subprocess.run(stream.ytdlp_cmd() + ["--version"], capture_output=True,
                              text=True, timeout=20)
         return (out.stdout or "").strip().splitlines()[0] if out.returncode == 0 else ""
     except Exception:
@@ -475,7 +476,7 @@ class LiveSession:
         # (세션 하나가 3GB입니다). 이슈 #1에서 실제로 그렇게 원인이 가려졌습니다.
         asr = vad = history = refiner = None
         try:
-            meta = subprocess.run(["yt-dlp", "--no-warnings", "-j", self.url],
+            meta = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", self.url],
                                   capture_output=True, text=True)
             if meta.returncode == 0:
                 d = json.loads(meta.stdout)

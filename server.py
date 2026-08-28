@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import jobs
 import live
 import store
+import stream
 import translate
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -179,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
             # commits: a live broadcast and a finished video are different
             # pipelines with different waiting behaviour.
             import subprocess as sp
-            out = sp.run(["yt-dlp", "--no-warnings", "-j", body.get("url", "")],
+            out = sp.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", body.get("url", "")],
                          capture_output=True, text=True)
             if out.returncode != 0:
                 return self._json({"error": out.stderr.strip()[:200] or "주소를 해석할 수 없습니다"}, 400)

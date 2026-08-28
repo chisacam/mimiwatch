@@ -42,7 +42,7 @@ fetch() {  # fetch <파일명> <URL> <설명>
 # ── 0. 준비물 ──────────────────────────────────────────────────────────
 say "준비물 확인"
 missing=()
-for cmd in git cmake curl ffmpeg yt-dlp python3; do
+for cmd in git cmake curl ffmpeg python3; do
   if command -v "$cmd" >/dev/null 2>&1; then ok "$cmd"; else missing+=("$cmd"); fi
 done
 if [ ${#missing[@]} -gt 0 ]; then
@@ -53,29 +53,18 @@ fi
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
   || die "Python 3.10 이상이 필요합니다."
 
-# yt-dlp가 낡으면 유튜브에서 포맷을 하나도 받지 못합니다 — 234도 233도
-# bestaudio도 전부 "not available"이 되는데, 포맷이 없는 것이 아니라 목록을
-# 못 읽은 것입니다. 판은 YYYY.MM.DD 입니다.
-YTV="$(yt-dlp --version 2>/dev/null | head -1)"
-if python3 - "$YTV" <<'PYAGE'
-import sys
-from datetime import date
-try:
-    y, m, d = (int(x) for x in sys.argv[1].split(".")[:3])
-    sys.exit(0 if (date.today() - date(y, m, d)).days > 90 else 1)
-except Exception:
-    sys.exit(1)
-PYAGE
-then
-  skip "yt-dlp $YTV 는 석 달이 넘었습니다 — 'yt-dlp -U' 로 올리십시오"
-fi
 
 # ── 1. 가상환경 ────────────────────────────────────────────────────────
 say "가상환경"
 if [ -x "$PY" ]; then skip "있음"; else python3 -m venv "$HERE/.venv"; ok "생성"; fi
 "$PIP" install -q --upgrade pip
 "$PIP" install -q -r "$HERE/requirements.txt"
-ok "의존성 설치"
+# yt-dlp만 따로 올립니다. requirements에 이미 있지만, -r 은 이미 깔린 것을
+# 그대로 두므로 다시 실행해도 판올림이 되지 않습니다. 유튜브가 추출 경로를
+# 바꾸면 낡은 판은 포맷을 하나도 받지 못하므로(이슈 #1), 이 한 줄이
+# "다시 설치하면 고쳐진다"를 성립시킵니다.
+"$PIP" install -q -U yt-dlp
+ok "의존성 설치 (yt-dlp $("$PY" -m yt_dlp --version 2>/dev/null | head -1))"
 
 # ── 2. transcribe.cpp ──────────────────────────────────────────────────
 say "transcribe.cpp (전사 런타임)"

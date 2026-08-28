@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import queue
 import sys
@@ -58,6 +59,31 @@ def model_dir() -> str:
         return os.path.join(base, "mimiwatch", "models")
     return os.path.join(os.path.expanduser("~"), ".local", "share",
                         "mimiwatch", "models")
+
+
+_YTDLP: list[str] | None = None
+
+
+def ytdlp_cmd() -> list[str]:
+    """yt-dlp를 부르는 명령.
+
+    **가상환경에 깔린 것을 먼저 씁니다.** yt-dlp는 파이썬 패키지이고,
+    설치 스크립트가 여기에 최신으로 넣어 둡니다. 그러면 시스템에 낡은
+    판이 있어도 가려집니다 -- 유튜브가 추출 경로를 자주 바꿔서, 몇 달
+    지난 판은 포맷 목록을 통째로 받지 못합니다(이슈 #1).
+
+    `python -m yt_dlp`로 부릅니다. 경로를 짐작하지 않아도 되고, 스크립트
+    껍데기가 어디에 어떤 이름으로 놓였든 상관없습니다.
+
+    없으면 PATH의 `yt-dlp`로 물러납니다. 예전 설치본이 그렇습니다.
+    """
+    global _YTDLP
+    if _YTDLP is None:
+        # find_spec은 모듈을 실행하지 않습니다. import 하면 1초 가까이
+        # 걸리는데, 이 함수는 자주 불립니다.
+        found = importlib.util.find_spec("yt_dlp") is not None
+        _YTDLP = [sys.executable, "-m", "yt_dlp"] if found else ["yt-dlp"]
+    return list(_YTDLP)
 
 
 def default_threads(device: str) -> int:

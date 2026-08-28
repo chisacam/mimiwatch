@@ -183,23 +183,12 @@ $missing = @()
 if (-not (Get-Command curl.exe -EA SilentlyContinue)) {
   Die 'curl.exe가 없습니다. 윈도우 10 1803 이상이 필요합니다.'
 }
-foreach ($c in 'ffmpeg', 'yt-dlp') {
-  if (Get-Command $c -EA SilentlyContinue) { Ok $c } else { $missing += $c }
-}
-# yt-dlp가 낡으면 유튜브에서 포맷을 하나도 받지 못합니다 -- 234도 233도
-# bestaudio도 전부 "not available"이 되는데, 포맷이 없는 것이 아니라 목록을
-# 못 읽은 것입니다(이슈 #1). 판은 YYYY.MM.DD 입니다.
-if ($missing -notcontains 'yt-dlp') {
-  $ytv = (Get-Native 'yt-dlp' @('--version')).Lines | Select-Object -First 1
-  if ("$ytv" -match '^(\d{4})\.(\d{2})\.(\d{2})') {
-    $age = (Get-Date) - (Get-Date -Year $Matches[1] -Month $Matches[2] -Day $Matches[3])
-    if ($age.Days -gt 90) {
-      Skip "yt-dlp $ytv 는 $([int]$age.Days)일 지났습니다 -- `yt-dlp -U` 로 올리십시오"
-    } else { Ok "yt-dlp $ytv" }
-  }
-}
+# yt-dlp는 준비물이 아닙니다. 파이썬 패키지이므로 아래에서 가상환경 안에
+# 최신으로 넣습니다 -- 시스템에 깔린 것은 스스로 갱신되지 않아, 몇 달 지나면
+# 유튜브에서 포맷을 하나도 받지 못합니다(이슈 #1).
+if (Get-Command 'ffmpeg' -EA SilentlyContinue) { Ok 'ffmpeg' } else { $missing += 'ffmpeg' }
 if ($missing.Count -gt 0) {
-  $ids = @{ 'ffmpeg' = 'Gyan.FFmpeg'; 'yt-dlp' = 'yt-dlp.yt-dlp' }
+  $ids = @{ 'ffmpeg' = 'Gyan.FFmpeg' }
   Write-Host "`n  없는 것: $($missing -join ', ')"
   foreach ($m in $missing) { Write-Host "    winget install --id $($ids[$m])" }
   Write-Host '  설치한 뒤 터미널을 새로 열고 다시 실행하십시오.'
@@ -263,6 +252,13 @@ Say '의존성'
 $llamaIndex = "https://abetlen.github.io/llama-cpp-python/whl/$Backend"
 $code = Invoke-Native $Py @('-m', 'pip', 'install', '--extra-index-url', $llamaIndex,
                            '-r', (Join-Path $Here 'requirements.txt'))
+if ($code -eq 0) {
+  # yt-dlp만 따로 올립니다. requirements에 이미 있지만 -r 은 이미 깔린 것을
+  # 그대로 두므로, 다시 실행해도 판올림이 되지 않습니다. 유튜브가 추출
+  # 경로를 바꾸면 낡은 판은 포맷을 하나도 받지 못하므로(이슈 #1), 이 한
+  # 줄이 "다시 설치하면 고쳐진다"를 성립시킵니다.
+  $code = Invoke-Native $Py @('-m', 'pip', 'install', '-q', '-U', 'yt-dlp')
+}
 if ($code -ne 0) {
   Die @"
 의존성 설치에 실패했습니다.
@@ -270,7 +266,8 @@ if ($code -ne 0) {
   인덱스: $llamaIndex
 "@
 }
-Ok '설치'
+$ytv = (Get-Native $Py @('-m', 'yt_dlp', '--version')).Lines | Select-Object -First 1
+Ok "설치 (yt-dlp $ytv)"
 
 # ---- 3. 전사 런타임 --------------------------------------------------------
 Say '전사 런타임 (transcribe.cpp)'

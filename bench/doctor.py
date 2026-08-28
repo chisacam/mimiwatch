@@ -35,25 +35,33 @@ def main():
     print(f"  Python {sys.version.split()[0]} · 논리 코어 {os.cpu_count()}")
 
     section("준비물")
-    for exe in ("ffmpeg", "yt-dlp"):
-        path = shutil.which(exe)
-        ver = ""
-        if path:
-            try:
-                r = subprocess.run([exe, "--version"], capture_output=True,
-                                   text=True, timeout=20)
-                ver = (r.stdout or r.stderr).strip().splitlines()[0][:40]
-            except Exception as e:                          # noqa: BLE001
-                ver = f"(판을 묻지 못했습니다: {e})"
-        line(bool(path), exe, ver or "없음")
-    # yt-dlp가 낡으면 유튜브에서 포맷을 하나도 받지 못합니다. 이슈 #1이
-    # 그랬습니다 -- 234도 233도 bestaudio도 전부 "not available"이었는데,
-    # 포맷이 없는 것이 아니라 목록을 못 읽은 것이었습니다.
-    import live
+    path = shutil.which("ffmpeg")
+    ver = ""
+    if path:
+        try:
+            r = subprocess.run(["ffmpeg", "--version"], capture_output=True,
+                               text=True, timeout=20)
+            ver = (r.stdout or r.stderr).strip().splitlines()[0][:40]
+        except Exception as e:                              # noqa: BLE001
+            ver = f"(판을 묻지 못했습니다: {e})"
+    line(bool(path), "ffmpeg", ver or "없음")
+
+    # 시스템에 깔린 것이 아니라 **실제로 부르는 것**을 봅니다. 가상환경에
+    # 있으면 그쪽을 쓰고, 없으면 PATH로 물러납니다.
+    import stream, live
+    cmd = stream.ytdlp_cmd()
+    where = "가상환경" if cmd[0] != "yt-dlp" else "PATH(시스템)"
     v = live.ytdlp_version()
+    line(bool(v), f"yt-dlp ({where})", v or "부를 수 없습니다")
+    # 낡으면 유튜브에서 포맷을 하나도 받지 못합니다. 이슈 #1이 그랬습니다 --
+    # 234도 233도 bestaudio도 전부 "not available"이었는데, 포맷이 없는
+    # 것이 아니라 목록을 못 읽은 것이었습니다.
     if live.ytdlp_stale(v):
-        print(f"       ↳ yt-dlp {v} 는 석 달이 넘었습니다. `yt-dlp -U` 로 "
-              f"올리십시오 — 유튜브가 추출 경로를 자주 바꿉니다.")
+        print(f"       ↳ 석 달이 넘었습니다. 설치 스크립트를 다시 돌리면 "
+              f"가상환경 것이 최신으로 올라갑니다.")
+    elif where.startswith("PATH"):
+        print("       ↳ 예전 설치본입니다. 설치 스크립트를 다시 돌리면 "
+              "가상환경 안으로 들어와 판올림이 자동이 됩니다.")
 
     section("전사 런타임")
     try:

@@ -5,8 +5,8 @@ git clone https://github.com/chisacam/mimiwatch.git
 cd mimiwatch
 winget install --id Python.Python.3.12
 winget install --id Gyan.FFmpeg
-winget install --id yt-dlp.yt-dlp
-# 위 셋을 새로 깔았다면 터미널을 새로 여십시오 (PATH가 갱신됩니다)
+# 위 둘을 새로 깔았다면 터미널을 새로 여십시오 (PATH가 갱신됩니다)
+# yt-dlp는 install.ps1 이 가상환경 안에 최신으로 넣습니다
 .\install.ps1
 .\run.ps1
 ```
@@ -31,7 +31,7 @@ CMake도, Vulkan SDK도, git 클론도 없습니다.
 | 전사 런타임 | 소스를 받아 CMake 빌드 | `pip install transcribe-cpp` (win_amd64 휠) |
 | GPU 가속 | Metal (자동) / CUDA / ROCm | **Vulkan** (휠에 포함) |
 | 번역 런타임 | PyPI의 llama-cpp-python | 만든 쪽 인덱스의 win_amd64 휠 |
-| 준비물 | git, cmake, ffmpeg, yt-dlp | ffmpeg, yt-dlp |
+| 준비물 | git, cmake, ffmpeg | ffmpeg |
 | 모델 위치 | `~/.local/share/mimiwatch/models` | `%LOCALAPPDATA%\mimiwatch\models` |
 
 ## GPU 가속: Vulkan을 씁니다
@@ -122,13 +122,13 @@ transcribe.cpp가 NPU 백엔드를 갖거나, whisper.cpp-amd가 서버를 내�
 |---|---|---|
 | `.\install.ps1` 이 실행되지 않음 | 실행 정책 | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` |
 | `python`이 마이크로소프트 스토어를 엶 | 윈도우 기본 자리표시자 | `winget install --id Python.Python.3.12` 후 새 터미널 |
-| `ffmpeg` / `yt-dlp` 를 못 찾음 | 열려 있던 터미널의 PATH가 낡음 | 터미널을 새로 여십시오 |
+| `ffmpeg` 를 못 찾음 | 열려 있던 터미널의 PATH가 낡음 | 터미널을 새로 여십시오 |
 | llama-cpp-python 설치 실패 | 파이썬 판에 맞는 휠이 없음 | `-Backend cpu` 로 다시, 그래도 안 되면 파이썬 3.12를 쓰십시오 |
 | 백엔드에 `vulkan`이 없음 | 드라이버가 낡음 | 그래픽 드라이버 갱신. 없어도 CPU로 돕니다 |
 | 내려받다 끊김 | — | 그냥 다시 실행하십시오. 받다 만 것은 `.part`로 남고 완성본만 인정합니다 |
 | `NativeCommandError`로 중간에 멈춤 | 0.1의 결함 (이슈 #1) | 최신 판을 받으십시오. Windows PowerShell 5.1이 명령의 stderr 한 줄을 종료 오류로 바꾸던 문제입니다 |
 | 전사가 시작되자마자 실패 | GPU에 모델을 못 올렸을 수 있습니다 | `bench/doctor.py`로 확인하고, `device=auto`만 실패하면 `backends.json`에 `"device": "cpu"`를 적으십시오 |
-| 라이브에서 "오디오를 찾지 못했습니다" | **yt-dlp가 낡았습니다** | `yt-dlp -U`. 유튜브가 추출 경로를 자주 바꿔서, 몇 달 지난 판은 포맷 목록을 통째로 못 받습니다 |
+| 라이브에서 "오디오를 찾지 못했습니다" | **yt-dlp가 낡았습니다** | `.\install.ps1` 을 다시 돌리십시오. 가상환경 안의 yt-dlp가 최신으로 올라갑니다 |
 
 ## 무엇을 확인했고 무엇을 확인하지 못했는가
 

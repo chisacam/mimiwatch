@@ -25,16 +25,18 @@ YouTube 영상과 라이브 방송을 **자신의 언어로 이해하기 위한 
 - macOS, Linux, 또는 Windows 10 1803 이상. Python 3.10 이상
 - 디스크 약 7GB (모델 6.3GB + macOS/Linux는 transcribe.cpp 빌드분)
 
-macOS/Linux는 `git`, `cmake`, `curl`, `ffmpeg`, `yt-dlp`가 필요합니다.
+macOS/Linux는 `git`, `cmake`, `curl`, `ffmpeg`가 필요합니다.
 macOS라면 준비물은 이걸로 끝납니다.
 
 ```sh
-brew install git cmake ffmpeg yt-dlp
+brew install git cmake ffmpeg
 ```
 
 **윈도우는 빌드 도구가 필요 없습니다** — 미리 만들어진 휠을 쓰므로
-`ffmpeg`와 `yt-dlp`만 있으면 됩니다. [docs/WINDOWS.md](docs/WINDOWS.md)를
-보십시오.
+`ffmpeg`만 있으면 됩니다. [docs/WINDOWS.md](docs/WINDOWS.md)를 보십시오.
+
+`yt-dlp`는 준비물이 아닙니다. 설치 스크립트가 가상환경 안에 최신으로
+넣습니다 — 아래를 보십시오.
 
 ## 설치
 
@@ -300,18 +302,23 @@ AMD·NVIDIA·Intel 모두 윈도우에서는 Vulkan 한 경로로 갑니다 — 
 "게임은 끝났어"로 끝내 버립니다. 대신 **프롬프트를 장르에 맞추는 쪽**이
 훨씬 싸고 효과가 컸습니다.
 
-## yt-dlp는 최신으로 두십시오
+## yt-dlp는 가상환경 안에 있습니다
 
-유튜브가 추출 경로를 자주 바꾸고 yt-dlp가 그때마다 따라갑니다. 몇 달 지난
-판은 **포맷 목록을 통째로 받지 못합니다** — 그러면 라이브에서 "오디오를
-찾지 못했습니다"가 나옵니다. 포맷이 없는 것이 아니라 아무것도 못 읽은
+시스템에 깔지 않고 `.venv` 안에 둡니다. 유튜브가 추출 경로를 자주 바꾸고
+yt-dlp가 그때마다 따라가는데, `winget`이나 `brew`로 깐 것은 스스로 갱신되지
+않습니다. 몇 달 지나면 **포맷 목록을 통째로 받지 못해** 라이브에서 "오디오를
+찾지 못했습니다"가 됩니다 — 포맷이 없는 것이 아니라 아무것도 못 읽은
 것입니다.
 
+**설치 스크립트를 다시 돌리면 판올림이 됩니다.**
+
 ```sh
-yt-dlp -U
+./install.sh          # 윈도우: .\install.ps1
 ```
 
-설치 스크립트와 `bench/doctor.py`가 석 달이 넘은 판을 짚어 줍니다.
+이미 끝난 단계는 건너뛰고 yt-dlp만 최신으로 올립니다. 예전 설치본이라
+시스템 것을 쓰고 있어도, 한 번 다시 돌리면 가상환경 안으로 들어옵니다.
+지금 무엇을 쓰고 있는지는 `bench/doctor.py`가 알려 줍니다.
 
 ## 알려진 한계
 

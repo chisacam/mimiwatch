@@ -4,8 +4,13 @@
 라이브는 SQLite에 있었습니다. 저장 모양이 갈려 있으니 읽고 쓰는 길이 두
 벌이었고, 내보내기·편집·재번역이 그 갈래를 하나씩 더 짊어져야 했습니다.
 
-이 시험은 **옮긴 결과가 원본과 한 글자도 다르지 않은지**를 봅니다. 원본은
-`data/legacy/` 에 그대로 남아 있으므로 둘을 맞대어 볼 수 있습니다.
+이 시험은 **옮기는 코드가 한 글자도 잃지 않는지**를 봅니다. `data/legacy/` 의
+원본을 임시 저장소로 다시 옮겨 보고 그 결과를 원본과 맞댑니다.
+
+실제 저장소와 맞대지 않는 이유가 있습니다. 옮긴 뒤에도 사람은 자막을 고치고
+지우고 다시 전사합니다 -- 그때마다 실제 저장소는 원본과 달라지는 것이
+당연하고, 그것을 실패로 적으면 정상적인 작업이 시험을 깨뜨립니다. 실제로
+한 번 그렇게 울렸습니다.
 
     .venv/bin/python bench/store_migrate.py
 
@@ -56,46 +61,65 @@ def main():
         "SELECT name FROM sqlite_master WHERE type='index'")}
     check("cues_owner_start" in idx, "owner+start 인덱스가 있다")
 
-    print("\n[2] 옮긴 녹화본이 원본과 같은가")
+    print("\n[2] 옮기는 코드가 원본을 그대로 옮기는가")
     legacy = store.LEGACY
     names = (sorted(n for n in os.listdir(legacy) if n.endswith(".json"))
              if os.path.isdir(legacy) else [])
     if not names:
-        print("  ----  data/legacy/ 가 비어 옮길 것이 없었습니다")
-    total = 0
-    for name in names:
-        vid = name[:-5]
-        with open(os.path.join(legacy, name), encoding="utf-8") as f:
-            old = json.load(f)
-        old_cues = old.pop("cues", [])
-        for c in old_cues:
-            if "translations" not in c:
-                c["translations"] = ({"local-m2m100": c["translation"]}
-                                     if c.get("translation") else {})
-            c.pop("translation", None)
-        meta = store.doc(vid)
-        if meta is None:
-            check(False, f"{vid} 가 표에 없다")
-            continue
-        new_cues = [{"start": c["t"], "end": c["end"], "lang": c["lang"],
-                     "text": c["text"], "translations": c["translations"]}
-                    | ({"speaker": c["speaker"]} if c["speaker"] else {})
-                    for c in store.cues(vid)]
-        same_n = len(old_cues) == len(new_cues)
-        same_c = same_n and all(norm(a) == norm(b)
-                                for a, b in zip(old_cues, new_cues))
-        # backends_done 은 자막에서 다시 계산하므로 비교에서 뺍니다.
-        old.pop("backends_done", None)
-        keys = {k for k in set(old) | set(meta) if k != "backends_done"}
-        same_m = all(old.get(k) == meta.get(k) for k in keys)
-        check(same_n and same_c and same_m,
-              f"{vid}: 자막 {len(old_cues)}줄과 메타가 그대로"
-              + ("" if same_n else f" (줄 수 {len(old_cues)}->{len(new_cues)})")
-              + ("" if same_c or not same_n else " (내용 다름)")
-              + ("" if same_m else " (메타 다름)"))
-        total += len(old_cues)
-    if names:
-        check(total > 0, f"모두 합쳐 {total}줄")
+        print("  ----  data/legacy/ 가 비어 맞대어 볼 원본이 없습니다")
+    else:
+        # 임시 저장소로 다시 옮겨 봅니다. 실제 저장소는 그 뒤로 사람이
+        # 고쳤을 수 있으므로 여기서 보지 않습니다.
+        tmp = tempfile.mkdtemp(prefix="mw-mig-")
+        try:
+            os.makedirs(os.path.join(tmp, "data"), exist_ok=True)
+            for n in names:
+                shutil.copy(os.path.join(legacy, n),
+                            os.path.join(tmp, "data", n))
+            real = (store.DATA, store.DB, store.LEGACY, store._db)
+            store.DATA = os.path.join(tmp, "data")
+            store.DB = os.path.join(store.DATA, "mimiwatch.db")
+            store.LEGACY = os.path.join(store.DATA, "legacy")
+            store._db = None
+            store.init()
+            moved = store.import_legacy_docs()
+            check(moved == len(names), f"{len(names)}개를 옮겼다 ({moved})")
+            total = 0
+            for name in names:
+                vid = name[:-5]
+                with open(os.path.join(legacy, name), encoding="utf-8") as f:
+                    old = json.load(f)
+                old_cues = old.pop("cues", [])
+                for c in old_cues:
+                    if "translations" not in c:
+                        c["translations"] = ({"local-m2m100": c["translation"]}
+                                             if c.get("translation") else {})
+                    c.pop("translation", None)
+                meta = store.doc(vid)
+                new_cues = [{"start": c["t"], "end": c["end"], "lang": c["lang"],
+                             "text": c["text"], "translations": c["translations"]}
+                            | ({"speaker": c["speaker"]} if c["speaker"] else {})
+                            for c in store.cues(vid)]
+                same_n = len(old_cues) == len(new_cues)
+                same_c = same_n and all(norm(a) == norm(b)
+                                        for a, b in zip(old_cues, new_cues))
+                old.pop("backends_done", None)
+                keys = {k for k in set(old) | set(meta or {}) if k != "backends_done"}
+                same_m = meta is not None and all(old.get(k) == meta.get(k) for k in keys)
+                check(same_n and same_c and same_m,
+                      f"{vid}: 자막 {len(old_cues)}줄과 메타가 그대로"
+                      + ("" if same_n else f" (줄 수 {len(old_cues)}->{len(new_cues)})")
+                      + ("" if same_c or not same_n else " (내용 다름)")
+                      + ("" if same_m else " (메타 다름)"))
+                total += len(old_cues)
+            check(total > 0, f"모두 합쳐 {total}줄")
+            check(not [n for n in os.listdir(os.path.join(tmp, "data"))
+                       if n.endswith(".json")], "옮긴 원본은 data/ 에 남지 않는다")
+            check(len(os.listdir(store.LEGACY)) == len(names),
+                  "원본은 legacy/ 로 옮겨진다 (지우지 않습니다)")
+        finally:
+            store.DATA, store.DB, store.LEGACY, store._db = real
+            shutil.rmtree(tmp, ignore_errors=True)
 
     print("\n[3] 라이브 자막은 그대로인가")
     sess = [s for s in store.sessions(200) if s.get("cues")]

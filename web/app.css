@@ -325,6 +325,44 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
   padding:.5rem 1rem; cursor:pointer; border-left:2px solid transparent;
 }
 .line:hover{background:#171b25}
+
+/* ---------- 자막 고치기 ---------- */
+/* 줄마다 달려 있지만 얹어 놓기만 합니다. 늘 보이면 스크립트가 단추밭이
+   되고, 읽는 것이 이 패널의 본래 일입니다. */
+.line{position:relative}
+.line-edit{
+  position:absolute; right:.45rem; top:.35rem; opacity:0;
+  background:var(--panel); color:var(--dim);
+  border:1px solid var(--line); border-radius:6px;
+  padding:.05rem .3rem; font-size:.7rem; cursor:pointer; font-family:inherit;
+}
+.line:hover .line-edit,
+.line-edit:focus-visible{opacity:1}
+.line-edit:hover{color:var(--text); border-color:var(--accent)}
+.line.editing{background:#151a24; cursor:default}
+.line.editing .line-edit{display:none}
+.cue-edit{display:flex; flex-direction:column; gap:.35rem}
+.cue-edit textarea{
+  width:100%; resize:vertical; font-family:inherit; font-size:.8rem;
+  line-height:1.45; color:var(--text); background:#0d1017;
+  border:1px solid var(--line); border-radius:6px; padding:.35rem .45rem;
+}
+.cue-edit textarea:focus{outline:none; border-color:var(--accent)}
+.cue-edit .ce-tr{color:var(--accent)}
+.ce-bar{display:flex; align-items:center; gap:.35rem}
+.ce-at{
+  width:5rem; font-family:var(--mono); font-size:.74rem;
+  color:var(--text); background:#0d1017;
+  border:1px solid var(--line); border-radius:6px; padding:.2rem .35rem;
+}
+.ce-bar .grow{flex:1}
+.ce-bar .seg{font-size:.72rem; padding:.2rem .5rem}
+.ce-bar .danger{color:var(--warn); border-color:#52201d}
+/* 원문을 고친 뒤 번역이 옛 문장의 것으로 남아 있다는 표시. */
+.tr-stale{
+  margin-left:.4rem; font-size:.68rem; font-weight:600;
+  color:var(--warn); opacity:.85; white-space:nowrap;
+}
 .line.on{background:#16221f; border-left-color:var(--accent)}
 .line .t{font-family:var(--mono); font-size:.68rem; color:var(--dim); padding-top:.15rem}
 .line .tx{font-size:.86rem; line-height:1.5}

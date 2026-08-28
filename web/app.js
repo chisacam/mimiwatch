@@ -156,34 +156,40 @@ function wrap(el, text, speaker) {
 function buildScript() {
   const box = $("script");
   box.textContent = "";
-  state.cues.forEach((c, i) => {
-    const row = document.createElement("div");
-    row.className = "line";
-    row.dataset.i = i;
-    const t = document.createElement("div");
-    t.className = "t";
-    t.textContent = fmt(c.start);
-    const body = document.createElement("div");
-    const tx = document.createElement("div");
-    tx.className = "tx";
-    tx.textContent = c.text;
-    body.appendChild(tx);
-    const trText = trOf(c);
-    if (trText) {
-      const tr = document.createElement("div");
-      tr.className = "tr";
-      tr.textContent = trText;
-      body.appendChild(tr);
-    }
-    row.append(t, body);
-    row.addEventListener("click", () => {
-      if (state.player) { state.player.seekTo(c.start, true); state.player.playVideo(); }
-    });
-    box.appendChild(row);
-  });
+  state.cues.forEach((c, i) => box.appendChild(scriptRow(c, i)));
 }
+
+/* 줄 한 개를 만듭니다.
+ *
+ * 녹화본과 라이브가 각자 만들고 있었습니다. 몸통을 채우는 코드가 두 벌이라
+ * 화자 표시는 한쪽에만 있었고, 편집을 붙이려면 또 두 벌이 될 뻔했습니다.
+ * 다른 것은 무엇으로 줄을 찾느냐뿐입니다 -- 녹화본은 위치(data-i)로,
+ * 라이브는 자막 번호(data-id)로. 둘 다 답니다. */
+function scriptRow(c, i) {
+  const row = document.createElement("div");
+  row.className = "line";
+  if (i != null) row.dataset.i = i;
+  if (c.id != null) row.dataset.id = c.id;
+  const t = document.createElement("div");
+  t.className = "t";
+  const body = document.createElement("div");
+  row.append(t, body);
+  refreshScriptRow(row, c);
+  row.addEventListener("click", (e) => {
+    // 편집 중인 줄에서는 눌러도 움직이지 않습니다. 글자를 고르려던 것이
+    // 재생 위치를 옮겨 버리면 고칠 수가 없습니다.
+    if (row.classList.contains("editing")) return;
+    if (state.player) { state.player.seekTo(cueStart(c), true); state.player.playVideo(); }
+  });
+  return row;
+}
+
+const cueStart = (c) => (c.start != null ? c.start : c.t) || 0;
 function refreshScriptRow(row, c) {
-  const body = row.lastElementChild;
+  row.firstElementChild.textContent = fmt(cueStart(c));
+  // 줄의 짜임은 [시각, 몸통, ✎] 입니다. lastElementChild 로 몸통을 잡으면
+  // 두 번째 호출부터 단추를 지우게 됩니다.
+  const body = row.children[1];
   body.textContent = "";
   const tx = document.createElement("div");
   tx.className = "tx";
@@ -201,9 +207,29 @@ function refreshScriptRow(row, c) {
     const tr = document.createElement("div");
     tr.className = "tr";
     tr.textContent = trText;
+    // 원문을 고쳤으면 붙어 있는 번역은 **고치기 전 문장**의 번역입니다.
+    // 지우지 않고 그렇게 표시만 합니다 -- 틀린 번역이라도 없는 것보다
+    // 낫고, 다시 번역할지는 사람이 정할 일입니다.
+    if (String(c.edited || "").includes("text")) {
+      const warn = document.createElement("b");
+      warn.className = "tr-stale";
+      warn.title = "원문을 고친 뒤라 이 번역은 옛 문장의 것입니다";
+      warn.textContent = "⟲ 원문과 다름";
+      tr.appendChild(warn);
+    }
     body.appendChild(tr);
   }
   row.classList.toggle("pending", c.kind === "final" && !trText);
+  // 편집 단추. 줄에 얹어 두고 CSS 가 hover 일 때만 보입니다. 다시 그릴
+  // 때마다 새로 답니다 -- 닫힌 값(c)을 물고 있어서 옛것을 남기면 고친
+  // 내용이 아니라 고치기 전 값으로 편집기가 열립니다.
+  row.querySelector(":scope > .line-edit")?.remove();
+  const pen = document.createElement("button");
+  pen.className = "line-edit";
+  pen.title = "이 줄을 고칩니다";
+  pen.textContent = "✎";
+  pen.addEventListener("click", (e) => { e.stopPropagation(); openCueEditor(row, c); });
+  row.appendChild(pen);
 }
 
 function appendScriptLine(c) {
@@ -216,20 +242,138 @@ function appendScriptLine(c) {
     pinScriptToBottom();
     return;
   }
-  const row = document.createElement("div");
-  row.className = "line";
-  row.dataset.id = c.id;
-  const t = document.createElement("div");
-  t.className = "t";
-  t.textContent = fmt(c.start);
-  const body = document.createElement("div");
-  row.append(t, body);
-  refreshScriptRow(row, c);
-  row.addEventListener("click", () => {
-    if (state.player) { state.player.seekTo(c.start, true); state.player.playVideo(); }
-  });
-  box.appendChild(row);
+  box.appendChild(scriptRow(c, null));
   pinScriptToBottom();
+}
+
+/* ---------- 자막 고치기 ----------
+ *
+ * 전사는 틀립니다. 잡음을 말로 듣고, 고유명사를 엉뚱하게 적고, 번역은 그
+ * 위에서 한 번 더 어긋납니다. 내보내기까지 붙은 마당에 고칠 방법이 없으면
+ * 틀린 채로 나갑니다.
+ *
+ * 고치는 것은 서버가 곧바로 저장합니다. 자막은 이제 녹화본이든 라이브든
+ * 같은 표에 한 줄씩 들어 있어서, 한 줄을 고치는 데 그 영상 전체를 다시 쓸
+ * 일이 없습니다. */
+function openCueEditor(row, c) {
+  if (row.classList.contains("editing")) return;
+  const owner = editOwner();
+  if (!owner) return;
+  row.classList.add("editing");
+  const body = row.children[1];
+  const keep = body.cloneNode(true);
+
+  const box = document.createElement("div");
+  box.className = "cue-edit";
+  const src = document.createElement("textarea");
+  src.className = "ce-src";
+  src.rows = 2;
+  src.value = c.text || "";
+  const tr = document.createElement("textarea");
+  src.placeholder = "원문";
+  tr.className = "ce-tr";
+  tr.rows = 2;
+  tr.placeholder = "번역 (비우면 그대로 둡니다)";
+  tr.value = trOf(c) || "";
+  const bar = document.createElement("div");
+  bar.className = "ce-bar";
+  const at = document.createElement("input");
+  at.type = "number"; at.step = "0.1"; at.className = "ce-at";
+  at.value = (Math.round(cueStart(c) * 10) / 10).toFixed(1);
+  at.title = "이 줄이 뜨는 시각(초)";
+  const save = mkbtn("저장", "primary-seg");
+  const del = mkbtn("🗑", "danger");
+  del.title = "이 줄을 지웁니다";
+  const cancel = mkbtn("취소", "");
+  bar.append(at, document.createElement("span"), save, del, cancel);
+  bar.children[1].className = "grow";
+  box.append(src, tr, bar);
+  body.textContent = "";
+  body.appendChild(box);
+  src.focus();
+
+  const close = () => {
+    row.classList.remove("editing");
+    body.textContent = "";
+    while (keep.firstChild) body.appendChild(keep.firstChild);
+  };
+  cancel.addEventListener("click", (e) => { e.stopPropagation(); close(); });
+  box.addEventListener("click", (e) => e.stopPropagation());
+  // Ctrl/⌘+Enter 로 저장. 그냥 Enter 는 줄바꿈이어야 합니다 -- 자막 한 줄이
+  // 늘 한 문장은 아닙니다.
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); close(); }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save.click(); }
+  });
+
+  save.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    save.disabled = true;
+    const payload = { id: owner, cue: c.id, backend: state.backend };
+    if (src.value !== (c.text || "")) payload.text = src.value.trim();
+    if (tr.value !== (trOf(c) || "")) payload.tr = tr.value.trim();
+    const t0 = +at.value;
+    if (Number.isFinite(t0) && Math.abs(t0 - cueStart(c)) > 0.05) payload.start = t0;
+    const res = await (await fetch("/api/cue", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })).json();
+    if (res.error) { jobError(res.error); save.disabled = false; return; }
+    row.classList.remove("editing");
+    applyCueEdit(res.cue);
+  });
+
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    del.disabled = true;
+    const res = await (await fetch("/api/cue/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: owner, cue: c.id }),
+    })).json();
+    if (res.error) { jobError(res.error); del.disabled = false; return; }
+    row.classList.remove("editing");
+    dropCue(c.id);
+  });
+}
+
+function mkbtn(text, cls) {
+  const b = document.createElement("button");
+  b.className = "seg " + cls;
+  b.textContent = text;
+  return b;
+}
+
+/* 지금 보고 있는 것을 목록이 쓰는 값으로. 서버가 그것으로 표를 찾습니다. */
+function editOwner() {
+  if (state.live) return "live:" + state.live.id;
+  if (state.doc && !isLiveDoc()) return state.doc.id;
+  return "";
+}
+
+/* 서버가 돌려준 줄을 화면의 기억과 맞춥니다. 라이브는 `t`, 녹화본은
+ * `start` 로 들고 있어서 여기서 한 번 맞춰 줍니다. */
+function applyCueEdit(got) {
+  const c = state.cues.find(x => x.id === got.id);
+  if (!c) return;
+  Object.assign(c, {
+    text: got.text, lang: got.lang, speaker: got.speaker,
+    edited: got.edited, translations: got.translations,
+    start: got.t, end: got.end,
+  });
+  if ("t" in c) c.t = got.t;
+  const row = $("script").querySelector(`.line[data-id="${CSS.escape(String(got.id))}"]`);
+  if (row) refreshScriptRow(row, c);
+  renderCue();
+}
+
+function dropCue(id) {
+  const i = state.cues.findIndex(x => x.id === id);
+  if (i >= 0) state.cues.splice(i, 1);
+  if (state.live) state.live.byId.delete(id);
+  const row = $("script").querySelector(`.line[data-id="${CSS.escape(String(id))}"]`);
+  if (row) row.remove();
+  state.idx = -1;
+  renderCue();
 }
 
 /* 라이브에서 「따라가기」는 특정 줄이 아니라 **바닥**을 좇는 것입니다.
@@ -1995,6 +2139,9 @@ async function attachLive(sessionId, videoId) {
     if (m.type === "cue") onLiveCue(m);
     else if (m.type === "translation") onLiveTranslation(m);
     else if (m.type === "status") onLiveStatus(m);
+    // 다른 창에서 줄을 지웠습니다. 본 창과 대본 창이 같은 세션을 보고
+    // 있으므로 한쪽에서 고친 것이 다른 쪽에도 닿아야 합니다.
+    else if (m.type === "drop") dropCue(m.id);
   };
   es.onerror = () => {
     // 끝난 세션은 서버가 백로그를 다 보내고 스트림을 닫습니다. 그것은 끊김이

@@ -155,8 +155,11 @@ def load_video(vid: str) -> dict:
     meta = store.doc(vid)
     if meta is None:
         raise KeyError(vid)
-    cues = [{"start": c["t"], "end": c["end"], "lang": c["lang"],
-             "text": c["text"], "translations": c["translations"]}
+    # id 를 함께 냅니다. 자막 한 줄을 고치려면 화면이 그 줄을 가리킬 수
+    # 있어야 하는데, 위치(index)는 한 줄만 지워도 어긋납니다.
+    cues = [{"id": c["id"], "start": c["t"], "end": c["end"], "lang": c["lang"],
+             "text": c["text"], "translations": c["translations"],
+             "edited": c["edited"]}
             | ({"speaker": c["speaker"]} if c["speaker"] else {})
             for c in store.cues(vid)]
     doc = {**meta, "cues": cues}

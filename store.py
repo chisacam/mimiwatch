@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS cues (
   lang     TEXT NOT NULL DEFAULT '',
   speaker  TEXT NOT NULL DEFAULT '',
   tr       TEXT NOT NULL DEFAULT '{}',
+  edited   TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (owner, cue_id)
 );
 CREATE INDEX IF NOT EXISTS cues_owner_start ON cues(owner, start);
@@ -118,6 +119,9 @@ def _migrate_columns(db: sqlite3.Connection):
         # 이미 쌓인 자막은 전부 라이브라 끝 시각이 없습니다. 0은 「모른다」는
         # 뜻이고, 내보낼 때 다음 줄까지로 지어 줍니다.
         db.execute("ALTER TABLE cues ADD COLUMN end REAL NOT NULL DEFAULT 0")
+    if "edited" not in have:
+        # 사람이 손댄 자리를 적어 둡니다. 빈 문자열이면 기계가 적은 그대로.
+        db.execute("ALTER TABLE cues ADD COLUMN edited TEXT NOT NULL DEFAULT ''")
 
 
 def init():
@@ -255,6 +259,7 @@ def cues(owner: str) -> list[dict]:
     return [{"id": r["cue_id"], "kind": r["kind"], "t": r["start"],
              "end": r["end"],
              "text": r["text"], "lang": r["lang"], "speaker": r["speaker"],
+             "edited": r["edited"],
              "translations": json.loads(r["tr"] or "{}")}
             for r in _rows("SELECT * FROM cues WHERE owner = ? "
                            "ORDER BY cue_id", (owner,))]
@@ -290,7 +295,7 @@ def update_cue(owner: str, cue_id: int, **fields) -> bool:
     전부 잃습니다.
     """
     cols = {k: v for k, v in fields.items()
-            if k in ("kind", "start", "end", "text", "lang", "speaker")}
+            if k in ("kind", "start", "end", "text", "lang", "speaker", "edited")}
     tr = fields.get("translations")
     if not cols and tr is None:
         return False
@@ -304,6 +309,90 @@ def update_cue(owner: str, cue_id: int, **fields) -> bool:
         cur = db.execute(f"UPDATE cues SET {', '.join(sets)} "
                          "WHERE owner = ? AND cue_id = ?",
                          (*args, owner, int(cue_id)))
+        db.commit()
+        return cur.rowcount > 0
+
+
+def owner_of(value: str) -> str:
+    """화면의 목록이 쓰는 값(`live:<세션>` 또는 영상 id)을 표의 owner 로."""
+    return value[5:] if value.startswith("live:") else value
+
+
+# 사람이 손댄 자리. 빈 문자열이면 기계가 적은 그대로입니다.
+#   "text" -- 원문을 고쳤습니다. 붙어 있는 번역은 **고치기 전 문장**의
+#             번역이므로 더 이상 맞지 않습니다. 화면이 그렇게 표시합니다.
+#   "tr"   -- 번역을 손으로 고쳤습니다. 뭉텅이 재번역이 이 줄을 덮으면
+#             사람이 한 일이 지워지므로, 그때 건너뛰라는 표시입니다.
+EDIT_FLAGS = ("text", "tr")
+
+
+def edit_cue(owner: str, cue_id: int, *, text=None, tr=None, backend="",
+             start=None, end=None) -> dict | None:
+    """자막 한 줄을 사람이 고칩니다.
+
+    돌려주는 것은 고쳐진 줄이고, 그 줄이 없으면 None 입니다.
+    """
+    with _lock:
+        db = _connect()
+        row = db.execute("SELECT * FROM cues WHERE owner = ? AND cue_id = ?",
+                         (owner, int(cue_id))).fetchone()
+        if row is None:
+            return None
+        flags = {f for f in (row["edited"] or "").split(",") if f}
+        cols, args = [], []
+        if text is not None and text != row["text"]:
+            cols.append("text = ?")
+            args.append(text)
+            # 원문이 바뀌었으니 붙어 있는 번역은 옛 문장의 것입니다.
+            flags.add("text")
+        if tr is not None:
+            trs = json.loads(row["tr"] or "{}")
+            key = backend or next(iter(trs), "") or "manual"
+            trs[key] = tr
+            cols.append("tr = ?")
+            args.append(json.dumps(trs, ensure_ascii=False))
+            # 사람이 번역을 맞춰 두었으므로 어긋남 표시는 내려갑니다.
+            flags.add("tr")
+            flags.discard("text")
+        if start is not None:
+            new_start = float(start)
+            cols.append("start = ?")
+            args.append(new_start)
+            # 끝 시각도 같이 옮깁니다. 시작만 옮기면 길이가 늘거나 줄고,
+            # 앞으로 당긴 경우에는 끝이 시작보다 앞서는 자막이 나옵니다 --
+            # SRT 로 내보내면 도구가 버리거나 통째로 무너집니다. 「이 줄을
+            # 조금 앞으로」는 길이를 그대로 두고 옮기라는 뜻입니다.
+            if end is None and row["end"] > row["start"]:
+                cols.append("end = ?")
+                args.append(new_start + (row["end"] - row["start"]))
+        if end is not None:
+            cols.append("end = ?")
+            args.append(float(end))
+        if not cols:
+            return _row_to_cue(row)      # 바꿀 것이 없었습니다
+        cols.append("edited = ?")
+        args.append(",".join(sorted(flags)))
+        db.execute(f"UPDATE cues SET {', '.join(cols)} "
+                   "WHERE owner = ? AND cue_id = ?", (*args, owner, int(cue_id)))
+        db.commit()
+        got = db.execute("SELECT * FROM cues WHERE owner = ? AND cue_id = ?",
+                         (owner, int(cue_id))).fetchone()
+        return _row_to_cue(got)
+
+
+def _row_to_cue(r) -> dict:
+    return {"id": r["cue_id"], "kind": r["kind"], "t": r["start"], "end": r["end"],
+            "text": r["text"], "lang": r["lang"], "speaker": r["speaker"],
+            "edited": r["edited"], "translations": json.loads(r["tr"] or "{}")}
+
+
+def delete_cue(owner: str, cue_id: int) -> bool:
+    """줄 하나를 지웁니다. 번호는 다시 매기지 않습니다 -- 라이브에서는 정제본이
+    자기가 흡수한 줄의 번호를 물려받으므로 번호가 곧 신원입니다."""
+    with _lock:
+        db = _connect()
+        cur = db.execute("DELETE FROM cues WHERE owner = ? AND cue_id = ?",
+                         (owner, int(cue_id)))
         db.commit()
         return cur.rowcount > 0
 

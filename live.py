@@ -795,6 +795,35 @@ def set_title(session_id: str, title: str) -> dict:
     return {"ok": True, "title": title}
 
 
+def notify_edit(owner: str, cue: dict, backend: str = ""):
+    """고친 줄을 보고 있는 창들에 알립니다.
+
+    본 창에서 고치면 대본 창에도 바로 반영되어야 합니다. 받는 중인 세션만
+    구독자가 있으므로(끝난 세션의 SSE 는 백로그를 다 보내고 닫습니다),
+    여기서 할 일이 없으면 조용히 지나갑니다.
+
+    새 이벤트 종류를 만들지 않고 자막이 도착할 때와 같은 모양으로 보냅니다.
+    브라우저는 이미 id 로 줄을 찾아 제자리에서 갈아 끼웁니다.
+    """
+    s = get(owner)
+    if s is None:
+        return
+    s.emit({"type": "cue", "id": cue["id"], "kind": cue["kind"],
+            "t": cue["t"], "text": cue["text"], "lang": cue["lang"],
+            "speaker": cue["speaker"], "edited": cue["edited"]})
+    trs = cue.get("translations") or {}
+    text = trs.get(backend) or next(iter(trs.values()), "")
+    if text:
+        s.emit({"type": "translation", "id": cue["id"],
+                "kind": cue["kind"], "text": text})
+
+
+def notify_drop(owner: str, cue_id: int):
+    s = get(owner)
+    if s is not None:
+        s.emit({"type": "drop", "id": int(cue_id)})
+
+
 def feed(session_id: str, raw: bytes) -> dict:
     """브라우저가 올린 탭 오디오 한 덩어리를 세션에 넣습니다."""
     s = get(session_id)

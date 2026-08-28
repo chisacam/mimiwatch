@@ -258,6 +258,33 @@ class Handler(BaseHTTPRequestHandler):
                 source="tab",
                 title=(body.get("title") or "").strip() or "탭 오디오"))
 
+        if path == "/api/cue":
+            # 자막 한 줄을 사람이 고칩니다. 녹화본이든 라이브든 같은 길입니다 --
+            # 저장소를 하나로 모은 값이 여기서 돌아옵니다.
+            owner = store.owner_of((body.get("id") or "").strip())
+            cue_id = body.get("cue")
+            if not owner or cue_id is None:
+                return self._json({"error": "id 와 cue 가 필요합니다"}, 400)
+            got = store.edit_cue(
+                owner, int(cue_id),
+                text=body.get("text"), tr=body.get("tr"),
+                backend=body.get("backend") or "",
+                start=body.get("start"), end=body.get("end"))
+            if got is None:
+                return self._json({"error": "no such cue"}, 404)
+            live.notify_edit(owner, got, body.get("backend") or "")
+            return self._json({"ok": True, "cue": got})
+
+        if path == "/api/cue/delete":
+            owner = store.owner_of((body.get("id") or "").strip())
+            cue_id = body.get("cue")
+            if not owner or cue_id is None:
+                return self._json({"error": "id 와 cue 가 필요합니다"}, 400)
+            if not store.delete_cue(owner, int(cue_id)):
+                return self._json({"error": "no such cue"}, 404)
+            live.notify_drop(owner, int(cue_id))
+            return self._json({"ok": True, "deleted": int(cue_id)})
+
         if path == "/api/live/title":
             return self._json(live.set_title(body.get("id", ""),
                                              body.get("title", "")))

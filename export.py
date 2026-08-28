@@ -60,9 +60,27 @@ def collect(value: str) -> tuple[dict, list[dict]]:
 
     돌려주는 줄은 `{start, end, text, tr, speaker, kind}` 입니다.
     """
-    if value.startswith("live:"):
-        return _collect_live(value[5:])
-    return _collect_video(value)
+    meta, rows = (_collect_live(value[5:]) if value.startswith("live:")
+                  else _collect_video(value))
+    _fill_ends(rows)
+    return meta, rows
+
+
+def _fill_ends(rows: list[dict]):
+    """끝 시각이 없거나 시작보다 앞선 줄을 손봅니다.
+
+    라이브 자막에는 애초에 끝 시각이 없고, 녹화본이라도 사람이 시작 시각을
+    앞으로 당기면 옛 끝 시각이 뒤에 남아 거꾸로 된 구간이 됩니다. SRT/VTT 에
+    그런 줄이 들어가면 도구가 그 자막을 버리거나 파일 전체를 거부합니다.
+
+    규칙은 하나입니다 -- 다음 줄이 시작할 때까지, 위아래를 막아서.
+    """
+    for i, r in enumerate(rows):
+        if r["end"] > r["start"]:
+            continue                      # 실제로 잰 구간입니다. 그대로 둡니다.
+        nxt = rows[i + 1]["start"] if i + 1 < len(rows) else None
+        span = (nxt - r["start"]) if nxt is not None else END_MAX_S
+        r["end"] = r["start"] + max(END_MIN_S, min(END_MAX_S, span))
 
 
 def _collect_live(session_id: str) -> tuple[dict, list[dict]]:
@@ -71,20 +89,15 @@ def _collect_live(session_id: str) -> tuple[dict, list[dict]]:
         raise KeyError("no such session")
     backend = st.get("backend") or ""
     cues = store.cues(session_id)
-    rows = []
-    for i, c in enumerate(cues):
-        start = float(c.get("t") or 0.0)
-        # 다음 줄까지, 위아래를 막아서.
-        nxt = float(cues[i + 1].get("t") or 0.0) if i + 1 < len(cues) else None
-        span = (nxt - start) if nxt is not None else END_MAX_S
-        span = max(END_MIN_S, min(END_MAX_S, span))
-        rows.append({
-            "start": start, "end": start + span,
-            "text": (c.get("text") or "").strip(),
-            "tr": _pick(c.get("translations") or {}, backend).strip(),
-            "speaker": c.get("speaker") or "",
-            "kind": c.get("kind") or "final",
-        })
+    # 끝 시각은 _fill_ends 가 채웁니다. 라이브에는 잰 구간이 없으므로 전부
+    # 그 규칙을 타지만, 짓는 자리는 한 군데여야 합니다.
+    rows = [{
+        "start": float(c.get("t") or 0.0), "end": float(c.get("end") or 0.0),
+        "text": (c.get("text") or "").strip(),
+        "tr": _pick(c.get("translations") or {}, backend).strip(),
+        "speaker": c.get("speaker") or "",
+        "kind": c.get("kind") or "final",
+    } for c in cues]
     meta = {"title": st.get("title") or session_id, "value": "live:" + session_id,
             "source_lang": st.get("source_lang") or "",
             "viewer_lang": st.get("viewer_lang") or "",

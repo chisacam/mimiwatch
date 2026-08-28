@@ -38,6 +38,21 @@
   const LIVE_KEY = "_";
   let trKey = LIVE_KEY;
 
+  /* 이 자막이 어느 영상의 것인가. 빈 문자열이면 알아내지 못한 것입니다 --
+   * 그때는 내리지 않고 묻습니다. */
+  let expectVideo = "";
+  const videoIdOf = (url) => {
+    try {
+      const u = new URL(url);
+      const v = u.searchParams.get("v");
+      if (v) return v;
+      const m = u.pathname.match(/^\/(live|shorts|embed)\/([^/?#]+)/);
+      return m ? m[2] : "";
+    } catch (_) {
+      return "";
+    }
+  };
+
   let ov = null;           // overlay 모듈의 조종기
   let node = null;         // 우리가 넣은 div
   let port = null;
@@ -207,9 +222,11 @@
     }
   }
 
-  function attach(value) {
+  function attach(value, videoId) {
     cues = []; byId = new Map(); live = false; receiving = false;
     trKey = LIVE_KEY;
+    expectVideo = videoId || "";
+    dismissAsk();
     MimiPanel.reset();
     if (!mount()) {
       log("플레이어를 찾지 못했습니다. 영상 페이지에서 다시 골라 주십시오.");
@@ -242,7 +259,7 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-    if (msg.type === "attach") { attach(msg.value); reply({ ok: true }); }
+    if (msg.type === "attach") { attach(msg.value, msg.videoId); reply({ ok: true }); }
     else if (msg.type === "detach") { unmount(); reply({ ok: true }); }
     else if (msg.type === "prefs") {
       Object.assign(prefs, msg.prefs || {});
@@ -287,22 +304,98 @@
   let lastUrl = location.href;
   setInterval(() => {
     if (location.href === lastUrl) return;
+    const wasVideo = videoIdOf(lastUrl);
     lastUrl = location.href;
-    log("영상이 바뀌었습니다. 다시 세웁니다.");
+    const now = videoIdOf(lastUrl);
+    if (!port) return;                       // 얹은 것이 없으면 볼 일도 없습니다
+    if (now && now === wasVideo) return;     // 같은 영상 안에서의 이동(시각 등)
+
+    if (expectVideo && now && now !== expectVideo) {
+      // 판별했습니다. 다른 영상이므로 내립니다. 이 자막은 저 영상의 것이
+      // 아니고, 남겨 두면 엉뚱한 말이 화면에 붙습니다.
+      log(`다른 영상입니다(${expectVideo} → ${now}). 내립니다.`);
+      unmount();
+      chrome.runtime.sendMessage({ type: "dropWatch" });
+      note(`다른 영상이라 자막을 내렸습니다. 팝업에서 다시 고를 수 있습니다.`);
+      return;
+    }
+    if (!expectVideo && now) {
+      // 어느 영상의 자막인지 알아내지 못했습니다(탭 소리로 시작했는데
+      // 주소를 못 읽은 경우 등). 마음대로 내리지 않고 묻습니다.
+      ask();
+      return;
+    }
+    // 같은 영상입니다. 화면이 갈아 끼워졌을 수 있으니 다시 세웁니다.
+    log("화면이 갈아 끼워졌습니다. 다시 세웁니다.");
     MimiPanel.unmount();
     MimiPanel.reset();
     if (node) { node.remove(); node = null; }
     if (ov) { ov.destroy(); ov = null; }
     stopTick();
-    if (port && mount()) { startTick(); apply(); }
+    if (mount()) { startTick(); apply(); }
   }, 700);
+
+  /* ---------- 물어보기 ----------
+   *
+   * confirm() 을 쓰지 않습니다. 페이지를 멈춰 세우는 데다 영상 위에서
+   * 그러면 재생까지 걸립니다. 플레이어 안에 작은 띠를 하나 놓습니다. */
+  const ASK_ID = "mimiwatch-ask";
+
+  function dismissAsk() {
+    document.querySelectorAll("#" + ASK_ID).forEach((e) => e.remove());
+  }
+
+  function note(text) {
+    const bar = putAsk(text);
+    if (bar) setTimeout(() => bar.remove(), 6000);
+  }
+
+  function putAsk(text) {
+    const player = findPlayer();
+    if (!player) return null;
+    dismissAsk();
+    const bar = document.createElement("div");
+    bar.id = ASK_ID;
+    bar.className = "mw-ask";
+    const span = document.createElement("span");
+    span.textContent = text;
+    bar.appendChild(span);
+    player.appendChild(bar);
+    return bar;
+  }
+
+  function ask() {
+    const bar = putAsk("다른 영상으로 옮긴 것 같습니다. 이 자막을 계속 얹을까요?");
+    if (!bar) return;
+    const keep = document.createElement("button");
+    keep.textContent = "계속";
+    keep.addEventListener("click", () => {
+      // 여기가 그 영상이라고 사용자가 답했습니다. 다시 묻지 않도록
+      // 지금 영상을 이 자막의 것으로 적어 둡니다.
+      expectVideo = videoIdOf(location.href);
+      dismissAsk();
+      MimiPanel.reset();
+      if (node) { node.remove(); node = null; }
+      if (ov) { ov.destroy(); ov = null; }
+      stopTick();
+      if (mount()) { startTick(); apply(); }
+    });
+    const drop = document.createElement("button");
+    drop.textContent = "내리기";
+    drop.addEventListener("click", () => {
+      dismissAsk();
+      unmount();
+      chrome.runtime.sendMessage({ type: "dropWatch" });
+    });
+    bar.append(keep, drop);
+  }
 
   function resume() {
     chrome.runtime.sendMessage({ type: "whatToWatch" }, (r) => {
       if (chrome.runtime.lastError || !r || !r.ok || !r.data) return;
       if (port) return;                // 이미 보고 있습니다
       log("이 탭이 보던 것을 이어 붙입니다:", r.data);
-      attach(r.data);
+      attach(r.data, r.videoId);
     });
   }
   resume();

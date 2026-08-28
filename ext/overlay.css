@@ -79,3 +79,22 @@
 .mw-panel-list .mw-tr:empty{display:none}
 /* 우리가 적은 안내(못 받은 구간)는 발화가 아닙니다. */
 .mw-panel-list .mw-note .mw-tx{color:#ffb454; font-size:11.5px; font-style:italic}
+
+/* ---------- 물어보는 띠 ----------
+   플레이어 안, 컨트롤 바 위에 잠깐 뜹니다. confirm() 을 쓰지 않는 이유는
+   페이지를 멈춰 세우기 때문입니다 -- 영상 위에서 그러면 재생까지 걸립니다. */
+.mw-ask{
+  position:absolute; left:50%; top:16px; transform:translateX(-50%);
+  z-index:35; display:flex; align-items:center; gap:8px;
+  max-width:88%; padding:8px 12px; border-radius:10px;
+  background:rgba(6,8,12,.88); border:1px solid rgba(255,255,255,.16);
+  color:#e6e9f0; font:500 13px/1.4 "Pretendard","Apple SD Gothic Neo",system-ui,sans-serif;
+  backdrop-filter:blur(8px);
+}
+.mw-ask button{
+  flex:none; background:#151a24; color:#c9cede;
+  border:1px solid #2a3244; border-radius:7px;
+  padding:3px 9px; font:inherit; font-size:12px; cursor:pointer;
+}
+.mw-ask button:hover{border-color:#5eead4; color:#fff}
+.mw-ask button:first-of-type{background:#5eead4; border-color:#5eead4; color:#04211b; font-weight:700}

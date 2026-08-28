@@ -58,12 +58,21 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         reply({ ok: true });
       } else if (msg.type === "watch") {
         reply({ ok: true, ...(await setWatch(msg.tabId, msg.value || "")) });
+      } else if (msg.type === "dropWatch") {
+        // content script 가 스스로 내렸습니다(다른 영상으로 옮김). 자기 탭
+        // 번호는 모르지만 우리는 sender 로 압니다. 화면은 이미 그쪽이
+        // 치웠으므로 기억만 지웁니다 -- 여기서 detach 를 도로 보내면
+        // 방금 내린 것을 한 번 더 내리는 셈입니다.
+        const id = sender && sender.tab && sender.tab.id;
+        if (id) await chrome.storage.local.set({ ["tab:" + id]: "" });
+        reply({ ok: true });
       } else if (msg.type === "whatToWatch") {
         // content script 가 방금 떠서 스스로 묻습니다. 자기 탭 번호는
         // 모르지만 우리는 sender 로 압니다.
         const id = sender && sender.tab && sender.tab.id;
         const k = "tab:" + id;
-        reply({ ok: true, data: id ? (await chrome.storage.local.get(k))[k] || "" : "" });
+        const v = id ? (await chrome.storage.local.get(k))[k] || "" : "";
+        reply({ ok: true, data: v, videoId: await expectedVideo(v) });
       } else if (msg.type === "watching") {
         const k = "tab:" + msg.tabId;
         reply({ ok: true, data: (await chrome.storage.local.get(k))[k] || "" });
@@ -96,8 +105,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 async function setWatch(tabId, value, opts) {
   await chrome.storage.local.set({ ["tab:" + tabId]: value });
   try {
+    const videoId = await expectedVideo(value);
     const r = await chrome.tabs.sendMessage(
-      tabId, value ? { type: "attach", value } : { type: "detach" });
+      tabId, value ? { type: "attach", value, videoId } : { type: "detach" });
     if (r && r.ok) return { delivered: true };
   } catch (_) { /* 아래에서 다룹니다 */ }
   if (!value) return { delivered: false };   // 내리는 것은 새로고침할 일이 아닙니다
@@ -111,6 +121,41 @@ async function setWatch(tabId, value, opts) {
     return { delivered: false, reloaded: true };
   } catch (e) {
     return { delivered: false, error: String(e.message || e) };
+  }
+}
+
+/* 주소에서 영상 id 를 뽑습니다. 세션이 어느 영상의 것인지 알아야, 다른
+ * 영상으로 옮겼을 때 옛 자막을 계속 얹는 일을 막을 수 있습니다. */
+function videoIdOf(url) {
+  try {
+    const u = new URL(url);
+    if (!/(^|\.)youtube\.com$/.test(u.hostname)) return "";
+    const v = u.searchParams.get("v");
+    if (v) return v;
+    const m = u.pathname.match(/^\/(live|shorts|embed)\/([^/?#]+)/);
+    return m ? m[2] : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+/* 이 자막이 어느 영상의 것인가. 모르면 빈 문자열입니다 -- 그때는 판별하지
+ * 못했다는 뜻이고, 내리지 않고 묻습니다. */
+async function expectedVideo(value) {
+  if (!value) return "";
+  // 녹화본은 고른 값이 곧 영상 id 입니다.
+  if (!value.startsWith("live:")) return value;
+  const sid = value.slice(5);
+  const k = "vid:" + sid;
+  const got = (await chrome.storage.local.get(k))[k];
+  if (got) return got;
+  try {
+    // 주소로 시작한 세션은 서버가 yt-dlp 로 영상 id 를 알아 둡니다.
+    // 탭 소리로 시작한 세션에는 없습니다(받아 올 주소가 없으니까요).
+    const st = await api(`/api/live/status/${encodeURIComponent(sid)}`);
+    return st.video_id || "";
+  } catch (_) {
+    return "";
   }
 }
 
@@ -159,6 +204,10 @@ async function startFromTab(msg) {
     await post("/api/live/stop", { id: res.id });
     return { ok: false, error: (started && started.error) || "소리를 잡지 못했습니다" };
   }
+  // 탭 소리 세션에는 서버가 알 영상 id 가 없습니다(받아 올 주소가 없으니까요).
+  // 시작한 탭의 주소로 우리가 적어 둡니다.
+  const vid = videoIdOf(msg.url || "");
+  if (vid) await chrome.storage.local.set({ ["vid:" + res.id]: vid });
   const w = await setWatch(msg.tabId, "live:" + res.id, { noReload: true });
   return { ok: true, id: res.id, ...w };
 }

@@ -69,6 +69,7 @@ async function init() {
   if (!$("profile").value) $("profile").selectedIndex = 0;
   syncProfileHint();
   await refreshState();
+  await syncHideButton();
   // 유튜브 탭이 아니면 시작할 것도 없습니다.
   $("start-box").classList.toggle("busy", !onYouTube);
 }
@@ -151,6 +152,7 @@ async function pushPrefs() {
 $("pick").addEventListener("change", async (e) => {
   const r = await send({ type: "watch", tabId, value: e.target.value });
   if (r && !r.ok) fail(r.error || "붙이지 못했습니다");
+  await syncHideButton();
   setTimeout(refreshState, 600);
 });
 
@@ -171,10 +173,28 @@ $("panel").addEventListener("change", (e) => {
 $("reset-pos").addEventListener("click", () => { prefs.pos = null; pushPrefs(); });
 /* 두 가지 일을 한 단추가 하고 있었습니다. 「치우기」라고 적어 두고 화면에서만
  * 내렸는데, 그것을 누른 사람은 받아 적기가 끝난 줄 알았습니다. 서버에서는
- * 계속 돌고 있었고요. 나눕니다. */
+ * 계속 돌고 있었고요. 나눕니다.
+ *
+ * 내리는 쪽은 **토글**입니다. 내리기만 하고 되돌릴 길을 주지 않으면 목록에서
+ * 다시 찾아 고르는 수밖에 없는데, 세션이 스무 개쯤 쌓이면 그것이 일입니다.
+ * 고르개는 「무엇을」에 답하고, 이 단추는 「지금 화면에 있나」에 답합니다 --
+ * 그래서 내려도 고르개는 그대로 둡니다. */
+async function syncHideButton() {
+  const now = await send({ type: "watching", tabId });
+  const on = !!(now && now.data);
+  $("hide").textContent = on ? "화면에서 내리기" : "화면에 다시 얹기";
+  $("hide").title = on
+    ? "화면에서만 내립니다. 받아 적기는 계속됩니다"
+    : "고른 것을 이 탭에 다시 얹습니다";
+  // 얹을 것이 없으면 누를 것도 없습니다.
+  $("hide").disabled = !on && !$("pick").value;
+  return on;
+}
+
 $("hide").addEventListener("click", async () => {
-  await send({ type: "watch", tabId, value: "" });
-  $("pick").value = "";
+  const on = !!(await send({ type: "watching", tabId }))?.data;
+  await send({ type: "watch", tabId, value: on ? "" : $("pick").value });
+  await syncHideButton();
   setTimeout(refreshState, 400);
 });
 
@@ -189,8 +209,12 @@ $("stop").addEventListener("click", async () => {
   fail("");
   // 화면에서도 내립니다. 받아 적기가 끝났는데 자막만 떠 있으면 아직 도는
   // 것처럼 보입니다. 쌓인 것은 서버에 그대로 남아 다시 고를 수 있습니다.
+  //
+  // 여기서는 고르개도 비웁니다. 내리기와 달리 그 세션은 이제 받지 않으므로
+  // 「다시 얹기」가 가리킬 것이 없습니다.
   await send({ type: "watch", tabId, value: "" });
   $("pick").value = "";
+  await syncHideButton();
   $("start-hint").textContent = "중단했습니다. 쌓인 자막은 그대로 남아 있습니다.";
   $("pick").length = 1;
   await fillPicker();
@@ -224,6 +248,7 @@ async function startWith(type) {
   $("pick").length = 1;
   await fillPicker();
   $("pick").value = "live:" + r.id;
+  await syncHideButton();
   setTimeout(refreshState, 800);
 }
 

@@ -34,7 +34,9 @@ import threading
 import time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.path.join(BASE, "data")
+# 저장 위치. `MIMIWATCH_DATA_DIR`로 바꿀 수 있습니다 -- 시험이 임시 디렉터리에
+# 서버를 띄울 때, 또는 큰 wav 를 다른 디스크에 두고 싶을 때.
+DATA = os.environ.get("MIMIWATCH_DATA_DIR") or os.path.join(BASE, "data")
 DB = os.path.join(DATA, "mimiwatch.db")
 
 _lock = threading.Lock()

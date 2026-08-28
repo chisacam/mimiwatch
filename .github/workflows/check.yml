@@ -1,0 +1,23 @@
+# 모델 없이 도는 검사만 돕니다. 전사 런타임(transcribe.cpp)은 리눅스 휠이 없어
+# 시험이 가짜 모듈로 대신합니다(tests/conftest.py). 모델을 올리는 시험은 없습니다.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy pytest ruff
+      - name: ruff (문법·미사용 이름)
+        run: ruff check .
+      - name: pytest
+        run: python -m pytest
+      - name: 확장 사본·형태 검사
+        run: python bench/ext_check.py

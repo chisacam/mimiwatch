@@ -80,8 +80,6 @@ class TranscribeCppASR:
 
     def __init__(self, model_path: str, lang: str | None, threads: int = 4,
                  label: str = "", device: str = "auto"):
-        import transcribe_cpp as tc
-
         self.device = resolve_device(device)
         # 원본 언어를 자동 판별에 맡기면 여기로 None이 들어옵니다. 그대로
         # 두면 transcribe가 내놓는 lang이 None이 되고, 그 값이 자막 한 줄을
@@ -125,8 +123,6 @@ class TranscribeCppASR:
         실패하면 쓰던 것이 그대로 남습니다 -- 바꾸려다 방송을 잃는 것이
         가장 나쁩니다.
         """
-        import transcribe_cpp as tc
-
         r = resolve_asr(spec, self.forced_lang)
         model = _shared_model(r["path"], r["device"])
         session = model.session(n_threads=r["threads"])

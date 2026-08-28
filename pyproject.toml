@@ -1,0 +1,22 @@
+# 패키지가 아닙니다 -- 도구 설정만 둡니다. 실행은 ./run.sh, 설치는 ./install.sh.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# 모델을 올리는 시험은 없습니다. 있으면 그 시험이 잘못된 것입니다.
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# bench/ 는 실측 스크립트라 한 줄에 여러 문장을 쓰는 곳이 있습니다.
+extend-exclude = ["bench", "measurements", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B006", "B008"]
+# E731: 한 줄 람다 배정, E702: `note(state="cancelled"); return` 같은 한 줄 두 문장.
+# 둘 다 이 코드베이스가 일부러 쓰는 모양입니다.
+ignore = ["E731", "E702"]
+
+[tool.ruff.lint.per-file-ignores]
+# 시험은 기대값을 한 줄에 길게 적는 편이 읽기 낫습니다.
+"tests/*" = ["E501"]

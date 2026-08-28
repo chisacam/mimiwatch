@@ -30,7 +30,6 @@ import translate
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(BASE, "web")
-DATA = os.path.join(BASE, "data")
 
 # 미디어 타입. 화면의 파일은 몇 종류뿐입니다.
 CTYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -329,7 +328,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": f"yt-dlp가 {stream.YTDLP_TIMEOUT_S:.0f}초 "
                                         "안에 답하지 않았습니다"}, 504)
         if out.returncode != 0:
-            return self._json({"error": out.stderr.strip()[:200] or "주소를 해석할 수 없습니다"}, 400)
+            return self._json({"error": out.stderr.strip()[:200]
+                                        or "주소를 해석할 수 없습니다"}, 400)
         d = json.loads(out.stdout)
         self._json({"id": d.get("id"), "title": d.get("title"),
                     "is_live": bool(d.get("is_live")),

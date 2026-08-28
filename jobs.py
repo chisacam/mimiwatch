@@ -31,7 +31,7 @@ import live
 import store
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.path.join(BASE, "data")
+DATA = store.DATA                 # 내려받은 wav 도 자막과 같은 곳에
 
 # config.py로 옮긴 것들. server.py와 시험이 이 이름으로 부릅니다.
 load_config = config.load

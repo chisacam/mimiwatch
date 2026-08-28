@@ -24,7 +24,8 @@ import sys
 import threading
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-CONFIG = os.path.join(BASE, "backends.json")
+# `MIMIWATCH_CONFIG`로 다른 파일을 쓸 수 있습니다(시험이 임시 파일을 씁니다).
+CONFIG = os.environ.get("MIMIWATCH_CONFIG") or os.path.join(BASE, "backends.json")
 EXAMPLE_CONFIG = os.path.join(BASE, "backends.example.json")
 
 # 설정의 키 이름. 번역기는 `backends`/`active`, 전사기는 `asr_backends`/`asr_active`.

@@ -755,7 +755,7 @@ mimiwatch 페이지의 「중단」입니다.
 | `ext/content.js` | 유튜브 페이지에 오버레이 주입, `<video>` 시계 읽기 |
 | `ext/background.js` | 서버와의 통신, 세션 시작, 탭 캡처 조율 |
 | `ext/offscreen.*` | 탭 소리를 실제로 잡는 곳 |
-| `ext/overlay.js` | **`web/overlay.js` 의 사본** |
+| `ext/overlay.js` `cuestore.js` `capture.js` `ytid.js` | **`web/` 의 사본** — 자막 그리기, 라이브 자막 저장소, 탭 소리 올리기, 영상 id |
 | `ext/panel.js` | 채팅 자리에 세우는 자막 내역 |
 | `ext/popup.*` | 무엇을 얹을지 고르는 창 |
 
@@ -798,13 +798,15 @@ mimiwatch 페이지의 「중단」입니다.
 넣으면 거부됩니다. content script 가 면제되는지는 크롬 판에 따라 다르므로
 아예 기대지 않고 `createElement` 로 짓습니다.
 
-**`ext/overlay.js` 는 사본입니다.** content script 는 확장 폴더 안의 파일만
-읽을 수 있고(원격 코드 실행은 MV3 가 막습니다), 그래서 복사해 둡니다. 사본은
-언젠가 반드시 어긋나므로 `bench/ext_check.py` 가 한 바이트씩 맞댑니다.
-`web/overlay.js` 를 고쳤으면 이렇게 맞춥니다.
+**공유 모듈은 사본입니다.** content script 는 확장 폴더 안의 파일만 읽을 수
+있고(원격 코드 실행은 MV3 가 막습니다), 그래서 `web/` 의 넷 — `overlay.js`
+(자막 그리기), `cuestore.js`(라이브 자막 목록 반영 규칙), `capture.js`(탭 소리
+16kHz 접어 올리기), `ytid.js`(영상 id) — 를 복사해 둡니다. 사본은 언젠가 반드시
+어긋나므로 `bench/ext_check.py` 가 한 바이트씩 맞댑니다. `web/` 쪽을 고쳤으면
+이렇게 맞춥니다.
 
 ```sh
-cp web/overlay.js ext/overlay.js
+cp web/overlay.js web/cuestore.js web/capture.js web/ytid.js ext/
 ```
 
 ## 알려진 한계
@@ -854,14 +856,30 @@ lsof -ti:8900 | xargs kill
 
 | 경로 | 내용 |
 |---|---|
-| `backends.json` | 엔진 설정 (git에 올라가지 않습니다) |
-| `data/mimiwatch.db` | 작업·세션·**자막 전부** (녹화본과 라이브) |
+| `backends.json` | 엔진 설정 (git에 올라가지 않습니다). `MIMIWATCH_CONFIG`로 다른 파일을 쓸 수 있습니다 |
+| `data/mimiwatch.db` | 작업·세션·**자막 전부** (녹화본과 라이브). `MIMIWATCH_DATA_DIR`로 자리를 바꿀 수 있습니다 |
 | `data/legacy/` | 옛 판이 남긴 `<영상id>.json`. 아무도 읽지 않습니다 |
 | `~/.local/share/mimiwatch/models` | 모델 |
+| `web/app/` | 화면 논리. 관심사별 파일(`state` → … → `main`)이고 `index.html`이 적는 순서로 읽힙니다 |
 | `ext/` | 브라우저 확장 (압축 해제된 채로 로드합니다) |
+| `tests/` | pytest 시험. 모델을 올리지 않습니다 |
 | `../transcribe.cpp` | 전사 런타임 체크아웃과 빌드 |
 
 `data/`를 통째로 지우면 초기 상태로 돌아갑니다. 모델은 지워지지 않습니다.
+
+### 검사
+
+고친 뒤에는 이것 하나를 돌립니다. 모듈 컴파일, `bench/*_check.py`(편집 규칙·
+내보내기·확장 사본·라이브 실패 경로), 그리고 `tests/`(pytest가 깔려 있으면)를
+차례로 돕니다. 모델을 올리거나 밖으로 나가는 것은 없습니다.
+
+```sh
+.venv/bin/python bench/check_all.py
+.venv/bin/pip install pytest && .venv/bin/python -m pytest      # 시험만
+```
+
+GitHub Actions(`.github/workflows/check.yml`)도 같은 것을 돕니다 — 전사
+런타임이 없는 기계라 시험이 가짜 모듈로 대신합니다(`tests/conftest.py`).
 
 **녹화본 자막도 이제 SQLite에 있습니다.** 예전에는 영상마다 JSON 파일
 하나였는데, 그러면 자막 한 줄을 고칠 때마다 그 영상의 자막을 통째로 다시

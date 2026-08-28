@@ -106,8 +106,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(b"not found", "text/plain", 404)
 
     def _sse(self, sid, sess):
-        """Stream a live session's cues. Chosen over the WebSocket mirror in
-        ws_ingest.py, which dropped events under the same load.
+        """Stream a live session's cues. Chosen over a WebSocket mirror, which
+        dropped events under the same load (92 delivered vs 15 over the same
+        window). That mirror lived in hayamimi and is not in this repo.
 
         The stored subtitles go out first, so a reloaded tab -- or a tab
         opening a session that outlived a restart -- sees the whole broadcast
@@ -164,6 +165,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = posixpath.normpath(self.path.split("?")[0])
         length = int(self.headers.get("Content-Length") or 0)
+
+        # 오디오만 JSON이 아닙니다. 아래에서 본문을 json.loads로 읽어 버리므로
+        # 그 앞에서 갈라 냅니다. 몸통은 16kHz 모노 int16 PCM 날것입니다 --
+        # base64로 감싸면 3분의 4가 되고, 초당 32KB짜리를 그럴 이유가 없습니다.
+        if path.startswith("/api/ingest/"):
+            sid = posixpath.basename(path)
+            raw = self.rfile.read(length) if length else b""
+            return self._json(live.feed(sid, raw))
+
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except Exception:
@@ -202,6 +212,20 @@ class Handler(BaseHTTPRequestHandler):
                 asr_backend_id=body.get("asr") or "",
                 refine=bool(body.get("refine", True)),
                 genre=body.get("genre")))
+
+        if path == "/api/live/capture":
+            # 브라우저가 자기 탭에서 들리는 소리를 올려 주는 세션입니다.
+            # 주소를 풀 것도, 받아 올 것도 없으므로 제목만 받습니다.
+            return self._json(live.start(
+                "", body.get("lang") or None,
+                body.get("viewer_lang") or "ko",
+                body.get("backend") or "local-m2m100",
+                profile=body.get("profile") or "broadcast",
+                asr_backend_id=body.get("asr") or "",
+                refine=bool(body.get("refine", True)),
+                genre=body.get("genre"),
+                source="tab",
+                title=(body.get("title") or "").strip() or "탭 오디오"))
 
         if path == "/api/live/backend":
             return self._json(live.set_backend(body.get("id", ""),

@@ -153,7 +153,18 @@
   <form method="dialog" id="add-form">
     <h3>영상 추가</h3>
     <p class="hint">YouTube 주소나 m3u8 주소를 넣으면 오디오를 받아 전사하고, 원본 언어가 내 언어와 다르면 번역까지 진행합니다.</p>
-    <label>주소 <input name="url" placeholder="https://youtu.be/... 또는 https://.../index.m3u8" required></label>
+    <label>소리 출처
+      <select name="source">
+        <option value="url">주소에서 받기 (기본)</option>
+        <option value="tab">이 브라우저의 다른 탭 소리 <!-- 멤버십 전용 --></option>
+      </select>
+      <small id="source-hint">서버가 yt-dlp로 오디오를 직접 받습니다.</small>
+    </label>
+    <label id="url-field">주소 <input name="url" placeholder="https://youtu.be/... 또는 https://.../index.m3u8"></label>
+    <label id="tab-title-field" hidden>이름
+      <input name="tab_title" placeholder="무엇을 듣는지 (목록에 이 이름으로 남습니다)">
+      <small>탭에는 제목이 없으므로 직접 적습니다. 비우면 「탭 오디오」가 됩니다.</small>
+    </label>
     <label>장르
       <select name="genre"></select>
       <small id="genre-hint">번역 프롬프트를 발화의 성격에 맞춥니다. 기술 발표와 게임 방송은 쓰는 말이 다릅니다.</small>

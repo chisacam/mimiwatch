@@ -40,6 +40,12 @@ from tcpp_asr import build_live_asr
 
 CHUNK = 1600            # 0.1s per VAD feed
 
+# 탭 오디오를 받을 때 큐에 쌓아 둘 최대 길이(초). 전사가 실시간을 못 따라가면
+# 여기가 찹니다. 브라우저는 재생을 늦출 수 없으므로 -- 사용자가 실제로 듣고
+# 있는 소리입니다 -- 넘치면 가장 오래된 것부터 버리고 몇 초를 버렸는지 적습니다.
+# 조용히 밀리다 20분 뒤 자막이 나오는 것보다 낫습니다.
+INGEST_MAX_S = 300.0
+
 # hayamimi's 12s force-split suits a single speaker who eventually pauses.
 # A multi-speaker broadcast never gives the VAD its 0.35s of silence: on a
 # four-way Minecraft collab, 44% of segments ran to the 12s cap, averaging
@@ -231,9 +237,15 @@ class LiveSession:
     def __init__(self, url: str, lang: str | None, viewer_lang: str,
                  backend_id: str, profile: str = "broadcast",
                  asr_backend_id: str = "", refine: bool = True,
-                 genre: str | None = None):
+                 genre: str | None = None, source: str = "hls",
+                 title: str = ""):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
+        # 소리를 어디서 받는가. "hls"는 서버가 yt-dlp로 주소를 풀어 ffmpeg으로
+        # 직접 당기고, "tab"은 브라우저가 자기 탭에서 들리는 소리를 올려 줍니다.
+        # 멤버십 전용 방송처럼 서버가 받을 수 없는 것을 위한 길입니다 -- 쿠키도
+        # 필요 없고, 사용자가 공유 대화상자에서 직접 고른 탭입니다.
+        self.source = "tab" if source == "tab" else "hls"
         self.lang = lang
         self.viewer_lang = viewer_lang
         self.backend_id = backend_id
@@ -260,7 +272,8 @@ class LiveSession:
         self.resume_from = 0.0
         # 되감아도 메우지 못한 구간(초). 0보다 크면 자막에 그렇게 적습니다.
         self.gap_s = 0.0
-        self.title = ""
+        # hls는 yt-dlp가 채우고, tab은 브라우저가 넣어 줍니다.
+        self.title = title
         # 재시작 뒤 이 세션을 다시 열려면 임베드할 영상 id가 필요합니다.
         # 세션 id는 우리가 만든 것이라 플레이어에 넣을 수 없습니다.
         self.video_id = ""
@@ -274,6 +287,10 @@ class LiveSession:
         self._subs: list[queue.Queue] = []
         self._stop = threading.Event()
         self._ff: subprocess.Popen | None = None
+        # 탭 오디오가 들어오는 자리. hls 세션에서는 쓰이지 않습니다.
+        self._q: queue.Queue = queue.Queue()
+        self._queued = 0            # 큐에 든 바이트
+        self.dropped_s = 0.0        # 큐가 넘쳐 버린 오디오(초)
         self._asr = None            # released on stop; see _release()
         # 인식기 객체는 세션이 끝나면 놓아주지만 어떤 엔진이었는지는
         # 남아야 합니다. 객체에서 그때그때 읽으면, 놓아준 뒤에 쓰이는
@@ -306,6 +323,7 @@ class LiveSession:
     def status(self) -> dict:
         return {"id": self.id, "state": self.state, "error": self.error,
                 "title": self.title, "url": self.url, "video_id": self.video_id,
+                "source": self.source,
                 "source_lang": self.lang, "viewer_lang": self.viewer_lang,
                 "backend": self.backend_id,
                 "asr_backend": self.asr_backend_id,
@@ -445,6 +463,64 @@ class LiveSession:
         self._stop.set()
         if self._ff:
             self._ff.terminate()
+        # 탭 세션의 수신 루프는 큐에서 기다립니다. 깃발만 세우면 timeout이
+        # 돌아올 때까지 서 있으므로 직접 깨웁니다.
+        if self.source == "tab":
+            self._q.put(None)
+
+    # ---- 탭 오디오 수신 ---------------------------------------------------
+    def feed(self, raw: bytes) -> dict:
+        """브라우저가 올린 16kHz 모노 int16 PCM 한 덩어리."""
+        if self.source != "tab":
+            return {"error": "이 세션은 탭 오디오를 받지 않습니다"}
+        if self._stop.is_set() or self.state in ("stopped", "error"):
+            return {"error": "세션이 끝났습니다", "state": self.state}
+        limit = int(INGEST_MAX_S * SAMPLE_RATE * 2)
+        # qsize()는 근사값이라 바이트로 셉니다. 조각 크기는 브라우저가 정합니다.
+        while self._queued + len(raw) > limit:
+            try:
+                old = self._q.get_nowait()
+            except queue.Empty:
+                break
+            if old is None:
+                break
+            self._queued -= len(old)
+            self.dropped_s += len(old) / 2 / SAMPLE_RATE
+        self._q.put(raw)
+        self._queued += len(raw)
+        return {"ok": True, "state": self.state,
+                "queued_s": round(self._queued / 2 / SAMPLE_RATE, 1),
+                "dropped_s": round(self.dropped_s, 1)}
+
+    def _chunks_from_tab(self):
+        """브라우저가 올린 덩어리를 VAD가 받는 0.1초 조각으로 잘라 냅니다.
+
+        ffmpeg 경로와 같은 크기로 내보냅니다. run_stream은 조각 하나마다
+        VAD를 먹이고 정제 시점을 재므로, 2초를 통째로 넘기면 그 두 가지가
+        같이 거칠어집니다.
+        """
+        need = CHUNK * 2
+        idle = False
+        while not self._stop.is_set():
+            try:
+                raw = self._q.get(timeout=2.0)
+            except queue.Empty:
+                # 탭이 조용합니다 -- 영상을 멈췄거나 공유가 끊겼습니다.
+                # 오지 않을 무음을 기다리는 대신 걸려 있는 발화를 확정합니다.
+                if not idle:
+                    idle = True
+                    yield None
+                continue
+            if raw is None:
+                break
+            self._queued = max(0, self._queued - len(raw))
+            idle = False
+            for off in range(0, len(raw) - need + 1, need):
+                block = np.frombuffer(raw, dtype=np.int16, count=CHUNK,
+                                      offset=off).astype(np.float32) / 32768.0
+                self.audio_s += CHUNK / SAMPLE_RATE
+                yield block
+        self.state = "stopped"
 
     def _resume_point(self, info: dict, release_ts: float | None):
         """끊긴 자리에서 다시 받으려면 재생목록의 어디부터 읽어야 하는가.
@@ -510,50 +586,95 @@ class LiveSession:
         self.state = "stopped"
 
     def _run(self):
-        # 이 넷을 미리 비워 둡니다. 아래 finally의 `del`이 이름을 지우는데,
-        # try가 그 이름들이 만들어지기 전에 실패하면 `del`이 UnboundLocalError를
-        # 냅니다. 그러면 **진짜 예외가 그 오류로 덮이고**, 더 나쁘게는 뒤따르는
-        # _release()와 _retire()가 실행되지 않아 모델이 얹힌 채 남습니다
-        # (세션 하나가 3GB입니다). 이슈 #1에서 실제로 그렇게 원인이 가려졌습니다.
-        asr = vad = history = refiner = None
+        # 여기는 소리를 어디서 받을지만 정하고, 받아 적는 일은 _transcribe가
+        # 합니다. 모델을 놓는 finally는 그쪽에 있습니다 -- 이 함수의 finally는
+        # 세션을 등록부에서 빼는 일만 하므로, 무엇이 실패해도 실행됩니다.
+        # (예전에 여기서 모델 이름을 `del` 하다가 try가 그 이름을 만들기 전에
+        # 실패하면 UnboundLocalError가 진짜 예외를 덮고 _release()까지
+        # 건너뛰어, 세션 하나가 3GB인 채로 남았습니다. 이슈 #1.)
         try:
-            meta = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", self.url],
-                                  capture_output=True, text=True)
-            if meta.returncode == 0:
-                d = json.loads(meta.stdout)
-                self.title = d.get("title", "")
-                self.video_id = d.get("id", "") or ""
-                if not d.get("is_live"):
-                    self.state = "error"
-                    # 방금 끝난 방송도 여기로 옵니다. /api/probe가 볼 때는
-                    # 라이브였는데 그 사이 끝난 경우입니다.
-                    self.error = ("라이브가 아닙니다. 방송이 방금 끝났거나 "
-                                  "녹화본 주소일 수 있습니다. 녹화본은 "
-                                  "「＋ 영상 추가」로 처리하십시오.")
-                    self._persist()
-                    self.emit({"type": "status", **self.status()})
-                    return
-
-            src, info = resolve_audio(self.url)
-            release_ts = None
-            if meta.returncode == 0:
-                release_ts = d.get("release_timestamp") or d.get("timestamp")
-            # Skipping the DVR window means the audio starts at the live edge;
-            # media_base has to account for everything we deliberately passed.
-            self.window_s = info.get("window_s") or 0.0
-            start_index, skipped = -2, self.window_s
-            if self.resume_from:
-                start_index, skipped = self._resume_point(info, release_ts)
-            self.media_base = media_base_from(info.get("pdt"), release_ts, skipped)
-            print(f"[live] playlist: {info.get('segments')} segments / "
-                  f"{self.window_s:.0f}s window, media_base={self.media_base:.0f}s"
-                  + (f", 이어받기 index={start_index} 빠진 구간={self.gap_s:.0f}s"
-                     if self.resume_from else ""),
-                  flush=True)
+            src = start_index = None
+            if self.source == "hls":
+                src, start_index = self._resolve_hls()
+                if src is None:
+                    return      # 오류는 _resolve_hls가 이미 알렸습니다
+            else:
+                # 탭 오디오에는 풀 재생목록도, 맞출 방송 시각도 없습니다.
+                # 사용자가 듣고 있는 그 순간이 0초입니다 -- 오히려 화면 위
+                # 자막 정렬에는 이쪽이 정확합니다. 사용자의 재생 위치가
+                # 곧 기준이기 때문입니다.
+                #
+                # 이어받기면 멈춘 자리에서 시간축을 이어 갑니다. 0으로
+                # 되돌리면 새 자막이 옛 자막 사이에 끼어 들어가 스크립트
+                # 순서가 뒤엉킵니다. 새 세션에서는 resume_from이 0입니다.
+                self.media_base = self.resume_from
             self.state = "loading"
             self._persist()
             self.emit({"type": "status", **self.status()})
+            self._transcribe(src, start_index)
+        except Exception as exc:
+            self.state = "error"
+            self.error = f"{type(exc).__name__}: {exc}"[:300]
+            # 화면에는 한 줄만 갑니다. 어디서 났는지는 로그에 남겨야
+            # 다음 보고가 진단 가능해집니다.
+            print(f"[live] 세션 {self.id} 실패:", file=sys.stderr)
+            traceback.print_exc()
+            self._persist()
+            self.emit({"type": "status", **self.status()})
+        finally:
+            self._release()
+            _retire(self.id)
 
+    def _resolve_hls(self):
+        """방송 주소를 ffmpeg이 읽을 수 있는 것으로 풀어냅니다.
+
+        돌려주는 것은 (재생목록 주소, -live_start_index)이고, 첫 값이 None이면
+        더 갈 수 없다는 뜻입니다 -- 상태와 오류는 여기서 이미 알렸습니다.
+        """
+        d = {}
+        meta = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", self.url],
+                              capture_output=True, text=True)
+        if meta.returncode == 0:
+            d = json.loads(meta.stdout)
+            self.title = d.get("title", "")
+            self.video_id = d.get("id", "") or ""
+            if not d.get("is_live"):
+                self.state = "error"
+                # 방금 끝난 방송도 여기로 옵니다. /api/probe가 볼 때는
+                # 라이브였는데 그 사이 끝난 경우입니다.
+                self.error = ("라이브가 아닙니다. 방송이 방금 끝났거나 "
+                              "녹화본 주소일 수 있습니다. 녹화본은 "
+                              "「＋ 영상 추가」로 처리하십시오.")
+                self._persist()
+                self.emit({"type": "status", **self.status()})
+                return None, None
+
+        src, info = resolve_audio(self.url)
+        release_ts = None
+        if meta.returncode == 0:
+            release_ts = d.get("release_timestamp") or d.get("timestamp")
+        # Skipping the DVR window means the audio starts at the live edge;
+        # media_base has to account for everything we deliberately passed.
+        self.window_s = info.get("window_s") or 0.0
+        start_index, skipped = -2, self.window_s
+        if self.resume_from:
+            start_index, skipped = self._resume_point(info, release_ts)
+        self.media_base = media_base_from(info.get("pdt"), release_ts, skipped)
+        print(f"[live] playlist: {info.get('segments')} segments / "
+              f"{self.window_s:.0f}s window, media_base={self.media_base:.0f}s"
+              + (f", 이어받기 index={start_index} 빠진 구간={self.gap_s:.0f}s"
+                 if self.resume_from else ""),
+              flush=True)
+        return src, start_index
+
+    def _transcribe(self, src, start_index):
+        """소리를 받아 자막으로 내보냅니다. 소리가 어디서 오는지는 모릅니다.
+
+        ffmpeg 파이프든 브라우저가 올린 큐든 여기부터는 같은 길입니다 --
+        `run_stream`이 받는 것은 float32 조각을 내놓는 제너레이터뿐입니다.
+        """
+        asr = vad = history = refiner = None
+        try:
             spec = asr_spec = None
             with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "backends.json"), encoding="utf-8") as f:
@@ -580,15 +701,19 @@ class LiveSession:
             history = AudioHistory(SAMPLE_RATE)
             refiner = Refiner(asr, history, sink) if self.refine else None
 
-            # -live_start_index -2 starts two segments from the end of the
-            # playlist. Without it ffmpeg reads a full-DVR playlist from the
-            # top and transcribes the broadcast's opening greetings while the
-            # viewer watches its live edge.
-            self._ff = subprocess.Popen(
-                ["ffmpeg", "-loglevel", "error",
-                 "-live_start_index", str(start_index), "-i", src,
-                 "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
-                stdout=subprocess.PIPE)
+            if self.source == "tab":
+                chunks = self._chunks_from_tab()
+            else:
+                # -live_start_index -2 starts two segments from the end of the
+                # playlist. Without it ffmpeg reads a full-DVR playlist from
+                # the top and transcribes the broadcast's opening greetings
+                # while the viewer watches its live edge.
+                self._ff = subprocess.Popen(
+                    ["ffmpeg", "-loglevel", "error",
+                     "-live_start_index", str(start_index), "-i", src,
+                     "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
+                    stdout=subprocess.PIPE)
+                chunks = self._chunks()
 
             self.state = "running"
             self._persist()
@@ -601,28 +726,26 @@ class LiveSession:
                     "note",
                     f"⋯ 서버가 멈춘 사이 약 {int(self.gap_s)}초를 받지 "
                     f"못했습니다 ⋯", self.lang or "", "")
-            run_stream(self._chunks(), vad, asr, sink, history, refiner)
+            if self.source == "tab" and self.resume_from:
+                # 탭 오디오는 되감을 수 없습니다. 공유가 끊긴 동안의 소리는
+                # 아무 데도 남아 있지 않으므로 몇 초인지도 알 수 없습니다.
+                self.publish_line(
+                    "note", "⋯ 여기서부터 탭 소리를 다시 받습니다. 공유가 "
+                    "끊긴 사이는 받지 못했습니다 ⋯", self.lang or "", "")
+            run_stream(chunks, vad, asr, sink, history, refiner)
             self.state = "stopped"
             self._persist()
             self.emit({"type": "status", **self.status()})
-        except Exception as exc:
-            self.state = "error"
-            self.error = f"{type(exc).__name__}: {exc}"[:300]
-            # 화면에는 한 줄만 갑니다. 어디서 났는지는 로그에 남겨야
-            # 다음 보고가 진단 가능해집니다.
-            print(f"[live] 세션 {self.id} 실패:", file=sys.stderr)
-            traceback.print_exc()
-            self._persist()
-            self.emit({"type": "status", **self.status()})
         finally:
+            # 이름을 지워야 모델이 놓입니다. try가 이름을 만들기 전에
+            # 실패할 수 있으므로 위에서 미리 None으로 묶어 두었습니다.
             del asr, vad, history, refiner
-            self._release()
-            _retire(self.id)
 
 
 def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
           profile: str = "broadcast", asr_backend_id: str = "",
-          refine: bool = True, genre: str | None = None) -> dict:
+          refine: bool = True, genre: str | None = None,
+          source: str = "hls", title: str = "") -> dict:
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
     for old_id in list(_sessions):
@@ -631,13 +754,25 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
             old.stop()
 
     s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile,
-                    asr_backend_id=asr_backend_id, refine=refine, genre=genre)
+                    asr_backend_id=asr_backend_id, refine=refine, genre=genre,
+                    source=source, title=title)
     with _lock:
         _sessions[s.id] = s
     # 첫 자막이 나오기 전에 서버가 죽어도 세션이 있었다는 사실은 남습니다.
     s._persist()
     s.start()
-    return {"id": s.id}
+    return {"id": s.id, "source": s.source}
+
+
+def feed(session_id: str, raw: bytes) -> dict:
+    """브라우저가 올린 탭 오디오 한 덩어리를 세션에 넣습니다."""
+    s = get(session_id)
+    if not s:
+        # 서버가 재시작됐거나 세션이 끝났습니다. 브라우저는 이 답을 보고
+        # 공유를 스스로 끊습니다 -- 아무도 듣지 않는 소리를 계속 올리는
+        # 것보다 낫습니다.
+        return {"error": "no such session"}
+    return s.feed(raw)
 
 
 def shutdown(timeout: float = 8.0) -> int:
@@ -779,7 +914,8 @@ def resume(session_id: str) -> dict:
         return {"error": "no such session"}
     if st.get("state") in ("starting", "loading", "running"):
         return {"error": "이미 받는 중입니다"}
-    if not st.get("url"):
+    tab = st.get("source") == "tab"
+    if not tab and not st.get("url"):
         return {"error": "주소가 남아 있지 않아 이어받을 수 없습니다"}
 
     # 한 번에 한 방송만 받습니다. start() 와 같은 규칙입니다 -- 모델을 두 벌
@@ -789,11 +925,12 @@ def resume(session_id: str) -> dict:
         if old is not None:
             old.stop()
 
-    s = LiveSession(st["url"], st.get("source_lang") or None,
+    s = LiveSession(st.get("url") or "", st.get("source_lang") or None,
                     st.get("viewer_lang") or "ko", st.get("backend") or "",
                     profile=st.get("profile") or "broadcast",
                     asr_backend_id=st.get("asr_backend") or "",
-                    refine=bool(st.get("refine")), genre=st.get("genre"))
+                    refine=bool(st.get("refine")), genre=st.get("genre"),
+                    source="tab" if tab else "hls")
     s.id = session_id
     s.title = st.get("title") or ""
     s.video_id = st.get("video_id") or ""
@@ -808,7 +945,10 @@ def resume(session_id: str) -> dict:
         _sessions[s.id] = s
     s._persist()
     s.start()
-    return {"id": s.id, "resumed": True}
+    # 브라우저는 source를 보고 탭 공유를 다시 물을지 정합니다. 탭 세션은
+    # 서버가 되감을 수 없으므로 소리를 다시 들려주지 않으면 한 줄도 늘지
+    # 않은 채 「받는 중」으로 남습니다.
+    return {"id": s.id, "resumed": True, "source": s.source}
 
 
 def set_asr(session_id: str, asr_backend_id: str) -> dict:

@@ -40,8 +40,10 @@ def make_session():
             media_base=0.0, window_s=0.0, audio_s=0.0, started=0.0, lines=0,
             translated=0, profile="broadcast", max_speech=4.0, min_silence=0.3,
             asr_label="", _ff=None, _asr=None, _tr=None, _recent=[], _subs=[],
-            _seq=0).items():
+            _seq=0, source="hls", resume_from=0.0, gap_s=0.0,
+            _queued=0, dropped_s=0.0).items():
         setattr(s, k, v)
+    s._q = __import__("queue").Queue()
     s._persist = lambda: None
     s.emit = lambda e: None
     s._subs = []

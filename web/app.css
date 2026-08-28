@@ -85,7 +85,7 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .menu{
   position:fixed; z-index:50;
   display:flex; flex-direction:column; gap:.55rem;
-  min-width:14rem; padding:.75rem;
+  width:16rem; padding:.75rem;
   background:var(--panel); border:1px solid var(--line); border-radius:10px;
   box-shadow:0 12px 34px rgba(0,0,0,.55);
 }
@@ -426,11 +426,10 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   font-weight:700; border-radius:6px; padding:.45rem 1.1rem; font-size:.82rem;
   cursor:pointer; font-family:inherit;
 }
-#asr-field select,#backend-field select{max-width:170px}
-@media (max-width:1280px){
-  #asr-field span,#backend-field span{display:none}
-  #asr-field select,#backend-field select{max-width:130px}
-}
+/* 전사·번역 선택기가 헤더에 나란히 있던 시절에는 폭을 묶어 두어야 했습니다
+ * -- 긴 엔진 이름이 헤더를 밀어냈기 때문입니다. 이제는 「관리」 메뉴 안에
+ * 세로로 서므로 그 제약이 오히려 셋의 길이를 어긋나게 만들었습니다.
+ * 메뉴 안에서는 셋이 같은 폭(.field.col select{width:100%})으로 섭니다. */
 @media (max-width:1040px){
   .bar .brand{display:none}
 }

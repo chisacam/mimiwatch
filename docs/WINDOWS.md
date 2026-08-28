@@ -127,6 +127,7 @@ transcribe.cpp가 NPU 백엔드를 갖거나, whisper.cpp-amd가 서버를 내�
 | 백엔드에 `vulkan`이 없음 | 드라이버가 낡음 | 그래픽 드라이버 갱신. 없어도 CPU로 돕니다 |
 | 내려받다 끊김 | — | 그냥 다시 실행하십시오. 받다 만 것은 `.part`로 남고 완성본만 인정합니다 |
 | `NativeCommandError`로 중간에 멈춤 | 0.1의 결함 (이슈 #1) | 최신 판을 받으십시오. Windows PowerShell 5.1이 명령의 stderr 한 줄을 종료 오류로 바꾸던 문제입니다 |
+| 전사가 시작되자마자 실패 | GPU에 모델을 못 올렸을 수 있습니다 | `bench/doctor.py`로 확인하고, `device=auto`만 실패하면 `backends.json`에 `"device": "cpu"`를 적으십시오 |
 
 ## 무엇을 확인했고 무엇을 확인하지 못했는가
 
@@ -184,5 +185,22 @@ PowerShell의 오류 스트림을 아예 거치지 않습니다.
 
 하네스의 `[9]`가 이 회귀를 지킵니다. pwsh 7에서도 확인할 수 있는 형태로,
 헬퍼가 stderr를 붙잡고 종료 코드만 돌려주는지 봅니다.
+
+## 막혔을 때: doctor
+
+무엇이 되고 무엇이 안 되는지 한 번에 찍어 줍니다. 명령을 여럿 주고받는
+것보다 이 하나를 돌려 붙여 넣는 편이 빠릅니다.
+
+```powershell
+.\.venv\Scripts\python.exe bench\doctor.py
+.\.venv\Scripts\python.exe bench\doctor.py "https://www.youtube.com/live/..."
+```
+
+준비물, 쓸 수 있는 백엔드, **전사 모델을 auto와 cpu 각각으로 올려 보기**,
+번역 백엔드 설정, 그리고 주소를 주면 그 해석까지 봅니다. 번역 모델(5GB)은
+건드리지 않으므로 몇 초면 끝납니다.
+
+`device=auto`만 실패하고 `device=cpu`는 되면, GPU에 모델을 못 올린 것입니다.
+`backends.json`에 `"device": "cpu"`를 적으면 됩니다(README의 「CPU로 돌리기」).
 
 처음 돌려 보시고 걸리는 곳이 있으면 알려 주십시오.

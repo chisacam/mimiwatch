@@ -248,6 +248,14 @@ CPU가 느릴 뿐 품질을 내주는 것은 아니고, 라이브에 필요한 1
 .venv/bin/python bench/asr_device.py
 ```
 
+무언가 안 될 때는 `bench/doctor.py`가 준비물·백엔드·모델 적재·주소 해석을
+한 번에 찍어 줍니다.
+
+```sh
+.venv/bin/python bench/doctor.py
+.venv/bin/python bench/doctor.py "https://www.youtube.com/live/..."
+```
+
 M2M-100은 이 설정과 무관합니다. CTranslate2를 CPU로 고정해 씁니다.
 
 ## 서버 종료

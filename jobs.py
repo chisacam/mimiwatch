@@ -17,6 +17,7 @@ import uuid
 import translate as mw_translate
 import transcribe_vod as vod
 import asr as mw_asr
+import stream as mw_stream
 import store
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -331,7 +332,12 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         try:
             kw = {"speakers": speakers} if engine.name == "local-hayamimi" else {}
             cues = engine.transcribe(samples, lang, **kw,
-                                     on_progress=lambda p: note(done=int(p * audio_s)))
+                                     on_progress=lambda p: note(done=int(p * audio_s)),
+                                     should_stop=cancelled)
+        except mw_stream.Cancelled:
+            # 사용자가 멈춘 것은 실패가 아닙니다. 대체 엔진으로 다시
+            # 시도하면 멈추라는 말을 무시하는 셈이 됩니다.
+            note(state="cancelled"); return
         except Exception as exc:
             if engine.name == "local-hayamimi":
                 raise
@@ -340,8 +346,12 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             note(asr_fallback=str(exc)[:160])
             print(f"[job] external ASR failed ({exc}); using hayamimi", flush=True)
             engine = mw_asr.LocalHayamimi()
-            cues = engine.transcribe(samples, lang,
-                                     on_progress=lambda p: note(done=int(p * audio_s)))
+            try:
+                cues = engine.transcribe(samples, lang,
+                                         on_progress=lambda p: note(done=int(p * audio_s)),
+                                         should_stop=cancelled)
+            except mw_stream.Cancelled:
+                note(state="cancelled"); return
         note(asr_used=engine.name)
         if cancelled():
             note(state="cancelled"); return

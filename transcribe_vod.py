@@ -67,7 +67,7 @@ def read_wav(path: str) -> np.ndarray:
 
 
 def transcribe(samples: np.ndarray, lang: str | None, on_progress=None,
-               speakers: bool = False, asr=None) -> list[dict]:
+               speakers: bool = False, asr=None, should_stop=None) -> list[dict]:
     """VAD-segment the whole file and decode each segment.
 
     Segment.start is a sample index, which is exactly the media timestamp the
@@ -89,6 +89,10 @@ def transcribe(samples: np.ndarray, lang: str | None, on_progress=None,
 
     def drain():
         while not vad.empty():
+            # 구간 하나마다 확인합니다. 청크 루프에서만 보면 해독이 뒤처진
+            # 만큼 늦게 멈춥니다 -- 느린 기계일수록 그 차이가 큽니다.
+            if should_stop and should_stop():
+                raise stream.Cancelled()
             seg = vad.front
             buf = np.asarray(seg.samples, dtype=np.float32)
             start_s = seg.start / SAMPLE_RATE
@@ -104,6 +108,8 @@ def transcribe(samples: np.ndarray, lang: str | None, on_progress=None,
                 cues.append(cue)
 
     for i in range(0, total, CHUNK):
+        if should_stop and should_stop():
+            raise stream.Cancelled()
         vad.accept_waveform(samples[i:i + CHUNK])
         drain()
         if on_progress and i % (CHUNK * 300) == 0:

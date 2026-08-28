@@ -28,6 +28,8 @@ import wave
 
 import numpy as np
 
+import stream
+
 SAMPLE_RATE = 16000
 
 
@@ -35,7 +37,12 @@ class ASRBackend:
     name = "base"
 
     def transcribe(self, samples: np.ndarray, lang: str | None,
-                   on_progress=None) -> list[dict]:
+                   on_progress=None, should_stop=None) -> list[dict]:
+        """`should_stop`이 참을 돌려주면 `stream.Cancelled`를 냅니다.
+
+        전사는 녹화본 작업에서 가장 긴 단계입니다. 단계 사이에서만
+        확인하면 시작한 뒤로는 끝날 때까지 멈출 수 없습니다.
+        """
         raise NotImplementedError
 
 
@@ -44,10 +51,11 @@ class LocalHayamimi(ASRBackend):
 
     name = "local-hayamimi"
 
-    def transcribe(self, samples, lang, on_progress=None, speakers=False):
+    def transcribe(self, samples, lang, on_progress=None, speakers=False,
+                   should_stop=None):
         import transcribe_vod as vod
         return vod.transcribe(samples, lang, on_progress=on_progress,
-                              speakers=speakers)
+                              speakers=speakers, should_stop=should_stop)
 
 
 class TranscribeCpp(ASRBackend):
@@ -63,12 +71,14 @@ class TranscribeCpp(ASRBackend):
     def __init__(self, spec: dict):
         self.spec = spec
 
-    def transcribe(self, samples, lang, on_progress=None, speakers=False):
+    def transcribe(self, samples, lang, on_progress=None, speakers=False,
+                   should_stop=None):
         import transcribe_vod as vod
         from tcpp_asr import build_live_asr
         engine = build_live_asr(self.spec, lang, threads=4)
         return vod.transcribe(samples, lang, on_progress=on_progress,
-                              speakers=speakers, asr=engine)
+                              speakers=speakers, asr=engine,
+                              should_stop=should_stop)
 
 
 class OpenAICompatibleASR(ASRBackend):
@@ -152,11 +162,14 @@ class OpenAICompatibleASR(ASRBackend):
         with urllib.request.urlopen(req, timeout=self.timeout) as r:
             return json.load(r)
 
-    def transcribe(self, samples, lang, on_progress=None):
+    def transcribe(self, samples, lang, on_progress=None, should_stop=None):
         spans = self._cut_points(samples)
         cues: list[dict] = []
         total = len(samples)
         for start, end in spans:
+            # 창 하나가 몇십 초 분량이므로 사이에서 확인하면 충분합니다.
+            if should_stop and should_stop():
+                raise stream.Cancelled()
             data = self._post(self._wav_bytes(samples[start:end]), lang)
             offset = start / SAMPLE_RATE
             segments = data.get("segments")

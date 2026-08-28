@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
-  libraryHidden: false, scriptOnly: false, capture: null,
+  libraryHidden: false, scriptOnly: false, capture: null, scriptWin: null,
   genres: [],
   // 전체화면에 들어가기 직전의 플레이어 높이. 자막 크기 배율의 기준입니다.
   fsBaseHeight: 0, cuePx: 0,
@@ -293,6 +293,7 @@ async function loadVideo(id) {
   syncGenreToDoc();
   setNowTitle(doc.title);
   applyModeForDoc();
+  clearPlayerError();
   if (state.player && state.ready) state.player.loadVideoById(id);
   else await createPlayer(id);
 }
@@ -352,6 +353,7 @@ async function createPlayer(videoId) {
   // 대본 창에는 영상이 없습니다. 유튜브 API를 부르지도, iframe을 얹지도
   // 않습니다 -- 그 창의 일은 읽는 것뿐입니다.
   if (state.scriptOnly) return;
+  clearPlayerError();
   await whenApiReady();
   if (!(window.YT && window.YT.Player)) {
     playerError("YouTube IFrame API를 불러오지 못했습니다. 네트워크를 확인해 주세요.");
@@ -398,6 +400,13 @@ function embedErrorText(code) {
   if (code === 5) return "브라우저의 재생기가 이 영상을 열지 못했습니다.";
   if (code === 2) return "영상 주소가 올바르지 않습니다.";
   return `영상을 재생할 수 없습니다 (code ${code}).`;
+}
+
+/* 안내 상자는 플레이어 자리를 통째로 덮습니다. 치우지 않으면 다음에 고른
+ * 영상이 그 뒤에서 재생되어, 소리는 나는데 화면은 안내문인 상태가 됩니다. */
+function clearPlayerError() {
+  const box = document.getElementById("player-error");
+  if (box) box.remove();
 }
 
 function playerError(msg, videoId) {
@@ -1490,9 +1499,15 @@ async function flushCapture(cap) {
 /* 「＋ 추가」에서 소리 출처를 「이 브라우저의 다른 탭」으로 고르면 여기로
  * 옵니다. 주소가 아니라 탭이 대상이므로 probe도, yt-dlp도 없습니다. */
 async function startTabCapture(title, lang) {
-  // 공유 창이 먼저입니다. 여기서 취소하면 아무 일도 일어나지 않습니다.
+  // 대본 창을 먼저 잡습니다. 이 흐름에는 붙일 영상이 없어서 본 화면에
+  // 남겨 둘 이유가 없는데, 공유 창을 고르고 난 뒤에는 팝업이 막힙니다.
+  // 아래 requestTabAudio 보다 앞이어야 하는 이유가 그것뿐입니다.
+  const pending = openPendingScriptWindow();
+  state.scriptWin = pending;
+
+  // 공유 창. 여기서 취소하면 아무 일도 일어나지 않습니다.
   const media = await requestTabAudio();
-  if (!media) return;
+  if (!media) { if (pending) pending.close(); state.scriptWin = null; return; }
   stopLive();
   const res = await (await fetch("/api/live/capture", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -1504,6 +1519,8 @@ async function startTabCapture(title, lang) {
   })).json();
   if (res.error) {
     media.getTracks().forEach(t => t.stop());
+    if (pending) pending.close();
+    state.scriptWin = null;
     jobError(res.error);
     return;
   }
@@ -1527,8 +1544,24 @@ async function startTabCapture(title, lang) {
   $("offset-wrap").style.display = "none";
   await attachLive(res.id, "");
   await pipeCapture(media, res.id);
-  showLiveNotice("이 브라우저의 다른 탭에서 나는 소리를 받아 적습니다. "
-             + "그 탭을 닫거나 공유를 멈추면 함께 끝납니다.");
+  // 플레이어 자리가 검은 사각형으로 남습니다. 이 흐름에는 끼워 넣을 영상이
+  // 없다는 것을 그 자리에서 말해 둡니다 -- 대본 창을 닫았을 때 본 화면만
+  // 보고 무엇이 잘못됐는지 헤매지 않도록.
+  playerError("이 방송은 여기서 재생하지 않습니다. 소리만 다른 탭에서 "
+              + "받아 적고 있습니다 — 유튜브 탭에서 보시고, 대본은 옆 "
+              + "창이나 오른쪽 스크립트에서 읽으십시오.");
+
+  // 잡아 둔 창을 대본으로 돌립니다. 팝업이 막혀 못 잡았으면 본 화면의
+  // 「⧉ 대본 창」으로 열 수 있다고 알립니다 -- 그 단추를 누르는 것은
+  // 새 조작이므로 그때는 열립니다.
+  if (pending && !pending.closed) {
+    pending.location = `/?script=${encodeURIComponent("live:" + res.id)}`;
+  }
+  showLiveNotice(
+    "이 브라우저의 다른 탭에서 나는 소리를 받아 적습니다. "
+    + "그 탭을 닫거나 공유를 멈추면 함께 끝납니다."
+    + (pending ? "" : " 팝업이 막혀 대본 창을 띄우지 못했습니다 — "
+                      + "오른쪽 「⧉ 대본 창」으로 여십시오."));
 }
 
 async function startLive(url, lang, probe) {
@@ -1608,6 +1641,10 @@ async function resumeLive(sessionId) {
 }
 
 async function attachLive(sessionId, videoId) {
+  // 영상 없는 세션(m3u8·탭 소리)은 아래에서 플레이어를 건너뛰므로, 앞서 본
+  // 것이 남긴 안내 상자를 여기서 치웁니다. createPlayer 만 믿으면 그 경로가
+  // 안 지나가서 옛 안내문이 그대로 남습니다.
+  clearPlayerError();
   // m3u8을 직접 넣은 세션에는 임베드할 영상이 없습니다. 그래도 스크립트 패널은
   // 읽을 수 있어야 하므로 플레이어만 건너뜁니다.
   if (videoId) await createPlayer(videoId);
@@ -1994,12 +2031,43 @@ function scriptWindowKey() {
   return new URLSearchParams(location.search).get("script") || "";
 }
 
+const SCRIPT_WIN = "width=460,height=860,menubar=no,toolbar=no";
+
 function openScriptWindow() {
   const key = state.live ? "live:" + state.live.id
             : (state.doc && !isLiveDoc() ? state.doc.id : "");
   if (!key) { alert("먼저 영상이나 방송을 여십시오."); return; }
-  window.open(`/?script=${encodeURIComponent(key)}`, "mimiwatch-script-" + key,
-              "width=460,height=860,menubar=no,toolbar=no");
+  const url = `/?script=${encodeURIComponent(key)}`;
+  // 이미 띄워 둔 창이 있으면 그것을 씁니다. 탭 소리로 시작하면 아래에서
+  // 미리 열어 두므로, 여기서 새로 열면 빈 창과 대본 창이 따로 남습니다.
+  if (state.scriptWin && !state.scriptWin.closed) {
+    state.scriptWin.location = url;
+    state.scriptWin.focus();
+    return;
+  }
+  state.scriptWin = window.open(url, "mimiwatch-script", SCRIPT_WIN);
+}
+
+/* 아직 세션 번호를 모를 때 자리만 잡아 두는 창.
+ *
+ * 순서 때문에 이렇게 합니다. `window.open` 은 사용자 조작 직후에만 열리는데,
+ * 탭 소리는 공유 창을 고르는 데 몇 초가 걸리고 그 사이에 유효기간이
+ * 지납니다. 그 뒤에 열려고 하면 크롬이 조용히 막습니다. 그래서 조작이 아직
+ * 살아 있는 지점에서 빈 창을 먼저 잡아 두고, 세션이 생기면 그 창을
+ * 대본으로 돌립니다. */
+function openPendingScriptWindow() {
+  const win = window.open("", "mimiwatch-script", SCRIPT_WIN);
+  if (!win) return null;          // 팝업 차단
+  win.document.write(
+    '<!doctype html><meta charset="utf-8"><title>대본</title>'
+    + '<style>html{color-scheme:dark light}'
+    + 'body{margin:0;display:grid;place-items:center;height:100vh;'
+    + 'font:14px/1.7 system-ui,sans-serif;background:#0e1117;color:#8b95a7;'
+    + 'text-align:center;padding:2rem}'
+    + '@media(prefers-color-scheme:light){body{background:#fff;color:#666}}'
+    + '</style><div>공유할 탭을 고르면<br>여기에 대본이 쌓입니다.</div>');
+  win.document.close();
+  return win;
 }
 
 /* 스크립트 줄에서 무엇을 보일지. 화면 위 자막 모드와는 다른 축입니다 --
@@ -2032,16 +2100,28 @@ function setScriptView(v) {
   if (state.scriptOnly) {
     // 목록도 플레이어도 없습니다. 지목된 것 하나만 엽니다.
     await refreshVideoList(undefined, [list, sessions]);
-    // 팝업 주소는 살아남습니다 -- 즐겨찾기에 들어가거나, 지운 영상을
-    // 가리킨 채 다시 열립니다. 그대로 openFromList에 넘기면 없는 것을
-    // 받으러 갔다가 조용히 빈 화면이 됩니다.
-    if (!$("video-list").querySelector(`.video-row[data-value="${CSS.escape(key)}"]`)) {
-      setNowTitle(null);
-      $("script").innerHTML =
-        '<div class="empty">이 대본은 더 이상 없습니다. 본 창에서 다시 여십시오.</div>';
+    if ($("video-list").querySelector(`.video-row[data-value="${CSS.escape(key)}"]`)) {
+      openFromList(key);
       return;
     }
-    openFromList(key);
+    // 목록에 없다고 없는 세션은 아닙니다. 목록은 한 줄이라도 받아 적은
+    // 방송만 올리는데, 탭 소리로 막 시작한 세션은 이 창이 열리는 시점에
+    // 아직 0줄입니다 -- 자동으로 띄우는 창이 매번 「없습니다」를 보게 됩니다.
+    // 세션이 실재하는지는 서버에 직접 묻습니다.
+    if (key.startsWith("live:")) {
+      const sid = key.slice(5);
+      const st = await (await fetch(`/api/live/status/${encodeURIComponent(sid)}`)).json();
+      if (st && st.id) {
+        setNowTitle(st.title || "");
+        await resumeLive(sid);
+        return;
+      }
+    }
+    // 팝업 주소는 살아남습니다 -- 즐겨찾기에 들어가거나, 지운 영상을
+    // 가리킨 채 다시 열립니다. 여기까지 왔으면 정말로 없는 것입니다.
+    setNowTitle(null);
+    $("script").innerHTML =
+      '<div class="empty">이 대본은 더 이상 없습니다. 본 창에서 다시 여십시오.</div>';
     return;
   }
   if (!list.length && !sessions.some(s => s.cues)) {

@@ -252,16 +252,21 @@ class Refiner:
             # 25초짜리 무리의 재해독은 0.5~1초가 걸립니다. 수신 경로에서
             # 그대로 돌리면 다음 발화의 확정본이 그만큼 늦어지므로 여기서
             # 처리합니다.
-            text = self.asr.transcribe(buf, self.sr,
-                                       speech_s=len(buf) / self.sr,
-                                       live=False)["text"].strip()
+            got = self.asr.transcribe(buf, self.sr,
+                                      speech_s=len(buf) / self.sr,
+                                      live=False)
+            text = got["text"].strip()
             if len(text) < REFINE_MIN_KEEP * len(fast_joined):
                 text = fast_joined
             if not text.strip():
                 return
-            tag = f"{speaker}|{self.asr.forced_lang}" if speaker else self.asr.forced_lang
+            # forced_lang이 아니라 이번 해독이 알아낸 언어를 씁니다. 「자동
+            # 판별」에서는 forced_lang이 빈 문자열이고, 그것을 자막에 실어
+            # 보내면 번역기가 원본 언어를 몰라 그냥 돌아섭니다.
+            lang = got.get("lang") or self.asr.forced_lang
+            tag = f"{speaker}|{lang}" if speaker else lang
             print(f"[refine/{tag}] {text}", flush=True)
-            self.sink.refine(text, self.asr.forced_lang, speaker)
+            self.sink.refine(text, lang, speaker)
 
         self._tasks.put(work)
 

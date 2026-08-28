@@ -226,7 +226,14 @@ class TranscribeCppASR:
                   f"{ngram_diversity(text):.2f}: {text[:50]}", flush=True)
             text = ""
 
-        return {"text": text, "lang": self.forced_lang, "tier": self.label,
+        # 언어를 못 박지 않았으면 런타임이 알아낸 것을 그대로 씁니다.
+        #
+        # 여기서 self.forced_lang만 돌려주던 것이 「자동 판별」로 켠 라이브가
+        # 한 줄도 번역되지 않던 원인이었습니다. 빈 문자열이 자막에 실려 가고,
+        # LiveSession._translate 는 원본 언어를 모르면 그냥 돌아섭니다 --
+        # 전사는 멀쩡히 나오는데 번역만 조용히 빠지므로 알아채기 어렵습니다.
+        return {"text": text, "lang": self.forced_lang or (result.language or ""),
+                "tier": self.label,
                 "lid_ms": 0.0, "decode_ms": decode_ms, "probe_ms": 0.0}
 
 

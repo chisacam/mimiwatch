@@ -32,7 +32,7 @@ const state = {
   cuePos: null,        // { x, y } 비율. restore()가 채웁니다 -- DEFAULT_CUE_POS 참고
   backend: "local-gemma", asr: "tcpp-best", refine: true,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
-  live: null,          // { id, es, byId } while a broadcast is running
+  live: null,          // { id, es, store } while a broadcast is running (store: MimiCues)
 };
 
 /* A cue can hold one translation per backend, so switching backends is a

@@ -231,9 +231,12 @@ function applyCueEdit(got) {
 }
 
 function dropCue(id) {
-  const i = state.cues.findIndex(x => x.id === id);
-  if (i >= 0) state.cues.splice(i, 1);
-  if (state.live) state.live.byId.delete(id);
+  if (state.live) {
+    state.live.store.drop(id);           // state.cues 는 그 저장소의 배열입니다
+  } else {
+    const i = state.cues.findIndex(x => x.id === id);
+    if (i >= 0) state.cues.splice(i, 1);
+  }
   const row = $("script").querySelector(`.line[data-id="${CSS.escape(String(id))}"]`);
   if (row) row.remove();
   state.idx = -1;

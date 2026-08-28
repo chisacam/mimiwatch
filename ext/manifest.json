@@ -28,6 +28,8 @@
       ],
       "js": [
         "overlay.js",
+        "ytid.js",
+        "cuestore.js",
         "panel.js",
         "content.js"
       ],

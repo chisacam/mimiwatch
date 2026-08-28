@@ -16,20 +16,13 @@
  *
  * 서버가 받는 것은 16kHz 모노 int16 PCM입니다. AudioContext를 16000으로 열면
  * 크롬이 리샘플까지 해 주므로 여기서 표본율을 만질 일이 없습니다. */
-/* 한 번에 올릴 길이. 짧을수록 자막이 빨리 나오지만 요청이 늘고, 길수록
- * 그 반대입니다. 2초면 초당 요청 0.5회에 덩어리 64KB라 어느 쪽도 부담이
- * 아니고, 지연은 VAD가 발화를 끊기까지 기다리는 시간에 이미 묻힙니다. */
-const INGEST_S = 2;
-
+/* 그래프·int16 변환·2초마다 올리기는 확장과 공유하는 web/capture.js
+ * (MimiCapture)가 합니다. 여기서는 스트림을 얻는 일과 화면 알림만 맡습니다. */
 function stopCapture() {
   const c = state.capture;
   if (!c) return;
   state.capture = null;
-  if (c.timer) clearInterval(c.timer);
-  try { c.node.disconnect(); } catch (_) {}
-  try { c.ctx.close(); } catch (_) {}
-  // 트랙을 놓아야 크롬의 "공유 중" 표시가 사라집니다.
-  c.stream.getTracks().forEach(t => t.stop());
+  MimiCapture.stop(c);
 }
 
 /* 탭을 고르게 합니다. **세션을 만들기 전에** 부릅니다.
@@ -165,91 +158,38 @@ function isTabSurface(media) {
 /* 받아 둔 스트림을 세션으로 흘려보냅니다. */
 async function pipeCapture(media, sessionId) {
   stopCapture();
-  const ctx = new AudioContext({ sampleRate: 16000 });
-  // 크롬의 자동재생 정책 때문에 새 AudioContext는 suspended로 태어납니다.
-  // 그 상태에서는 워클릿이 한 번도 돌지 않아, 화면은 「받는 중」인데 자막이
-  // 한 줄도 늘지 않습니다 -- 아무 데도 오류가 나지 않아 더 나쁩니다.
-  if (ctx.state === "suspended") await ctx.resume().catch(() => {});
-  await ctx.audioWorklet.addModule("/static/capture-worklet.js");
-  // 스테레오를 한 채널로 접는 일은 Web Audio 에 맡깁니다. 손으로 왼쪽만
-  // 집으면 오른쪽에 치우친 목소리를 통째로 놓칩니다.
-  const node = new AudioWorkletNode(ctx, "mimiwatch-capture", {
-    channelCount: 1,
-    channelCountMode: "explicit",
-    channelInterpretation: "speakers",
+  const cap = await MimiCapture.start({
+    media,
+    workletUrl: "/static/capture-worklet.js",
+    post: (buf) => fetch("/api/ingest/" + encodeURIComponent(sessionId), {
+      method: "POST", headers: { "Content-Type": "application/octet-stream" },
+      body: buf,
+    }).then(r => r.json()),
+    // 사용자가 크롬의 「공유 중지」를 누르면 여기로 옵니다. 순서가 중요합니다 --
+    // stopLive가 알림 칸을 비우므로 그 뒤에 씁니다.
+    onEnded: () => {
+      stopLive();
+      showLiveNotice("탭 공유가 끝났습니다. 자막 수신을 멈췄습니다.");
+    },
+    // 세션이 없어졌습니다(서버 재시작 등). 공유는 모듈이 이미 놓았습니다.
+    onError: (msg) => {
+      state.capture = null;
+      showLiveNotice("자막 세션이 끝났습니다: " + msg);
+    },
+    onDropped: (s) => showLiveNotice(
+      `전사가 실시간을 따라가지 못해 ${Math.round(s)}초를 버렸습니다. `
+      + "가벼운 전사 엔진으로 바꿔 보십시오."),
   });
-  ctx.createMediaStreamSource(media).connect(node);
-  // 워클릿이 목적지까지 이어져 있지 않으면 크롬이 아예 돌리지 않습니다.
-  // 소리를 되돌려 보내면 안 되므로 볼륨 0인 게인을 하나 끼웁니다.
-  const mute = ctx.createGain();
-  mute.gain.value = 0;
-  node.connect(mute).connect(ctx.destination);
-
-  const cap = { stream: media, ctx, node, buf: [], n: 0, timer: null,
-                id: sessionId, sending: false };
   state.capture = cap;
-  node.port.onmessage = (e) => { cap.buf.push(e.data); cap.n += e.data.length; };
-  // 사용자가 크롬의 「공유 중지」를 누르면 여기로 옵니다.
-  media.getAudioTracks()[0].addEventListener("ended", () => {
-    // 순서가 중요합니다. stopLive가 알림 칸을 비우므로 그 뒤에 씁니다.
-    stopLive();
-    showLiveNotice("탭 공유가 끝났습니다. 자막 수신을 멈췄습니다.");
-  });
 
-  cap.timer = setInterval(() => flushCapture(cap), INGEST_S * 1000);
-
-  // 소리가 실제로 오는지 확인합니다. 위의 resume()이 막히는 경우가 있고,
-  // 그때 조용히 실패하면 사용자는 전사가 느린 것과 구별하지 못합니다.
+  // 소리가 실제로 오는지 확인합니다. AudioContext의 resume()이 막히는 경우가
+  // 있고, 그때 조용히 실패하면 사용자는 전사가 느린 것과 구별하지 못합니다.
   setTimeout(() => {
     if (state.capture === cap && !cap.n && !cap.sent) {
       showLiveNotice("탭에서 소리가 오지 않습니다. 그 탭이 재생 중인지, "
                      + "공유할 때 「탭 오디오도 공유」를 켰는지 확인하십시오.");
     }
   }, 4000);
-}
-
-async function flushCapture(cap) {
-  // 앞선 전송이 아직 안 끝났으면 이번 것은 다음 차례에 같이 보냅니다.
-  // 겹쳐 보내면 서버 쪽 큐에 순서가 뒤집힌 채로 들어갑니다.
-  if (cap.sending || !cap.n || state.capture !== cap) return;
-  const frames = cap.buf; const total = cap.n;
-  cap.buf = []; cap.n = 0;
-  cap.sent = (cap.sent || 0) + total;
-
-  const pcm = new Int16Array(total);
-  let i = 0;
-  for (const f of frames) {
-    for (let k = 0; k < f.length; k++) {
-      const v = f[k];
-      // 클리핑을 먼저 합니다. 넘친 값을 그대로 곱하면 int16에서 감싸돌아
-      // 큰 소리가 잡음으로 바뀝니다.
-      pcm[i++] = v < -1 ? -32768 : v > 1 ? 32767 : Math.round(v * 32767);
-    }
-  }
-
-  cap.sending = true;
-  try {
-    const res = await fetch("/api/ingest/" + encodeURIComponent(cap.id), {
-      method: "POST", headers: { "Content-Type": "application/octet-stream" },
-      body: pcm.buffer,
-    });
-    const st = await res.json();
-    if (st.error) {
-      // 세션이 없어졌습니다. 아무도 듣지 않는 소리를 계속 올릴 이유가 없습니다.
-      showLiveNotice("자막 세션이 끝났습니다: " + st.error);
-      stopCapture();
-      return;
-    }
-    if (st.dropped_s >= 1 && st.dropped_s !== cap.warned) {
-      cap.warned = st.dropped_s;
-      showLiveNotice(`전사가 실시간을 따라가지 못해 ${Math.round(st.dropped_s)}초를 `
-                 + "버렸습니다. 가벼운 전사 엔진으로 바꿔 보십시오.");
-    }
-  } catch (_) {
-    // 서버가 잠깐 못 받았습니다. 이 덩어리는 잃지만 다음 것은 갑니다.
-  } finally {
-    cap.sending = false;
-  }
 }
 
 /* 「＋ 추가」에서 소리 출처를 「이 브라우저의 다른 탭」으로 고르면 여기로
@@ -287,10 +227,10 @@ async function startTabCapture(title, lang) {
   state.doc = { id: probe.id, title: probe.title, source_lang: lang || "",
                 viewer_lang: $("viewer-lang").value, translated: false,
                 backends_done: [state.backend], live: true };
-  state.cues = [];
-  state.idx = -1;
-  state.live = { id: res.id, byId: new Map(), es: null, speakers: new Set(),
+  state.live = { id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
                  url: "", lang, probe, asr: state.asr, source: "tab" };
+  state.cues = state.live.store.cues;
+  state.idx = -1;
   buildScript();
   renderBackendPicker();
   applyModeForDoc();

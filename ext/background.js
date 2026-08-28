@@ -125,19 +125,10 @@ async function setWatch(tabId, value, opts) {
 }
 
 /* 주소에서 영상 id 를 뽑습니다. 세션이 어느 영상의 것인지 알아야, 다른
- * 영상으로 옮겼을 때 옛 자막을 계속 얹는 일을 막을 수 있습니다. */
-function videoIdOf(url) {
-  try {
-    const u = new URL(url);
-    if (!/(^|\.)youtube\.com$/.test(u.hostname)) return "";
-    const v = u.searchParams.get("v");
-    if (v) return v;
-    const m = u.pathname.match(/^\/(live|shorts|embed)\/([^/?#]+)/);
-    return m ? m[2] : "";
-  } catch (_) {
-    return "";
-  }
-}
+ * 영상으로 옮겼을 때 옛 자막을 계속 얹는 일을 막을 수 있습니다. content
+ * script 와 같은 한 벌(ytid.js)입니다. */
+importScripts("ytid.js");
+const videoIdOf = MimiYtId.videoIdOf;
 
 /* 이 자막이 어느 영상의 것인가. 모르면 빈 문자열입니다 -- 그때는 판별하지
  * 못했다는 뜻이고, 내리지 않고 묻습니다. */

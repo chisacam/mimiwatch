@@ -41,23 +41,16 @@
   /* 이 자막이 어느 영상의 것인가. 빈 문자열이면 알아내지 못한 것입니다 --
    * 그때는 내리지 않고 묻습니다. */
   let expectVideo = "";
-  const videoIdOf = (url) => {
-    try {
-      const u = new URL(url);
-      const v = u.searchParams.get("v");
-      if (v) return v;
-      const m = u.pathname.match(/^\/(live|shorts|embed)\/([^/?#]+)/);
-      return m ? m[2] : "";
-    } catch (_) {
-      return "";
-    }
-  };
+  const videoIdOf = MimiYtId.videoIdOf;      // 배경 워커와 같은 한 벌(ytid.js)
 
   let ov = null;           // overlay 모듈의 조종기
   let node = null;         // 우리가 넣은 div
   let port = null;
-  let cues = [];
-  let byId = new Map();
+  // 자막 목록. 반영 규칙(같은 id 갈아 끼우기, replaces 빼기)은 mimiwatch
+  // 페이지와 공유하는 cuestore.js 의 것입니다. 배열은 제자리에서 고쳐지므로
+  // `cues`를 한 번 잡아 두고 그대로 씁니다.
+  const store = MimiCues.create();
+  const cues = store.cues;
   let live = false, receiving = false;
   // 서버와의 줄이 끊겼는가. 배경 워커가 다시 붙어 보는 동안 참입니다.
   // 팝업의 상태줄이 「지금 구간에 자막 없음」과 「서버 끊김」을 가릅니다.
@@ -122,8 +115,7 @@
     if (ov) { ov.destroy(); ov = null; }
     document.querySelectorAll("#" + ID).forEach((e) => e.remove());
     node = null;
-    cues = [];
-    byId = new Map();
+    store.reset();
   }
 
   /* 채팅 자리의 대본. 화면 위 자막과는 별개로 켜고 끕니다 -- 오버레이는
@@ -183,23 +175,6 @@
 
   /* ---------- 서버에서 오는 것 ---------- */
 
-  function upsert(m) {
-    const old = byId.get(m.id);
-    const cue = old || { id: m.id, translations: {} };
-    Object.assign(cue, { start: m.t, end: m.end || 0, text: m.text,
-                         lang: m.lang, kind: m.kind, speaker: m.speaker || "",
-                         arrived: Date.now() });
-    if (!old) { cues.push(cue); byId.set(m.id, cue); }
-    (m.replaces || []).forEach((id) => {
-      if (id === m.id) return;
-      const gone = byId.get(id);
-      if (!gone) return;
-      const i = cues.indexOf(gone);
-      if (i >= 0) cues.splice(i, 1);
-      byId.delete(id);
-    });
-  }
-
   /* 자막이 바뀔 때만 대본을 다시 그립니다. 렌더 루프(100ms)에 얹으면 초당
    * 열 번씩 수백 줄을 훑게 되는데, 대본은 새 줄이 올 때만 바뀝니다. */
   let panelDirty = false;
@@ -211,14 +186,10 @@
 
   function onEvent(e) {
     panelDirty = true;
-    if (e.type === "cue") upsert(e);
-    else if (e.type === "translation") {
-      const c = byId.get(e.id);
-      if (c) c.translations[trKey] = e.text;
-    } else if (e.type === "drop") {
-      const c = byId.get(e.id);
-      if (c) { const i = cues.indexOf(c); if (i >= 0) cues.splice(i, 1); byId.delete(e.id); }
-    } else if (e.type === "status") {
+    if (e.type === "cue") store.upsert(e);
+    else if (e.type === "translation") store.translate(e.id, trKey, e.text);
+    else if (e.type === "drop") store.drop(e.id);
+    else if (e.type === "status") {
       live = true;
       receiving = ["starting", "loading", "running"].includes(e.state);
 
@@ -226,7 +197,7 @@
   }
 
   function attach(value, videoId) {
-    cues = []; byId = new Map(); live = false; receiving = false;
+    store.reset(); live = false; receiving = false; stalled = false;
     trKey = LIVE_KEY;
     expectVideo = videoId || "";
     dismissAsk();
@@ -250,8 +221,7 @@
         live = false; receiving = false;
         // 녹화본은 번역이 엔진별로 여러 벌일 수 있습니다. 마지막 것을 씁니다.
         trKey = (m.data.backends_done || []).slice(-1)[0] || LIVE_KEY;
-        cues = m.data.cues || [];
-        byId = new Map(cues.map((c) => [c.id, c]));
+        store.load(m.data.cues || []);
         log(`녹화본 ${cues.length}줄, 번역 열쇠 ${trKey}`);
         MimiPanel.reset();
         panelDirty = true;

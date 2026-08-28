@@ -125,10 +125,10 @@ async function startLive(url, lang, probe) {
   state.doc = { id: probe.id, title: probe.title, source_lang: lang || "",
                 viewer_lang: $("viewer-lang").value, translated: false,
                 backends_done: [state.backend], live: true };
-  state.cues = [];
-  state.idx = -1;
-  state.live = { id: res.id, byId: new Map(), es: null, speakers: new Set(),
+  state.live = { id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
                  url, lang, probe, asr: state.asr };
+  state.cues = state.live.store.cues;     // 저장소가 제자리에서 고치는 배열
+  state.idx = -1;
   buildScript();
   renderBackendPicker();
   applyModeForDoc();
@@ -165,13 +165,13 @@ async function resumeLive(sessionId) {
   state.doc = { id: st.video_id || "", title: st.title || st.url,
                 source_lang: st.source_lang || "", viewer_lang: st.viewer_lang,
                 translated: false, backends_done: [st.backend], live: true };
-  state.cues = [];
-  state.idx = -1;
-  state.live = { id: st.id, byId: new Map(), es: null, speakers: new Set(),
+  state.live = { id: st.id, store: MimiCues.create(), es: null, speakers: new Set(),
                  url: st.url, lang: st.source_lang || null, state: st.state,
                  probe: { id: st.video_id, title: st.title },
                  source: st.source || "hls",
                  asr: st.asr_backend || "" };
+  state.cues = state.live.store.cues;
+  state.idx = -1;
   buildScript();
   renderBackendPicker();
   applyModeForDoc();
@@ -286,28 +286,14 @@ function onLiveCue(m) {
   const live = state.live;
   if (!live) return;
 
-  // A refined line supersedes the finals it absorbed. Drop those from both
-  // the cue list and the panel, keeping the one the refine reuses.
-  (m.replaces || []).forEach(id => {
-    if (id === m.id) return;
-    const old = live.byId.get(id);
-    if (!old) return;
-    const i = state.cues.indexOf(old);
-    if (i >= 0) state.cues.splice(i, 1);
-    live.byId.delete(id);
+  // 목록에 반영하는 규칙(같은 id는 갈아 끼우기, replaces는 빼기)은 확장과
+  // 공유하는 cuestore.js 의 것입니다. 여기서는 빠진 줄의 행만 걷어 냅니다.
+  const r = live.store.upsert(m);
+  r.removed.forEach(id => {
     const row = $("script").querySelector(`.line[data-id="${id}"]`);
     if (row) row.remove();
   });
-
-  const existing = live.byId.get(m.id);
-  const cue = existing || { translations: {}, id: m.id };
-  Object.assign(cue, { start: m.t, end: m.t + 6, text: m.text,
-                       lang: m.lang, kind: m.kind, speaker: m.speaker || "",
-                       arrived: Date.now() });
-  if (!existing) {
-    state.cues.push(cue);        // SSE delivers in order; no sort needed
-    live.byId.set(m.id, cue);
-  }
+  const cue = r.cue;
   const before = live.speakers.size;
   if (cue.speaker) live.speakers.add(cue.speaker);
   state.idx = -1;
@@ -326,9 +312,8 @@ function buildLiveScript() {
 }
 
 function onLiveTranslation(m) {
-  const cue = state.live && state.live.byId.get(m.id);
+  const cue = state.live && state.live.store.translate(m.id, state.backend, m.text);
   if (!cue) return;
-  cue.translations[state.backend] = m.text;
   if (!state.doc.translated) {
     state.doc.translated = true;
     applyModeForDoc();

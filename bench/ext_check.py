@@ -29,6 +29,9 @@ WEB = os.path.join(HERE, "web")
 
 FAIL = []
 
+# web/ 이 원본, ext/ 가 사본인 파일들.
+SHARED = ("overlay.js", "cuestore.js", "capture.js", "ytid.js", "capture-worklet.js")
+
 
 def check(cond, what):
     print(("  PASS  " if cond else "  FAIL  ") + what)
@@ -135,20 +138,36 @@ def main():
     # tabCapture 는 3단계에서 씁니다. 지금 없어도 되지만 있으면 적어 둡니다.
     print(f"  ----  권한: {', '.join(m.get('permissions', [])) or '(없음)'}")
 
-    print("\n[4] 자막 모듈 사본이 페이지 쪽과 같은가")
-    a = open(os.path.join(WEB, "overlay.js"), "rb").read()
-    bpath = os.path.join(EXT, "overlay.js")
-    if not os.path.exists(bpath):
-        check(False, "ext/overlay.js 가 있다")
-    else:
+    print("\n[4] 공유 모듈 사본이 페이지 쪽과 같은가")
+    # overlay.js 하나였던 것이 셋으로 늘었습니다 -- 라이브 자막 저장소(cuestore),
+    # 탭 소리 올리기(capture), 영상 id(ytid). 전부 web/ 이 원본이고 ext/ 는 사본.
+    for name in SHARED:
+        a = open(os.path.join(WEB, name), "rb").read()
+        bpath = os.path.join(EXT, name)
+        if not os.path.exists(bpath):
+            check(False, f"ext/{name} 가 있다")
+            continue
         b = open(bpath, "rb").read()
-        check(a == b, "web/overlay.js 와 한 바이트도 다르지 않다"
-                      + ("" if a == b else "  →  cp web/overlay.js ext/overlay.js"))
+        check(a == b, f"web/{name} 와 한 바이트도 다르지 않다"
+                      + ("" if a == b else f"  →  cp web/{name} ext/{name}"))
+    js_all = [x for cs in m.get("content_scripts", []) for x in cs.get("js", [])]
+    for name in ("ytid.js", "cuestore.js"):
+        check(name in js_all and js_all.index(name) < js_all.index("content.js"),
+              f"{name} 가 content.js 보다 먼저 읽힌다")
+    off_html = open(os.path.join(EXT, "offscreen.html"), encoding="utf-8").read()
+    check('src="capture.js"' in off_html and off_html.index("capture.js") < off_html.index("offscreen.js"),
+          "offscreen.html 이 capture.js 를 offscreen.js 보다 먼저 읽는다")
 
     print("\n[5] 스크립트가 깨지지 않았는가")
     for name in sorted(n for n in os.listdir(EXT) if n.endswith((".js", ".css"))):
         src = open(os.path.join(EXT, name), encoding="utf-8").read()
-        check(balanced(src), f"{name} 괄호와 따옴표가 맞다")
+        check(balanced(src), f"ext/{name} 괄호와 따옴표가 맞다")
+    # 페이지 쪽도 봅니다. app.js 를 여러 파일로 나눈 뒤라 한 파일의 괄호가
+    # 어긋나면 그 파일 뒤의 것이 통째로 죽습니다.
+    for folder in (WEB, os.path.join(WEB, "app")):
+        for name in sorted(n for n in os.listdir(folder) if n.endswith(".js")):
+            src = open(os.path.join(folder, name), encoding="utf-8").read()
+            check(balanced(src), f"{os.path.relpath(os.path.join(folder, name), HERE)} 괄호와 따옴표가 맞다")
 
     print("\n[6] 채팅 자리의 대본")
     if os.path.exists(os.path.join(EXT, "panel.js")):
@@ -183,9 +202,12 @@ def main():
         # 거기로 내보내면 48kHz 스테레오가 전화 음질로 깎여 나갑니다.
         check("source.connect(ctx.destination)" not in off,
               "듣는 소리를 16kHz 컨텍스트로 보내지 않는다")
-        check("sampleRate: 16000" in off, "받아 적는 쪽만 16kHz 다")
-        check("channelCount: 1" in off,
+        # 그래프 자체는 페이지와 공유하는 capture.js 에 있습니다.
+        capjs = open(os.path.join(EXT, "capture.js"), encoding="utf-8").read()
+        check("sampleRate: 16000" in capjs, "받아 적는 쪽만 16kHz 다 (capture.js)")
+        check("channelCount: 1" in capjs,
               "스테레오 접기를 Web Audio 에 맡긴다 (왼쪽만 집지 않습니다)")
+        check("MimiCapture.start" in off, "offscreen.js 가 공유 모듈로 잡는다")
         wl = open(os.path.join(EXT, "capture-worklet.js"), "rb").read()
         webwl = os.path.join(WEB, "capture-worklet.js")
         if os.path.exists(webwl):

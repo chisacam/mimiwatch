@@ -330,6 +330,19 @@
 <script async src="https://www.youtube.com/iframe_api"></script>
 <!-- 자막을 그리는 한 벌. 확장의 content script 도 같은 파일을 읽습니다. -->
 <script src="/static/overlay.js"></script>
-<script src="/static/app.js"></script>
+<!-- 화면 논리. 한 파일(app.js, 2700줄)이던 것을 관심사별로 나눴습니다. 전부 일반
+     스크립트로 전역을 함께 쓰므로 순서가 뜻을 가집니다 -- state.js 가 먼저,
+     main.js(bind·init)가 마지막입니다. 나머지는 함수 선언뿐이라 순서에 기대지
+     않습니다. -->
+<script src="/static/app/state.js"></script>
+<script src="/static/app/player.js"></script>
+<script src="/static/app/script-panel.js"></script>
+<script src="/static/app/engines.js"></script>
+<script src="/static/app/jobs.js"></script>
+<script src="/static/app/live.js"></script>
+<script src="/static/app/capture.js"></script>
+<script src="/static/app/export.js"></script>
+<script src="/static/app/library.js"></script>
+<script src="/static/app/main.js"></script>
 </body>
 </html>

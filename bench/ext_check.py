@@ -43,6 +43,10 @@ def balanced(src: str) -> bool:
     pair = {"}": "{", ")": "(", "]": "["}
     i, n = 0, len(src)
     quote = None
+    # 마지막으로 본 공백 아닌 글자. `/`가 나누기인지 정규식의 시작인지를
+    # 여기서 가릅니다 -- `replace(/[&<>"]/g, …)`의 따옴표를 문자열 시작으로
+    # 읽으면 그 뒤가 전부 어긋납니다.
+    prev = ""
     while i < n:
         c = src[i]
         if quote:
@@ -52,6 +56,23 @@ def balanced(src: str) -> bool:
                 quote = None
         elif c in "\"'`":
             quote = c
+        elif c == "/" and i + 1 < n and src[i + 1] not in "/*" and prev in "(,=:[!&|?{};\n":
+            # 정규식. 닫는 `/`까지 건너뜁니다. `[...]` 안의 `/`는 닫는 것이 아닙니다.
+            i += 1
+            in_class = False
+            while i < n and src[i] != "\n":
+                if src[i] == "\\":
+                    i += 2; continue
+                if src[i] == "[":
+                    in_class = True
+                elif src[i] == "]":
+                    in_class = False
+                elif src[i] == "/" and not in_class:
+                    break
+                i += 1
+            prev = "/"
+            i += 1
+            continue
         elif c == "/" and i + 1 < n and src[i + 1] == "/":
             i = src.find("\n", i)
             if i < 0:
@@ -67,6 +88,8 @@ def balanced(src: str) -> bool:
             depth[pair[c]] -= 1
             if depth[pair[c]] < 0:
                 return False
+        if not c.isspace() or c == "\n":
+            prev = c
         i += 1
     return all(v == 0 for v in depth.values()) and quote is None
 

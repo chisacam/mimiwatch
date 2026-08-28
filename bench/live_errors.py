@@ -172,6 +172,12 @@ def main():
     print("\n[6] 끊긴 세션을 같은 세션으로 이어받는가")
     started = {}
     real_store_session, real_store_cues = live.store.session, live.store.cues
+    # **쓰기 경로도 막습니다.** 읽기만 가짜로 바꿨더니 resume() 안의
+    # _persist() 가 실제 DB에 시험용 세션을 남겼고, 그것이 사용자의 영상
+    # 목록에 「옛 방송」으로 떴습니다. 시험은 저장소를 건드리지 않아야 합니다.
+    real_save_session, real_save_job = live.store.save_session, live.store.save_job
+    live.store.save_session = lambda *a, **k: None
+    live.store.save_job = lambda *a, **k: None
     live.store.session = lambda sid: {
         "id": sid, "state": "interrupted", "url": "https://example.invalid/live",
         "source_lang": "ja", "viewer_lang": "ko", "backend": "local-gemma",
@@ -188,6 +194,7 @@ def main():
     finally:
         live.LiveSession.start = real_start
         live.store.session, live.store.cues = real_store_session, real_store_cues
+        live.store.save_session, live.store.save_job = real_save_session, real_save_job
         live._sessions.pop("sess-1", None)
 
     check(not res.get("error"), f"이어받기가 받아들여졌다 ({res})")
@@ -200,6 +207,7 @@ def main():
           "설정을 그대로 물려받는다")
 
     print("\n[7] 이어받을 수 없는 경우")
+    live.store.save_session = lambda *a, **k: None
     live.store.session = lambda sid: None
     check("error" in live.resume("없음"), "없는 세션은 거절한다")
     live.store.session = lambda sid: {"id": sid, "state": "running", "url": "x"}
@@ -207,6 +215,11 @@ def main():
     live.store.session = lambda sid: {"id": sid, "state": "interrupted", "url": ""}
     check("error" in live.resume("sess-1"), "주소가 없으면 거절한다")
     live.store.session = real_store_session
+    live.store.save_session = real_save_session
+
+    # 시험이 저장소에 아무것도 남기지 않았는지 스스로 확인합니다.
+    check(live.store.session("sess-1") is None,
+          "시험용 세션이 저장소에 남지 않았다")
 
     print()
     if FAIL:

@@ -363,11 +363,17 @@ class LocalGemma(Translator):
 
     def __init__(self, model_path: str | None = None, n_ctx: int = 2048,
                  threads: int = 4, prompt: str | None = None,
-                 max_tokens: int = 256, genre: str | None = None):
+                 max_tokens: int = 256, genre: str | None = None,
+                 device: str = "auto"):
         import stream
 
         self.model_path = model_path or os.path.join(
             stream.model_dir(), "gemma-4-E4B_q4_0-it.gguf")
+        # `cpu`면 한 층도 GPU에 올리지 않습니다. 내장 그래픽처럼 전사와
+        # 나눠 쓰기 빠듯한 기계에서, 번역만이라도 CPU로 돌려 두면 자막이
+        # 서로를 기다리지 않습니다. 번역은 줄당 0.2초라 CPU로도 충분합니다.
+        self.device = (device or "auto").strip().lower()
+        self.n_gpu_layers = 0 if self.device == "cpu" else -1
         # 백엔드에 프롬프트를 직접 적어 두었다면 그것이 우선입니다. 장르는
         # 그 자리를 비워 둔 백엔드에만 적용됩니다.
         self.prompt = prompt or genre_prompt(genre)
@@ -389,9 +395,11 @@ class LocalGemma(Translator):
         from llama_cpp import Llama
         # 4GB짜리를 세션 시작마다 올리면 첫 자막이 그만큼 늦습니다. 처음
         # 번역할 때 올리고 그 뒤로는 재사용합니다.
+        print(f"[translate] Gemma · {self.device} · {self._threads}스레드",
+              file=sys.stderr, flush=True)
         self._llm = Llama(model_path=self.model_path, n_ctx=self._n_ctx,
-                          n_threads=self._threads, n_gpu_layers=-1,
-                          verbose=False)
+                          n_threads=self._threads,
+                          n_gpu_layers=self.n_gpu_layers, verbose=False)
 
     def translate(self, text: str, src: str, tgt: str,
                   context: list[str] | None = None) -> str:
@@ -481,10 +489,14 @@ def build(spec: dict | None, genre: str | None = None) -> Translator:
     spec = spec or {}
     min_chars = int(spec.get("min_chars", DEFAULT_MIN_CHARS) or 0)
     if spec.get("backend") == "gemma":
+        device = (spec.get("device") or "auto").strip().lower()
+        # CPU로 돌리면 스레드 4는 모자랍니다. 전사와 같은 규칙을 씁니다.
         gemma = LocalGemma(spec.get("model_path"),
                            n_ctx=int(spec.get("n_ctx", 2048)),
-                           threads=int(spec.get("threads", 4)),
-                           prompt=spec.get("prompt"), genre=genre)
+                           threads=int(spec.get("threads")
+                                       or stream.default_threads(device)),
+                           prompt=spec.get("prompt"), genre=genre,
+                           device=device)
         gemma.min_chars = min_chars
         # 모델 파일이 없거나 적재가 실패해도 자막이 원문으로 남지는 않도록
         # M2M-100을 뒤에 둡니다. 어느 쪽이 실제로 답했는지는 기록됩니다.

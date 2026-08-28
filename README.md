@@ -207,6 +207,49 @@ MIMIWATCH_MODEL_DIR=/path/to/models ./run.sh
 
 설정은 `backends.json`에 있습니다. 직접 고쳐도 됩니다.
 
+### CPU로 돌리기
+
+**기본은 GPU입니다.** 전사는 `auto`로 있는 것 중 가장 빠른 장치를 고르고,
+번역은 모든 층을 GPU에 올립니다.
+
+낮은 사양에서는 CPU가 나을 수 있습니다. 내장 그래픽은 시스템 메모리를
+CPU와 나눠 쓰고 대역폭도 좁아, 코어가 넉넉한 노트북에서는 CPU 쪽이 더
+빠르거나 최소한 다른 일을 방해하지 않습니다. 전사와 번역이 같은 작은
+iGPU를 다투는 것도 피할 수 있습니다.
+
+`backends.json`의 각 항목에 `device`를 적습니다.
+
+```json
+{ "id": "tcpp-best", "backend": "tcpp", "device": "cpu" }
+{ "id": "local-gemma", "backend": "gemma", "device": "cpu" }
+```
+
+| 값 | 뜻 |
+|---|---|
+| `auto` (기본) | 있는 것 중 가장 빠른 장치. GPU가 있으면 GPU |
+| `cpu` | GPU가 있어도 CPU로 |
+| `vulkan` `metal` `cuda` `rocm` | 딱 집어 지정 (없으면 `auto`로 물러납니다) |
+
+**스레드 수는 `device`에 맞춰 자동으로 정해집니다** — GPU면 4, CPU면 논리
+코어의 절반(최대 8)입니다. `threads`를 직접 적으면 그것이 우선합니다.
+
+전사만 잠깐 CPU로 돌려 보려면 파일을 고치지 않고 환경변수도 됩니다.
+
+```sh
+TRANSCRIBE_BACKEND=cpu ./run.sh
+```
+
+**속도 감각** — 이 기계(Apple M5 Pro)에서 20초 오디오를 재면 Metal이
+57배속, CPU 8스레드가 7.7배속입니다. **전사 결과는 글자까지 같았습니다.**
+CPU가 느릴 뿐 품질을 내주는 것은 아니고, 라이브에 필요한 1배속과는 여전히
+차이가 큽니다. 다만 이 배수는 기계마다 다르므로 그쪽에서 다시 재십시오.
+
+```sh
+.venv/bin/python bench/asr_device.py
+```
+
+M2M-100은 이 설정과 무관합니다. CTranslate2를 CPU로 고정해 씁니다.
+
 ## 서버 종료
 
 같은 ⚙ 창의 **「서버 · 종료」**로 끕니다. 프로세스를 죽이는 것과 다릅니다 —

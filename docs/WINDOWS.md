@@ -60,6 +60,22 @@ CMake도, Vulkan SDK도, git 클론도 없습니다.
 `vulkan`이 없으면 그래픽 드라이버를 갱신하십시오. 전사는 CPU로도 돕니다 —
 느릴 뿐입니다.
 
+### 내장 그래픽이라면 CPU도 재 보십시오
+
+`.\install.ps1 -Backend`는 **llama-cpp-python 휠을 무엇으로 깔지**만
+정합니다. 실제로 어디서 돌릴지는 `backends.json`의 `device`가 정하고,
+전사와 번역을 따로 고를 수 있습니다.
+
+```json
+{ "id": "tcpp-best",   "backend": "tcpp",  "device": "cpu" }
+{ "id": "local-gemma", "backend": "gemma", "device": "cpu" }
+```
+
+내장 그래픽(780M 등)은 시스템 메모리를 CPU와 나눠 쓰고 대역폭도 좁습니다.
+코어가 넉넉한 노트북이라면 CPU 쪽이 더 빠르거나, 최소한 전사와 번역이 같은
+iGPU를 다투는 일을 피할 수 있습니다. 자세한 것은 README의 「CPU로 돌리기」를
+보십시오.
+
 ## AMD: whisper.cpp-amd 는 왜 안 쓰는가
 
 [lemonade-sdk/whisper.cpp-amd][wa]는 실재하고 잘 만들어진 프로젝트입니다.

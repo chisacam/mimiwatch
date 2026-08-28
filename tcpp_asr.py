@@ -9,10 +9,13 @@ _identify_lang이 고정 언어를 그대로 돌려주므로 Refiner의 언어 �
 from __future__ import annotations
 
 import os
+import sys
 import threading
 
 import numpy as np
 from transcribe_cpp.errors import OutputTruncated
+
+import stream
 
 # 반복 폭주 판정: 4-gram 다양도가 이 값 아래면 환각으로 봅니다. 실측에서
 # 정상 구간은 0.92~0.98, Fun-ASR의 폭주 구간은 0.06이었습니다.
@@ -37,13 +40,43 @@ def looks_hallucinated(text: str) -> bool:
     return ngram_diversity(t) < DIVERSITY_FLOOR
 
 
+def resolve_device(want: str) -> str:
+    """쓸 백엔드를 정합니다.
+
+    `auto`는 있는 것 중 가장 빠른 것을 고릅니다 -- GPU가 있으면 GPU입니다.
+    `cpu`는 GPU가 있어도 CPU로 돌립니다. 그 편이 나은 기계가 있습니다:
+    내장 그래픽은 시스템 메모리를 CPU와 나눠 쓰고 대역폭도 좁아, 코어가
+    넉넉한 노트북에서는 CPU가 더 빠르거나 최소한 다른 일을 방해하지
+    않습니다. 전사와 번역이 같은 작은 iGPU를 다투는 것도 피할 수 있습니다.
+
+    `vulkan`/`metal`/`cuda`/`rocm`처럼 딱 집어 줄 수도 있습니다. 없는 것을
+    집으면 세우지 않고 auto로 물러납니다 -- 설정 한 줄 때문에 전사가 아예
+    안 되는 것보다 낫습니다.
+    """
+    import transcribe_cpp as tc
+
+    want = (want or "auto").strip().lower()
+    if want in ("", "auto", "gpu"):
+        # 'gpu'라는 정책은 없습니다. auto가 이미 GPU를 먼저 고릅니다.
+        return "auto"
+    try:
+        if tc.backend_available(want):
+            return want
+    except Exception:
+        pass
+    print(f"[asr] '{want}' 백엔드를 쓸 수 없어 auto로 돌아갑니다",
+          file=sys.stderr)
+    return "auto"
+
+
 class TranscribeCppASR:
     """RoutedASR 자리에 들어가는 단일 언어 어댑터."""
 
     def __init__(self, model_path: str, lang: str, threads: int = 4,
-                 label: str = ""):
+                 label: str = "", device: str = "auto"):
         import transcribe_cpp as tc
 
+        self.device = resolve_device(device)
         self.forced_lang = lang
         self.min_switch_s = 0.0
         # os.path.basename을 씁니다. "/"로만 자르면 윈도우의 역슬래시
@@ -51,8 +84,11 @@ class TranscribeCppASR:
         self.label = label or os.path.basename(model_path)
         self.hallucinations = 0
 
-        self._model = tc.Model(model_path)
+        self.threads = threads
+        self._model = tc.Model(model_path, backend=self.device)
         self._session = self._model.session(n_threads=threads)
+        print(f"[asr] {self.label} · {self.device} · {threads}스레드",
+              file=sys.stderr, flush=True)
         # 바인딩 세션은 동시 호출을 보장하지 않습니다. 라이브 경로는
         # 빠른 패스와 정제 패스가 서로 다른 스레드에서 들어오므로
         # 직렬화합니다.
@@ -159,5 +195,10 @@ def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4):
         raise FileNotFoundError(
             f"전사 모델이 없습니다: {path}\n"
             "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
-    return TranscribeCppASR(path, lang, threads=int(spec.get("threads", threads)),
-                            label=os.path.basename(path).replace(".gguf", ""))
+    device = resolve_device(spec.get("device", "auto"))
+    # 설정에 스레드 수가 적혀 있으면 그것이 우선입니다. 없으면 어디서
+    # 도는지에 맞춰 정합니다.
+    n_threads = int(spec.get("threads") or stream.default_threads(device))
+    return TranscribeCppASR(path, lang, threads=n_threads,
+                            label=os.path.basename(path).replace(".gguf", ""),
+                            device=device)

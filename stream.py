@@ -60,6 +60,21 @@ def model_dir() -> str:
                         "mimiwatch", "models")
 
 
+def default_threads(device: str) -> int:
+    """CPU로 돌릴 때는 스레드를 더 씁니다.
+
+    GPU 경로에서 4는 넉넉합니다 -- 무거운 일은 GPU가 하고 CPU는 앞뒤만
+    맡습니다. CPU로 돌리면 그 4가 전부이므로 코어 수에 맞춰 올립니다.
+    논리 코어를 다 쓰면 오히려 나빠지는 일이 잦아 절반에서 멈춥니다.
+
+    전사와 번역이 같은 규칙을 쓰도록 여기에 둡니다. 둘 다 stream을 이미
+    가져오므로, 한쪽이 다른 쪽의 런타임에 묶이지 않습니다.
+    """
+    if (device or "").strip().lower() == "cpu":
+        return max(4, min(8, (os.cpu_count() or 8) // 2))
+    return 4
+
+
 def build_vad(min_silence: float = 0.35,
               max_speech: float = 12.0) -> sherpa_onnx.VoiceActivityDetector:
     """발화를 잘라 주는 Silero VAD.

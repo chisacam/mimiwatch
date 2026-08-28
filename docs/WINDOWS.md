@@ -110,6 +110,7 @@ transcribe.cpp가 NPU 백엔드를 갖거나, whisper.cpp-amd가 서버를 내�
 | llama-cpp-python 설치 실패 | 파이썬 판에 맞는 휠이 없음 | `-Backend cpu` 로 다시, 그래도 안 되면 파이썬 3.12를 쓰십시오 |
 | 백엔드에 `vulkan`이 없음 | 드라이버가 낡음 | 그래픽 드라이버 갱신. 없어도 CPU로 돕니다 |
 | 내려받다 끊김 | — | 그냥 다시 실행하십시오. 받다 만 것은 `.part`로 남고 완성본만 인정합니다 |
+| `NativeCommandError`로 중간에 멈춤 | 0.1의 결함 (이슈 #1) | 최신 판을 받으십시오. Windows PowerShell 5.1이 명령의 stderr 한 줄을 종료 오류로 바꾸던 문제입니다 |
 
 ## 무엇을 확인했고 무엇을 확인하지 못했는가
 
@@ -150,5 +151,22 @@ brew install powershell
 **확인하지 못한 것**: 윈도우에서만 되는 것들입니다 — `winget` 안내,
 `Get-CimInstance`의 GPU 목록, Vulkan 로더 판정, 휠이 실제로 설치되고
 `transcribe_cpp.backends()`에 `vulkan`이 뜨는지, MSVC 없이 끝까지 가는지.
+
+### 이 하네스가 놓쳤던 것
+
+**Windows PowerShell 5.1은 네이티브 명령의 stderr 한 줄을 종료 오류로
+바꿉니다**(`NativeCommandError`). `$ErrorActionPreference='Stop'`일 때
+그렇고, `2>$null`로는 막히지 않습니다. pwsh 7에는 그 동작이 없어서 macOS
+시험에서는 드러나지 않았고, 실제 윈도우 사용자가 이슈 #1로 알려 주었습니다.
+
+이 스크립트에는 stderr가 정상인 자리가 여럿입니다 — 아직 깔지 않은 패키지를
+`import` 해 보는 확인, `curl`의 진행 막대, `pip`의 알림. 그래서 네이티브
+호출을 전부 `Invoke-Native`(출력을 그대로 흘려보냄)와 `Get-Native`(붙잡아
+돌려줌) 둘 중 하나로 모았습니다. 진행 막대가 살아 있어야 하는 자리는
+`Start-Process -NoNewWindow`로 부릅니다 — 콘솔 핸들을 물려주므로 stderr가
+PowerShell의 오류 스트림을 아예 거치지 않습니다.
+
+하네스의 `[9]`가 이 회귀를 지킵니다. pwsh 7에서도 확인할 수 있는 형태로,
+헬퍼가 stderr를 붙잡고 종료 코드만 돌려주는지 봅니다.
 
 처음 돌려 보시고 걸리는 곳이 있으면 알려 주십시오.

@@ -42,9 +42,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 # PowerShell 7.3부터는 네이티브 명령이 0이 아닌 코드로 끝나면 스스로
-# 예외를 던질 수 있습니다. 이 스크립트는 $LASTEXITCODE를 직접 보고
-# 사람이 읽을 안내를 붙이므로, 그 자동 동작을 끕니다. 5.1에는 이 변수가
-# 없으므로 있을 때만 건드립니다.
+# 예외를 던질 수 있습니다. 이 스크립트는 종료 코드를 직접 보고 사람이 읽을
+# 안내를 붙이므로 그 자동 동작을 끕니다. 5.1에는 이 변수가 없으므로 있을
+# 때만 건드립니다 -- 5.1에는 대신 stderr가 종료 오류가 되는 다른 문제가
+# 있고, 그쪽은 아래 Invoke-Native/Get-Native 가 맡습니다.
 if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
   $PSNativeCommandUseErrorActionPreference = $false
 }
@@ -61,6 +62,63 @@ function Ok   { param($m) Write-Host "  [OK] $m" -ForegroundColor Green }
 function Skip { param($m) Write-Host "  [--] $m" -ForegroundColor DarkGray }
 function Die  { param($m) Write-Host "`n[X] $m" -ForegroundColor Red; exit 1 }
 
+# ── 네이티브 명령 ───────────────────────────────────────────────────────
+#
+# Windows PowerShell 5.1에서는 $ErrorActionPreference='Stop'일 때 네이티브
+# 명령이 stderr에 **한 줄이라도** 쓰면 그것이 종료 오류가 됩니다
+# (NativeCommandError). `2>$null`로는 막히지 않습니다. 실제로 이 자리에서
+# 설치가 멈췄습니다 -- 아직 깔지 않은 패키지를 import 해 보는 확인이
+# 트레이스백을 내자 스크립트가 통째로 죽었습니다(이슈 #1).
+#
+# 이 스크립트에는 stderr가 정상인 자리가 여럿입니다: 위의 확인, curl의 진행
+# 막대, pip의 알림. 그래서 네이티브 호출은 전부 아래 둘 중 하나를 거칩니다.
+# PS 7의 $PSNativeCommandUseErrorActionPreference 와는 다른 이야기라, 위쪽의
+# 그 설정만으로는 5.1이 덮이지 않습니다.
+
+# 출력을 그대로 흘려보내며 부릅니다. 진행 막대처럼 살아 움직여야 하는 것에
+# 씁니다. Start-Process는 콘솔 핸들을 물려주므로 stderr가 PowerShell의 오류
+# 스트림을 거치지 않습니다 -- NativeCommandError 자체가 생기지 않습니다.
+function Invoke-Native {
+  param([Parameter(Mandatory)][string] $FilePath,
+        [string[]] $Arguments = @())
+  # 공백이나 한글이 든 경로가 인자로 갈 수 있으므로 감싸 줍니다.
+  $quoted = @($Arguments | ForEach-Object {
+    if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+  })
+  $p = Start-Process -FilePath $FilePath -ArgumentList $quoted `
+                     -NoNewWindow -Wait -PassThru
+  return $p.ExitCode
+}
+
+# 출력을 붙잡아 돌려줍니다. 짧은 확인에 씁니다. stderr는 문자열로 바꿔
+# 담으므로 오류 레코드가 되지 않습니다.
+function Get-Native {
+  param([Parameter(Mandatory)][string] $FilePath,
+        [string[]] $Arguments = @())
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $lines = & $FilePath @Arguments 2>&1 | ForEach-Object { "$_" }
+    return [pscustomobject]@{ Code = $LASTEXITCODE; Lines = @($lines) }
+  } finally { $ErrorActionPreference = $old }
+}
+
+# 여러 줄짜리 파이썬 조각은 임시 파일로 넘깁니다. -c 로 넘기면 따옴표가
+# 셸을 거치면서 깨지기 쉽고, Start-Process 에서는 특히 그렇습니다.
+function Invoke-PyFile {
+  param([Parameter(Mandatory)][string] $Code,
+        [string[]] $Arguments = @(),
+        [switch] $Stream)
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ("mimiwatch-" + [guid]::NewGuid().ToString('N') + ".py")
+  # Set-Content -Encoding UTF8 은 5.1에서 BOM을 붙이고 7에서는 붙이지
+  # 않습니다. 조각에 한글이 들어 있으므로 인코딩을 못 박아 둡니다.
+  [IO.File]::WriteAllText($tmp, $Code, (New-Object Text.UTF8Encoding $false))
+  try {
+    if ($Stream) { return Invoke-Native $Py (@($tmp) + $Arguments) }
+    return Get-Native $Py (@($tmp) + $Arguments)
+  } finally { Remove-Item -LiteralPath $tmp -EA SilentlyContinue }
+}
+
 # 모델 한 개를 받습니다. 끊긴 다운로드가 완성본으로 보이지 않도록 .part로
 # 받고 다 받은 뒤에 이름을 바꿉니다 -- install.sh와 같은 규칙입니다.
 function Get-Model {
@@ -72,8 +130,8 @@ function Get-Model {
   # curl.exe는 윈도우 10 1803부터 기본으로 들어 있습니다. GB 단위 파일에서
   # Invoke-WebRequest보다 훨씬 빠릅니다 -- 그쪽은 응답을 통째로 메모리에
   # 들고 있다가 마지막에 씁니다.
-  & curl.exe -fL --progress-bar -o $part $Url
-  if ($LASTEXITCODE -ne 0) { Remove-Item $part -EA SilentlyContinue; Die "$Desc 내려받기 실패" }
+  $code = Invoke-Native 'curl.exe' @('-fL', '--progress-bar', '-o', $part, $Url)
+  if ($code -ne 0) { Remove-Item $part -EA SilentlyContinue; Die "$Desc 내려받기 실패 (curl $code)" }
   Move-Item -Force $part $dest
   Ok $Desc
 }
@@ -90,13 +148,13 @@ foreach ($c in 'python', 'python3', 'py -3') {
   # 윈도우 스토어의 자리표시자 python.exe는 실행하면 스토어를 열 뿐입니다.
   # 버전을 물어보고 답하는 것만 진짜로 봅니다.
   #
-  # 성패는 $LASTEXITCODE가 아니라 **출력의 모양**으로 가립니다. `... |
-  # Select-Object -First 1`은 파이프라인을 일찍 끊어 종료 코드를 갱신하지
-  # 않으므로, 앞선 명령의 값이 그대로 남습니다 -- 새 셸에서는 아예 비어
-  # 있어서 `$null -eq 0`이 거짓이 되고, 파이썬이 깔려 있는데도 없다고
-  # 말하게 됩니다. (여러 줄이 나올 수 있어 첫 줄만 봅니다.)
-  $v = (& $exe @pre -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null |
-        Select-Object -First 1)
+  # 성패는 종료 코드가 아니라 **출력의 모양**으로 가립니다. 예전에는
+  # `... | Select-Object -First 1` 뒤의 $LASTEXITCODE를 봤는데, 파이프라인이
+  # 일찍 끊겨 그 값이 갱신되지 않습니다 -- 새 셸에서는 아예 비어 있어서
+  # 파이썬이 깔려 있는데도 없다고 말했습니다. (여러 줄이 나올 수 있어 첫
+  # 줄만 봅니다.)
+  $probe = Get-Native $exe (@($pre) + @('-c', "import sys; print('%d.%d' % sys.version_info[:2])"))
+  $v = ($probe.Lines | Select-Object -First 1)
   if ("$v".Trim() -match '^(\d+)\.(\d+)$') {
     $major = [int]$Matches[1]
     $minor = [int]$Matches[2]
@@ -179,20 +237,21 @@ Say '가상환경'
 if (Test-Path $Py) {
   Skip '있음'
 } else {
-  & $PythonExe @PythonArgs -m venv (Join-Path $Here '.venv')
-  if ($LASTEXITCODE -ne 0) { Die '가상환경 생성 실패' }
+  $code = Invoke-Native $PythonExe (@($PythonArgs) + @('-m', 'venv', (Join-Path $Here '.venv')))
+  if ($code -ne 0) { Die '가상환경 생성 실패' }
   Ok '생성'
 }
-& $Py -m pip install -q --upgrade pip
-if ($LASTEXITCODE -ne 0) { Die 'pip 갱신 실패' }
+$code = Invoke-Native $Py @('-m', 'pip', 'install', '-q', '--upgrade', 'pip')
+if ($code -ne 0) { Die 'pip 갱신 실패' }
 
 Say '의존성'
 # llama-cpp-python은 PyPI에 윈도우 휠이 없습니다. 만든 쪽이 따로 두는
 # 인덱스에는 있고, 거기에는 Vulkan 판도 있습니다. requirements.txt에
 # 적어 두지 않는 이유는 이 인덱스가 윈도우에서만 필요하기 때문입니다.
 $llamaIndex = "https://abetlen.github.io/llama-cpp-python/whl/$Backend"
-& $Py -m pip install -q --extra-index-url $llamaIndex -r (Join-Path $Here 'requirements.txt')
-if ($LASTEXITCODE -ne 0) {
+$code = Invoke-Native $Py @('-m', 'pip', 'install', '--extra-index-url', $llamaIndex,
+                           '-r', (Join-Path $Here 'requirements.txt'))
+if ($code -ne 0) {
   Die @"
 의존성 설치에 실패했습니다.
   llama-cpp-python 휠을 못 찾은 것이라면 -Backend cpu 로 다시 해 보십시오.
@@ -205,15 +264,17 @@ Ok '설치'
 Say '전사 런타임 (transcribe.cpp)'
 # 맥/리눅스는 여기서 소스를 받아 CMake로 빌드하지만, 윈도우 휠에는 CPU와
 # Vulkan 백엔드가 DLL로 함께 들어 있습니다. 받아서 풀면 끝입니다.
-& $Py -c "import transcribe_cpp" 2>$null
-if ($LASTEXITCODE -eq 0) {
+# 아직 안 깔렸으면 여기서 트레이스백이 납니다. 그것이 정상이고, 그래서
+# Get-Native 로 붙잡습니다 -- 그냥 부르면 5.1이 이 트레이스백을 종료 오류로
+# 바꿔 설치를 통째로 세웁니다(이슈 #1).
+if ((Get-Native $Py @('-c', 'import transcribe_cpp')).Code -eq 0) {
   Skip '설치됨'
 } else {
-  & $Py -m pip install -q transcribe-cpp
-  if ($LASTEXITCODE -ne 0) { Die 'transcribe-cpp 설치 실패' }
+  $code = Invoke-Native $Py @('-m', 'pip', 'install', 'transcribe-cpp')
+  if ($code -ne 0) { Die 'transcribe-cpp 설치 실패' }
   Ok '설치'
 }
-& $Py -c @'
+$backendProbe = @'
 import transcribe_cpp
 kinds = [b.kind for b in transcribe_cpp.backends()]
 print('  쓸 수 있는 백엔드: ' + ', '.join(sorted(set(kinds))))
@@ -221,6 +282,10 @@ if 'vulkan' not in kinds:
     print('  (GPU 경로가 안 잡혔습니다. 전사는 CPU로 돕니다 -- 그래픽')
     print('   드라이버를 갱신하면 잡힐 수 있습니다.)')
 '@
+# 백엔드를 못 읽어도 설치를 세우지 않습니다. 알려 주는 것이 목적입니다.
+$probe = Invoke-PyFile $backendProbe
+if ($probe.Code -eq 0) { $probe.Lines | ForEach-Object { Write-Host $_ } }
+else { Skip '백엔드 목록을 읽지 못했습니다 (전사는 CPU로도 돕니다)' }
 
 # ---- 4. 모델 ---------------------------------------------------------------
 Say '모델'
@@ -247,12 +312,13 @@ if (Test-Path $m2m) {
   Skip 'M2M-100 있음'
 } else {
   Write-Host '  M2M-100 (473MB - 대체 번역기) 내려받는 중...'
-  & $Py -c @'
+  $getM2M = @'
 import sys
 from huggingface_hub import snapshot_download
 snapshot_download('ishiki-emo/mojicast-m2m100-ct2', local_dir=sys.argv[1])
-'@ $m2m
-  if ($LASTEXITCODE -ne 0) { Die 'M2M-100 내려받기 실패' }
+'@
+  $code = Invoke-PyFile $getM2M @($m2m) -Stream
+  if ($code -ne 0) { Die 'M2M-100 내려받기 실패' }
   Ok 'M2M-100'
 }
 
@@ -275,7 +341,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Here 'data') | Out-Null
 # ---- 6. 확인 ---------------------------------------------------------------
 Say '확인'
 $env:MIMIWATCH_MODEL_DIR = $ModelDir
-& $Py -c @'
+$verify = @'
 import os, sys
 sys.path.insert(0, sys.argv[1])
 import stream, tcpp_asr                                   # noqa: F401
@@ -288,8 +354,10 @@ if missing:
     raise SystemExit(1)
 print('  모듈 적재 OK')
 print('  필수 모델 OK')
-'@ $Here
-if ($LASTEXITCODE -ne 0) { Die '설치 확인 실패' }
+'@
+$check = Invoke-PyFile $verify @($Here)
+$check.Lines | ForEach-Object { Write-Host $_ }
+if ($check.Code -ne 0) { Die '설치 확인 실패' }
 Ok '설치 확인 완료'
 
 Write-Host "`n설치가 끝났습니다.`n" -ForegroundColor White

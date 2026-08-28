@@ -18,6 +18,13 @@
      알아봤으니 CPU로 가자"는 자리에서 설치가 통째로 멈춥니다.
   3. 없는 드라이브 앞에서 `Test-Path`도 같은 문제를 냅니다.
 
+이 하네스가 놓친 것도 하나 적어 둡니다. Windows PowerShell 5.1은
+`$ErrorActionPreference='Stop'`일 때 네이티브 명령의 stderr 한 줄을 종료
+오류로 바꿉니다(NativeCommandError). pwsh 7에는 그 동작이 없어서 여기서는
+드러나지 않았고, 실제 윈도우 사용자가 이슈 #1로 알려 주었습니다. 그래서
+아래 [9]는 pwsh 7에서도 확인할 수 있는 형태로 -- 헬퍼가 stderr를 붙잡아
+종료 코드만 돌려주는지 -- 시험합니다.
+
     pwsh 가 필요합니다:  brew install powershell
     실행:                .venv/bin/python bench/ps_test.py
 """
@@ -35,8 +42,8 @@ def slice_script():
     find = lambda p: next(i for i, l in enumerate(src, 1) if p(l))
     py_s = find(lambda l: l.startswith("$PythonExe = $null"))
     py_e = find(lambda l: l.startswith("if (-not $PythonExe)")) - 1
-    v_e = find(lambda l: l.startswith("'@ $Here"))
-    v_s = max(i for i, l in enumerate(src[:v_e], 1) if l.strip() == "& $Py -c @'")
+    v_s = find(lambda l: l.startswith("$verify = @'"))
+    v_e = find(lambda l: l.startswith("$check.Lines"))
     b_s = find(lambda l: l.startswith("Say '백엔드'"))
     b_e = next(i for i, l in enumerate(src, 1) if i > b_s and l == "}")
     fn_s = find(lambda l: l.startswith("function Say"))
@@ -44,7 +51,7 @@ def slice_script():
                 and src[i - 2].strip().startswith("Ok $Desc"))
     # 범위를 잘못 잡으면 모델 내려받기 구간까지 실행됩니다. 한 번 그렇게
     # 2.2GB를 받았습니다.
-    assert v_e - v_s < 20, f"확인 블록이 {v_e - v_s}행 -- 범위를 잘못 잡았습니다"
+    assert v_e - v_s < 25, f"확인 블록이 {v_e - v_s}행 -- 범위를 잘못 잡았습니다"
     assert b_e - b_s < 45, f"백엔드 블록이 {b_e - b_s}행 -- 범위를 잘못 잡았습니다"
     L = lambda a, b: "\n".join(src[a - 1:b])
     return {"fns": L(fn_s, fn_e), "python": L(py_s, py_e),
@@ -98,10 +105,10 @@ $Py = Join-Path $env:REPO '.venv/bin/python'
 $Here = $env:REPO
 $env:MIMIWATCH_MODEL_DIR = $env:REALMODELS
 {p['verify']}
-Assert ($LASTEXITCODE -eq 0) '[6] 여기-문자열을 -c 로 넘겨 확인이 통과한다'
+Assert ($check.Code -eq 0) '[6] 파이썬 조각을 넘겨 확인이 통과한다'
 $env:MIMIWATCH_MODEL_DIR = $ModelDir
 {p['verify']}
-Assert ($LASTEXITCODE -eq 1) '[6b] 모델이 없으면 exit 1'
+Assert ($check.Code -eq 1) '[6b] 모델이 없으면 종료 코드 1'
 
 $Backend = 'auto'
 {p['backend']}
@@ -109,6 +116,35 @@ Assert ($Backend -eq 'cpu') "[7] GPU/WMI/드라이브가 없어도 멈추지 않
 
 Assert (-not ('{w}' -notmatch [regex]::Escape('{n}'))) '[8] 기본 위치면 안내하지 않는다'
 Assert ('D:{chr(92)}models' -notmatch [regex]::Escape('{n}')) '[8] 다른 위치면 안내한다'
+
+# [9] 이슈 #1의 회귀 시험.
+#
+# 아직 깔지 않은 패키지를 import 해 보는 확인은 트레이스백을 냅니다. 그것이
+# 정상이고, 스크립트를 세워서는 안 됩니다. Windows PowerShell 5.1에서는
+# $ErrorActionPreference='Stop'이 그 stderr를 종료 오류로 바꿔 설치를
+# 통째로 죽였습니다. 헬퍼가 stderr를 붙잡고 종료 코드만 돌려주는지 봅니다.
+$ErrorActionPreference = 'Stop'
+$threw = $false
+$res = $null
+try {{
+  $res = Get-Native $env:SYSPY @('-c', 'import sys; print("boom", file=sys.stderr); sys.exit(3)')
+}} catch {{ $threw = $true }}
+Assert (-not $threw) '[9] stderr를 내는 명령이 스크립트를 세우지 않는다'
+Assert ($res -and $res.Code -eq 3) "[9] 종료 코드를 그대로 돌려준다 ($($res.Code))"
+Assert ($res -and ($res.Lines -join ' ') -match 'boom') '[9] stderr 내용도 붙잡는다'
+
+$threw = $false
+try {{
+  $code = Invoke-Native $env:SYSPY @('-c', 'import sys; print("boom", file=sys.stderr); sys.exit(4)')
+}} catch {{ $threw = $true }}
+Assert (-not $threw) '[9] 흘려보내는 쪽도 세우지 않는다'
+Assert ($code -eq 4) "[9] 흘려보내는 쪽도 종료 코드를 돌려준다 ($code)"
+
+# [10] 공백이 든 경로를 인자로 넘겨도 살아남는가.
+$spaced = Join-Path $ModelDir 'a b'
+New-Item -ItemType Directory -Force -Path $spaced | Out-Null
+$probe = Get-Native $env:SYSPY @('-c', 'import sys,os; print(os.path.isdir(sys.argv[1]))', $spaced)
+Assert (($probe.Lines -join '') -match 'True') '[10] 공백이 든 경로가 온전히 전달된다'
 
 Write-Host ""
 if ($fail) {{ Write-Host "$fail 건 실패" -ForegroundColor Red; exit 1 }}
@@ -156,6 +192,9 @@ if ($e.Count) {{ $e | ForEach-Object {{ $_.Message }}; exit 1 }}
                "REALMODELS": os.environ.get(
                    "MIMIWATCH_MODEL_DIR",
                    os.path.expanduser("~/.local/share/mimiwatch/models")),
+               # [9]/[10]에서 stderr를 일부러 내는 데 씁니다. venv 파이썬은
+               # 무거우므로 시스템 파이썬을 씁니다.
+               "SYSPY": shutil.which("python3") or shutil.which("python") or "python3",
                "PATH": f"{tmp}/shim:{os.environ['PATH']}"}
         r = subprocess.run(["pwsh", "-NoProfile", "-File", f"{tmp}/harness.ps1"],
                            env=env, capture_output=True, text=True)

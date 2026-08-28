@@ -1,8 +1,8 @@
 """쌓인 자막을 파일로 내보냅니다.
 
-읽는 곳이 두 군데입니다. 녹화본은 `data/<영상id>.json` 에 `start`/`end` 를
-가진 채로 있고, 라이브는 SQLite 의 `cues` 에 시작 시각 `t` 만 있습니다.
-여기서 그 둘을 한 모양으로 만든 뒤 형식을 입힙니다.
+녹화본과 라이브가 같은 표에 있으므로 읽는 길은 하나입니다. 다만 담고 있는
+것이 다릅니다 -- 녹화본은 구간을 실제로 재어 `end` 가 있고, 라이브는 시작
+시각뿐입니다.
 
 라이브에 끝 시각이 없는 것은 구조상 그렇습니다 -- 발화가 끝나는 순간을
 아는 것은 VAD 이고, 자막은 그보다 늦게 확정되어 시작 시각만 달고 나옵니다.
@@ -12,11 +12,8 @@ SRT/VTT 는 끝 시각을 요구하므로 여기서 지어 줍니다. 규칙은 
 from __future__ import annotations
 
 import json
-import os
 
 import store
-
-DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 # 라이브 자막의 끝 시각을 짓는 규칙.
 #
@@ -96,25 +93,25 @@ def _collect_live(session_id: str) -> tuple[dict, list[dict]]:
 
 
 def _collect_video(video_id: str) -> tuple[dict, list[dict]]:
-    path = os.path.join(DATA, os.path.basename(video_id) + ".json")
-    if not os.path.exists(path):
+    meta_doc = store.doc(video_id)
+    if meta_doc is None:
         raise KeyError("no such video")
-    with open(path, encoding="utf-8") as f:
-        doc = json.load(f)
+    cues = store.cues(video_id)
     # 녹화본은 구간을 실제로 재어 두었으므로 그대로 씁니다.
-    backend = (doc.get("backends_done") or [""])[-1]
+    backend = (meta_doc.get("backends_done")
+               or sorted({b for c in cues for b in c["translations"]}) or [""])[-1]
     rows = [{
-        "start": float(c.get("start") or 0.0),
-        "end": float(c.get("end") or 0.0),
-        "text": (c.get("text") or "").strip(),
-        "tr": _pick(c.get("translations") or {}, backend).strip(),
-        "speaker": c.get("speaker") or "",
-        "kind": "final",
-    } for c in doc.get("cues", [])]
-    meta = {"title": doc.get("title") or video_id, "value": video_id,
-            "source_lang": doc.get("source_lang") or "",
-            "viewer_lang": doc.get("viewer_lang") or "",
-            "live": False, "url": doc.get("url") or ""}
+        "start": float(c["t"] or 0.0),
+        "end": float(c["end"] or 0.0),
+        "text": (c["text"] or "").strip(),
+        "tr": _pick(c["translations"], backend).strip(),
+        "speaker": c["speaker"],
+        "kind": c["kind"] or "final",
+    } for c in cues]
+    meta = {"title": meta_doc.get("title") or video_id, "value": video_id,
+            "source_lang": meta_doc.get("source_lang") or "",
+            "viewer_lang": meta_doc.get("viewer_lang") or "",
+            "live": False, "url": meta_doc.get("url") or ""}
     return meta, rows
 
 

@@ -56,17 +56,36 @@ CREATE TABLE IF NOT EXISTS sessions (
   doc       TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS cues (
-  session  TEXT NOT NULL,
+  owner    TEXT NOT NULL,
   cue_id   INTEGER NOT NULL,
   kind     TEXT NOT NULL DEFAULT '',
-  t        REAL NOT NULL DEFAULT 0,
+  start    REAL NOT NULL DEFAULT 0,
+  end      REAL NOT NULL DEFAULT 0,
   text     TEXT NOT NULL DEFAULT '',
   lang     TEXT NOT NULL DEFAULT '',
   speaker  TEXT NOT NULL DEFAULT '',
   tr       TEXT NOT NULL DEFAULT '{}',
-  PRIMARY KEY (session, cue_id)
+  PRIMARY KEY (owner, cue_id)
+);
+CREATE INDEX IF NOT EXISTS cues_owner_start ON cues(owner, start);
+CREATE TABLE IF NOT EXISTS docs (
+  id       TEXT PRIMARY KEY,
+  updated  REAL NOT NULL,
+  doc      TEXT NOT NULL
 );
 """
+
+# 열 이름이 바뀌었습니다. 예전 판으로 만든 파일에는 `session`과 `t`가 있고,
+# IF NOT EXISTS는 이미 있는 테이블을 그냥 두므로 여기서 따로 옮깁니다.
+#
+# `session`을 `owner`로 바꾼 것은 이 표가 이제 라이브 세션만 담지 않기
+# 때문입니다. 녹화본 자막도 같은 표에 들어옵니다 -- 저장 모양이 갈려 있어서
+# 자막 한 줄을 고치는 길이 두 벌이었고, 내보내기·편집·재번역이 그 갈래를
+# 하나씩 더 짊어져야 했습니다.
+#
+# `t`를 `start`로 바꾼 것은 이제 짝이 되는 `end`가 생겼기 때문입니다.
+# 녹화본은 구간을 실제로 재어 두었고, 라이브는 끝 시각을 모릅니다(0).
+COLUMN_MOVES = [("session", "owner"), ("t", "start")]
 
 
 def _connect() -> sqlite3.Connection:
@@ -78,9 +97,27 @@ def _connect() -> sqlite3.Connection:
         _db.execute("PRAGMA journal_mode=WAL")
         _db.execute("PRAGMA synchronous=NORMAL")
         _db.execute("PRAGMA busy_timeout=5000")
+        _migrate_columns(_db)
         _db.executescript(SCHEMA)
+        _migrate_columns(_db)      # 갓 만든 표에는 걸릴 것이 없습니다
         _db.commit()
     return _db
+
+
+def _migrate_columns(db: sqlite3.Connection):
+    """옛 열 이름을 새 이름으로 옮깁니다. 이미 옮겼으면 아무것도 하지 않습니다."""
+    have = {r[1] for r in db.execute("PRAGMA table_info(cues)")}
+    if not have:
+        return                      # 표가 아직 없습니다. SCHEMA가 만듭니다.
+    for old, new in COLUMN_MOVES:
+        if old in have and new not in have:
+            db.execute(f"ALTER TABLE cues RENAME COLUMN {old} TO {new}")
+            have.discard(old)
+            have.add(new)
+    if "end" not in have:
+        # 이미 쌓인 자막은 전부 라이브라 끝 시각이 없습니다. 0은 「모른다」는
+        # 뜻이고, 내보낼 때 다음 줄까지로 지어 줍니다.
+        db.execute("ALTER TABLE cues ADD COLUMN end REAL NOT NULL DEFAULT 0")
 
 
 def init():
@@ -145,7 +182,7 @@ def session(session_id: str) -> dict | None:
 def sessions(limit: int = 30) -> list[dict]:
     out = []
     for r in _rows("SELECT s.doc, s.video_id, s.started, "
-                   "  (SELECT COUNT(*) FROM cues WHERE cues.session = s.id) AS cues "
+                   "  (SELECT COUNT(*) FROM cues WHERE cues.owner = s.id) AS cues "
                    "FROM sessions s ORDER BY s.started DESC LIMIT ?", (limit,)):
         out.append({**json.loads(r["doc"]), "video_id": r["video_id"],
                     "started_at": r["started"], "cues": r["cues"]})
@@ -166,17 +203,19 @@ def save_cue(session_id: str, cue: dict):
     갈아 끼울 때 번역은 비웁니다. 정제본은 문장이 바뀐 것이므로 앞 번역은
     이미 틀린 문장에 대한 번역입니다. 새 번역은 곧 따로 도착합니다.
     """
-    _write("INSERT INTO cues (session, cue_id, kind, t, text, lang, speaker) "
-           "VALUES (?, ?, ?, ?, ?, ?, ?) "
-           "ON CONFLICT(session, cue_id) DO UPDATE SET "
-           "  kind=excluded.kind, t=excluded.t, text=excluded.text, "
+    _write("INSERT INTO cues (owner, cue_id, kind, start, end, text, lang, speaker) "
+           "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+           "ON CONFLICT(owner, cue_id) DO UPDATE SET "
+           "  kind=excluded.kind, start=excluded.start, end=excluded.end, "
+           "  text=excluded.text, "
            "  lang=excluded.lang, speaker=excluded.speaker, tr='{}'",
            # `.get(k, "")`는 키가 없을 때만 기본값을 냅니다. 키가 있고
            # 값이 None이면 None이 그대로 바인딩되어, 열의 DEFAULT ''도
            # 적용되지 않은 채 NOT NULL에 걸립니다. 자막 한 줄을 잃는 것도
            # 아니고 세션이 끝나므로, 값 쪽에서 한 번 더 거릅니다.
            (session_id, int(cue["id"]), cue.get("kind") or "",
-            float(cue.get("t") or 0), cue.get("text") or "",
+            float(cue.get("t") or 0), float(cue.get("end") or 0),
+            cue.get("text") or "",
             cue.get("lang") or "", cue.get("speaker") or ""))
 
 
@@ -184,7 +223,7 @@ def drop_cues(session_id: str, cue_ids: list[int]):
     if not cue_ids:
         return
     marks = ",".join("?" * len(cue_ids))
-    _write(f"DELETE FROM cues WHERE session = ? AND cue_id IN ({marks})",
+    _write(f"DELETE FROM cues WHERE owner = ? AND cue_id IN ({marks})",
            (session_id, *[int(i) for i in cue_ids]))
 
 
@@ -194,22 +233,155 @@ def save_translation(session_id: str, cue_id: int, backend: str, text: str):
     # 필요가 없는 의존입니다.
     with _lock:
         db = _connect()
-        row = db.execute("SELECT tr FROM cues WHERE session = ? AND cue_id = ?",
+        row = db.execute("SELECT tr FROM cues WHERE owner = ? AND cue_id = ?",
                          (session_id, int(cue_id))).fetchone()
         if row is None:
             return
         tr = json.loads(row["tr"] or "{}")
         tr[backend] = text
-        db.execute("UPDATE cues SET tr = ? WHERE session = ? AND cue_id = ?",
+        db.execute("UPDATE cues SET tr = ? WHERE owner = ? AND cue_id = ?",
                    (json.dumps(tr, ensure_ascii=False), session_id, int(cue_id)))
         db.commit()
 
 
-def cues(session_id: str) -> list[dict]:
+def cues(owner: str) -> list[dict]:
     """쌓인 자막을 도착 순서대로. 정제본은 자기가 흡수한 첫 확정 줄의 id를
-    물려받으므로, id 순서가 곧 읽는 순서입니다."""
-    return [{"id": r["cue_id"], "kind": r["kind"], "t": r["t"],
+    물려받으므로, id 순서가 곧 읽는 순서입니다.
+
+    시작 시각은 `t`로 냅니다. 열 이름은 `start`이지만 이 딕셔너리는 그대로
+    SSE 로 나가고 브라우저가 `t`로 읽습니다 -- 저장 이름을 바꿨다고 통신
+    형식까지 흔들 이유가 없습니다. `end`는 0이면 모른다는 뜻입니다.
+    """
+    return [{"id": r["cue_id"], "kind": r["kind"], "t": r["start"],
+             "end": r["end"],
              "text": r["text"], "lang": r["lang"], "speaker": r["speaker"],
              "translations": json.loads(r["tr"] or "{}")}
-            for r in _rows("SELECT * FROM cues WHERE session = ? "
-                           "ORDER BY cue_id", (session_id,))]
+            for r in _rows("SELECT * FROM cues WHERE owner = ? "
+                           "ORDER BY cue_id", (owner,))]
+
+
+def cue_count(owner: str) -> int:
+    return _rows("SELECT COUNT(*) AS n FROM cues WHERE owner = ?", (owner,))[0]["n"]
+
+
+def replace_cues(owner: str, rows: list[dict]):
+    """한 소유자의 자막을 통째로 갈아 끼웁니다. 녹화본 전사가 끝났을 때처럼
+    앞의 것이 의미를 잃는 경우에만 씁니다."""
+    with _lock:
+        db = _connect()
+        db.execute("DELETE FROM cues WHERE owner = ?", (owner,))
+        db.executemany(
+            "INSERT INTO cues (owner, cue_id, kind, start, end, text, lang, "
+            "speaker, tr) VALUES (?,?,?,?,?,?,?,?,?)",
+            [(owner, i + 1, c.get("kind") or "final",
+              float(c.get("start") or c.get("t") or 0),
+              float(c.get("end") or 0), c.get("text") or "",
+              c.get("lang") or "", c.get("speaker") or "",
+              json.dumps(c.get("translations") or {}, ensure_ascii=False))
+             for i, c in enumerate(rows)])
+        db.commit()
+
+
+def update_cue(owner: str, cue_id: int, **fields) -> bool:
+    """자막 한 줄의 몇 칸만 고칩니다. 편집과 재번역이 쓰는 자리입니다.
+
+    파일에 담아 두던 시절에는 한 글자를 고치려면 그 영상의 자막을 통째로
+    다시 써야 했습니다. 83분짜리가 수백 줄인데, 그 도중에 서버가 죽으면
+    전부 잃습니다.
+    """
+    cols = {k: v for k, v in fields.items()
+            if k in ("kind", "start", "end", "text", "lang", "speaker")}
+    tr = fields.get("translations")
+    if not cols and tr is None:
+        return False
+    sets = [f"{k} = ?" for k in cols]
+    args = list(cols.values())
+    if tr is not None:
+        sets.append("tr = ?")
+        args.append(json.dumps(tr, ensure_ascii=False))
+    with _lock:
+        db = _connect()
+        cur = db.execute(f"UPDATE cues SET {', '.join(sets)} "
+                         "WHERE owner = ? AND cue_id = ?",
+                         (*args, owner, int(cue_id)))
+        db.commit()
+        return cur.rowcount > 0
+
+
+# ---- 녹화본 -----------------------------------------------------------------
+#
+# 예전에는 `data/<영상id>.json` 파일 하나에 메타와 자막을 함께 담았습니다.
+# 자막만 이쪽 표로 옮기고 메타는 `docs`에 JSON 한 덩어리로 남깁니다 --
+# 세션 레코드와 같은 이유입니다. 조회 조건이 id 하나뿐이고, 그대로 HTTP
+# 응답이 되므로 열로 펼치면 필드가 늘 때마다 어긋날 자리가 생깁니다.
+
+def save_doc(video_id: str, meta: dict):
+    _write("INSERT OR REPLACE INTO docs (id, updated, doc) VALUES (?, ?, ?)",
+           (video_id, time.time(), json.dumps(meta, ensure_ascii=False)))
+
+
+def doc(video_id: str) -> dict | None:
+    rows = _rows("SELECT doc FROM docs WHERE id = ?", (video_id,))
+    return json.loads(rows[0]["doc"]) if rows else None
+
+
+def doc_ids() -> list[str]:
+    """최근에 손댄 것부터. 목록이 그 순서로 보여 줍니다."""
+    return [r["id"] for r in
+            _rows("SELECT id FROM docs ORDER BY updated DESC")]
+
+
+def delete_doc(video_id: str):
+    with _lock:
+        db = _connect()
+        db.execute("DELETE FROM cues WHERE owner = ?", (video_id,))
+        db.execute("DELETE FROM docs WHERE id = ?", (video_id,))
+        db.commit()
+
+
+LEGACY = os.path.join(DATA, "legacy")
+
+
+def import_legacy_docs() -> int:
+    """`data/<영상id>.json` 을 표로 옮깁니다. 기동할 때 한 번 돌고, 옮길 것이
+    없으면 아무것도 하지 않습니다.
+
+    **원본을 지우지 않고 `data/legacy/` 로 옮깁니다.** 옮기는 일이 어긋나도
+    되돌아갈 자리가 있어야 합니다. 그 디렉터리는 아무도 읽지 않으므로,
+    한동안 써 보고 괜찮으면 지우면 됩니다.
+    """
+    if not os.path.isdir(DATA):
+        return 0
+    names = [n for n in sorted(os.listdir(DATA)) if n.endswith(".json")]
+    if not names:
+        return 0
+    moved = 0
+    for name in names:
+        path = os.path.join(DATA, name)
+        vid = name[:-5]
+        try:
+            with open(path, encoding="utf-8") as f:
+                old = json.load(f)
+        except Exception as exc:
+            print(f"[store] {name} 을 읽지 못해 그대로 둡니다: {exc}")
+            continue
+        if not isinstance(old, dict) or "cues" not in old:
+            continue                # 우리 것이 아닙니다
+        rows = old.pop("cues", [])
+        # 옛 판은 자막마다 `translation` 하나만 달고 있었습니다. 백엔드별
+        # 지도로 접어 넣습니다 -- jobs.migrate() 가 하던 일입니다.
+        for c in rows:
+            if "translations" not in c:
+                c["translations"] = ({"local-m2m100": c["translation"]}
+                                     if c.get("translation") else {})
+        old["backends_done"] = sorted({b for c in rows for b in c["translations"]})
+        save_doc(vid, old)
+        replace_cues(vid, rows)
+        os.makedirs(LEGACY, exist_ok=True)
+        os.replace(path, os.path.join(LEGACY, name))
+        moved += 1
+        print(f"[store] 옮김: {name} ({len(rows)}줄)")
+    if moved:
+        print(f"[store] 녹화본 {moved}개를 표로 옮겼습니다. "
+              f"원본은 {LEGACY} 에 있습니다.")
+    return moved

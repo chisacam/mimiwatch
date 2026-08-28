@@ -42,29 +42,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_file(os.path.join(WEB, "index.html"), "text/html; charset=utf-8")
 
         if path == "/api/videos":
+            # 최근에 손댄 것부터. 방금 기다린 영상이 맨 위에 있어야지, id가
+            # 어디에 정렬되느냐에 달릴 일이 아닙니다. 예전에는 파일 mtime을
+            # 봤는데 이제 표에 updated가 있습니다.
             items = []
-            names = sorted(os.listdir(DATA)) if os.path.isdir(DATA) else []
-            # Newest first: after adding a video the one you just waited for
-            # should be at the top, not wherever its id happens to sort.
-            names.sort(key=lambda n: os.path.getmtime(os.path.join(DATA, n)),
-                       reverse=True)
-            for name in names:
-                if not name.endswith(".json"):
-                    continue
-                d = jobs.load_video(name[:-5])
+            for vid in store.doc_ids():
+                d = store.doc(vid) or {}
                 items.append({k: d.get(k) for k in
                               ("id", "title", "duration", "uploader", "source_lang",
                                "viewer_lang", "translated", "audio_seconds",
                                "backends_done")} |
-                             {"cues": len(d.get("cues", []))})
+                             {"cues": store.cue_count(vid)})
             return self._send(json.dumps(items, ensure_ascii=False).encode(),
                               "application/json; charset=utf-8")
 
         if path.startswith("/api/video/"):
             vid = os.path.basename(path[len("/api/video/"):])
-            if not os.path.exists(os.path.join(DATA, f"{vid}.json")):
+            try:
+                doc = jobs.load_video(vid)
+            except KeyError:
                 return self._send(b'{"error":"not found"}', "application/json", 404)
-            doc = jobs.load_video(vid)
             return self._json(doc)
 
         if path == "/api/backends":
@@ -381,6 +378,10 @@ def main():
     # 스키마 생성과 복구를 요청을 받기 전에 끝냅니다. 재시작 전에 돌던 작업과
     # 세션은 이어질 수 없으므로, 계속 도는 척하지 않고 중단됨으로 적습니다.
     store.init()
+    # 예전 판이 남긴 `data/<영상id>.json` 을 표로 옮깁니다. 옮길 것이 없으면
+    # 아무것도 하지 않으므로 매번 불러도 됩니다. 원본은 지우지 않고
+    # data/legacy/ 로 옮깁니다.
+    store.import_legacy_docs()
     stale_jobs, stale_live = jobs.restore(), live.restore()
     if stale_jobs or stale_live:
         print(f"mimiwatch: 재시작 전 작업 {stale_jobs}건, 라이브 세션 "

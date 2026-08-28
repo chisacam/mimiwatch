@@ -142,38 +142,37 @@ def find_asr(backend_id: str) -> dict | None:
     return None
 
 
-def video_path(vid: str) -> str:
-    return os.path.join(DATA, f"{vid}.json")
+# 녹화본도 라이브와 같은 표에 담깁니다. 예전에는 `data/<영상id>.json` 파일
+# 하나였는데, 그러면 자막 한 줄을 고칠 때마다 그 영상의 자막을 통째로 다시
+# 써야 합니다. 83분짜리가 수백 줄이고, 쓰는 도중에 죽으면 전부 잃습니다.
+# 아래 셋은 부르는 쪽을 그대로 두려고 이름을 남긴 껍데기입니다.
+
+def has_video(vid: str) -> bool:
+    return store.doc(vid) is not None
 
 
 def load_video(vid: str) -> dict:
-    with open(video_path(vid), encoding="utf-8") as f:
-        doc = json.load(f)
-    return migrate(doc)
-
-
-def migrate(doc: dict) -> dict:
-    """Older files carry a single `translation` per cue; fold it into the
-    per-backend map so both shapes can coexist without a data migration
-    step the user has to run."""
-    for c in doc.get("cues", []):
-        if "translations" not in c:
-            c["translations"] = ({"local-m2m100": c["translation"]}
-                                 if c.get("translation") else {})
-    doc["backends_done"] = sorted({b for c in doc.get("cues", [])
-                                   for b in c["translations"]})
+    meta = store.doc(vid)
+    if meta is None:
+        raise KeyError(vid)
+    cues = [{"start": c["t"], "end": c["end"], "lang": c["lang"],
+             "text": c["text"], "translations": c["translations"]}
+            | ({"speaker": c["speaker"]} if c["speaker"] else {})
+            for c in store.cues(vid)]
+    doc = {**meta, "cues": cues}
+    doc["backends_done"] = sorted({b for c in cues for b in c["translations"]})
     return doc
 
 
 def save_video(vid: str, doc: dict):
     # Recompute rather than trust the value loaded before this pass ran; a
     # job that just added a backend would otherwise write a stale list.
-    doc["backends_done"] = sorted({b for c in doc.get("cues", [])
+    doc = dict(doc)
+    cues = doc.pop("cues", [])
+    doc["backends_done"] = sorted({b for c in cues
                                    for b in c.get("translations", {})})
-    tmp = video_path(vid) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(doc, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, video_path(vid))
+    store.save_doc(vid, doc)
+    store.replace_cues(vid, cues)
 
 
 def delete_video(vid: str, keep_audio: bool = False) -> dict:
@@ -182,10 +181,9 @@ def delete_video(vid: str, keep_audio: bool = False) -> dict:
     The wav is the bulk of the footprint (a 108-minute broadcast is ~200MB)
     but it is also what makes a re-transcribe fast, so the caller chooses.
     """
-    path = video_path(vid)
-    if not os.path.exists(path):
+    if not has_video(vid):
         return {"error": f"'{vid}' 영상이 없습니다"}
-    os.remove(path)
+    store.delete_doc(vid)
     freed = 0
     wav = os.path.join(DATA, f"{vid}.wav")
     if not keep_audio and os.path.exists(wav):
@@ -365,7 +363,7 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         # for with another backend. Transcription is deterministic for the
         # same audio, so a cue whose text is unchanged keeps what it had.
         previous = []
-        if os.path.exists(video_path(meta["id"])):
+        if has_video(meta["id"]):
             try:
                 previous = load_video(meta["id"]).get("cues", [])
             except Exception:

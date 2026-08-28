@@ -21,7 +21,12 @@ let tabId = null;
 let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55, offset: 0 };
 /* 새 세션을 시작할 때 쓰는 값. 자막 모양(prefs)과 나눠 둡니다 -- 저쪽은
  * 지금 보이는 것을 바꾸고, 이쪽은 다음에 시작할 것을 정합니다. */
-let start = { lang: "", genre: "general" };
+/* 정제는 **꺼 둔 채로 시작합니다.** mimiwatch 페이지의 기본값과 다릅니다.
+ * 저쪽은 녹화본도 다루지만 확장은 라이브만 시작하고, 라이브에서는 정제가
+ * 대개 손해입니다 -- 발화 한 무리가 끝나기를 2초 기다렸다 합쳐서 다시
+ * 받아 적으므로, 말이 빠르게 오가면 자막이 늦게 자리를 잡고 이미 읽은 줄이
+ * 통째로 바뀝니다. */
+let start = { lang: "", genre: "general", refine: false };
 const SKEY = "startPrefs";
 
 function fail(text) {
@@ -57,6 +62,7 @@ async function init() {
   $("lang").value = start.lang || "";
   $("genre").value = start.genre || "general";
   if (!$("genre").value) $("genre").selectedIndex = 0;
+  $("refine").checked = !!start.refine;
   await refreshState();
   // 유튜브 탭이 아니면 시작할 것도 없습니다.
   $("start-box").classList.toggle("busy", !onYouTube);
@@ -161,7 +167,7 @@ async function startWith(type) {
     // 식별자라 「탭 오디오」로만 남았습니다.
     title: (tab.title || "").replace(/\s+-\s+YouTube$/, ""),
     lang: start.lang || null, genre: start.genre || "general",
-    viewerLang: "ko",
+    refine: !!start.refine, viewerLang: "ko",
   });
   $("start-box").classList.remove("busy");
   if (!r || !r.ok) {
@@ -179,6 +185,7 @@ async function startWith(type) {
 function saveStart() { chrome.storage.local.set({ [SKEY]: start }); }
 $("lang").addEventListener("change", (e) => { start.lang = e.target.value; saveStart(); });
 $("genre").addEventListener("change", (e) => { start.genre = e.target.value; saveStart(); });
+$("refine").addEventListener("change", (e) => { start.refine = e.target.checked; saveStart(); });
 
 $("start-url").addEventListener("click", () => startWith("startUrl"));
 $("start-tab").addEventListener("click", () => startWith("startCapture"));

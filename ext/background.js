@@ -59,6 +59,12 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       } else if (msg.type === "watch") {
         await setWatch(msg.tabId, msg.value || "");
         reply({ ok: true });
+      } else if (msg.type === "whatToWatch") {
+        // content script 가 방금 떠서 스스로 묻습니다. 자기 탭 번호는
+        // 모르지만 우리는 sender 로 압니다.
+        const id = sender && sender.tab && sender.tab.id;
+        const k = "tab:" + id;
+        reply({ ok: true, data: id ? (await chrome.storage.local.get(k))[k] || "" : "" });
       } else if (msg.type === "watching") {
         const k = "tab:" + msg.tabId;
         reply({ ok: true, data: (await chrome.storage.local.get(k))[k] || "" });
@@ -102,7 +108,7 @@ async function startFromUrl(msg) {
   const cfg = await api("/api/backends");
   const res = await post("/api/live/start", {
     url: msg.url, lang: msg.lang || null, viewer_lang: msg.viewerLang || "ko",
-    backend: cfg.active, asr: cfg.asr_active, refine: true,
+    backend: cfg.active, asr: cfg.asr_active, refine: !!msg.refine,
     genre: msg.genre || "general", profile: msg.profile || "broadcast",
   });
   if (res.error) return { ok: false, error: res.error };
@@ -121,7 +127,7 @@ async function startFromTab(msg) {
   const res = await post("/api/live/capture", {
     title: msg.title || "", lang: msg.lang || null,
     viewer_lang: msg.viewerLang || "ko",
-    backend: cfg.active, asr: cfg.asr_active, refine: true,
+    backend: cfg.active, asr: cfg.asr_active, refine: !!msg.refine,
     genre: msg.genre || "general", profile: msg.profile || "broadcast",
   });
   if (res.error) return { ok: false, error: res.error };

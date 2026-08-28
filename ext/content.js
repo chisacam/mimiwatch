@@ -210,10 +210,30 @@
     if (ov) apply();
   });
 
+  /* 스스로 물어봅니다.
+   *
+   * 배경 워커가 `attach` 를 보내지만 그 순간 우리가 없을 수 있습니다 --
+   * 확장을 다시 로드한 직후(열려 있던 탭은 옛 content script 를 계속
+   * 씁니다), 페이지를 새로고침한 직후, 유튜브가 화면을 갈아 끼운 직후.
+   * 그때 배경은 조용히 실패하고 다시 시도하지 않았습니다. 사용자에게는
+   * 「골랐는데 안 나온다」로만 보이고, 실제로 페이지를 새로고침해야
+   * 나왔습니다.
+   *
+   * 저장은 이미 되어 있으므로 우리가 읽어 오면 됩니다. */
+  function resume() {
+    chrome.runtime.sendMessage({ type: "whatToWatch" }, (r) => {
+      if (chrome.runtime.lastError || !r || !r.ok || !r.data) return;
+      if (port) return;                // 이미 보고 있습니다
+      log("이 탭이 보던 것을 이어 붙입니다:", r.data);
+      attach(r.data);
+    });
+  }
+  resume();
+
   /* 유튜브는 주소만 갈아 끼우고 페이지를 새로 읽지 않습니다. 영상이 바뀌면
    * 플레이어 요소도 새로 생기므로, 우리가 넣어 둔 것이 사라졌는지 살핍니다. */
   setInterval(() => {
-    if (!port) return;                 // 볼 자막이 없으면 아무것도 하지 않습니다
+    if (!port) { resume(); return; }
     if (node && node.isConnected) return;
     if (mount()) startTick();
   }, 1500);

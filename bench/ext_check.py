@@ -152,8 +152,17 @@ def main():
         off = open(os.path.join(EXT, "offscreen.js"), encoding="utf-8").read()
         check("chromeMediaSource" in off,
               "탭 캡처 제약(chromeMediaSource)을 쓴다")
-        check("source.connect(ctx.destination)" in off,
-              "잡은 소리를 사용자에게 되돌려 준다 (안 그러면 탭이 음소거됩니다)")
+        # 되돌려 주기는 해야 합니다. tabCapture 로 잡으면 그 탭의 소리가
+        # 사용자에게 들리지 않게 되니까요.
+        check("srcObject = media" in off and ".play()" in off,
+              "잡은 소리를 되돌려 준다 (안 그러면 탭이 음소거됩니다)")
+        # 다만 **우리 그래프를 거치면 안 됩니다.** 그 컨텍스트는 16kHz 라,
+        # 거기로 내보내면 48kHz 스테레오가 전화 음질로 깎여 나갑니다.
+        check("source.connect(ctx.destination)" not in off,
+              "듣는 소리를 16kHz 컨텍스트로 보내지 않는다")
+        check("sampleRate: 16000" in off, "받아 적는 쪽만 16kHz 다")
+        check("channelCount: 1" in off,
+              "스테레오 접기를 Web Audio 에 맡긴다 (왼쪽만 집지 않습니다)")
         wl = open(os.path.join(EXT, "capture-worklet.js"), "rb").read()
         webwl = os.path.join(WEB, "capture-worklet.js")
         if os.path.exists(webwl):

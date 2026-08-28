@@ -1760,7 +1760,13 @@ async function pipeCapture(media, sessionId) {
   // 한 줄도 늘지 않습니다 -- 아무 데도 오류가 나지 않아 더 나쁩니다.
   if (ctx.state === "suspended") await ctx.resume().catch(() => {});
   await ctx.audioWorklet.addModule("/static/capture-worklet.js");
-  const node = new AudioWorkletNode(ctx, "mimiwatch-capture");
+  // 스테레오를 한 채널로 접는 일은 Web Audio 에 맡깁니다. 손으로 왼쪽만
+  // 집으면 오른쪽에 치우친 목소리를 통째로 놓칩니다.
+  const node = new AudioWorkletNode(ctx, "mimiwatch-capture", {
+    channelCount: 1,
+    channelCountMode: "explicit",
+    channelInterpretation: "speakers",
+  });
   ctx.createMediaStreamSource(media).connect(node);
   // 워클릿이 목적지까지 이어져 있지 않으면 크롬이 아예 돌리지 않습니다.
   // 소리를 되돌려 보내면 안 되므로 볼륨 0인 게인을 하나 끼웁니다.

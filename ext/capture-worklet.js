@@ -9,6 +9,9 @@
  */
 class CaptureProcessor extends AudioWorkletProcessor {
   process(inputs) {
+    // 채널은 하나입니다. 노드를 만들 때 channelCount:1 로 잡아 두어,
+    // 스테레오를 접는 일은 Web Audio 가 합니다 -- 여기서 손으로 왼쪽만
+    // 집으면 오른쪽에 치우친 목소리를 통째로 놓칩니다.
     const ch = inputs[0] && inputs[0][0];
     // slice(0)는 사본입니다. 이 버퍼는 다음 호출에서 재사용되므로 그대로
     // 넘기면 메인 스레드가 읽기 전에 다른 소리로 덮입니다.

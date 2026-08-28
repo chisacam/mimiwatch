@@ -34,3 +34,4 @@ fieldset .row .seg{flex:1}
 fieldset .slider{flex:1; min-width:0}
 fieldset select{flex:1; min-width:0}
 .busy{opacity:.55; pointer-events:none}
+.seg.wide{flex:1; width:100%}

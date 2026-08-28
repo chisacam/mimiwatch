@@ -34,10 +34,21 @@
   let onSeek = null;
   let follow = true;
 
+  /* 문서에 남은 우리 것을 **전부** 걷어 냅니다.
+   *
+   * 하나만 추적하면 놓칩니다. 유튜브는 화면을 갈아 끼우며 오른쪽 열을
+   * 통째로 떼었다 다시 붙이는데, 떼여 있는 동안 `node.isConnected` 가
+   * false 라 새 것을 하나 더 만들고, 옛 것이 되붙으면 그때부터 둘이 됩니다.
+   * 추적하는 것은 새 것뿐이라 옛 것은 체크를 꺼도 사라지지 않았습니다. */
+  function sweep() {
+    document.querySelectorAll("#" + ID).forEach((e) => e.remove());
+  }
+
   function mount() {
     const col = findColumn();
     if (!col) return false;
-    if (node && node.isConnected) return true;
+    if (node && node.isConnected && node.parentElement === col) return true;
+    sweep();
 
     node = document.createElement("div");
     node.id = ID;
@@ -89,8 +100,13 @@
   }
 
   function unmount() {
-    if (node && node.parentElement) node.parentElement.removeChild(node);
+    sweep();
     if (hidden) { hidden.style.display = ""; hidden = null; }
+    // 우리가 감춘 것이 아니더라도, 우리 때문에 감춰진 채 남은 채팅은
+    // 되돌려 놓습니다. 화면이 갈아 끼워지면 hidden 이 옛 요소를 가리키게
+    // 되어 진짜 채팅이 감춰진 채로 남습니다.
+    const chat = findChat();
+    if (chat && chat.style.display === "none") chat.style.display = "";
     node = list = head = null;
     rows = new Map();
   }

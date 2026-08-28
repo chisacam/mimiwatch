@@ -54,6 +54,9 @@
     const player = findPlayer();
     if (!player) return false;
     if (node && node.isConnected && node.parentElement === player) return true;
+    // 남은 것을 전부 걷습니다. 유튜브가 플레이어를 갈아 끼우는 사이 하나만
+    // 추적하면 옛 것을 놓치고, 그러면 자막이 두 겹으로 뜹니다.
+    document.querySelectorAll("#" + ID).forEach((e) => e.remove());
 
     node = document.createElement("div");
     node.id = ID;
@@ -116,6 +119,10 @@
   }
 
   function apply() {
+    // 자막 내역은 오버레이와 별개입니다. 이 줄이 아래 `if (!ov) return` 뒤에
+    // 있어서, 오버레이가 아직(또는 이미) 없으면 체크를 꺼도 내역이 사라지지
+    // 않았습니다.
+    syncPanel();
     if (!ov) return;
     ov.setView({ mode: prefs.mode, showPrev: prefs.showPrev });
     // 유튜브의 전체화면은 플레이어 요소가 그대로 커집니다. 그 높이를 기준으로
@@ -125,7 +132,6 @@
     ov.setSize(prefs.size, h ? Math.max(0.6, h / 480) : 1);
     if (prefs.pos) ov.setPos(prefs.pos);
     node.style.setProperty("--mw-dim", String(prefs.dim));
-    syncPanel();
   }
 
   /* ---------- 시계 ---------- */
@@ -261,6 +267,22 @@
    * 나왔습니다.
    *
    * 저장은 이미 되어 있으므로 우리가 읽어 오면 됩니다. */
+  /* 유튜브는 주소만 갈아 끼웁니다(SPA). 다른 영상으로 옮기면 플레이어도
+   * 오른쪽 열도 새로 생기는데, 우리가 넣어 둔 것은 옛 영상의 자막을 그대로
+   * 들고 남아 있었습니다. 주소가 바뀌면 한 번 걷어 내고 다시 세웁니다. */
+  let lastUrl = location.href;
+  setInterval(() => {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    log("영상이 바뀌었습니다. 다시 세웁니다.");
+    MimiPanel.unmount();
+    MimiPanel.reset();
+    if (node) { node.remove(); node = null; }
+    if (ov) { ov.destroy(); ov = null; }
+    stopTick();
+    if (port && mount()) { startTick(); apply(); }
+  }, 700);
+
   function resume() {
     chrome.runtime.sendMessage({ type: "whatToWatch" }, (r) => {
       if (chrome.runtime.lastError || !r || !r.ok || !r.data) return;

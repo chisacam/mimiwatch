@@ -169,11 +169,31 @@ $("panel").addEventListener("change", (e) => {
   prefs.panel = e.target.checked; pushPrefs(); setTimeout(refreshState, 500);
 });
 $("reset-pos").addEventListener("click", () => { prefs.pos = null; pushPrefs(); });
-$("stop").addEventListener("click", async () => {
-  // 화면에서 치우기만 합니다. 세션은 서버에서 계속 돕니다 -- 받아 적던 것을
-  // 끝내려면 mimiwatch 페이지의 「중단」입니다.
+/* 두 가지 일을 한 단추가 하고 있었습니다. 「치우기」라고 적어 두고 화면에서만
+ * 내렸는데, 그것을 누른 사람은 받아 적기가 끝난 줄 알았습니다. 서버에서는
+ * 계속 돌고 있었고요. 나눕니다. */
+$("hide").addEventListener("click", async () => {
   await send({ type: "watch", tabId, value: "" });
   $("pick").value = "";
+  setTimeout(refreshState, 400);
+});
+
+$("stop").addEventListener("click", async () => {
+  const value = $("pick").value;
+  const id = value.startsWith("live:") ? value.slice(5) : "";
+  if (!id) { fail("받아 적는 중인 세션이 아닙니다."); return; }
+  $("stop").disabled = true;
+  const r = await send({ type: "stopSession", sessionId: id, tabId });
+  $("stop").disabled = false;
+  if (r && !r.ok) { fail(r.error || "중단하지 못했습니다"); return; }
+  fail("");
+  // 화면에서도 내립니다. 받아 적기가 끝났는데 자막만 떠 있으면 아직 도는
+  // 것처럼 보입니다. 쌓인 것은 서버에 그대로 남아 다시 고를 수 있습니다.
+  await send({ type: "watch", tabId, value: "" });
+  $("pick").value = "";
+  $("start-hint").textContent = "중단했습니다. 쌓인 자막은 그대로 남아 있습니다.";
+  $("pick").length = 1;
+  await fillPicker();
   setTimeout(refreshState, 400);
 });
 /* ---------- 이 탭에서 새로 시작 ---------- */

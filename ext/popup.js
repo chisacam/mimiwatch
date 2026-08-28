@@ -27,7 +27,10 @@ let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55, offset: 0,
  * 대개 손해입니다 -- 발화 한 무리가 끝나기를 2초 기다렸다 합쳐서 다시
  * 받아 적으므로, 말이 빠르게 오가면 자막이 늦게 자리를 잡고 이미 읽은 줄이
  * 통째로 바뀝니다. */
-let start = { lang: "", genre: "general", refine: false, profile: "broadcast" };
+let start = { lang: "", genre: "general", refine: false, profile: "broadcast",
+              // 번역 대상 언어. 예전에는 "ko"로 박혀 있어 한국어 사용자만
+              // 확장을 쓸 수 있었습니다. mimiwatch 페이지의 「내 언어」와 같은 값.
+              viewerLang: "ko" };
 const SKEY = "startPrefs";
 
 function fail(text) {
@@ -67,6 +70,8 @@ async function init() {
   $("refine").checked = !!start.refine;
   $("profile").value = start.profile || "broadcast";
   if (!$("profile").value) $("profile").selectedIndex = 0;
+  $("viewer").value = start.viewerLang || "ko";
+  if (!$("viewer").value) $("viewer").selectedIndex = 0;
   syncProfileHint();
   await refreshState();
   await syncHideButton();
@@ -133,6 +138,7 @@ async function refreshState() {
     if (!r.player) bits.push("플레이어 못 찾음");
     else if (!r.box || !r.box.w) bits.push("화면에 자리 없음");
     else if (!r.text) bits.push(r.mode === "off" ? "자막 끔" : "지금 구간에 자막 없음");
+    if (r.stalled) bits.push("서버 연결 끊김 (다시 붙는 중)");
     if (!r.ticking) bits.push("시계 멈춤");
     if (r.panel) bits.push(r.panelUp ? "자막 내역 세움" : "자리 못 찾음");
     $("state").textContent = bits.join(" · ");
@@ -239,7 +245,7 @@ async function startWith(type) {
     title: (tab.title || "").replace(/\s+-\s+YouTube$/, ""),
     lang: start.lang || null, genre: start.genre || "general",
     refine: !!start.refine, profile: start.profile || "broadcast",
-    viewerLang: "ko",
+    viewerLang: start.viewerLang || "ko",
   });
   $("start-box").classList.remove("busy");
   if (!r || !r.ok) {
@@ -268,6 +274,7 @@ $("refine").addEventListener("change", (e) => { start.refine = e.target.checked;
 $("profile").addEventListener("change", (e) => {
   start.profile = e.target.value; saveStart(); syncProfileHint();
 });
+$("viewer").addEventListener("change", (e) => { start.viewerLang = e.target.value; saveStart(); });
 
 $("start-url").addEventListener("click", () => startWith("startUrl"));
 $("start-tab").addEventListener("click", () => startWith("startCapture"));

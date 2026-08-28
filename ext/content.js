@@ -59,6 +59,9 @@
   let cues = [];
   let byId = new Map();
   let live = false, receiving = false;
+  // 서버와의 줄이 끊겼는가. 배경 워커가 다시 붙어 보는 동안 참입니다.
+  // 팝업의 상태줄이 「지금 구간에 자막 없음」과 「서버 끊김」을 가릅니다.
+  let stalled = false;
   let tickTimer = null;
   let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55,
                 pos: null, offset: 0, panel: false };
@@ -236,7 +239,13 @@
     if (port) { try { port.disconnect(); } catch (_) {} }
     port = chrome.runtime.connect({ name: "cues" });
     port.onMessage.addListener((m) => {
-      if (m.type === "event") onEvent(m.data);
+      if (m.type === "event") { stalled = false; onEvent(m.data); }
+      else if (m.type === "stalled") stalled = true;
+      else if (m.type === "ended") {
+        // 끝난 세션은 서버가 백로그를 다 보내고 닫습니다. 더 올 것이 없으니
+        // 「받는 중」의 규칙(최근 줄 붙잡기)에서 시각 기준 조회로 넘어갑니다.
+        stalled = false; receiving = false;
+      }
       else if (m.type === "doc") {
         live = false; receiving = false;
         // 녹화본은 번역이 엔진별로 여러 벌일 수 있습니다. 마지막 것을 씁니다.
@@ -267,7 +276,7 @@
     } else if (msg.type === "state") {
       const r = node ? node.getBoundingClientRect() : null;
       reply({ ok: true, mounted: !!(node && node.isConnected),
-              cues: cues.length, live, receiving, trKey,
+              cues: cues.length, live, receiving, stalled, trKey,
               // 안 보인다는 말은 여러 가지입니다 -- 안 붙었거나, 붙었는데
               // 크기가 0이거나, 그릴 자막이 없거나. 구별할 수 있게 냅니다.
               box: r ? { w: Math.round(r.width), h: Math.round(r.height) } : null,
@@ -302,12 +311,17 @@
    * 오른쪽 열도 새로 생기는데, 우리가 넣어 둔 것은 옛 영상의 자막을 그대로
    * 들고 남아 있었습니다. 주소가 바뀌면 한 번 걷어 내고 다시 세웁니다. */
   let lastUrl = location.href;
-  setInterval(() => {
+  function onNavigate() {
     if (location.href === lastUrl) return;
     const wasVideo = videoIdOf(lastUrl);
     lastUrl = location.href;
     const now = videoIdOf(lastUrl);
-    if (!port) return;                       // 얹은 것이 없으면 볼 일도 없습니다
+    if (!port) {
+      // 얹은 것이 없습니다. 다만 이 탭에 볼 것이 정해져 있는데 아까는 영상
+      // 페이지가 아니어서 못 붙었을 수 있으니 한 번 물어봅니다.
+      if (now) resume();
+      return;
+    }
     if (now && now === wasVideo) return;     // 같은 영상 안에서의 이동(시각 등)
 
     if (expectVideo && now && now !== expectVideo) {
@@ -333,7 +347,12 @@
     if (ov) { ov.destroy(); ov = null; }
     stopTick();
     if (mount()) { startTick(); apply(); }
-  }, 700);
+  }
+  // 유튜브는 화면을 갈아 끼울 때마다 이 이벤트를 문서에 띄웁니다. 예전에는
+  // 0.7초마다 주소를 들여다봤는데, 모든 유튜브 탭에서 영원히 도는 시계였습니다.
+  // 이벤트가 오지 않는 판(또는 이름이 바뀐 뒤)을 위해 느린 시계 하나만 남깁니다.
+  document.addEventListener("yt-navigate-finish", onNavigate);
+  setInterval(onNavigate, 3000);
 
   /* ---------- 물어보기 ----------
    *
@@ -400,10 +419,21 @@
   }
   resume();
 
+  /* 팝업이 이 탭에 볼 것을 정하면 저장(`tab:<번호>`)이 먼저 바뀝니다. 그
+   * 변화를 여기서 듣습니다 -- 예전에는 붙은 것이 없는 동안 1.5초마다 배경
+   * 워커에게 「볼 것 있나」를 물어서, 유튜브 탭이 열려 있는 한 워커가 잠들
+   * 틈이 없었습니다. 어느 탭의 열쇠인지는 모르지만 물어보는 값은 싸고,
+   * 우리 탭이 아니면 배경이 빈 답을 줍니다. */
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (!port && Object.keys(changes).some((k) => k.startsWith("tab:"))) resume();
+  });
+
   /* 유튜브는 주소만 갈아 끼우고 페이지를 새로 읽지 않습니다. 영상이 바뀌면
-   * 플레이어 요소도 새로 생기므로, 우리가 넣어 둔 것이 사라졌는지 살핍니다. */
+   * 플레이어 요소도 새로 생기므로, 우리가 넣어 둔 것이 사라졌는지 살핍니다.
+   * 문서만 보는 시계라 배경 워커를 깨우지 않습니다. */
   setInterval(() => {
-    if (!port) { resume(); return; }
+    if (!port) return;
     if (node && node.isConnected) {
       // 오버레이는 살아 있는데 대본만 사라졌을 수 있습니다. 유튜브가
       // 오른쪽 열을 통째로 갈아 끼우는 경우입니다.

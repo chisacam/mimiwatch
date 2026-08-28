@@ -867,7 +867,11 @@ let booted = false;
 
 function persist() {
   if (!booted) return;
-  const translated = !!(state.doc && state.doc.translated);
+  // applyModeForDoc()가 읽는 것과 같은 기준으로 적어야 합니다. 예전에는 여기서
+  // `doc.translated`를 봤는데 라이브는 그 값이 첫 번역이 올 때까지 false라,
+  // 라이브에서 고른 자막 모드가 `modeSame` 칸에 저장되고 다음에는
+  // `modeTranslated` 칸에서 읽혀 기억되지 않았습니다.
+  const translated = docHasTranslation();
   const prev = loadPrefs();
   savePrefs({
     ...prev,
@@ -2005,8 +2009,12 @@ async function resumeLive(sessionId) {
     // 오류로 끝난 세션도 이어받을 수 있어야 합니다. 모델 파일을 못 찾았다든가
     // 하는 이유는 대개 고치고 나면 사라지는 것이고, 그때 이어붙일 자리가
     // 없으면 받아 둔 자막을 버리고 새로 시작하는 수밖에 없습니다.
-    else if (st.url && (st.state === "interrupted" || st.state === "error")) {
-      offerResume(st.id, st.state);
+    //
+    // `stopped`여도 서버가 「수신이 끊겨서」(stopped_by=stream)라고 적어 두었으면
+    // 권합니다. 사용자가 「중단」한 것(user)과 방송이 끝난 것(ended)은 아닙니다.
+    else if (st.url && (st.state === "interrupted" || st.state === "error"
+                        || (st.state === "stopped" && st.stopped_by === "stream"))) {
+      offerResume(st.id, st.state === "stopped" ? "error" : st.state);
     }
   }
   await attachLive(st.id, st.video_id);

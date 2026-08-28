@@ -74,6 +74,11 @@ PROFILES = {
                   "label": "합방·다인 대화 (발화가 겹침)"},
 }
 
+# HLS 수신이 끊겼을 때 같은 세션 안에서 다시 붙어 보는 횟수. 사이의 기다림은
+# 3초·6초·9초…로 늘어나 다 합쳐 1분 남짓입니다. 그 안에 돌아오지 않으면
+# 포기하고 「이어받기」에 맡깁니다 -- 그쪽은 사용자가 시키는 일입니다.
+HLS_RECONNECT_TRIES = 5
+
 _sessions: dict[str, "LiveSession"] = {}
 _lock = threading.Lock()
 
@@ -274,6 +279,10 @@ class LiveSession:
         self.min_silence = prof["min_silence"]
         self.state = "starting"
         self.error: str | None = None
+        # 왜 멈췄는가. "user"는 「중단」을 눌렀거나 서버를 끈 것, "ended"는
+        # 방송이 끝난 것, "stream"은 수신이 끊겼는데 다시 붙지 못한 것입니다.
+        # 셋이 다 `stopped`로 보이면 화면은 이어받기를 권할지 정할 수 없습니다.
+        self.stopped_by = ""
         # 이어받을 때, 끊기기 직전까지 받아 둔 미디어 위치입니다. 0이면
         # 새로 시작하는 세션이라 되감을 것이 없습니다.
         self.resume_from = 0.0
@@ -293,6 +302,10 @@ class LiveSession:
         self._seq = 0
         self._subs: list[queue.Queue] = []
         self._stop = threading.Event()
+        # 발행 경로의 자물쇠. 확정 줄은 수신 스레드가, 정제본은 정제 스레드가
+        # 넣습니다 -- 둘이 동시에 `_recent`를 고치면 한쪽의 `remove`가 다른
+        # 쪽의 `del [:-40]`과 엉켜 ValueError가 나거나 엉뚱한 줄을 흡수합니다.
+        self._pub_lock = threading.RLock()
         self._ff: subprocess.Popen | None = None
         # 탭 오디오가 들어오는 자리. hls 세션에서는 쓰이지 않습니다.
         self._q: queue.Queue = queue.Queue()
@@ -336,6 +349,7 @@ class LiveSession:
                 "asr_backend": self.asr_backend_id,
                 "refine": self.refine,
                 "asr": self.asr_label,
+                "stopped_by": self.stopped_by,
                 "media_base": round(self.media_base, 2),
                 "profile": self.profile, "max_speech": self.max_speech,
                 "genre": self.genre,
@@ -352,6 +366,10 @@ class LiveSession:
         text = (text or "").strip()
         if not text:
             return
+        with self._pub_lock:
+            self._publish_locked(kind, text, lang, speaker)
+
+    def _publish_locked(self, kind: str, text: str, lang: str, speaker: str):
         media_t = self.media_base + self.audio_s
         if kind in ("final", "note"):
             self._seq += 1
@@ -454,10 +472,15 @@ class LiveSession:
         src = cue.get("lang") or self.lang or ""
         if not src or src == self.viewer_lang:
             return
-        if not self._tr.should_translate(cue["text"], src, self.viewer_lang):
+        # 한 번 붙잡아 둡니다. 세션이 끝나면 `_release()`가 `_tr`를 None으로
+        # 놓는데, 마지막 줄의 번역 스레드는 그 뒤에도 돌고 있을 수 있습니다.
+        tr = self._tr
+        if tr is None:
+            return
+        if not tr.should_translate(cue["text"], src, self.viewer_lang):
             return
         try:
-            out = self._tr.translate(cue["text"], src, self.viewer_lang, context)
+            out = tr.translate(cue["text"], src, self.viewer_lang, context)
         except Exception as exc:
             # 실패했다고 줄을 버리지 않습니다. 그러면 시청자에게는 그 발화가
             # 아예 없었던 것처럼 보입니다. 번역할 수 없었다는 사실이 남도록
@@ -479,6 +502,7 @@ class LiveSession:
         threading.Thread(target=self._run, daemon=True).start()
 
     def stop(self):
+        self.stopped_by = self.stopped_by or "user"
         self._stop.set()
         if self._ff:
             self._ff.terminate()
@@ -592,17 +616,99 @@ class LiveSession:
                 pass
             self._ff = None
 
+    def _spawn_ffmpeg(self, src: str, start_index):
+        # -live_start_index -2 starts two segments from the end of the
+        # playlist. Without it ffmpeg reads a full-DVR playlist from the top
+        # and transcribes the broadcast's opening greetings while the viewer
+        # watches its live edge.
+        self._ff = subprocess.Popen(
+            ["ffmpeg", "-loglevel", "error",
+             "-live_start_index", str(start_index), "-i", src,
+             "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
+            stdout=subprocess.PIPE)
+
     def _chunks(self):
-        assert self._ff and self._ff.stdout
+        """ffmpeg이 내놓는 소리를 0.1초 조각으로. **끊기면 같은 세션 안에서
+        다시 붙습니다.**
+
+        예전에는 ffmpeg이 끝나면 곧 세션이 「종료됨」이었습니다. 방송이 끝난
+        것과 재생목록을 잠깐 못 받은 것이 같은 결말이었고, 두 시간 방송이
+        30분에 한 번 끊기면 자막이 새 세션으로 갈라졌습니다. 이제 ffmpeg이
+        스스로 끝나면 방송이 아직 진행 중인지 다시 물어보고, 진행 중이면 끊긴
+        자리(DVR 창 안이면 한 조각도 잃지 않고)에서 이어 받습니다. 못 메운
+        구간은 자막에 적습니다 -- 이어받기와 같은 규칙입니다.
+
+        조각 사이에 `None`을 한 번 내보내 걸려 있던 발화를 확정시킵니다.
+        """
         need = CHUNK * 2
+        attempt = 0
         while not self._stop.is_set():
-            raw = self._ff.stdout.read(need)
-            if not raw or len(raw) < need:
+            assert self._ff and self._ff.stdout
+            while not self._stop.is_set():
+                raw = self._ff.stdout.read(need)
+                if not raw or len(raw) < need:
+                    break
+                samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                self.audio_s += len(samples) / SAMPLE_RATE
+                attempt = 0                  # 소리가 오면 재시도 횟수는 처음부터
+                yield samples
+            if self._stop.is_set():
                 break
-            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-            self.audio_s += len(samples) / SAMPLE_RATE
-            yield samples
-        self.state = "stopped"
+            # ffmpeg이 스스로 끝났습니다. 방송이 끝났거나, 재생목록을 잠깐
+            # 못 받은 것입니다. 걸려 있는 발화를 먼저 확정합니다.
+            yield None
+            reattached = False
+            while not self._stop.is_set() and attempt < HLS_RECONNECT_TRIES:
+                attempt += 1
+                outcome = self._reconnect(attempt)
+                if outcome == "ok":
+                    reattached = True
+                    break
+                if outcome == "ended":
+                    self.stopped_by = "ended"
+                    break
+                # 아직 붙지 못했습니다. 잠깐 기다렸다 다음 시도로. stop()이
+                # 오면 기다림이 곧 끝납니다.
+                if self._stop.wait(min(3.0 * attempt, 15.0)):
+                    break
+            if reattached:
+                continue
+            if not self._stop.is_set() and self.stopped_by != "ended":
+                self.stopped_by = "stream"
+                self.state = "error"
+                self.error = (f"수신이 끊겼고 {HLS_RECONNECT_TRIES}번 다시 붙어 보았지만 "
+                              "되지 않았습니다. 「이어받기」로 다시 시도할 수 있습니다.")
+            break
+        if self.state != "error":
+            self.state = "stopped"
+
+    def _reconnect(self, attempt: int) -> str:
+        """끊긴 자리에서 ffmpeg을 다시 세웁니다.
+
+        돌려주는 것은 "ok"(붙었음) / "ended"(방송이 끝났음) / "retry"(지금은
+        못 붙었음)입니다. 붙었으면 `self._ff`가 새 프로세스입니다.
+        """
+        # 지금까지 받은 자리. 새 재생목록의 시각 기준(media_base)이 여기서
+        # 다시 계산되므로 audio_s는 0부터 다시 셉니다 -- media_t = base + audio_s.
+        self.resume_from = self.media_base + self.audio_s
+        try:
+            src, start_index = self._resolve_hls(reconnect=True)
+        except Exception as exc:
+            print(f"[live] 세션 {self.id} 다시 붙기 {attempt}회 실패: {exc}",
+                  file=sys.stderr, flush=True)
+            return "retry"
+        if src is None:
+            return "ended"
+        self.audio_s = 0.0
+        self._spawn_ffmpeg(src, start_index)
+        print(f"[live] 세션 {self.id} 다시 붙음 ({attempt}회, 빠진 구간 {self.gap_s:.0f}초)",
+              flush=True)
+        if self.gap_s >= 1.0:
+            self.publish_line(
+                "note", f"⋯ 수신이 끊겨 약 {int(self.gap_s)}초를 받지 못했습니다 ⋯",
+                self.lang or "", "")
+        self.gap_s = 0.0
+        return "ok"
 
     def _run(self):
         # 여기는 소리를 어디서 받을지만 정하고, 받아 적는 일은 _transcribe가
@@ -644,11 +750,13 @@ class LiveSession:
             self._release()
             _retire(self.id)
 
-    def _resolve_hls(self):
+    def _resolve_hls(self, reconnect: bool = False):
         """방송 주소를 ffmpeg이 읽을 수 있는 것으로 풀어냅니다.
 
         돌려주는 것은 (재생목록 주소, -live_start_index)이고, 첫 값이 None이면
         더 갈 수 없다는 뜻입니다 -- 상태와 오류는 여기서 이미 알렸습니다.
+        `reconnect`면 「라이브가 아님」은 오류가 아니라 방송이 끝난 것이므로
+        상태를 건드리지 않고 None만 돌려줍니다.
         """
         d = {}
         try:
@@ -665,6 +773,8 @@ class LiveSession:
             self.title = d.get("title", "")
             self.video_id = d.get("id", "") or ""
             if not d.get("is_live"):
+                if reconnect:
+                    return None, None
                 self.state = "error"
                 # 방금 끝난 방송도 여기로 옵니다. /api/probe가 볼 때는
                 # 라이브였는데 그 사이 끝난 경우입니다.
@@ -723,15 +833,7 @@ class LiveSession:
             if self.source == "tab":
                 chunks = self._chunks_from_tab()
             else:
-                # -live_start_index -2 starts two segments from the end of the
-                # playlist. Without it ffmpeg reads a full-DVR playlist from
-                # the top and transcribes the broadcast's opening greetings
-                # while the viewer watches its live edge.
-                self._ff = subprocess.Popen(
-                    ["ffmpeg", "-loglevel", "error",
-                     "-live_start_index", str(start_index), "-i", src,
-                     "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
-                    stdout=subprocess.PIPE)
+                self._spawn_ffmpeg(src, start_index)
                 chunks = self._chunks()
 
             self.state = "running"
@@ -756,7 +858,8 @@ class LiveSession:
                 # 마지막 무리의 정제가 끝나기를 기다립니다. 상태를 「종료됨」으로
                 # 적은 뒤에 정제본이 도착하면 끝난 세션에 줄이 늘어납니다.
                 refiner.close()
-            self.state = "stopped"
+            if self.state != "error":     # 수신 루프가 포기했으면 그 말을 남깁니다
+                self.state = "stopped"
             self._persist()
             self.emit({"type": "status", **self.status()})
         finally:
@@ -775,6 +878,9 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
           source: str = "hls", title: str = "") -> dict:
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
+    refused = _refuse_remote_asr(asr_backend_id)
+    if refused:
+        return refused
     for old_id in list(_sessions):
         old = get(old_id)
         if old is not None:
@@ -789,6 +895,22 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
     s._persist()
     s.start()
     return {"id": s.id, "source": s.source}
+
+
+def _refuse_remote_asr(asr_backend_id: str) -> dict | None:
+    """라이브는 로컬 전사기만 받습니다.
+
+    OpenAI 호환 전사 엔드포인트는 오디오 **파일**을 창 단위로 보내는 것이라
+    녹화본에만 맞습니다. 라이브에 고르면 예전에는 `resolve_asr`가 모델 이름
+    (`whisper-1`)을 파일 경로로 알고 「전사 모델이 없습니다: …/whisper-1」을
+    냈습니다 -- 틀린 진단입니다. 여기서 이유를 제대로 말합니다.
+    """
+    spec = config.find_asr(asr_backend_id) if asr_backend_id else None
+    if spec and spec.get("backend") == "openai":
+        return {"error": f"'{spec.get('label') or asr_backend_id}'는 외부(OpenAI 호환) "
+                         "전사 엔진이라 라이브에는 쓸 수 없습니다. 녹화본 전용입니다. "
+                         "로컬 엔진을 고르십시오."}
+    return None
 
 
 def set_title(session_id: str, title: str) -> dict:
@@ -1039,6 +1161,7 @@ def resume(session_id: str) -> dict:
     s.id = session_id
     s.title = st.get("title") or ""
     s.video_id = st.get("video_id") or ""
+    s.error = None                       # 왜 멈췄었는지는 이제 지난 일입니다
     # 이어 붙이려면 번호가 이어져야 합니다. 새 줄이 옛 줄의 id를 다시 쓰면
     # 화면에서 그 자리를 덮어씁니다.
     prior = store.cues(session_id)
@@ -1073,6 +1196,9 @@ def set_asr(session_id: str, asr_backend_id: str) -> dict:
     spec = config.find_asr(asr_backend_id)
     if spec is None:
         return {"error": f"'{asr_backend_id}' 전사 엔진이 없습니다"}
+    refused = _refuse_remote_asr(asr_backend_id)
+    if refused:
+        return refused
     if not hasattr(s._asr, "swap"):
         return {"error": "이 세션의 전사기는 갈아 끼울 수 없습니다"}
     try:

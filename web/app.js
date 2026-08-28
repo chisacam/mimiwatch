@@ -1274,9 +1274,14 @@ function hideLiveNotice() {
 
 /* 끊긴 세션을 같은 세션으로 이어 붙입니다. 자막은 세션 id로 저장되므로
  * 그때까지의 스크립트가 그대로 남고 뒤에 이어 붙습니다. */
-function offerResume(sessionId) {
+/* `why` 는 왜 멈췄는지입니다. 서버가 죽은 것과 공유가 끝난 것은 다른 일이고,
+ * 다시 시작하려면 해야 할 일도 다릅니다 -- 탭 소리는 브라우저가 다시
+ * 들려줘야 합니다. */
+function offerResume(sessionId, why) {
   const box = $("live-notice");
-  box.textContent = "서버가 멈춰 수신이 끊겼습니다 — ";
+  box.textContent = why === "tab"
+    ? "자막 수신이 멈춰 있습니다. 탭을 다시 공유하면 이어서 쌓입니다 — "
+    : "서버가 멈춰 수신이 끊겼습니다 — ";
   const b = document.createElement("button");
   b.className = "seg";
   b.textContent = "이어받기";
@@ -1732,11 +1737,19 @@ async function resumeLive(sessionId) {
   $("live-badge").hidden = !running;
   // 탭 소리에는 맞출 영상이 없으므로 오프셋도 의미가 없습니다.
   $("offset-wrap").style.display = st.source === "tab" ? "none" : "flex";
-  // 끊긴 세션은 이어받을 수 있습니다. 자동으로 하지 않습니다 -- 방송을 다시
-  // 받기 시작하는 것은 눌러서 시킬 일입니다. 탭 소리는 주소가 없는 대신
-  // 브라우저가 다시 들려주면 되므로, 주소 조건에서 빼 줍니다.
-  if (!running && st.state === "interrupted" && (st.url || st.source === "tab")) {
-    offerResume(st.id);
+  // 멈춘 세션은 이어받을 수 있습니다. 자동으로 하지 않습니다 -- 다시 받기
+  // 시작하는 것은 눌러서 시킬 일입니다.
+  //
+  // 주소로 받는 세션은 `interrupted`(서버가 죽음)일 때만 권합니다.
+  // `stopped` 는 사용자가 「중단」을 누른 것이라 다시 묻는 것이 성가십니다.
+  //
+  // 탭 소리는 다릅니다. 공유를 멈추거나 그 탭을 닫으면 `stopped` 로
+  // 끝나는데, 그것이 정상 종료 경로입니다 -- 서버를 정상으로 내려도
+  // 마찬가지입니다. 그러니 멈춰 있으면 언제나 권합니다. 같은 세션으로
+  // 이어야 스크립트가 한 줄기로 남습니다.
+  if (!running) {
+    if (st.source === "tab") offerResume(st.id, "tab");
+    else if (st.state === "interrupted" && st.url) offerResume(st.id);
   }
   await attachLive(st.id, st.video_id);
 }

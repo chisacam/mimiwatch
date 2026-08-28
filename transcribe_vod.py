@@ -119,6 +119,9 @@ def main():
     ap.add_argument("--viewer-lang", default="ko",
                     help="the viewer's language; translation is skipped when it matches")
     ap.add_argument("--no-translate", action="store_true")
+    ap.add_argument("--genre", default=mw_translate.DEFAULT_GENRE,
+                    choices=sorted(mw_translate.GENRE_PROMPTS),
+                    help="발화의 성격에 맞는 번역 프롬프트를 고릅니다")
     ap.add_argument("--speakers", action="store_true",
                     help="label each cue with a speaker id (S1, S2, ...)")
     ap.add_argument("--outdir", default="data")
@@ -155,7 +158,7 @@ def main():
     # could already read.
     needs = source_lang != args.viewer_lang and not args.no_translate
     if needs:
-        tr = mw_translate.build(None)
+        tr = mw_translate.build(None, args.genre)
         print(f"[vod] translating {source_lang} -> {args.viewer_lang} "
               f"({tr.name})...", file=sys.stderr)
         t0 = time.time()
@@ -165,7 +168,12 @@ def main():
                 skipped += 1
                 continue
             try:
-                out = tr.translate(c["text"], source_lang, args.viewer_lang)
+                # 직전 자막 몇 줄을 참고로 함께 넘깁니다. 뒤쪽은 넘기지
+                # 않습니다 -- 라이브에는 없는 정보라 결과가 갈립니다.
+                out = tr.translate(
+                    c["text"], source_lang, args.viewer_lang,
+                    [p["text"] for p in
+                     cues[max(0, i - mw_translate.CONTEXT_LINES):i]])
             except Exception as exc:
                 print(f"\n[vod] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
                 out = c["text"]

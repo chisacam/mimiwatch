@@ -182,7 +182,18 @@ def delete_backend(backend_id: str) -> dict:
     return cfg
 
 
-def start(vid: str, backend_id: str) -> dict:
+def _context(cues: list[dict], i: int) -> list[str]:
+    """`cues[i]` 직전 몇 줄. 번역기에 참고로 넘깁니다.
+
+    녹화본은 라이브와 달리 앞뒤가 전부 이미 나와 있으므로 인덱스로 바로
+    잘라내면 됩니다. 뒤쪽은 넘기지 않습니다 -- 라이브에서는 있을 수 없는
+    정보라 두 경로의 번역이 달라집니다.
+    """
+    n = mw_translate.CONTEXT_LINES
+    return [c["text"] for c in cues[max(0, i - n):i] if (c.get("text") or "").strip()]
+
+
+def start(vid: str, backend_id: str, genre: str | None = None) -> dict:
     spec = find_backend(backend_id)
     if spec is None:
         known = ", ".join(b["id"] for b in load_config()["backends"])
@@ -191,9 +202,14 @@ def start(vid: str, backend_id: str) -> dict:
     if doc["source_lang"] == doc.get("viewer_lang"):
         return {"error": "source language matches the viewer language"}
 
+    # 장르를 고르지 않았다면 이 영상을 전사할 때 골랐던 것을 씁니다. 다시
+    # 번역할 때마다 되묻지 않기 위해서입니다.
+    genre = genre or doc.get("genre")
+
     job_id = uuid.uuid4().hex[:12]
     with _lock:
         _jobs[job_id] = {"id": job_id, "video": vid, "backend": backend_id,
+                         "genre": genre or mw_translate.DEFAULT_GENRE,
                          "done": 0, "total": len(doc["cues"]), "state": "running",
                          "started": time.time(), "error": None, "skipped": 0,
                          "degraded": False, "failures": 0,
@@ -204,14 +220,16 @@ def start(vid: str, backend_id: str) -> dict:
         snapshot = dict(_jobs[job_id])
     store.save_job(snapshot)
 
-    threading.Thread(target=_run, args=(job_id, vid, spec, doc), daemon=True).start()
+    threading.Thread(target=_run, args=(job_id, vid, spec, doc, genre),
+                     daemon=True).start()
     return {"id": job_id}
 
 
 def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                      backend_id: str = "local-m2m100",
                      asr_id: str = "local-hayamimi",
-                     speakers: bool = False) -> dict:
+                     speakers: bool = False,
+                     genre: str | None = None) -> dict:
     """Take a URL from the UI all the way to a playable cue file.
 
     Everything the CLI does, driven from the browser, with the phase reported
@@ -226,19 +244,21 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                          "started": time.time(), "error": None, "cancel": False,
                          "title": "", "video": None, "skipped": 0,
                          "by_remote": 0, "by_local": 0, "degraded": False,
-                         "failures": 0, "asr": asr_id}
+                         "failures": 0, "asr": asr_id,
+                         "genre": genre or mw_translate.DEFAULT_GENRE}
         snapshot = dict(_jobs[job_id])
     store.save_job(snapshot)
     threading.Thread(target=_run_transcribe,
                      args=(job_id, url, lang, viewer_lang, backend_id, asr_id,
-                           speakers),
+                           speakers, genre),
                      daemon=True).start()
     return {"id": job_id}
 
 
 def _run_transcribe(job_id: str, url: str, lang: str | None,
                     viewer_lang: str, backend_id: str,
-                    asr_id: str = "local-hayamimi", speakers: bool = False):
+                    asr_id: str = "local-hayamimi", speakers: bool = False,
+                    genre: str | None = None):
     def note(**kw):
         _note(job_id, **kw)
 
@@ -310,6 +330,7 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
 
         doc = {**meta, "source_lang": source_lang, "lang_counts": counts,
                "viewer_lang": viewer_lang, "translated": bool(kept),
+               "genre": genre or mw_translate.DEFAULT_GENRE,
                "audio_seconds": round(audio_s, 1), "cues": merged}
         save_video(meta["id"], doc)
         note(kept=kept)
@@ -321,7 +342,7 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             return
 
         spec = find_backend(backend_id) or {"backend": "local"}
-        tr = mw_translate.build(spec)
+        tr = mw_translate.build(spec, genre)
         bid = spec.get("id", "local-m2m100")
         skipped = 0
         for i, c in enumerate(doc["cues"]):
@@ -334,7 +355,8 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
                 skipped += 1
             else:
                 try:
-                    out = tr.translate(c["text"], source_lang, viewer_lang)
+                    out = tr.translate(c["text"], source_lang, viewer_lang,
+                                       _context(doc["cues"], i))
                 except Exception as exc:
                     # 실패했다고 줄을 버리면 그 발화가 없었던 것처럼 보입니다.
                     # 원문을 남기고 왜 실패했는지만 적습니다.
@@ -359,12 +381,13 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         note(state="error", error=str(exc)[:300])
 
 
-def _run(job_id: str, vid: str, spec: dict, doc: dict):
+def _run(job_id: str, vid: str, spec: dict, doc: dict,
+         genre: str | None = None):
     def note(**kw):
         _note(job_id, **kw)
 
     try:
-        tr = mw_translate.build(spec)
+        tr = mw_translate.build(spec, genre)
         src, tgt = doc["source_lang"], doc["viewer_lang"]
         bid = spec["id"]
         skipped = 0
@@ -378,7 +401,8 @@ def _run(job_id: str, vid: str, spec: dict, doc: dict):
                 skipped += 1
             else:
                 try:
-                    out = tr.translate(c["text"], src, tgt)
+                    out = tr.translate(c["text"], src, tgt,
+                                       _context(doc["cues"], i))
                 except Exception as exc:
                     print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
                     out = c["text"]

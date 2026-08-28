@@ -26,7 +26,7 @@ let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55, offset: 0 };
  * 대개 손해입니다 -- 발화 한 무리가 끝나기를 2초 기다렸다 합쳐서 다시
  * 받아 적으므로, 말이 빠르게 오가면 자막이 늦게 자리를 잡고 이미 읽은 줄이
  * 통째로 바뀝니다. */
-let start = { lang: "", genre: "general", refine: false };
+let start = { lang: "", genre: "general", refine: false, profile: "broadcast" };
 const SKEY = "startPrefs";
 
 function fail(text) {
@@ -56,28 +56,46 @@ async function init() {
   if (sp[SKEY]) Object.assign(start, sp[SKEY]);
 
   await fillPicker();
-  await fillGenres();
+  await fillChoices();
   // 고르개를 채운 **뒤에** 값을 앉힙니다. 비어 있는 select 에 value 를 넣으면
   // 그냥 버려집니다 -- 그래서 매번 처음으로 되돌아가 보였습니다.
   $("lang").value = start.lang || "";
   $("genre").value = start.genre || "general";
   if (!$("genre").value) $("genre").selectedIndex = 0;
   $("refine").checked = !!start.refine;
+  $("profile").value = start.profile || "broadcast";
+  if (!$("profile").value) $("profile").selectedIndex = 0;
+  syncProfileHint();
   await refreshState();
   // 유튜브 탭이 아니면 시작할 것도 없습니다.
   $("start-box").classList.toggle("busy", !onYouTube);
 }
 
-/* 장르는 서버가 들고 있습니다. 팝업에 붙박이로 적어 두면 서버에서 늘릴
- * 때마다 어긋납니다. */
-async function fillGenres() {
+/* 장르와 콘텐츠 유형은 서버가 들고 있습니다. 팝업에 붙박이로 적어 두면
+ * 서버에서 늘리거나 값을 손볼 때마다 어긋납니다 -- 특히 콘텐츠 유형은
+ * 실제로 몇 초에 끊을지가 그 표에 들어 있습니다. */
+let profiles = [];
+
+async function fillChoices() {
   const r = await send({ type: "backends" });
   if (!r || !r.ok) return;
-  const sel = $("genre");
-  for (const g of (r.data.genres || [])) {
-    sel.append(new Option(g.label || g.id, g.id));
-  }
-  if (!sel.length) sel.append(new Option("일반", "general"));
+  const g = $("genre");
+  for (const x of (r.data.genres || [])) g.append(new Option(x.label || x.id, x.id));
+  if (!g.length) g.append(new Option("일반", "general"));
+
+  profiles = r.data.live_profiles || [];
+  const p = $("profile");
+  for (const x of profiles) p.append(new Option(x.label || x.id, x.id));
+  if (!p.length) p.append(new Option("일반 방송", "broadcast"));
+}
+
+/* 고른 유형이 실제로 몇 초에 끊는지 적어 둡니다. 「일반 방송」이 4초라는
+ * 것을 모르면 왜 자막이 잘게 끊기는지 알 수 없습니다. */
+function syncProfileHint() {
+  const x = profiles.find((p) => p.id === $("profile").value);
+  $("profile-hint").textContent = x
+    ? `발화가 ${x.max_speech}초를 넘으면 끊습니다. 쉼은 ${x.min_silence}초.`
+    : "발화를 몇 초에 끊을지 정합니다.";
 }
 
 /* 서버가 들고 있는 것을 한 목록으로. 라이브 세션이 위, 녹화본이 아래입니다 --
@@ -167,7 +185,8 @@ async function startWith(type) {
     // 식별자라 「탭 오디오」로만 남았습니다.
     title: (tab.title || "").replace(/\s+-\s+YouTube$/, ""),
     lang: start.lang || null, genre: start.genre || "general",
-    refine: !!start.refine, viewerLang: "ko",
+    refine: !!start.refine, profile: start.profile || "broadcast",
+    viewerLang: "ko",
   });
   $("start-box").classList.remove("busy");
   if (!r || !r.ok) {
@@ -186,6 +205,9 @@ function saveStart() { chrome.storage.local.set({ [SKEY]: start }); }
 $("lang").addEventListener("change", (e) => { start.lang = e.target.value; saveStart(); });
 $("genre").addEventListener("change", (e) => { start.genre = e.target.value; saveStart(); });
 $("refine").addEventListener("change", (e) => { start.refine = e.target.checked; saveStart(); });
+$("profile").addEventListener("change", (e) => {
+  start.profile = e.target.value; saveStart(); syncProfileHint();
+});
 
 $("start-url").addEventListener("click", () => startWith("startUrl"));
 $("start-tab").addEventListener("click", () => startWith("startCapture"));

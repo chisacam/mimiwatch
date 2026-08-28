@@ -300,7 +300,7 @@ function applyModeForDoc() {
   if (!translated && (state.mode === "both" || state.mode === "translation")) {
     state.mode = "off";
   }
-  document.querySelectorAll(".seg").forEach(b => b.classList.toggle("on", b.dataset.mode === state.mode));
+  syncModeButtons();
   state.idx = -1;
   renderCue();
 }
@@ -369,6 +369,22 @@ function playerError(msg) {
 }
 
 /* ---------- controls ---------- */
+
+/* 자막 모드 단추는 두 벌입니다 -- 플레이어 아래의 것과 전체화면 상자 안의
+ * 것. 어느 쪽을 눌러도 같은 자리를 거치게 하고, 표시도 함께 맞춥니다. */
+function setMode(mode) {
+  state.mode = mode;
+  syncModeButtons();
+  persist();
+  state.idx = -1;
+  renderCue();
+}
+
+function syncModeButtons() {
+  document.querySelectorAll("[data-mode]").forEach(b =>
+    b.classList.toggle("on", b.dataset.mode === state.mode));
+}
+
 function applySize(px) {
   state.cuePx = px;
   applyCueSize();
@@ -417,6 +433,15 @@ function fsFailed(msg) {
   setTimeout(() => { b.textContent = "⛶ 전체화면"; }, 4000);
 }
 
+let fsIdleTimer = null;
+function showFsControls() {
+  if (!fsElement()) return;
+  const wrap = $("player-wrap");
+  wrap.classList.add("fs-active");
+  clearTimeout(fsIdleTimer);
+  fsIdleTimer = setTimeout(() => wrap.classList.remove("fs-active"), 2500);
+}
+
 function onFullscreenChange() {
   const el = fsElement();
   const on = !!el;
@@ -431,16 +456,18 @@ function onFullscreenChange() {
   if (!on) state.fsBaseHeight = 0;
   $("fullscreen").classList.toggle("on", on);
   $("fullscreen").textContent = on ? "⛶ 창으로" : "⛶ 전체화면";
+  if (on) showFsControls();
+  else { clearTimeout(fsIdleTimer); $("player-wrap").classList.remove("fs-active"); }
   // 상자 크기가 바뀐 뒤에 재야 합니다. 전환 직후에는 아직 옛 크기입니다.
   requestAnimationFrame(applyCueSize);
 }
 function bind() {
-  document.querySelectorAll(".seg").forEach(b => {
-    b.addEventListener("click", () => {
-      state.mode = b.dataset.mode;
-      document.querySelectorAll(".seg").forEach(x => x.classList.toggle("on", x === b));
-      persist(); state.idx = -1; renderCue();
-    });
+  // `.seg`가 아니라 `[data-mode]`로 좁힙니다. `.seg`는 🗑, ⚙, 스크립트 접기,
+  // 전체화면처럼 자막과 무관한 단추도 달고 있는 공용 클래스입니다. 그것들을
+  // 누르면 state.mode가 undefined가 되어 원문이 사라졌고(번역만 남습니다),
+  // persist()가 그 값을 저장까지 했습니다.
+  document.querySelectorAll("[data-mode]").forEach(b => {
+    b.addEventListener("click", () => setMode(b.dataset.mode));
   });
   $("size").addEventListener("input", e => { applySize(+e.target.value); persist(); });
   $("dim").addEventListener("input", e => {
@@ -500,6 +527,11 @@ function bind() {
     if (e.key === "f") toggleFullscreen();
   });
   $("fullscreen").addEventListener("click", toggleFullscreen);
+  $("fs-exit").addEventListener("click", toggleFullscreen);
+  // 조절기는 마우스가 움직일 때만 뜨고 잠시 뒤 사라집니다. 영상 위에 계속
+  // 떠 있으면 보는 것을 방해합니다.
+  $("player-wrap").addEventListener("mousemove", showFsControls);
+  $("fs-controls").addEventListener("mousemove", showFsControls);
   // 영상 위 더블클릭은 받을 수 없습니다. iframe이 상자를 꽉 채우고 있어
   // letterbox 여백까지 iframe의 것이라, 그 두 번 누름은 유튜브가 가져갑니다.
   document.addEventListener("fullscreenchange", onFullscreenChange);

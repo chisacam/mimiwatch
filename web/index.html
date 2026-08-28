@@ -45,6 +45,17 @@
         <div id="cue-main" class="cue-main"></div>
         <div id="cue-src" class="cue-src"></div>
       </div>
+
+      <!-- 전체화면에서는 상자 밖의 조절기가 그려지지 않습니다. 자막 모드만
+           상자 안에도 둡니다. 창 모드에서는 아래 조절기가 있으므로 숨깁니다. -->
+      <div id="fs-controls" class="fs-controls">
+        <span class="glabel">자막</span>
+        <button class="seg" data-mode="off">끄기</button>
+        <button class="seg" data-mode="both" data-needs-translation>둘 다</button>
+        <button class="seg" data-mode="translation" data-needs-translation>번역만</button>
+        <button class="seg" data-mode="source">원문만</button>
+        <button id="fs-exit" class="seg">⛶ 창으로</button>
+      </div>
     </div>
 
     <div class="controls">

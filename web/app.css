@@ -88,6 +88,25 @@ main.panel-hidden .panel{opacity:0; pointer-events:none}
   text-wrap:balance; text-shadow:0 2px 8px rgba(0,0,0,.9);
 }
 .cue-prev:empty,.cue-main:empty,.cue-src:empty{display:none}
+
+/* 전체화면 전용 조절기.
+ *
+ * 전체화면 요소의 하위 트리만 그려지므로, 상자 밖의 조절기는 그때 사라집니다.
+ * 자막 모드만이라도 상자 안에서 바꿀 수 있어야 합니다. 창 모드에서는 바로
+ * 아래에 같은 단추가 있으니 내보이지 않습니다. */
+.fs-controls{
+  display:none; position:absolute; left:50%; transform:translateX(-50%);
+  bottom:1.2rem; z-index:2;
+  align-items:center; gap:.3rem; padding:.45rem .6rem;
+  background:rgba(6,8,12,.82); border:1px solid var(--line); border-radius:9px;
+  backdrop-filter:blur(6px);
+  opacity:0; transition:opacity .18s ease; pointer-events:none;
+}
+#player-wrap:fullscreen .fs-controls,
+#player-wrap:-webkit-full-screen .fs-controls{ display:flex }
+/* 마우스가 움직일 때만 뜹니다. 영상 위에 계속 떠 있으면 방해가 됩니다. */
+#player-wrap.fs-active .fs-controls{ opacity:1; pointer-events:auto }
+.fs-controls .glabel{ margin-right:.15rem }
 .cue-main span,.cue-src span,.cue-prev span{
   background:rgba(6,8,12,var(--cue-bg,.55)); padding:.1em .4em; border-radius:4px;
   box-decoration-break:clone; -webkit-box-decoration-break:clone;

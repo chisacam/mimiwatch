@@ -248,11 +248,17 @@ class TranscribeCppASR:
 # SenseVoice는 `데이터독`을 `데이터`로 줄였고, 양자화를 F32까지 올려도
 # 그대로였습니다. 한 종류의 방송만 잘 보는 모델보다 전부 견디는 모델이
 # 낫습니다. 근거는 measurements/RESULTS.md 11~14장에 있습니다.
-MODEL_DIR = os.environ.get(
-    "MIMIWATCH_MODEL_DIR",
-    os.path.join(os.path.expanduser("~"), ".local", "share",
-                 "mimiwatch", "models"))
-WHISPER = os.path.join(MODEL_DIR, "whisper-large-v3-turbo-Q8_0.gguf")
+#
+# 파일 이름만 둡니다. 어디에 있는지는 `stream.model_dir()`이 정합니다 --
+# 예전에는 여기서 `~/.local/share/...`를 따로 계산했는데, 그 계산에는
+# 윈도우의 `%LOCALAPPDATA%` 분기가 없었습니다. install.ps1은 거기에 받아
+# 두므로, `MIMIWATCH_MODEL_DIR`을 따로 주지 않은 윈도우에서는 기본 전사기
+# 파일을 찾지 못했습니다. 모델 위치를 아는 곳은 한 군데여야 합니다.
+WHISPER_FILE = "whisper-large-v3-turbo-Q8_0.gguf"
+
+
+def default_whisper() -> str:
+    return os.path.join(stream.model_dir(), WHISPER_FILE)
 
 
 def resolve_asr(spec: dict | None, lang: str | None) -> dict:
@@ -262,7 +268,8 @@ def resolve_asr(spec: dict | None, lang: str | None) -> dict:
     (`TranscribeCppASR.swap`)가 같은 규칙을 써야 하므로 떼어 두었습니다.
     """
     spec = spec or {}
-    path = (spec.get("models") or {}).get(lang or "") or spec.get("model") or WHISPER
+    path = ((spec.get("models") or {}).get(lang or "") or spec.get("model")
+            or default_whisper())
     # 설정에는 파일 이름만 적을 수 있게 합니다. 전체 경로를 적으라고 하면
     # 윈도우·맥의 모델 위치가 달라 예시를 그대로 쓸 수 없습니다.
     if not os.path.isabs(path) and not os.path.exists(path):

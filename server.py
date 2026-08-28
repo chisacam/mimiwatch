@@ -221,8 +221,15 @@ class Handler(BaseHTTPRequestHandler):
             # commits: a live broadcast and a finished video are different
             # pipelines with different waiting behaviour.
             import subprocess as sp
-            out = sp.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", body.get("url", "")],
-                         capture_output=True, text=True)
+            try:
+                out = sp.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", body.get("url", "")],
+                             capture_output=True, text=True,
+                             timeout=stream.YTDLP_TIMEOUT_S)
+            except sp.TimeoutExpired:
+                # 상한이 없으면 이 요청 스레드가 영영 기다립니다. 브라우저도
+                # 함께 기다리므로 「추가」 대화상자가 멈춘 것처럼 보입니다.
+                return self._json({"error": f"yt-dlp가 {stream.YTDLP_TIMEOUT_S:.0f}초 "
+                                            "안에 답하지 않았습니다"}, 504)
             if out.returncode != 0:
                 return self._json({"error": out.stderr.strip()[:200] or "주소를 해석할 수 없습니다"}, 400)
             d = json.loads(out.stdout)
@@ -353,13 +360,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(cfg)
 
         if path == "/api/asr-backends/delete":
-            bid = body.get("id", "")
-            if bid == "local-hayamimi":
-                return self._json({"error": "기본 로컬 전사 엔진은 삭제할 수 없습니다"})
-            cfg = jobs.load_config()
-            cfg["asr_backends"] = [b for b in cfg.get("asr_backends", []) if b["id"] != bid]
-            jobs.save_config(cfg)
-            return self._json(cfg)
+            return self._json(jobs.delete_asr_backend(body.get("id", "")))
 
         if path == "/api/backends/delete":
             return self._json(jobs.delete_backend(body.get("id", "")))

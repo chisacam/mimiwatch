@@ -69,6 +69,21 @@ def restore() -> int:
 
 EXAMPLE_CONFIG = os.path.join(BASE, "backends.example.json")
 
+# 지울 수 없는 기본 엔진. 번역은 대체 경로(WithFallback)가 M2M-100을 늘 뒤에
+# 두므로 그 설정이 있어야 하고, 전사는 목록에서 사라지면 고를 것이 없어집니다.
+# 화면(app.js의 LOCKED)과 같은 값이어야 합니다 -- 예전에는 서버가 이미 없는
+# `local-hayamimi`를 지키고 있어서 API로는 기본 전사기를 지울 수 있었습니다.
+PROTECTED = {"tr": "local-m2m100", "asr": "tcpp-best"}
+
+
+def _example_default(key: str, fallback: str) -> str:
+    """예시 설정의 기본 활성 엔진. 활성 엔진을 지웠을 때 되돌아갈 자리입니다."""
+    try:
+        with open(EXAMPLE_CONFIG, encoding="utf-8") as f:
+            return json.load(f).get(key) or fallback
+    except Exception:
+        return fallback
+
 
 def load_config() -> dict:
     # backends.json holds real endpoints and keys and is not in the repo;
@@ -216,15 +231,31 @@ def cancel(job_id: str) -> dict:
 
 
 def delete_backend(backend_id: str) -> dict:
+    return _delete_engine("backends", "active", PROTECTED["tr"], backend_id)
+
+
+def delete_asr_backend(backend_id: str) -> dict:
+    return _delete_engine("asr_backends", "asr_active", PROTECTED["asr"], backend_id)
+
+
+def _delete_engine(key: str, active_key: str, protected: str, engine_id: str) -> dict:
+    """엔진 하나를 설정에서 지웁니다. 번역·전사가 같은 규칙입니다.
+
+    지운 것이 활성 엔진이었으면 예시 설정의 기본으로 되돌립니다(그것이 남아
+    있을 때). 예전에는 번역 쪽이 무조건 M2M-100으로 되돌아갔는데, 예시의
+    기본은 Gemma입니다 -- 지운 뒤 첫 세션이 갑자기 품질이 떨어졌습니다.
+    """
     cfg = load_config()
-    if backend_id == "local-m2m100":
-        return {"error": "기본 로컬 백엔드는 삭제할 수 없습니다"}
-    before = len(cfg["backends"])
-    cfg["backends"] = [b for b in cfg["backends"] if b["id"] != backend_id]
-    if len(cfg["backends"]) == before:
-        return {"error": f"'{backend_id}' 백엔드가 없습니다"}
-    if cfg.get("active") == backend_id:
-        cfg["active"] = "local-m2m100"
+    if engine_id == protected:
+        return {"error": "기본 로컬 엔진은 삭제할 수 없습니다"}
+    entries = cfg.get(key, [])
+    kept = [b for b in entries if b["id"] != engine_id]
+    if len(kept) == len(entries):
+        return {"error": f"'{engine_id}' 엔진이 없습니다"}
+    cfg[key] = kept
+    if cfg.get(active_key) == engine_id:
+        want = _example_default(active_key, protected)
+        cfg[active_key] = want if any(b["id"] == want for b in kept) else protected
     save_config(cfg)
     return cfg
 
@@ -370,7 +401,9 @@ def _run_retranslate(job_id, owner, spec, meta, cues, todo, genre):
             d["translated"] = True
             store.save_doc(owner, d)
         note(state="done", elapsed=round(time.time() - _jobs[job_id]["started"], 1))
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        # SystemExit도 받습니다. Exception이 아니라 위에서 놓치면 스레드가
+        # 조용히 죽고 작업은 `running`으로 영원히 남습니다.
         note(state="error", error=str(exc)[:300])
 
 
@@ -425,7 +458,11 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
 
         note(phase="download")
         os.makedirs(DATA, exist_ok=True)
-        wav = vod.fetch_audio(url, os.path.join(DATA, f"{meta['id']}.wav"))
+        try:
+            wav = vod.fetch_audio(url, os.path.join(DATA, f"{meta['id']}.wav"),
+                                  should_stop=cancelled)
+        except mw_stream.Cancelled:
+            note(state="cancelled"); return
         if cancelled():
             note(state="cancelled"); return
 
@@ -535,7 +572,9 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         save_video(meta["id"], doc)
         note(phase="done", state="done", done=len(doc["cues"]), skipped=skipped,
              elapsed=round(time.time() - _jobs[job_id]["started"], 1))
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        # SystemExit도 받습니다. Exception이 아니라 위에서 놓치면 스레드가
+        # 조용히 죽고 작업은 `running`으로 영원히 남습니다.
         note(state="error", error=str(exc)[:300])
 
 

@@ -12,6 +12,7 @@ irrelevant when nothing is played until the whole file is done.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import subprocess
@@ -32,29 +33,68 @@ SAMPLE_RATE = 16000
 CHUNK = 1600  # 0.1s per VAD feed
 
 
+# 실패는 RuntimeError로 냅니다. 예전에는 SystemExit이었는데, 이 함수들은
+# 서버의 작업 스레드(jobs._run_transcribe)에서도 불립니다. SystemExit은
+# Exception이 아니라 그쪽의 `except Exception`이 잡지 못하고, 스레드의
+# 기본 excepthook은 SystemExit을 조용히 무시합니다 -- 그러면 작업이
+# `running`인 채로 영원히 남고 「중단」도 듣지 않습니다. 다운로드 도중
+# 네트워크가 끊기면 정확히 이 경로였습니다. CLI 쪽(main)이 종료 코드로
+# 바꿉니다.
+class VodError(RuntimeError):
+    """yt-dlp나 ffmpeg가 실패했습니다."""
+
+
 def probe(url: str) -> dict:
-    out = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", url],
-                         capture_output=True, text=True)
+    try:
+        out = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", url],
+                             capture_output=True, text=True,
+                             timeout=stream.YTDLP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise VodError(f"yt-dlp가 {stream.YTDLP_TIMEOUT_S:.0f}초 안에 답하지 않았습니다")
     if out.returncode != 0:
-        raise SystemExit(f"yt-dlp failed: {out.stderr.strip()[:300]}")
+        raise VodError(f"yt-dlp failed: {out.stderr.strip()[:300]}")
     d = json.loads(out.stdout)
     return {"id": d.get("id"), "title": d.get("title"),
             "duration": d.get("duration"), "uploader": d.get("uploader"),
             "is_live": bool(d.get("is_live")), "url": url}
 
 
-def fetch_audio(url: str, dest: str) -> str:
-    """Download the audio-only rendition and decode it to 16kHz mono wav."""
+def fetch_audio(url: str, dest: str, should_stop=None) -> str:
+    """Download the audio-only rendition and decode it to 16kHz mono wav.
+
+    `should_stop`이 참을 돌려주면 내려받기를 죽이고 `stream.Cancelled`를
+    냅니다. 두 시간짜리 방송은 내려받기만 몇 분인데, 예전에는 그 사이에
+    「중단」을 눌러도 다 받은 뒤에야 멈췄습니다.
+    """
     if os.path.exists(dest):
         print(f"[vod] reusing cached audio {dest}", file=sys.stderr)
         return dest
     tmp = dest + ".src"
-    dl = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-f", "bestaudio",
-                         "-o", tmp, url], capture_output=True, text=True)
-    if dl.returncode != 0:
-        raise SystemExit(f"yt-dlp download failed: {dl.stderr.strip()[:300]}")
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", tmp,
-                    "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), dest], check=True)
+    proc = subprocess.Popen(
+        stream.ytdlp_cmd() + ["--no-warnings", "-f", "bestaudio", "-o", tmp, url],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    while True:
+        try:
+            _, err = proc.communicate(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            if should_stop and should_stop():
+                proc.kill()
+                proc.wait()
+                # yt-dlp는 받는 동안 `.part` 같은 조각 파일을 남깁니다.
+                for leftover in glob.glob(glob.escape(tmp) + "*"):
+                    try:
+                        os.remove(leftover)
+                    except OSError:
+                        pass
+                raise stream.Cancelled()
+    if proc.returncode != 0:
+        raise VodError(f"yt-dlp download failed: {(err or '').strip()[:300]}")
+    try:
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", tmp,
+                        "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), dest], check=True)
+    except subprocess.CalledProcessError as exc:
+        raise VodError(f"ffmpeg failed: {exc}") from exc
     os.remove(tmp)
     return dest
 
@@ -206,4 +246,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except VodError as exc:
+        # 명령줄에서는 종료 코드로 말합니다. 서버 스레드에서는 예외로 남겨야
+        # 하므로 함수 안에서는 SystemExit을 쓰지 않습니다.
+        raise SystemExit(str(exc))

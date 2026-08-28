@@ -20,8 +20,10 @@ import difflib
 import json
 import os
 import queue
-import re
 import subprocess
+# 이름을 따로 들여옵니다. 시험(bench/live_errors.py)이 `live.subprocess`를
+# 가짜로 갈아 끼우는데, 그 가짜에는 예외 클래스가 없습니다.
+from subprocess import TimeoutExpired
 import sys
 import threading
 import traceback
@@ -84,8 +86,13 @@ def resolve_audio(url: str) -> tuple[str, dict]:
     """Audio-only rendition plus what the manifest says about media time."""
     why = []
     for fmt in ("234", "233", "bestaudio"):
-        out = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-f", fmt, "-g", url],
-                             capture_output=True, text=True)
+        try:
+            out = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-f", fmt, "-g", url],
+                                 capture_output=True, text=True,
+                                 timeout=stream.YTDLP_TIMEOUT_S)
+        except TimeoutExpired:
+            why.append(f"{fmt}: {stream.YTDLP_TIMEOUT_S:.0f}초 안에 답하지 않음")
+            continue
         lines = out.stdout.strip().splitlines()
         if out.returncode == 0 and lines:
             return lines[0], manifest_info(lines[0])
@@ -393,6 +400,15 @@ class LiveSession:
             covered = ([self._recent[i] for i in range(best[0], best[-1] + 1)]
                        if best else [])
             target = covered[0] if covered else None
+            if target is None:
+                # 흡수할 확정 줄을 하나도 못 찾았습니다(재해독에서 글자가 크게
+                # 갈렸거나, 그 줄들이 이미 `_recent` 밖으로 밀려났거나). 이때
+                # 예전에는 `self._seq` -- 곧 **가장 최근 줄의 번호** -- 를 그대로
+                # 썼는데, 그 줄은 이 정제본과 무관한 다음 발화일 수 있습니다.
+                # 그러면 그 발화의 원문이 덮이고 번역까지 비워졌습니다. 짝을
+                # 못 찾은 정제본은 새 줄로 넣습니다.
+                self._seq += 1
+                self.lines += 1
             cue = {"type": "cue", "id": target["id"] if target else self._seq,
                    "kind": "refine", "t": round(target["t"] if target else media_t, 2),
                    "text": text, "lang": lang, "speaker": speaker,
@@ -415,7 +431,10 @@ class LiveSession:
         빠진 대신 기다리는 동안 들어온 뒤 줄이 남아 있습니다. 시각으로
         거르면 두 경우가 한 규칙으로 처리됩니다.
         """
-        older = [c["text"] for c in self._recent if c["t"] < cue["t"]]
+        # 우리가 적은 안내(kind=note)는 발화가 아닙니다. 문맥에 넣으면
+        # 번역기가 「서버가 멈춘 사이 …」를 앞 문장으로 알고 옮깁니다.
+        older = [c["text"] for c in self._recent
+                 if c["t"] < cue["t"] and c.get("kind") != "note"]
         return older[-mw_translate.CONTEXT_LINES:]
 
     def _translate_async(self, cue: dict):
@@ -632,8 +651,15 @@ class LiveSession:
         더 갈 수 없다는 뜻입니다 -- 상태와 오류는 여기서 이미 알렸습니다.
         """
         d = {}
-        meta = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", self.url],
-                              capture_output=True, text=True)
+        try:
+            meta = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", self.url],
+                                  capture_output=True, text=True,
+                                  timeout=stream.YTDLP_TIMEOUT_S)
+        except TimeoutExpired:
+            # 정보를 못 받아도 아래 resolve_audio가 한 번 더 시도합니다.
+            # 거기서도 안 되면 그쪽이 이유를 실어 예외를 냅니다.
+            meta = subprocess.CompletedProcess(args=[], returncode=-1,
+                                               stdout="", stderr="시간 초과")
         if meta.returncode == 0:
             d = json.loads(meta.stdout)
             self.title = d.get("title", "")
@@ -733,10 +759,18 @@ class LiveSession:
                     "note", "⋯ 여기서부터 탭 소리를 다시 받습니다. 공유가 "
                     "끊긴 사이는 받지 못했습니다 ⋯", self.lang or "", "")
             run_stream(chunks, vad, asr, sink, history, refiner)
+            if refiner is not None:
+                # 마지막 무리의 정제가 끝나기를 기다립니다. 상태를 「종료됨」으로
+                # 적은 뒤에 정제본이 도착하면 끝난 세션에 줄이 늘어납니다.
+                refiner.close()
             self.state = "stopped"
             self._persist()
             self.emit({"type": "status", **self.status()})
         finally:
+            # 정제 스레드를 꼭 끝냅니다. 살려 두면 그 스레드가 전사 모델을
+            # 쥐고 있어 아래 del 이 소용없습니다.
+            if refiner is not None:
+                refiner.close()
             # 이름을 지워야 모델이 놓입니다. try가 이름을 만들기 전에
             # 실패할 수 있으므로 위에서 미리 None으로 묶어 두었습니다.
             del asr, vad, history, refiner

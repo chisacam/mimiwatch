@@ -73,6 +73,11 @@ class Cancelled(RuntimeError):
 
 _YTDLP: list[str] | None = None
 
+# yt-dlp 한 번 부르는 데 허용하는 시간(초). 유튜브 쪽이 멎으면 yt-dlp도 같이
+# 멎는데, 상한이 없으면 그 요청 스레드(또는 세션)가 영영 기다립니다. 주소
+# 해석은 보통 몇 초입니다.
+YTDLP_TIMEOUT_S = 90.0
+
 
 def ytdlp_cmd() -> list[str]:
     """yt-dlp를 부르는 명령.
@@ -220,12 +225,29 @@ class Refiner:
     def _loop(self):
         while True:
             task = self._tasks.get()
+            if task is None:                              # close()가 보낸 끝 표시
+                self._tasks.task_done()
+                return
             try:
                 task()
             except Exception as exc:                      # 한 무리의 실패가
                 print(f"[refine] 실패: {exc}", flush=True)  # 세션을 죽이면 안 됩니다
             finally:
                 self._tasks.task_done()
+
+    def close(self, timeout: float = 10.0):
+        """작업 스레드를 끝냅니다. 남은 무리는 마저 처리하고 나옵니다.
+
+        이것이 없던 동안 `_loop`는 영영 `get()`에서 기다렸고, 그 스레드가
+        `self`를 쥐고 있으니 `self.asr`(전사 모델 한 벌)·`history`·`sink`가
+        세션이 끝난 뒤에도 회수되지 않았습니다. 세션마다 모델이 하나씩
+        쌓이는 셈입니다. 세션이 끝나는 자리에서 꼭 부릅니다 -- 두 번 불러도
+        됩니다.
+        """
+        if not self._thread.is_alive():
+            return
+        self._tasks.put(None)
+        self._thread.join(timeout)
 
     def add_span(self, seg_start: int, seg_end: int, text: str, speaker: str):
         self.spans.append((seg_start, seg_end, text, speaker))
@@ -301,6 +323,14 @@ def run_stream(chunks, vad, asr, sink, history: AudioHistory,
                        sample_rate, fails)
         if refiner is not None and not vad.is_speech_detected():
             refiner.maybe_refine(int(audio_pos * sample_rate))
+
+    # 소리가 끝났습니다(방송 종료, ffmpeg 종료). 걸려 있는 발화를 확정하고
+    # 마지막 무리도 정제합니다. 이것이 없으면 마지막 몇 줄은 거친 확정본으로만
+    # 남습니다 -- 위의 None 신호와 같은 일을 끝에서 한 번 더 합니다.
+    vad.flush()
+    _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate, fails)
+    if refiner is not None:
+        refiner.maybe_refine(int(audio_pos * sample_rate), force=True)
 
 
 # 해독이 연달아 이만큼 실패하면 장치가 죽은 것으로 보고 세션을 놓습니다.

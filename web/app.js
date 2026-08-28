@@ -14,6 +14,7 @@ const state = {
   genres: [],
   // 전체화면에 들어가기 직전의 플레이어 높이. 자막 크기 배율의 기준입니다.
   fsBaseHeight: 0, cuePx: 0,
+  cuePos: null,        // { x, y } 비율. restore()가 채웁니다 -- DEFAULT_CUE_POS 참고
   backend: "local-gemma", asr: "tcpp-best", refine: true,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   live: null,          // { id, es, byId } while a broadcast is running
@@ -127,6 +128,10 @@ function renderCue() {
   wrap($("cue-main"), line(cur), chipFor(cur));
   wrap($("cue-src"), state.mode === "both" && trOf(cur) ? cur.text : "");
   wrap($("cue-prev"), state.showPrev ? line(prev) : "", chipFor(prev));
+
+  // 문장이 바뀌면 덩어리 크기도 바뀝니다. 짧은 문장 자리에 놓아 둔 자막이
+  // 긴 문장에서 상자 밖으로 나가지 않도록, 그릴 때마다 자리를 다시 자릅니다.
+  applyCuePos();
 
   if (i !== state.idx) {
     state.idx = i;
@@ -450,7 +455,6 @@ function syncModeButtons() {
 const CONTROL_EFFECT = {
   size: v => applySize(+v),
   dim:  v => document.documentElement.style.setProperty("--cue-bg", (+v / 100).toFixed(2)),
-  pos:  v => { $("overlay").style.bottom = v + "%"; },
 };
 
 function setControl(name, value) {
@@ -463,7 +467,7 @@ function setControl(name, value) {
 /* 창 쪽 값을 전체화면 쪽 입력에 되비칩니다. 전체화면에 들어갈 때도 한 번
  * 부릅니다 -- 그때까지 손대지 않았으면 그 입력들은 빈 채로 있습니다. */
 function syncControlInputs() {
-  for (const name of ["size", "dim", "pos"]) {
+  for (const name of ["size", "dim"]) {
     document.querySelectorAll(`[data-ctl="${name}"]`).forEach(el => {
       if (el.value !== $(name).value) el.value = $(name).value;
     });
@@ -489,6 +493,112 @@ function applyCueSize() {
   const eff = Math.round(px * scale);
   $("overlay").style.fontSize = eff + "px";
   $("cue-main").style.fontSize = eff + "px";
+  // 글자가 커지면 덩어리도 커집니다. 커진 만큼 상자 밖으로 나갈 수 있으니
+  // 자리를 다시 잘라 줍니다.
+  applyCuePos();
+}
+
+/* ---------- 자막 자리 ---------- */
+
+/* 자막 자리는 픽셀이 아니라 **플레이어 상자에 대한 비율**로 적어 둡니다.
+ * 창과 전체화면은 크기가 다르고 창 자체도 늘었다 줄었다 하므로, 픽셀로
+ * 적어 두면 창에서 정한 자리가 전체화면에서는 왼쪽 위 구석이 됩니다.
+ *   x -- 상자 왼쪽에서 잰, 자막 덩어리 **가운데**의 가로 비율
+ *   y -- 상자 **바닥**에서 잰, 자막 덩어리 아래끝의 세로 비율
+ * y를 위가 아니라 바닥에서 재는 것은, 자막이 붙어 있어야 하는 쪽이 바닥이기
+ * 때문입니다. 글자 크기를 키워도 아래끝은 제자리에 남습니다. */
+const DEFAULT_CUE_POS = { x: 0.5, y: 0.06 };   // 아래 가운데. 예전 bottom:6%와 같은 자리입니다
+
+/* 「위치」 슬라이더는 없앴습니다.
+ *
+ * 끌기와 슬라이더를 같이 두면 두 조절기가 같은 값을 쓰면서도 **범위가
+ * 다릅니다**. 슬라이더는 0~40%로 고정이지만, 끌기의 한계는 그때그때 자막
+ * 덩어리의 높이에 따라 달라집니다(글자 크기와 줄 수가 매번 다르니까요).
+ * 슬라이더를 남기려면 그 범위를 매 프레임 다시 계산해 넣어야 하고, 그래도
+ * 가로(x)는 슬라이더가 말할 수 없어 반쪽만 따라오는 조절기가 됩니다.
+ * 어차피 끌기가 슬라이더가 하던 일을 다 하므로 슬라이더를 걷고, 그 자리에
+ * 되돌리기 단추만 남깁니다. 값을 쓰는 곳이 하나뿐이니 어긋날 수 없습니다. */
+
+/* 저장된 비율을 실제 left/bottom 으로 앉힙니다. */
+function applyCuePos() {
+  const { x, y } = clampCuePos(state.cuePos || DEFAULT_CUE_POS);
+  const ov = $("overlay");
+  ov.style.left = (x * 100).toFixed(3) + "%";
+  ov.style.bottom = (y * 100).toFixed(3) + "%";
+}
+
+/* 저장값을 그대로 쓰지 않고 그릴 때마다 한 번 더 자릅니다.
+ *
+ * 자막 덩어리의 크기는 글자 크기와 그때 나온 문장 길이에 따라 매번
+ * 달라집니다. 놓을 때는 상자 안이었어도 다음 문장이 길면 밖으로 삐져나가
+ * 글자가 잘립니다. 자르는 것은 **보여 주는 값**뿐입니다 -- 저장값까지 같이
+ * 줄이면 짧은 문장이 한 번 지나갈 때마다 사용자가 정한 자리가 조금씩
+ * 안쪽으로 끌려옵니다. */
+function clampCuePos(p) {
+  const wrap = $("player-wrap"), ov = $("overlay");
+  const bw = wrap.clientWidth, bh = wrap.clientHeight;
+  if (!bw || !bh) return p;
+  // 가운데를 기준점으로 잡았으니 좌우 여유는 덩어리 폭의 절반입니다. 자막이
+  // 상자보다 넓으면(아주 큰 글자 + 긴 문장) 여유가 없으므로 가운데로 둡니다.
+  const half = Math.min(ov.offsetWidth / 2 / bw, 0.5);
+  const top = Math.max(0, 1 - ov.offsetHeight / bh);
+  return {
+    x: Math.min(Math.max(p.x, half), 1 - half),
+    y: Math.min(Math.max(p.y, 0), top),
+  };
+}
+
+function resetCuePos() {
+  state.cuePos = { ...DEFAULT_CUE_POS };
+  applyCuePos();
+  persist();
+}
+
+/* 끌기는 Pointer Events로 받습니다.
+ *
+ * setPointerCapture 가 있어야 합니다. 포인터가 자막 밖으로 -- 곧 iframe 위로
+ * -- 나가는 순간 그 움직임은 유튜브 문서의 것이 되어 우리에게 오지 않고,
+ * 교차 출처라 document에 mousemove를 걸어도 넘어오지 않습니다. 캡처를 걸어
+ * 두면 뗄 때까지 모든 이동이 이 요소로 옵니다. 마우스와 터치를 한 벌로
+ * 다룰 수 있는 것은 덤입니다. */
+let cueDrag = null;
+
+function startCueDrag(e) {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  const r = $("overlay").getBoundingClientRect();
+  cueDrag = {
+    id: e.pointerId,
+    // 잡은 지점과 기준점(가운데-아래끝)의 어긋남. 빼 주지 않으면 누르는
+    // 순간 자막이 커서 밑으로 홱 옮겨 붙습니다.
+    dx: e.clientX - (r.left + r.width / 2),
+    dy: e.clientY - r.bottom,
+  };
+  $("overlay").setPointerCapture(e.pointerId);
+  $("overlay").classList.add("dragging");
+  e.preventDefault();
+}
+
+function moveCueDrag(e) {
+  if (!cueDrag || e.pointerId !== cueDrag.id) return;
+  // 전체화면에서도 그대로 통합니다. clientX/Y도 이 사각형도 뷰포트 기준이라,
+  // 상자가 화면 전체가 되면 두 값이 함께 커집니다.
+  const box = $("player-wrap").getBoundingClientRect();
+  if (!box.width || !box.height) return;
+  state.cuePos = {
+    x: (e.clientX - cueDrag.dx - box.left) / box.width,
+    y: (box.bottom - (e.clientY - cueDrag.dy)) / box.height,
+  };
+  applyCuePos();
+}
+
+function endCueDrag(e) {
+  if (!cueDrag || e.pointerId !== cueDrag.id) return;
+  $("overlay").classList.remove("dragging");
+  cueDrag = null;
+  // 놓은 자리는 **잘라서** 저장합니다. 상자 한참 밖에서 손을 뗐는데 그 값을
+  // 그대로 남기면, 다음에 열 때 화면에 없는 자리가 되살아납니다.
+  state.cuePos = clampCuePos(state.cuePos);
+  persist();
 }
 
 const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
@@ -575,13 +685,24 @@ function bind() {
     b.addEventListener("click", () => setMode(b.dataset.mode));
   });
   // 슬라이더도 두 벌입니다 -- 플레이어 아래의 것과 전체화면 상자 안의 것.
-  // 창 쪽(#size/#dim/#pos)을 값의 주인으로 두고, 어느 쪽을 움직이든 그리로
+  // 창 쪽(#size/#dim)을 값의 주인으로 두고, 어느 쪽을 움직이든 그리로
   // 모은 뒤 양쪽 표시를 맞춥니다.
-  for (const name of ["size", "dim", "pos"]) {
+  for (const name of ["size", "dim"]) {
     $(name).addEventListener("input", e => setControl(name, e.target.value));
     document.querySelectorAll(`[data-ctl="${name}"]`).forEach(el =>
       el.addEventListener("input", e => setControl(name, e.target.value)));
   }
+  // 자막 끌기. 리스너는 #overlay 하나에만 겁니다 -- 실제로 눌리는 것은 그 안의
+  // 글자줄이지만 이벤트는 올라오고, 포인터 캡처는 캡처를 건 요소로 이동을
+  // 모아 줍니다.
+  const ov = $("overlay");
+  ov.addEventListener("pointerdown", startCueDrag);
+  ov.addEventListener("pointermove", moveCueDrag);
+  ov.addEventListener("pointerup", endCueDrag);
+  ov.addEventListener("pointercancel", endCueDrag);
+  // 되돌리기 단추도 두 벌입니다 -- 플레이어 아래와 전체화면 상자 안.
+  document.querySelectorAll("[data-cue-reset]").forEach(b =>
+    b.addEventListener("click", resetCuePos));
   $("show-prev").addEventListener("change", e => { state.showPrev = e.target.checked; persist(); renderCue(); });
   $("follow").addEventListener("change", e => {
     state.follow = e.target.checked;
@@ -678,6 +799,9 @@ function bind() {
   // 전체화면에서 창 크기가 바뀌면(다른 화면으로 옮기는 등) 배율도 바뀝니다.
   window.addEventListener("resize", () => {
     if (fsElement()) applyCueSize();
+    // 자막 자리는 상자 크기에 대한 비율이라 창 모드에서도 다시 재야 합니다.
+    // 비율 자체는 그대로지만, 밖으로 나가는지 자르는 기준이 달라집니다.
+    applyCuePos();
     if (!$("manage-menu").hidden) toggleManage(true);
   });
 }
@@ -724,7 +848,7 @@ function persist() {
     ...prev,
     [translated ? "modeTranslated" : "modeSame"]: state.mode,
     size: +$("size").value, dim: +$("dim").value,
-    pos: +$("pos").value, showPrev: $("show-prev").checked,
+    cuePos: state.cuePos, showPrev: $("show-prev").checked,
     offset: +$("offset").value, viewerLang: $("viewer-lang").value,
     panelHidden: state.panelHidden, libraryHidden: state.libraryHidden,
     backend: state.backend,
@@ -738,13 +862,18 @@ function restore() {
   if (p.viewerLang) $("viewer-lang").value = p.viewerLang;
   if (p.size) $("size").value = p.size;
   if (p.dim != null) $("dim").value = p.dim;
-  if (p.pos != null) $("pos").value = p.pos;
+  // 예전에는 세로 자리만 「위치」 슬라이더의 퍼센트(p.pos)로 적었습니다.
+  // 그 값을 가운데-그 높이로 옮겨 줍니다. 슬라이더 시절에 정해 둔 자리가
+  // 갱신 한 번으로 아래 가운데로 튀지 않게요.
+  state.cuePos = p.cuePos ? { ...DEFAULT_CUE_POS, ...p.cuePos }
+               : p.pos != null ? { x: DEFAULT_CUE_POS.x, y: p.pos / 100 }
+               : { ...DEFAULT_CUE_POS };
   if (p.showPrev != null) $("show-prev").checked = p.showPrev;
   if (p.offset != null) { $("offset").value = p.offset; state.offset = p.offset; }
   state.showPrev = $("show-prev").checked;
   applySize(+$("size").value);
   document.documentElement.style.setProperty("--cue-bg", (+$("dim").value / 100).toFixed(2));
-  $("overlay").style.bottom = $("pos").value + "%";
+  applyCuePos();
   $("offset-val").textContent = state.offset.toFixed(1) + "s";
   syncControlInputs();
   setScriptView(p.scriptView || "both");

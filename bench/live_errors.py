@@ -169,6 +169,45 @@ def main():
     check(s2.asr_backend_id == "tcpp-best" and s2.asr_label == "old-model",
           "쓰던 엔진이 그대로다")
 
+    print("\n[6] 끊긴 세션을 같은 세션으로 이어받는가")
+    started = {}
+    real_store_session, real_store_cues = live.store.session, live.store.cues
+    live.store.session = lambda sid: {
+        "id": sid, "state": "interrupted", "url": "https://example.invalid/live",
+        "source_lang": "ja", "viewer_lang": "ko", "backend": "local-gemma",
+        "asr_backend": "tcpp-best", "profile": "collab", "refine": True,
+        "genre": "gaming", "title": "옛 방송", "video_id": "vid1",
+        "media_base": 400.0, "audio_s": 1100.0,
+    }
+    live.store.cues = lambda sid: [{"id": 1}, {"id": 2}, {"id": 7}]
+    real_start = live.LiveSession.start
+    live.LiveSession.start = lambda self: started.setdefault("self", self)
+    try:
+        res = live.resume("sess-1")
+        s = started.get("self")
+    finally:
+        live.LiveSession.start = real_start
+        live.store.session, live.store.cues = real_store_session, real_store_cues
+        live._sessions.pop("sess-1", None)
+
+    check(not res.get("error"), f"이어받기가 받아들여졌다 ({res})")
+    check(s is not None and s.id == "sess-1", "세션 id를 그대로 쓴다")
+    check(s and s._seq == 7, f"번호가 이어진다 (_seq={s and s._seq})")
+    check(s and s.lines == 3, f"줄 수를 물려받는다 ({s and s.lines})")
+    check(s and abs(s.resume_from - 1500.0) < 0.01,
+          f"끊긴 미디어 위치를 계산한다 ({s and s.resume_from})")
+    check(s and s.profile == "collab" and s.genre == "gaming" and s.refine,
+          "설정을 그대로 물려받는다")
+
+    print("\n[7] 이어받을 수 없는 경우")
+    live.store.session = lambda sid: None
+    check("error" in live.resume("없음"), "없는 세션은 거절한다")
+    live.store.session = lambda sid: {"id": sid, "state": "running", "url": "x"}
+    check("error" in live.resume("sess-1"), "이미 받는 중이면 거절한다")
+    live.store.session = lambda sid: {"id": sid, "state": "interrupted", "url": ""}
+    check("error" in live.resume("sess-1"), "주소가 없으면 거절한다")
+    live.store.session = real_store_session
+
     print()
     if FAIL:
         print(f"{len(FAIL)} 건 실패")

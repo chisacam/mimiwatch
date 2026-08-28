@@ -255,6 +255,11 @@ class LiveSession:
         self.min_silence = prof["min_silence"]
         self.state = "starting"
         self.error: str | None = None
+        # 이어받을 때, 끊기기 직전까지 받아 둔 미디어 위치입니다. 0이면
+        # 새로 시작하는 세션이라 되감을 것이 없습니다.
+        self.resume_from = 0.0
+        # 되감아도 메우지 못한 구간(초). 0보다 크면 자막에 그렇게 적습니다.
+        self.gap_s = 0.0
         self.title = ""
         # 재시작 뒤 이 세션을 다시 열려면 임베드할 영상 id가 필요합니다.
         # 세션 id는 우리가 만든 것이라 플레이어에 넣을 수 없습니다.
@@ -323,10 +328,10 @@ class LiveSession:
         if not text:
             return
         media_t = self.media_base + self.audio_s
-        if kind == "final":
+        if kind in ("final", "note"):
             self._seq += 1
             self.lines += 1
-            cue = {"type": "cue", "id": self._seq, "kind": "final",
+            cue = {"type": "cue", "id": self._seq, "kind": kind,
                    "t": round(media_t, 2), "text": text,
                    "lang": lang, "speaker": speaker}
             self._recent.append(cue)
@@ -396,6 +401,9 @@ class LiveSession:
         return older[-mw_translate.CONTEXT_LINES:]
 
     def _translate_async(self, cue: dict):
+        # 우리가 적은 안내입니다. 번역기에 넘길 것이 아닙니다.
+        if cue.get("kind") == "note":
+            return
         if self.lang and self.lang == self.viewer_lang:
             return
         # 문맥은 여기서 붙잡습니다. 번역 스레드가 도는 사이에도 자막은 계속
@@ -437,6 +445,39 @@ class LiveSession:
         self._stop.set()
         if self._ff:
             self._ff.terminate()
+
+    def _resume_point(self, info: dict, release_ts: float | None):
+        """끊긴 자리에서 다시 받으려면 재생목록의 어디부터 읽어야 하는가.
+
+        유튜브는 지금 진행 중인 방송도 얼마간 되감을 수 있게 내어 줍니다
+        (DVR 창). 서버가 멈춘 사이가 그 창 안이면 **한 조각도 잃지 않고**
+        이어 붙일 수 있습니다. 창보다 오래 멈춰 있었으면 메우지 못한 만큼을
+        `gap_s`에 남겨, 화면에 그렇게 적습니다.
+
+        돌려주는 것은 (ffmpeg의 -live_start_index, 건너뛴 초)입니다.
+        """
+        first = media_base_from(info.get("pdt"), release_ts, 0.0)
+        segs = int(info.get("segments") or 0)
+        seg_dur = (self.window_s / segs) if segs else float(info.get("target") or 2.0)
+        want = self.resume_from - first        # 재생목록 앞에서 몇 초를 건너뛸까
+
+        if seg_dur <= 0 or self.window_s <= 0:
+            # 창을 읽지 못했습니다. 되감기를 시도하지 않고 라이브 끝에서
+            # 받되, 얼마를 잃었는지는 알 수 없으므로 적지 않습니다.
+            return -2, self.window_s
+        if want <= 0:
+            # 우리가 멈춘 지점이 이미 창 밖으로 밀려났습니다. 남아 있는
+            # 가장 오래된 것부터 받고, 그 사이는 잃은 것으로 적습니다.
+            self.gap_s = max(0.0, -want)
+            return 0, 0.0
+        if want >= self.window_s:
+            # 창 안에서 못 메울 것이 없습니다 -- 우리가 멈춘 지점이 아직
+            # 라이브 끝보다 뒤이므로 그냥 끝에서 이어 받습니다.
+            self.gap_s = 0.0
+            return -2, self.window_s
+        idx = max(0, int(want / seg_dur))
+        self.gap_s = 0.0
+        return idx, idx * seg_dur
 
     def _release(self):
         """Drop the models this session loaded.
@@ -500,10 +541,14 @@ class LiveSession:
             # Skipping the DVR window means the audio starts at the live edge;
             # media_base has to account for everything we deliberately passed.
             self.window_s = info.get("window_s") or 0.0
-            self.media_base = media_base_from(info.get("pdt"), release_ts,
-                                              self.window_s)
+            start_index, skipped = -2, self.window_s
+            if self.resume_from:
+                start_index, skipped = self._resume_point(info, release_ts)
+            self.media_base = media_base_from(info.get("pdt"), release_ts, skipped)
             print(f"[live] playlist: {info.get('segments')} segments / "
-                  f"{self.window_s:.0f}s window, media_base={self.media_base:.0f}s",
+                  f"{self.window_s:.0f}s window, media_base={self.media_base:.0f}s"
+                  + (f", 이어받기 index={start_index} 빠진 구간={self.gap_s:.0f}s"
+                     if self.resume_from else ""),
                   flush=True)
             self.state = "loading"
             self._persist()
@@ -541,13 +586,21 @@ class LiveSession:
             # viewer watches its live edge.
             self._ff = subprocess.Popen(
                 ["ffmpeg", "-loglevel", "error",
-                 "-live_start_index", "-2", "-i", src,
+                 "-live_start_index", str(start_index), "-i", src,
                  "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
                 stdout=subprocess.PIPE)
 
             self.state = "running"
             self._persist()
             self.emit({"type": "status", **self.status()})
+            if self.gap_s >= 1.0:
+                # 조용한 구멍을 남기지 않습니다. 되감아도 메우지 못한
+                # 구간이 있으면 스크립트에 그렇게 적습니다 -- 자막이
+                # 없는 것과 받아 적지 못한 것은 다른 이야기입니다.
+                self.publish_line(
+                    "note",
+                    f"⋯ 서버가 멈춘 사이 약 {int(self.gap_s)}초를 받지 "
+                    f"못했습니다 ⋯", self.lang or "", "")
             run_stream(self._chunks(), vad, asr, sink, history, refiner)
             self.state = "stopped"
             self._persist()
@@ -706,6 +759,56 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     s._tr = mw_translate.build(spec, s.genre)
     s.backend_id = backend_id
     return {"backend": backend_id}
+
+
+def resume(session_id: str) -> dict:
+    """끊긴 세션의 수신을 **같은 세션으로** 이어 붙입니다.
+
+    지금까지는 서버가 죽으면 그 세션은 거기서 끝이었습니다. 이어받은 척하면
+    조용한 구멍이 생긴다는 이유였는데, 구멍을 조용하지 않게 만들면 그 이유가
+    없어집니다. 두 가지로 그렇게 합니다.
+
+      - 유튜브의 DVR 창 안이면 되감아 **한 조각도 잃지 않고** 받습니다.
+      - 창보다 오래 멈춰 있었으면 못 메운 초를 자막 한 줄로 적습니다.
+
+    세션 id를 그대로 쓰므로 자막은 이어집니다. 자동으로 하지 않습니다 --
+    서버를 켰다고 방송을 다시 받기 시작하는 것은 사용자가 시킨 일이 아닙니다.
+    """
+    st = store.session(session_id)
+    if not st:
+        return {"error": "no such session"}
+    if st.get("state") in ("starting", "loading", "running"):
+        return {"error": "이미 받는 중입니다"}
+    if not st.get("url"):
+        return {"error": "주소가 남아 있지 않아 이어받을 수 없습니다"}
+
+    # 한 번에 한 방송만 받습니다. start() 와 같은 규칙입니다 -- 모델을 두 벌
+    # 올려 둘 이유가 없습니다.
+    for old_id in list(_sessions):
+        old = get(old_id)
+        if old is not None:
+            old.stop()
+
+    s = LiveSession(st["url"], st.get("source_lang") or None,
+                    st.get("viewer_lang") or "ko", st.get("backend") or "",
+                    profile=st.get("profile") or "broadcast",
+                    asr_backend_id=st.get("asr_backend") or "",
+                    refine=bool(st.get("refine")), genre=st.get("genre"))
+    s.id = session_id
+    s.title = st.get("title") or ""
+    s.video_id = st.get("video_id") or ""
+    # 이어 붙이려면 번호가 이어져야 합니다. 새 줄이 옛 줄의 id를 다시 쓰면
+    # 화면에서 그 자리를 덮어씁니다.
+    prior = store.cues(session_id)
+    s._seq = max((int(c["id"]) for c in prior), default=0)
+    s.lines = len(prior)
+    s.resume_from = float(st.get("media_base") or 0.0) + float(st.get("audio_s") or 0.0)
+
+    with _lock:
+        _sessions[s.id] = s
+    s._persist()
+    s.start()
+    return {"id": s.id, "resumed": True}
 
 
 def set_asr(session_id: str, asr_backend_id: str) -> dict:

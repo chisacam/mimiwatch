@@ -1165,6 +1165,34 @@ function hideLiveNotice() {
   box.textContent = "";
 }
 
+/* 끊긴 세션을 같은 세션으로 이어 붙입니다. 자막은 세션 id로 저장되므로
+ * 그때까지의 스크립트가 그대로 남고 뒤에 이어 붙습니다. */
+function offerResume(sessionId) {
+  const box = $("live-notice");
+  box.textContent = "서버가 멈춰 수신이 끊겼습니다 — ";
+  const b = document.createElement("button");
+  b.className = "seg";
+  b.textContent = "이어받기";
+  b.onclick = async () => {
+    b.disabled = true;
+    b.textContent = "이어받는 중…";
+    const res = await (await fetch("/api/live/resume", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: sessionId }),
+    })).json();
+    if (res.error) { showLiveNotice(`이어받지 못했습니다 — ${res.error}`); return; }
+    hideLiveNotice();
+    // 같은 세션이므로 다시 붙기만 하면 됩니다. detachLive 로 지금 붙어
+    // 있는 것을 끊고 새로 열어야 상태 이벤트를 처음부터 받습니다.
+    detachLive();
+    state.live = null;
+    await resumeLive(sessionId);
+    await refreshVideoList();
+  };
+  box.appendChild(b);
+  box.hidden = false;
+}
+
 function showLiveNotice(text) {
   const box = $("live-notice");
   box.textContent = text;
@@ -1278,6 +1306,9 @@ async function resumeLive(sessionId) {
   state.jobId = null;
   $("live-badge").hidden = !running;
   $("offset-wrap").style.display = "flex";
+  // 끊긴 세션이고 주소가 남아 있으면 이어받을 수 있습니다. 자동으로 하지
+  // 않습니다 -- 방송을 다시 받기 시작하는 것은 눌러서 시킬 일입니다.
+  if (!running && st.state === "interrupted" && st.url) offerResume(st.id);
   await attachLive(st.id, st.video_id);
 }
 

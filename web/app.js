@@ -1288,11 +1288,21 @@ function offerResume(sessionId, why) {
   b.onclick = async () => {
     b.disabled = true;
     b.textContent = "이어받는 중…";
+    // 대본 창을 여기서 잡습니다. 이 클릭이 살아 있는 유일한 지점입니다 --
+    // 아래 공유 창을 고르고 나면 크롬이 window.open 을 막습니다. 시작할
+    // 때와 같은 이유이고 같은 순서입니다.
+    const pending = why === "tab" ? openPendingScriptWindow() : null;
+    if (pending) state.scriptWin = pending;
+
     const res = await (await fetch("/api/live/resume", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: sessionId }),
     })).json();
-    if (res.error) { showLiveNotice(`이어받지 못했습니다 — ${res.error}`); return; }
+    if (res.error) {
+      if (pending) { pending.close(); state.scriptWin = null; }
+      showLiveNotice(`이어받지 못했습니다 — ${res.error}`);
+      return;
+    }
     hideLiveNotice();
     // 같은 세션이므로 다시 붙기만 하면 됩니다. detachLive 로 지금 붙어
     // 있는 것을 끊고 새로 열어야 상태 이벤트를 처음부터 받습니다.
@@ -1303,16 +1313,21 @@ function offerResume(sessionId, why) {
     // 탭 소리는 서버가 되감을 수 없습니다. 브라우저가 다시 들려줘야
     // 이어집니다 -- 세션만 살아나고 소리가 오지 않으면 「받는 중」인 채로
     // 한 줄도 늘지 않습니다.
-    if (res.source === "tab") {
-      const media = await requestTabAudio();
-      if (!media) {
-        showLiveNotice("탭을 다시 공유해야 이어집니다. 목록에서 다시 "
-                       + "「이어받기」를 누르십시오.");
-        return;
-      }
-      await pipeCapture(media, sessionId);
-      showLiveNotice("탭 소리를 다시 받습니다.");
+    if (res.source !== "tab") return;
+    const media = await requestTabAudio();
+    if (!media) {
+      if (pending) { pending.close(); state.scriptWin = null; }
+      // 세션은 이미 살아났는데 소리가 오지 않습니다. 그 상태를 화면에
+      // 적어 두지 않으면 「받는 중」인 채로 한 줄도 늘지 않는 이유를
+      // 알 길이 없습니다.
+      tabStageNotice("탭을 다시 공유해야 이어집니다.");
+      showLiveNotice("탭을 다시 공유해야 이어집니다. 목록에서 다시 "
+                     + "「이어받기」를 누르십시오.");
+      return;
     }
+    await pipeCapture(media, sessionId);
+    tabStageNotice();
+    aimScriptWindow(pending, sessionId);
   };
   box.appendChild(b);
   box.hidden = false;
@@ -1416,6 +1431,22 @@ async function requestTabAudio() {
     return null;
   }
   return media;
+}
+
+/* 탭 세션의 안내는 **화면 자리**에만 씁니다.
+ *
+ * 위쪽 막대에도 같은 말을 띄웠더니 한 화면에 두 번 나왔습니다. 그 자리는
+ * 좁고(대본 창에서는 460px입니다) 눌러야 할 것을 알리는 데 써야 하므로,
+ * 설명은 비어 있는 플레이어 자리로 내립니다. 어차피 그 자리는 이 흐름에서
+ * 검은 사각형으로 남습니다.
+ *
+ * 시작할 때와 이어받을 때 모두 부릅니다 -- 이어받기는 attachLive 를 지나며
+ * clearPlayerError() 로 이 안내를 지우고 갑니다. */
+function tabStageNotice(tail) {
+  playerError("이 방송은 여기서 재생하지 않습니다. 소리만 다른 탭에서 "
+              + "받아 적고 있습니다 — 유튜브 탭에서 보시고, 대본은 옆 "
+              + "창이나 오른쪽 스크립트에서 읽으십시오."
+              + (tail ? " " + tail : ""));
 }
 
 /* 이름 고치기.
@@ -1638,29 +1669,25 @@ async function startTabCapture(title, lang) {
   $("offset-wrap").style.display = "none";
   await attachLive(res.id, "");
   await pipeCapture(media, res.id);
-  // 플레이어 자리가 검은 사각형으로 남습니다. 이 흐름에는 끼워 넣을 영상이
-  // 없다는 것을 그 자리에서 말해 둡니다 -- 대본 창을 닫았을 때 본 화면만
-  // 보고 무엇이 잘못됐는지 헤매지 않도록.
-  playerError("이 방송은 여기서 재생하지 않습니다. 소리만 다른 탭에서 "
-              + "받아 적고 있습니다 — 유튜브 탭에서 보시고, 대본은 옆 "
-              + "창이나 오른쪽 스크립트에서 읽으십시오.");
+  tabStageNotice(isTabSurface(media) ? "" :
+    // 창이나 화면 전체도 소리가 오면 받습니다. 다만 무엇이 섞여 들어올지
+    // 알 수 없으므로, 그렇게 골랐다는 것만 짚어 둡니다.
+    "지금은 탭이 아니라 창·화면을 공유하고 있습니다 — 다른 소리가 섞이면 "
+    + "탭으로 다시 고르십시오.");
+  aimScriptWindow(pending, res.id);
+}
 
-  // 잡아 둔 창을 대본으로 돌립니다. 팝업이 막혀 못 잡았으면 본 화면의
-  // 「⧉ 대본 창」으로 열 수 있다고 알립니다 -- 그 단추를 누르는 것은
-  // 새 조작이므로 그때는 열립니다.
+/* 잡아 둔 빈 창을 대본으로 돌립니다. 팝업이 막혀 못 잡았으면 위쪽 막대로
+ * 알립니다 -- 「⧉ 대본 창」을 누르는 것은 새 조작이므로 그때는 열립니다.
+ * 그 한 줄은 눌러야 할 것을 알리는 말이라 막대에 남깁니다. */
+function aimScriptWindow(pending, sessionId) {
   if (pending && !pending.closed) {
-    pending.location = `/?script=${encodeURIComponent("live:" + res.id)}`;
+    pending.location = `/?script=${encodeURIComponent("live:" + sessionId)}`;
+    hideLiveNotice();
+    return;
   }
-  showLiveNotice(
-    (isTabSurface(media)
-      ? "이 브라우저의 다른 탭에서 나는 소리를 받아 적습니다. "
-      // 창이나 화면 전체도 소리가 오면 받습니다. 다만 무엇이 섞여 들어올지
-      // 알 수 없으므로, 그렇게 골랐다는 것만 짚어 둡니다.
-      : "탭이 아니라 창·화면을 공유하고 있습니다. 그 소리를 받아 적습니다 — "
-        + "다른 소리가 섞이면 탭으로 다시 고르십시오. ")
-    + "그 탭을 닫거나 공유를 멈추면 함께 끝납니다."
-    + (pending ? "" : " 팝업이 막혀 대본 창을 띄우지 못했습니다 — "
-                      + "오른쪽 「⧉ 대본 창」으로 여십시오."));
+  showLiveNotice("팝업이 막혀 대본 창을 띄우지 못했습니다 — "
+                 + "오른쪽 「⧉ 대본 창」으로 여십시오.");
 }
 
 async function startLive(url, lang, probe) {
@@ -1752,6 +1779,11 @@ async function resumeLive(sessionId) {
     else if (st.state === "interrupted" && st.url) offerResume(st.id);
   }
   await attachLive(st.id, st.video_id);
+  // 탭 세션에는 끼워 넣을 영상이 없습니다. attachLive 가 앞서 본 것의
+  // 안내를 지우고 지나가므로, 그 뒤에 이 흐름의 안내를 다시 씁니다.
+  if (st.source === "tab") {
+    tabStageNotice(running ? "" : "수신은 멈춰 있고, 쌓인 대본만 보고 있습니다.");
+  }
 }
 
 async function attachLive(sessionId, videoId) {

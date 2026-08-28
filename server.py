@@ -11,8 +11,10 @@ import os
 import posixpath
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import export
 import jobs
 import live
 import store
@@ -96,6 +98,38 @@ class Handler(BaseHTTPRequestHandler):
             if st is None:
                 return self._send(b'{"error":"no such job"}', "application/json", 404)
             return self._json(st)
+
+        if path == "/api/export":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            value = (q.get("id") or [""])[0]
+            fmt = (q.get("fmt") or ["srt"])[0]
+            view = (q.get("view") or ["both"])[0]
+            try:
+                meta, rows = export.collect(value)
+                body, ctype = export.render(meta, rows, fmt, view)
+            except KeyError:
+                return self._send(b"not found", "text/plain", 404)
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            # 제목에 한글과 일본어가 들어갑니다. filename= 은 ASCII 만 담을
+            # 수 있으므로 RFC 5987 의 filename* 을 같이 보냅니다 -- 브라우저는
+            # 둘 중 읽을 수 있는 쪽을 씁니다.
+            name = export.filename(meta, fmt)
+            quoted = urllib.parse.quote(name, safe="")
+            # 앞의 filename= 은 filename* 을 못 읽는 도구를 위한 자리라
+            # ASCII 여야 합니다. 세션 값을 그대로 쓰면 `live:xxx.srt` 가 되어
+            # 윈도우에서 만들 수 없는 이름이 됩니다.
+            plain = "".join(c for c in (value or "mimiwatch")
+                            if c.isalnum() or c in "-_") or "mimiwatch"
+            self.send_header("Content-Disposition",
+                             f"attachment; filename=\"{plain}.{fmt}\"; "
+                             f"filename*=UTF-8''{quoted}")
+            self.end_headers()
+            return self.wfile.write(body)
 
         if path.startswith("/static/"):
             target = os.path.join(WEB, os.path.basename(path))

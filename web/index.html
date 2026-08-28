@@ -134,6 +134,7 @@
       <h2>스크립트</h2>
       <button id="open-script-window" class="seg"
               title="대본만 따로 띄웁니다. 임베드가 막힌 방송을 유튜브에서 보며 읽을 때 씁니다">⧉ 대본 창</button>
+      <button id="open-export" class="seg" title="쌓인 자막을 파일로 내보냅니다">⤓ 내보내기</button>
       <label class="check"><input id="follow" type="checkbox" checked> 따라가기</label>
     </div>
 
@@ -203,6 +204,34 @@
       <span class="grow"></span>
       <button value="cancel" formnovalidate>취소</button>
       <button value="save" class="primary">시작</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="export-dialog">
+  <form method="dialog" id="export-form">
+    <h3>자막 내보내기</h3>
+    <p class="hint" id="export-what">—</p>
+    <label>형식
+      <select name="fmt">
+        <option value="srt">SRT — 영상 편집기·플레이어</option>
+        <option value="vtt">WebVTT — 웹 플레이어</option>
+        <option value="txt">텍스트 — 타임스탬프를 붙여 읽기</option>
+        <option value="json">JSON — 다시 불러오기·재번역</option>
+      </select>
+      <small id="export-hint">끝 시각은 다음 자막까지, 최대 6초입니다.</small>
+    </label>
+    <label>담을 것
+      <select name="view">
+        <option value="both">둘 다 (원문 다음 줄에 번역)</option>
+        <option value="tr">번역만</option>
+        <option value="src">원문만</option>
+      </select>
+    </label>
+    <div class="row">
+      <span class="grow"></span>
+      <button value="cancel" formnovalidate>취소</button>
+      <button value="save" class="primary">내려받기</button>
     </div>
   </form>
 </dialog>

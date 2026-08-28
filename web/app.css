@@ -275,6 +275,7 @@ body.script-only .bar > *:not(.now):not(#live-notice):not(#lang-status):not(.spa
 body.script-only .library,
 body.script-only .stage,
 body.script-only #open-script-window,
+body.script-only #open-export,
 body.script-only #rename-live,
 body.script-only #job{display:none}
 /* 그리드를 그대로 두고 칸을 0으로 만들려 했더니 두 가지가 걸렸습니다.

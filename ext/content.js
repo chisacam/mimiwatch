@@ -91,18 +91,29 @@
     return true;
   }
 
+  /* 이 탭에서 내립니다. 화면에서 지우는 것만으로는 모자랍니다.
+   *
+   * **포트를 끊어야 합니다.** 예전에는 끊지 않아서, 1.5초마다 도는 감시자가
+   * `port` 가 살아 있는 것을 보고 「오버레이가 사라졌네」 하며 다시
+   * 세웠습니다. 단추를 누르면 잠깐 사라졌다가 다음 자막에 되살아났습니다. */
   function unmount() {
     stopTick();
+    if (port) { try { port.disconnect(); } catch (_) {} port = null; }
     MimiPanel.unmount();
+    MimiPanel.reset();
     if (ov) { ov.destroy(); ov = null; }
-    if (node && node.parentElement) node.parentElement.removeChild(node);
+    document.querySelectorAll("#" + ID).forEach((e) => e.remove());
     node = null;
+    cues = [];
+    byId = new Map();
   }
 
   /* 채팅 자리의 대본. 화면 위 자막과는 별개로 켜고 끕니다 -- 오버레이는
    * 지금 한 줄이고, 이쪽은 지나간 것을 되짚는 자리입니다. */
   function syncPanel() {
-    if (prefs.panel) {
+    // 붙어 있지 않으면 세우지 않습니다. 내린 뒤에도 이 함수가 도는데,
+    // `prefs.panel` 만 보면 자막 내역이 저 혼자 되살아납니다.
+    if (prefs.panel && port) {
       if (!MimiPanel.mounted()) {
         MimiPanel.reset();
         if (!MimiPanel.mount()) return;
@@ -225,6 +236,9 @@
     port.onDisconnect.addListener(() => { port = null; });
     port.postMessage({ type: "attach", value });
     startTick();
+    // 포트가 선 뒤에 한 번 더 부릅니다. mount() 안의 apply() 는 이 줄보다
+    // 앞서 도는데, 그때는 아직 port 가 없어 자막 내역이 서지 않습니다.
+    syncPanel();
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, reply) => {

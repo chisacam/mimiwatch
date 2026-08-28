@@ -187,6 +187,10 @@ function scriptRow(c, i) {
     // 재생 위치를 옮겨 버리면 고칠 수가 없습니다.
     if (row.classList.contains("editing")) return;
     if (state.scriptMode === "edit") { openCueEditor(row, c); return; }
+    // 고르는 중에는 움직이지 않습니다. 고르기는 pointerdown 에서 하는데,
+    // 거기서 preventDefault() 를 해도 click 은 그대로 옵니다 -- 그것이 막는
+    // 것은 글자 선택 같은 기본 동작이지 뒤따르는 click 이벤트가 아닙니다.
+    if (state.scriptMode === "tr") return;
     if (state.player) { state.player.seekTo(cueStart(c), true); state.player.playVideo(); }
   });
   // 번역 모드의 고르기. click 이 아니라 pointerdown 에 거는 것은 shift+click 이

@@ -199,7 +199,10 @@
       <select name="genre"></select>
       <small id="genre-hint">번역 프롬프트를 발화의 성격에 맞춥니다. 기술 발표와 게임 방송은 쓰는 말이 다릅니다.</small>
     </label>
-    <label>콘텐츠 유형 <small class="tag">라이브 전용</small>
+    <!-- 딱지를 글자와 한 덩어리로 묶습니다. 이 label 은 세로 flex 라
+         (다른 「…전용」 딱지가 붙은 둘은 label.inline 이라 가로입니다)
+         그냥 두면 딱지가 혼자 한 줄을 차지하며 늘어납니다. -->
+    <label><span>콘텐츠 유형 <small class="tag">라이브 전용</small></span>
       <select name="profile"></select>
       <small>발화를 얼마나 자주 끊을지 정합니다. 여러 사람이 겹쳐 말하면 짧게 끊어야 누락이 줄어듭니다.</small>
     </label>

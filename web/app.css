@@ -96,17 +96,42 @@ main.panel-hidden .panel{opacity:0; pointer-events:none}
  * 아래에 같은 단추가 있으니 내보이지 않습니다. */
 .fs-controls{
   display:none; position:absolute; left:50%; transform:translateX(-50%);
-  bottom:1.2rem; z-index:2;
-  align-items:center; gap:.3rem; padding:.45rem .6rem;
-  background:rgba(6,8,12,.82); border:1px solid var(--line); border-radius:9px;
-  backdrop-filter:blur(6px);
+  /* 유튜브의 제어줄이 화면 맨 아래를 차지하므로 그 위에 얹습니다. */
+  bottom:5.5rem; z-index:3; width:min(680px, 82%);
+  flex-direction:column; gap:.45rem; padding:.6rem .75rem;
+  background:rgba(6,8,12,.86); border:1px solid var(--line); border-radius:11px;
+  backdrop-filter:blur(8px); font-size:.8rem; color:var(--dim);
   opacity:0; transition:opacity .18s ease; pointer-events:none;
 }
+.fs-row{ display:flex; align-items:center; gap:.5rem 1rem; flex-wrap:wrap }
+.fs-row .grow{ flex:1 }
 #player-wrap:fullscreen .fs-controls,
 #player-wrap:-webkit-full-screen .fs-controls{ display:flex }
 /* 마우스가 움직일 때만 뜹니다. 영상 위에 계속 떠 있으면 방해가 됩니다. */
 #player-wrap.fs-active .fs-controls{ opacity:1; pointer-events:auto }
 .fs-controls .glabel{ margin-right:.15rem }
+
+/* 조절기를 다시 부르는 띠.
+ *
+ * 영상 위의 마우스 움직임은 우리에게 오지 않습니다 -- iframe이 상자를 덮고
+ * 있고, 그 안은 교차 출처라 이벤트가 넘어오지 않습니다. 그래서 iframe 위에
+ * 얹은 이 띠로 받습니다. 유튜브의 제어줄(맨 아래 약 60px)을 가리지 않도록
+ * 그보다 위에 두고, 폭도 가운데로 제한합니다. */
+.fs-hotzone{
+  display:none; position:absolute; left:50%; transform:translateX(-50%);
+  bottom:4.5rem; width:min(760px, 88%); height:8rem;
+  z-index:2; pointer-events:auto;
+}
+#player-wrap:fullscreen .fs-hotzone,
+#player-wrap:-webkit-full-screen .fs-hotzone{ display:block }
+
+/* 놀고 있는 동안 커서를 감추는 막.
+ *
+ * 커서가 iframe 위에 있으면 그 모양은 유튜브 문서가 정합니다. 바깥에서
+ * cursor를 걸 방법이 없으므로, 잠깐 우리 막을 덮어 커서를 가져옵니다.
+ * 대신 그동안의 클릭은 유튜브에 닿지 않습니다 -- 첫 움직임이나 첫 누름은
+ * 막을 걷는 데 쓰이고, 그다음부터 정상입니다. */
+.fs-veil{ position:absolute; inset:0; z-index:1; cursor:none; background:transparent }
 .cue-main span,.cue-src span,.cue-prev span{
   background:rgba(6,8,12,var(--cue-bg,.55)); padding:.1em .4em; border-radius:4px;
   box-decoration-break:clone; -webkit-box-decoration-break:clone;

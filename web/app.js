@@ -385,6 +385,29 @@ function syncModeButtons() {
     b.classList.toggle("on", b.dataset.mode === state.mode));
 }
 
+const CONTROL_EFFECT = {
+  size: v => applySize(+v),
+  dim:  v => document.documentElement.style.setProperty("--cue-bg", (+v / 100).toFixed(2)),
+  pos:  v => { $("overlay").style.bottom = v + "%"; },
+};
+
+function setControl(name, value) {
+  $(name).value = value;
+  CONTROL_EFFECT[name](value);
+  syncControlInputs();
+  persist();
+}
+
+/* 창 쪽 값을 전체화면 쪽 입력에 되비칩니다. 전체화면에 들어갈 때도 한 번
+ * 부릅니다 -- 그때까지 손대지 않았으면 그 입력들은 빈 채로 있습니다. */
+function syncControlInputs() {
+  for (const name of ["size", "dim", "pos"]) {
+    document.querySelectorAll(`[data-ctl="${name}"]`).forEach(el => {
+      if (el.value !== $(name).value) el.value = $(name).value;
+    });
+  }
+}
+
 function applySize(px) {
   state.cuePx = px;
   applyCueSize();
@@ -434,12 +457,48 @@ function fsFailed(msg) {
 }
 
 let fsIdleTimer = null;
+let fsVeil = null;
+
 function showFsControls() {
   if (!fsElement()) return;
   const wrap = $("player-wrap");
   wrap.classList.add("fs-active");
+  // 전체화면에 들어간 뒤 처음 열릴 때, 그동안 창에서 바꾼 값을 반영합니다.
+  syncControlInputs();
+  removeVeil();
   clearTimeout(fsIdleTimer);
-  fsIdleTimer = setTimeout(() => wrap.classList.remove("fs-active"), 2500);
+  fsIdleTimer = setTimeout(hideFsControls, 2500);
+}
+
+function hideFsControls() {
+  const wrap = $("player-wrap");
+  wrap.classList.remove("fs-active");
+  if (fsElement()) addVeil();
+}
+
+/* 커서를 감추려면 커서가 우리 것이어야 합니다.
+ *
+ * 커서가 iframe 위에 있는 동안 그 모양은 유튜브 문서가 정합니다. 바깥에서
+ * cursor를 거는 방법은 없습니다. 그래서 놀고 있는 동안만 투명한 막을 덮어
+ * 커서를 가져오고, 움직이거나 누르는 순간 걷습니다.
+ *
+ * 대가가 하나 있습니다. 막이 덮여 있는 동안의 클릭은 유튜브에 닿지 않고
+ * 막을 걷는 데 쓰입니다. 그다음 클릭부터는 평소대로입니다. */
+function addVeil() {
+  if (fsVeil || !fsElement()) return;
+  fsVeil = document.createElement("div");
+  fsVeil.className = "fs-veil";
+  const wake = () => { removeVeil(); showFsControls(); };
+  fsVeil.addEventListener("mousemove", wake);
+  fsVeil.addEventListener("mousedown", wake);
+  fsVeil.addEventListener("wheel", wake, { passive: true });
+  $("player-wrap").appendChild(fsVeil);
+}
+
+function removeVeil() {
+  if (!fsVeil) return;
+  fsVeil.remove();
+  fsVeil = null;
 }
 
 function onFullscreenChange() {
@@ -456,8 +515,14 @@ function onFullscreenChange() {
   if (!on) state.fsBaseHeight = 0;
   $("fullscreen").classList.toggle("on", on);
   $("fullscreen").textContent = on ? "⛶ 창으로" : "⛶ 전체화면";
-  if (on) showFsControls();
-  else { clearTimeout(fsIdleTimer); $("player-wrap").classList.remove("fs-active"); }
+  if (on) {
+    showFsControls();
+  } else {
+    clearTimeout(fsIdleTimer);
+    $("player-wrap").classList.remove("fs-active");
+    // 창으로 돌아왔는데 막이 남으면 영상을 아예 누를 수 없게 됩니다.
+    removeVeil();
+  }
   // 상자 크기가 바뀐 뒤에 재야 합니다. 전환 직후에는 아직 옛 크기입니다.
   requestAnimationFrame(applyCueSize);
 }
@@ -469,12 +534,14 @@ function bind() {
   document.querySelectorAll("[data-mode]").forEach(b => {
     b.addEventListener("click", () => setMode(b.dataset.mode));
   });
-  $("size").addEventListener("input", e => { applySize(+e.target.value); persist(); });
-  $("dim").addEventListener("input", e => {
-    document.documentElement.style.setProperty("--cue-bg", (+e.target.value / 100).toFixed(2));
-    persist();
-  });
-  $("pos").addEventListener("input", e => { $("overlay").style.bottom = e.target.value + "%"; persist(); });
+  // 슬라이더도 두 벌입니다 -- 플레이어 아래의 것과 전체화면 상자 안의 것.
+  // 창 쪽(#size/#dim/#pos)을 값의 주인으로 두고, 어느 쪽을 움직이든 그리로
+  // 모은 뒤 양쪽 표시를 맞춥니다.
+  for (const name of ["size", "dim", "pos"]) {
+    $(name).addEventListener("input", e => setControl(name, e.target.value));
+    document.querySelectorAll(`[data-ctl="${name}"]`).forEach(el =>
+      el.addEventListener("input", e => setControl(name, e.target.value)));
+  }
   $("show-prev").addEventListener("change", e => { state.showPrev = e.target.checked; persist(); renderCue(); });
   $("follow").addEventListener("change", e => {
     state.follow = e.target.checked;
@@ -532,6 +599,10 @@ function bind() {
   // 떠 있으면 보는 것을 방해합니다.
   $("player-wrap").addEventListener("mousemove", showFsControls);
   $("fs-controls").addEventListener("mousemove", showFsControls);
+  // 영상 위의 움직임은 iframe이 삼키므로 위의 처리기까지 오지 않습니다.
+  // 이 띠만이 전체화면에서 조절기를 다시 부르는 길입니다.
+  $("fs-hotzone").addEventListener("mouseenter", showFsControls);
+  $("fs-hotzone").addEventListener("mousemove", showFsControls);
   // 영상 위 더블클릭은 받을 수 없습니다. iframe이 상자를 꽉 채우고 있어
   // letterbox 여백까지 iframe의 것이라, 그 두 번 누름은 유튜브가 가져갑니다.
   document.addEventListener("fullscreenchange", onFullscreenChange);
@@ -582,6 +653,7 @@ function restore() {
   document.documentElement.style.setProperty("--cue-bg", (+$("dim").value / 100).toFixed(2));
   $("overlay").style.bottom = $("pos").value + "%";
   $("offset-val").textContent = state.offset.toFixed(1) + "s";
+  syncControlInputs();
   setPanel(!!p.panelHidden);
 }
 

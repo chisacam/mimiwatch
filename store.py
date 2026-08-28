@@ -183,7 +183,7 @@ def session(session_id: str) -> dict | None:
     return {**json.loads(rows[0]["doc"]), "video_id": rows[0]["video_id"]}
 
 
-def sessions(limit: int = 30) -> list[dict]:
+def sessions(limit: int = 50) -> list[dict]:
     out = []
     for r in _rows("SELECT s.doc, s.video_id, s.started, "
                    "  (SELECT COUNT(*) FROM cues WHERE cues.owner = s.id) AS cues "
@@ -191,6 +191,20 @@ def sessions(limit: int = 30) -> list[dict]:
         out.append({**json.loads(r["doc"]), "video_id": r["video_id"],
                     "started_at": r["started"], "cues": r["cues"]})
     return out
+
+
+def delete_session(session_id: str) -> bool:
+    """세션과 그 자막을 지웁니다. 받는 중인 세션을 막는 것은 live.py의 일입니다.
+
+    예전에는 지울 길이 없어 목록이 자라기만 했습니다 -- 최근 20개만 보이는
+    목록 뒤에 시험용 세션과 실패한 세션이 쌓여 진짜 방송이 밀려났습니다.
+    """
+    with _lock:
+        db = _connect()
+        db.execute("DELETE FROM cues WHERE owner = ?", (session_id,))
+        cur = db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        db.commit()
+        return cur.rowcount > 0
 
 
 def running_session_ids() -> list[str]:
@@ -282,14 +296,19 @@ def replace_cues(owner: str, rows: list[dict]):
     with _lock:
         db = _connect()
         db.execute("DELETE FROM cues WHERE owner = ?", (owner,))
+        # `edited`도 함께 씁니다. 빠뜨렸던 동안, 이 함수를 지나는 경로(엔진을
+        # 바꿔 전체 번역, 같은 영상 다시 넣기)가 사람이 손댄 표시를 전부
+        # 지웠습니다 -- 「원문과 다름」이 사라지고 손편집 번역이 뭉텅이
+        # 재번역에 덮였습니다.
         db.executemany(
             "INSERT INTO cues (owner, cue_id, kind, start, end, text, lang, "
-            "speaker, tr) VALUES (?,?,?,?,?,?,?,?,?)",
+            "speaker, tr, edited) VALUES (?,?,?,?,?,?,?,?,?,?)",
             [(owner, i + 1, c.get("kind") or "final",
               float(c.get("start") or c.get("t") or 0),
               float(c.get("end") or 0), c.get("text") or "",
               c.get("lang") or "", c.get("speaker") or "",
-              json.dumps(c.get("translations") or {}, ensure_ascii=False))
+              json.dumps(c.get("translations") or {}, ensure_ascii=False),
+              c.get("edited") or "")
              for i, c in enumerate(rows)])
         db.commit()
 

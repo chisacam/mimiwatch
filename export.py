@@ -54,14 +54,20 @@ def _pick(translations: dict, backend: str) -> str:
     return translations.get(backend) or next(iter(translations.values()), "") or ""
 
 
-def collect(value: str) -> tuple[dict, list[dict]]:
+def collect(value: str, backend: str = "") -> tuple[dict, list[dict]]:
     """`value` 는 화면의 목록이 쓰는 것과 같습니다: 라이브는 `live:<세션>`,
     녹화본은 영상 id.
 
+    `backend`는 어느 엔진의 번역을 담을지입니다. 비우면 라이브는 그 세션이
+    쓴 엔진, 녹화본은 번역이 있는 엔진 중 하나입니다 -- 예전에는 녹화본에서
+    이 선택이 `backends_done`의 **알파벳 마지막**이었고, Gemma와 M2M-100이
+    둘 다 있으면 `local-m2m100`이 뽑혔습니다. 화면에서 보고 있던 것과 다른
+    번역이 파일로 나갔습니다.
+
     돌려주는 줄은 `{start, end, text, tr, speaker, kind}` 입니다.
     """
-    meta, rows = (_collect_live(value[5:]) if value.startswith("live:")
-                  else _collect_video(value))
+    meta, rows = (_collect_live(value[5:], backend) if value.startswith("live:")
+                  else _collect_video(value, backend))
     _fill_ends(rows)
     return meta, rows
 
@@ -83,11 +89,11 @@ def _fill_ends(rows: list[dict]):
         r["end"] = r["start"] + max(END_MIN_S, min(END_MAX_S, span))
 
 
-def _collect_live(session_id: str) -> tuple[dict, list[dict]]:
+def _collect_live(session_id: str, backend: str = "") -> tuple[dict, list[dict]]:
     st = store.session(session_id)
     if not st:
         raise KeyError("no such session")
-    backend = st.get("backend") or ""
+    backend = backend or st.get("backend") or ""
     cues = store.cues(session_id)
     # 끝 시각은 _fill_ends 가 채웁니다. 라이브에는 잰 구간이 없으므로 전부
     # 그 규칙을 타지만, 짓는 자리는 한 군데여야 합니다.
@@ -105,14 +111,16 @@ def _collect_live(session_id: str) -> tuple[dict, list[dict]]:
     return meta, rows
 
 
-def _collect_video(video_id: str) -> tuple[dict, list[dict]]:
+def _collect_video(video_id: str, backend: str = "") -> tuple[dict, list[dict]]:
     meta_doc = store.doc(video_id)
     if meta_doc is None:
         raise KeyError("no such video")
     cues = store.cues(video_id)
     # 녹화본은 구간을 실제로 재어 두었으므로 그대로 씁니다.
-    backend = (meta_doc.get("backends_done")
-               or sorted({b for c in cues for b in c["translations"]}) or [""])[-1]
+    have = sorted({b for c in cues for b in c["translations"]})
+    if backend not in have:
+        # 고른 엔진의 번역이 없으면(또는 고르지 않았으면) 있는 것 중에서.
+        backend = (have or [""])[-1]
     rows = [{
         "start": float(c["t"] or 0.0),
         "end": float(c["end"] or 0.0),

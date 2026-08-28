@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import difflib
 import json
-import os
 import queue
 import subprocess
 # 이름을 따로 들여옵니다. 시험(bench/live_errors.py)이 `live.subprocess`를
@@ -33,6 +32,7 @@ import uuid
 
 import numpy as np
 
+import config
 import store
 import stream
 import translate as mw_translate
@@ -701,16 +701,9 @@ class LiveSession:
         """
         asr = vad = history = refiner = None
         try:
-            spec = asr_spec = None
-            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   "backends.json"), encoding="utf-8") as f:
-                cfg = json.load(f)
-            for b in cfg["backends"]:
-                if b["id"] == self.backend_id:
-                    spec = b
-            for b in cfg.get("asr_backends", []):
-                if b["id"] == self.asr_backend_id:
-                    asr_spec = b
+            cfg = config.load()
+            spec = config.find("tr", self.backend_id, cfg)
+            asr_spec = config.find("asr", self.asr_backend_id, cfg)
             self._tr = mw_translate.build(spec, self.genre)
 
             # Speaker tags are a recorded-video feature. CAM++ needs enough
@@ -927,17 +920,31 @@ def status_of(session_id: str) -> dict | None:
     return store.session(session_id)
 
 
-def recent(limit: int = 20) -> list[dict]:
+def recent(limit: int = 50) -> list[dict]:
     """Sessions the viewer can go back to, newest first.
 
     A live session leaves no cue file, so before this it existed only for as
     long as the tab stayed open. The picker needs a list to offer.
+
+    한도가 20이던 때 표에는 42개가 있었습니다 -- 절반이 보이지 않았고 지울
+    길도 없었습니다. 이제 지울 수 있으니(`delete`) 한도는 넉넉히 두고,
+    화면이 `?limit=`로 더 청할 수 있습니다.
     """
     live_now = {sid: s.status() for sid, s in _sessions.items()}
     out = []
     for row in store.sessions(limit):
         out.append({**row, **live_now.get(row["id"], {})})
     return out
+
+
+def delete(session_id: str) -> dict:
+    """세션과 그 자막을 지웁니다. 받는 중이면 먼저 멈춰야 합니다 -- 받는
+    도중에 표에서 지우면 다음 줄이 곧바로 다시 만들어 유령 세션이 됩니다."""
+    if get(session_id) is not None:
+        return {"error": "받는 중인 세션은 지울 수 없습니다. 먼저 「중단」하십시오."}
+    if not store.delete_session(session_id):
+        return {"error": "no such session"}
+    return {"deleted": session_id}
 
 
 def backlog(session_id: str) -> list[dict]:
@@ -985,12 +992,7 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     s = get(session_id)
     if not s:
         return {"error": "no such session"}
-    spec = None
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "backends.json"), encoding="utf-8") as f:
-        for b in json.load(f)["backends"]:
-            if b["id"] == backend_id:
-                spec = b
+    spec = config.find_backend(backend_id)
     if spec is None:
         return {"error": f"'{backend_id}' 백엔드가 없습니다"}
     # 장르는 보고 있는 영상의 성질이므로 백엔드를 바꿔도 그대로입니다.
@@ -1068,12 +1070,7 @@ def set_asr(session_id: str, asr_backend_id: str) -> dict:
     s = get(session_id)
     if not s:
         return {"error": "no such session"}
-    spec = None
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "backends.json"), encoding="utf-8") as f:
-        for b in json.load(f).get("asr_backends", []):
-            if b["id"] == asr_backend_id:
-                spec = b
+    spec = config.find_asr(asr_backend_id)
     if spec is None:
         return {"error": f"'{asr_backend_id}' 전사 엔진이 없습니다"}
     if not hasattr(s._asr, "swap"):

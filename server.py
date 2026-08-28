@@ -14,6 +14,7 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import config
 import export
 import jobs
 import live
@@ -65,7 +66,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(doc)
 
         if path == "/api/backends":
-            cfg = jobs.load_config()
+            cfg = config.load()
             cfg["live_profiles"] = [{"id": k, **v} for k, v in live.PROFILES.items()]
             # 장르는 프롬프트만 바꾸므로 라이브·녹화본 양쪽에 씁니다.
             # 프롬프트 본문은 보내지 않습니다 -- 화면에 쓸 것은 이름과
@@ -75,7 +76,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(cfg)
 
         if path == "/api/live/sessions":
-            return self._json(live.recent())
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                limit = max(1, min(500, int((q.get("limit") or ["50"])[0])))
+            except ValueError:
+                limit = 50
+            return self._json(live.recent(limit))
 
         if path.startswith("/api/live/events/"):
             sid = os.path.basename(path)
@@ -101,8 +107,10 @@ class Handler(BaseHTTPRequestHandler):
             value = (q.get("id") or [""])[0]
             fmt = (q.get("fmt") or ["srt"])[0]
             view = (q.get("view") or ["both"])[0]
+            # 어느 엔진의 번역을 담을지. 화면이 지금 보고 있는 것을 넘깁니다.
+            backend = (q.get("backend") or [""])[0]
             try:
-                meta, rows = export.collect(value)
+                meta, rows = export.collect(value, backend)
                 body, ctype = export.render(meta, rows, fmt, view)
             except KeyError:
                 return self._send(b"not found", "text/plain", 404)
@@ -193,9 +201,48 @@ class Handler(BaseHTTPRequestHandler):
         self._send(json.dumps(obj, ensure_ascii=False).encode("utf-8"),
                    "application/json; charset=utf-8", code)
 
+    def _same_origin_write(self) -> bool:
+        """쓰기 요청이 우리 화면이나 우리 확장에서 왔는가.
+
+        서버는 127.0.0.1에만 묶여 있지만, 그것이 곧 우리 화면만 부를 수 있다는
+        뜻은 아닙니다. 사용자가 열어 둔 **아무 웹사이트**나 `fetch(..., {mode:
+        "no-cors"})`로 여기에 POST를 던질 수 있고, 답은 못 읽어도 요청은
+        닿습니다 -- `/api/shutdown`, `/api/video/delete`, 번역 엔진의 주소를
+        남의 서버로 바꿔 자막 본문을 내보내게 하는 `/api/backends` 같은 것들.
+        크롬은 공용 페이지가 사설망을 부르는 것을 막아 주지만(PNA) 파이어폭스는
+        그렇지 않습니다.
+
+        규칙은 단순합니다. `Origin`이 없으면(curl, 시험, 같은 창의 폼) 통과.
+        있으면 우리 자신(Host와 같은 곳)이나 브라우저 확장만 통과. 확장의
+        서비스 워커는 `chrome-extension://…` 출처로 오므로 그것이 우리
+        확장인지까지는 가리지 않습니다 -- 확장 id는 설치마다 다르고, 확장을
+        깐 것은 사용자 자신입니다.
+        """
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin or origin == "null":
+            # `Sec-Fetch-Site`가 있으면 그것이 더 정직한 답입니다. cross-site인데
+            # Origin을 비운 요청(no-cors 일부)이 여기로 옵니다.
+            return (self.headers.get("Sec-Fetch-Site") or "same-origin") in (
+                "same-origin", "none")
+        if origin.startswith(("chrome-extension://", "moz-extension://",
+                              "safari-web-extension://")):
+            return True
+        host = (self.headers.get("Host") or "").strip()
+        try:
+            o = urllib.parse.urlsplit(origin)
+        except ValueError:
+            return False
+        return o.scheme == "http" and (o.netloc == host or o.hostname in (
+            "localhost", "127.0.0.1") and (o.port or 80) == self.server.server_address[1])
+
     def do_POST(self):
         path = posixpath.normpath(self.path.split("?")[0])
-        length = int(self.headers.get("Content-Length") or 0)
+        if not self._same_origin_write():
+            return self._json({"error": "다른 출처에서 온 쓰기 요청은 받지 않습니다"}, 403)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._json({"error": "bad Content-Length"}, 400)
 
         # 오디오만 JSON이 아닙니다. 아래에서 본문을 json.loads로 읽어 버리므로
         # 그 앞에서 갈라 냅니다. 몸통은 16kHz 모노 int16 PCM 날것입니다 --
@@ -211,10 +258,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "bad json"}, 400)
 
         if path == "/api/translate":
+            # 전체 번역은 「전부 고른 재번역」과 같은 길입니다. 예전에는 따로
+            # 짠 루프가 자막을 통째로 다시 써서 손편집을 지웠습니다.
             vid, backend = body.get("video"), body.get("backend")
             if not vid or not backend:
                 return self._json({"error": "video and backend are required"}, 400)
-            return self._json(jobs.start(vid, backend, body.get("genre")))
+            return self._json(jobs.start_retranslate(vid, backend, None,
+                                                     body.get("genre")))
 
         if path == "/api/probe":
             # The UI needs to know which flow a URL belongs to before it
@@ -245,9 +295,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(live.start(
                 url, body.get("lang") or None,
                 body.get("viewer_lang") or "ko",
-                body.get("backend") or "local-m2m100",
+                body.get("backend") or config.active("tr"),
                 profile=body.get("profile") or "broadcast",
-                asr_backend_id=body.get("asr") or "",
+                asr_backend_id=body.get("asr") or config.active("asr"),
                 refine=bool(body.get("refine", True)),
                 genre=body.get("genre")))
 
@@ -257,9 +307,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(live.start(
                 "", body.get("lang") or None,
                 body.get("viewer_lang") or "ko",
-                body.get("backend") or "local-m2m100",
+                body.get("backend") or config.active("tr"),
                 profile=body.get("profile") or "broadcast",
-                asr_backend_id=body.get("asr") or "",
+                asr_backend_id=body.get("asr") or config.active("asr"),
                 refine=bool(body.get("refine", True)),
                 genre=body.get("genre"),
                 source="tab",
@@ -341,23 +391,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(jobs.start_transcribe(
                 url, body.get("lang") or None,
                 body.get("viewer_lang") or "ko",
-                body.get("backend") or "local-m2m100",
-                body.get("asr") or "local-hayamimi",
+                body.get("backend") or "",
+                body.get("asr") or "",
                 bool(body.get("speakers")),
                 body.get("genre")))
 
         if path == "/api/asr-backends":
-            cfg = jobs.load_config()
             entry = {k: body.get(k, "") for k in
                      ("id", "label", "backend", "base_url", "model", "api_key")}
             entry["window_s"] = float(body.get("window_s") or 240)
             if not entry["id"]:
                 return self._json({"error": "id is required"}, 400)
-            cfg.setdefault("asr_backends", [])
-            cfg["asr_backends"] = [b for b in cfg["asr_backends"] if b["id"] != entry["id"]]
-            cfg["asr_backends"].append(entry)
-            jobs.save_config(cfg)
-            return self._json(cfg)
+            return self._json(config.upsert("asr", entry))
+
+        if path == "/api/live/delete":
+            return self._json(live.delete((body.get("id") or "").strip()))
 
         if path == "/api/asr-backends/delete":
             return self._json(jobs.delete_asr_backend(body.get("id", "")))
@@ -371,17 +419,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/backends":
             # The viewer edits an endpoint in the UI; persisting it here keeps
             # the demo usable across restarts without editing a file by hand.
-            cfg = jobs.load_config()
             entry = {k: body.get(k, "") for k in
                      ("id", "label", "backend", "base_url", "model", "api_key")}
             entry["min_chars"] = int(body.get("min_chars") or 0)
             entry["no_reasoning"] = bool(body.get("no_reasoning", True))
             if not entry["id"]:
                 return self._json({"error": "id is required"}, 400)
-            cfg["backends"] = [b for b in cfg["backends"] if b["id"] != entry["id"]]
-            cfg["backends"].append(entry)
-            jobs.save_config(cfg)
-            return self._json(cfg)
+            return self._json(config.upsert("tr", entry))
 
         self._json({"error": "not found"}, 404)
 

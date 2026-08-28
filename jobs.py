@@ -1,19 +1,28 @@
-"""Background re-translation jobs.
+"""배경 작업: 녹화본 전사와 (재)번역.
 
-Translation used to happen once, at transcription time, and got baked into
-the cue file. Comparing backends means being able to re-translate a video
-that is already transcribed, so translations are keyed by backend id and a
-job runs in the background while the viewer keeps watching.
+번역은 처음에는 전사할 때 한 번 하고 자막 파일에 박아 두는 것이었습니다.
+엔진을 비교하려면 이미 전사한 영상을 다시 번역할 수 있어야 하므로, 번역은
+엔진 id별로 따로 들고, 작업은 배경 스레드에서 돌며 시청자는 계속 봅니다.
+
+**번역 루프는 한 벌입니다(`_translate_rows`).** 예전에는 셋이었습니다 --
+전체 번역, 골라서 재번역, 전사 직후 번역. 셋 중 하나만 손으로 고친 번역을
+건너뛰었고, 다른 둘은 자막을 통째로 다시 쓰면서 `edited` 표시까지 지웠습니다.
+엔진을 바꾸는 것만으로 사람이 맞춰 둔 번역이 덮이고 「원문과 다름」 표시가
+사라졌습니다. 이제 셋 모두 같은 루프를 지나며, 그 루프는 한 줄씩
+`store.save_translation`으로 씁니다.
+
+설정은 `config.py`가 맡습니다. 여기 남은 `load_config` 등은 부르는 쪽을
+그대로 두려는 이름뿐입니다.
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 import threading
 import time
 import uuid
 
+import config
 import translate as mw_translate
 import transcribe_vod as vod
 import asr as mw_asr
@@ -23,7 +32,13 @@ import store
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(BASE, "data")
-CONFIG = os.path.join(BASE, "backends.json")
+
+# config.py로 옮긴 것들. server.py와 시험이 이 이름으로 부릅니다.
+load_config = config.load
+save_config = config.save
+find_backend = config.find_backend
+find_asr = config.find_asr
+PROTECTED = config.PROTECTED
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
@@ -43,6 +58,23 @@ def _note(job_id: str, **kw):
         j.update(kw)
         snapshot = dict(j)
     store.save_job(snapshot)
+
+
+def _new_job(**fields) -> str:
+    """작업 레코드를 만들어 메모리와 표에 넣고 id를 돌려줍니다."""
+    job_id = uuid.uuid4().hex[:12]
+    job = {"id": job_id, "state": "running", "done": 0, "total": 0,
+           "started": time.time(), "error": None, "skipped": 0, "kept": 0,
+           "degraded": False, "failures": 0,
+           # 줄마다 셉니다. 어느 모델이 실제로 글을 내놓았는지를 숫자로
+           # 보여 주기 위해서입니다 -- "언젠가 대체가 있었다"가 아니라.
+           "by_remote": 0, "by_local": 0, "cancel": False}
+    job.update(fields)
+    with _lock:
+        _jobs[job_id] = job
+        snapshot = dict(job)
+    store.save_job(snapshot)
+    return job_id
 
 
 def restore() -> int:
@@ -65,97 +97,6 @@ def restore() -> int:
             store.save_job(job)
     store.prune_jobs()
     return hit
-
-
-EXAMPLE_CONFIG = os.path.join(BASE, "backends.example.json")
-
-# 지울 수 없는 기본 엔진. 번역은 대체 경로(WithFallback)가 M2M-100을 늘 뒤에
-# 두므로 그 설정이 있어야 하고, 전사는 목록에서 사라지면 고를 것이 없어집니다.
-# 화면(app.js의 LOCKED)과 같은 값이어야 합니다 -- 예전에는 서버가 이미 없는
-# `local-hayamimi`를 지키고 있어서 API로는 기본 전사기를 지울 수 있었습니다.
-PROTECTED = {"tr": "local-m2m100", "asr": "tcpp-best"}
-
-
-def _example_default(key: str, fallback: str) -> str:
-    """예시 설정의 기본 활성 엔진. 활성 엔진을 지웠을 때 되돌아갈 자리입니다."""
-    try:
-        with open(EXAMPLE_CONFIG, encoding="utf-8") as f:
-            return json.load(f).get(key) or fallback
-    except Exception:
-        return fallback
-
-
-def load_config() -> dict:
-    # backends.json holds real endpoints and keys and is not in the repo;
-    # first run seeds it from the example so the app starts out of the box.
-    if not os.path.exists(CONFIG) and os.path.exists(EXAMPLE_CONFIG):
-        import shutil
-        shutil.copy(EXAMPLE_CONFIG, CONFIG)
-    with open(CONFIG, encoding="utf-8") as f:
-        cfg = json.load(f)
-    return _seed_new_entries(cfg)
-
-
-def _seed_new_entries(cfg: dict) -> dict:
-    """예시에 새로 생긴 엔진을 사용자 설정에 들여옵니다.
-
-    backends.json은 첫 실행 때 한 번 복사되고 그 뒤로는 손대지 않습니다 --
-    실제 주소와 API 키가 들어 있어 덮어쓸 수 없기 때문입니다. 그런데 그러면
-    나중에 추가된 기본 엔진이 기존 사용자에게 영영 닿지 않습니다. 경량
-    전사기를 넣고도 아무도 못 보는 일이 실제로 있었습니다.
-
-    한 번 들여온 id는 `seeded`에 적어 둡니다. 그래서 사용자가 지운 엔진은
-    다시 살아나지 않고, **정말로 새로 생긴 것만** 들어옵니다.
-
-    처음 이 코드를 만나는 설정에는 `seeded`가 없습니다. 그때는 지금 가지고
-    있는 것을 이미 본 것으로 치고, 예시에만 있는 것을 들여옵니다.
-    """
-    if not os.path.exists(EXAMPLE_CONFIG):
-        return cfg
-    try:
-        with open(EXAMPLE_CONFIG, encoding="utf-8") as f:
-            example = json.load(f)
-    except Exception:
-        return cfg
-
-    seen = set(cfg.get("seeded") or [])
-    added = []
-    for key in ("backends", "asr_backends"):
-        have = {b["id"] for b in cfg.get(key, [])}
-        seen |= have                      # 지금 가진 것은 이미 본 것입니다
-        for entry in example.get(key, []):
-            if entry["id"] in have or entry["id"] in seen:
-                continue
-            cfg.setdefault(key, []).append(dict(entry))
-            seen.add(entry["id"])
-            added.append(entry["id"])
-
-    if added or set(cfg.get("seeded") or []) != seen:
-        cfg["seeded"] = sorted(seen)
-        save_config(cfg)
-    if added:
-        print(f"[설정] 새 엔진을 들여왔습니다: {', '.join(added)}",
-              file=sys.stderr, flush=True)
-    return cfg
-
-
-def save_config(cfg: dict):
-    with open(CONFIG, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=1)
-
-
-def find_backend(backend_id: str) -> dict | None:
-    for b in load_config()["backends"]:
-        if b["id"] == backend_id:
-            return b
-    return None
-
-
-def find_asr(backend_id: str) -> dict | None:
-    for b in load_config().get("asr_backends", []):
-        if b["id"] == backend_id:
-            return b
-    return None
 
 
 # 녹화본도 라이브와 같은 표에 담깁니다. 예전에는 `data/<영상id>.json` 파일
@@ -184,8 +125,9 @@ def load_video(vid: str) -> dict:
 
 
 def save_video(vid: str, doc: dict):
-    # Recompute rather than trust the value loaded before this pass ran; a
-    # job that just added a backend would otherwise write a stale list.
+    """전사 결과를 통째로 씁니다. **전사가 끝났을 때만** 부릅니다 -- 자막을
+    전부 갈아 끼우므로, 번역이나 편집처럼 몇 줄만 바뀌는 일에는 쓰지
+    않습니다. 그쪽은 `store.save_translation`/`store.edit_cue`입니다."""
     doc = dict(doc)
     cues = doc.pop("cues", [])
     doc["backends_done"] = sorted({b for c in cues
@@ -230,92 +172,113 @@ def cancel(job_id: str) -> dict:
     return {"state": "cancelling"}
 
 
+def _cancelled(job_id: str) -> bool:
+    with _lock:
+        return bool(_jobs[job_id]["cancel"])
+
+
 def delete_backend(backend_id: str) -> dict:
-    return _delete_engine("backends", "active", PROTECTED["tr"], backend_id)
+    return config.delete("tr", backend_id)
 
 
 def delete_asr_backend(backend_id: str) -> dict:
-    return _delete_engine("asr_backends", "asr_active", PROTECTED["asr"], backend_id)
+    return config.delete("asr", backend_id)
 
 
-def _delete_engine(key: str, active_key: str, protected: str, engine_id: str) -> dict:
-    """엔진 하나를 설정에서 지웁니다. 번역·전사가 같은 규칙입니다.
-
-    지운 것이 활성 엔진이었으면 예시 설정의 기본으로 되돌립니다(그것이 남아
-    있을 때). 예전에는 번역 쪽이 무조건 M2M-100으로 되돌아갔는데, 예시의
-    기본은 Gemma입니다 -- 지운 뒤 첫 세션이 갑자기 품질이 떨어졌습니다.
-    """
-    cfg = load_config()
-    if engine_id == protected:
-        return {"error": "기본 로컬 엔진은 삭제할 수 없습니다"}
-    entries = cfg.get(key, [])
-    kept = [b for b in entries if b["id"] != engine_id]
-    if len(kept) == len(entries):
-        return {"error": f"'{engine_id}' 엔진이 없습니다"}
-    cfg[key] = kept
-    if cfg.get(active_key) == engine_id:
-        want = _example_default(active_key, protected)
-        cfg[active_key] = want if any(b["id"] == want for b in kept) else protected
-    save_config(cfg)
-    return cfg
-
+# ---- 번역 -------------------------------------------------------------------
 
 def _context(cues: list[dict], i: int) -> list[str]:
     """`cues[i]` 직전 몇 줄. 번역기에 참고로 넘깁니다.
 
     녹화본은 라이브와 달리 앞뒤가 전부 이미 나와 있으므로 인덱스로 바로
     잘라내면 됩니다. 뒤쪽은 넘기지 않습니다 -- 라이브에서는 있을 수 없는
-    정보라 두 경로의 번역이 달라집니다.
+    정보라 두 경로의 번역이 달라집니다. 안내(note)는 발화가 아니므로 뺍니다.
     """
     n = mw_translate.CONTEXT_LINES
-    return [c["text"] for c in cues[max(0, i - n):i] if (c.get("text") or "").strip()]
+    return [c["text"] for c in cues[max(0, i - n):i]
+            if (c.get("text") or "").strip() and c.get("kind") != "note"]
 
 
-def start(vid: str, backend_id: str, genre: str | None = None) -> dict:
-    spec = find_backend(backend_id)
-    if spec is None:
-        known = ", ".join(b["id"] for b in load_config()["backends"])
-        return {"error": f"'{backend_id}' 백엔드가 없습니다. 사용 가능: {known}"}
-    doc = load_video(vid)
-    if doc["source_lang"] == doc.get("viewer_lang"):
-        return {"error": "source language matches the viewer language"}
+def _hand_translated(c: dict) -> bool:
+    """사람이 번역을 손으로 맞춘 줄. 뭉텅이 번역이 덮으면 되돌릴 수 없습니다."""
+    return "tr" in (c.get("edited") or "")
 
-    # 장르를 고르지 않았다면 이 영상을 전사할 때 골랐던 것을 씁니다. 다시
-    # 번역할 때마다 되묻지 않기 위해서입니다.
-    genre = genre or doc.get("genre")
 
-    job_id = uuid.uuid4().hex[:12]
-    with _lock:
-        _jobs[job_id] = {"id": job_id, "video": vid, "backend": backend_id,
-                         "genre": genre or mw_translate.DEFAULT_GENRE,
-                         "done": 0, "total": len(doc["cues"]), "state": "running",
-                         "started": time.time(), "error": None, "skipped": 0,
-                         "degraded": False, "failures": 0,
-                         # Counted per line so the viewer can see which model
-                         # is actually producing text, not just that a
-                         # fallback happened at some point.
-                         "by_remote": 0, "by_local": 0, "cancel": False}
-        snapshot = dict(_jobs[job_id])
-    store.save_job(snapshot)
+def _translate_rows(job_id: str, owner: str, spec: dict, meta: dict,
+                    cues: list[dict], todo: list[dict], genre: str | None) -> bool:
+    """`todo`를 한 줄씩 번역해 표에 씁니다. 세 경로가 전부 여기를 지납니다.
 
-    threading.Thread(target=_run, args=(job_id, vid, spec, doc, genre),
-                     daemon=True).start()
-    return {"id": job_id}
+    돌려주는 값은 끝까지 갔는지(True)/취소되었는지(False)입니다. 진행률은
+    작업 레코드에 적고, 보고 있는 라이브 창에는 SSE로 곧바로 흘려보냅니다.
+    `todo`는 이미 손편집 줄을 뺀 것이어야 합니다 -- 그 판단은 부르는 쪽이
+    하고 `kept`로 적습니다.
+    """
+    tr = mw_translate.build(spec, genre)
+    bid = spec.get("id") or config.PROTECTED["tr"]
+    tgt = meta.get("viewer_lang") or "ko"
+    by_id = {c["id"]: i for i, c in enumerate(cues)}
+    skipped = 0
+
+    def progress(n):
+        _note(job_id, done=n, skipped=skipped,
+              degraded=bool(getattr(tr, "tripped", False)),
+              failures=getattr(tr, "failures", 0))
+
+    for n, c in enumerate(todo):
+        if _cancelled(job_id):
+            _note(job_id, state="cancelled", done=n, skipped=skipped)
+            return False
+        # 원본 언어는 그 줄이 들고 있는 것을 먼저 씁니다. 「자동 판별」로
+        # 켠 세션은 메타의 source_lang 이 비어 있습니다.
+        src = c.get("lang") or meta.get("source_lang") or ""
+        if not src or src == tgt or not tr.should_translate(c["text"], src, tgt):
+            skipped += 1
+        else:
+            try:
+                out = tr.translate(c["text"], src, tgt,
+                                   _context(cues, by_id.get(c["id"], 0)))
+            except Exception as exc:
+                # 실패했다고 줄을 버리면 그 발화가 없었던 것처럼 보입니다.
+                # 원문을 남기고 왜 실패했는지만 적습니다.
+                print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
+                out = c["text"]
+            # 대체 백엔드가 낸 줄은 그 백엔드 이름으로 남깁니다. 닿지 않은
+            # 엔드포인트가 만든 것처럼 기록하면 비교가 성립하지 않습니다.
+            from_primary = getattr(tr, "last_used", "primary") == "primary"
+            # 번역이 원문과 같아도 저장합니다. 고유명사나 짧은 감탄사는
+            # 그대로 두는 것이 옳은 번역입니다.
+            if (out or "").strip():
+                key = bid if from_primary else config.PROTECTED["tr"]
+                store.save_translation(owner, c["id"], key, out)
+                # 보고 있는 창에도 바로 닿게 합니다(받는 중인 라이브만 구독자가
+                # 있습니다. 아니면 조용히 지나갑니다).
+                live.notify_translation(owner, c["id"], c.get("kind") or "final", out)
+            with _lock:
+                _jobs[job_id]["by_remote" if from_primary else "by_local"] += 1
+        if n % 5 == 0:
+            progress(n)
+    progress(len(todo))
+    return True
+
+
+def _mark_translated(owner: str):
+    d = store.doc(owner)
+    if d is not None:
+        d["translated"] = True
+        store.save_doc(owner, d)
 
 
 def start_retranslate(value: str, backend_id: str, cue_ids=None,
                       genre: str | None = None) -> dict:
-    """골라 둔 자막을 다시 번역합니다.
+    """자막을 (다시) 번역합니다. 녹화본이든 라이브든 같은 길입니다.
 
-    녹화본이든 라이브든 같은 길입니다. 예전 `start()` 는 녹화본 파일 하나를
-    통째로 읽어 통째로 다시 쓰는 것이었는데, 자막이 표로 모인 뒤로는 고른
-    줄만 한 줄씩 갱신하면 됩니다.
-
-    `cue_ids` 가 None 이면 전부입니다.
+    `cue_ids`가 None이면 전부입니다 -- 화면에서 번역 엔진을 바꾸었을 때가
+    이 경우입니다. 사람이 고친 번역은 어느 경우에도 건드리지 않고 `kept`로
+    셉니다.
     """
     spec = find_backend(backend_id)
     if spec is None:
-        known = ", ".join(b["id"] for b in load_config()["backends"])
+        known = ", ".join(b["id"] for b in config.entries("tr"))
         return {"error": f"'{backend_id}' 백엔드가 없습니다. 사용 가능: {known}"}
     owner = store.owner_of(value)
     meta = store.doc(owner) or store.session(owner)
@@ -329,89 +292,43 @@ def start_retranslate(value: str, backend_id: str, cue_ids=None,
     if not picked:
         return {"error": "고른 자막이 없습니다"}
 
-    # 사람이 고친 번역은 건드리지 않습니다. 뭉텅이로 다시 돌리다가 손으로
-    # 맞춰 둔 줄을 덮으면, 그 일은 되돌릴 수도 없습니다.
-    kept = [c for c in picked if "tr" in (c.get("edited") or "")]
-    todo = [c for c in picked if "tr" not in (c.get("edited") or "")]
-    if not todo:
+    kept = [c for c in picked if _hand_translated(c)]
+    todo = [c for c in picked if not _hand_translated(c)]
+    if not todo and want is not None:
         return {"error": f"고른 {len(picked)}줄이 모두 손으로 고친 번역입니다"}
 
+    # 장르를 고르지 않았다면 이 영상을 전사할 때 골랐던 것을 씁니다. 다시
+    # 번역할 때마다 되묻지 않기 위해서입니다.
     genre = genre or meta.get("genre")
-    job_id = uuid.uuid4().hex[:12]
-    with _lock:
-        _jobs[job_id] = {"id": job_id, "kind": "retranslate", "video": value,
-                         "owner": owner, "backend": backend_id,
-                         "genre": genre or mw_translate.DEFAULT_GENRE,
-                         "done": 0, "total": len(todo), "state": "running",
-                         "started": time.time(), "error": None, "skipped": 0,
-                         "kept": len(kept), "degraded": False, "failures": 0,
-                         "by_remote": 0, "by_local": 0, "cancel": False}
-        snapshot = dict(_jobs[job_id])
-    store.save_job(snapshot)
-    threading.Thread(target=_run_retranslate,
-                     args=(job_id, owner, spec, meta, cues, todo, genre),
-                     daemon=True).start()
+    job_id = _new_job(kind="retranslate", video=value, owner=owner,
+                      backend=backend_id, genre=genre or mw_translate.DEFAULT_GENRE,
+                      total=len(todo), kept=len(kept))
+    if not todo:
+        # 전부 손편집이라 할 일이 없습니다. 작업은 만들어 둡니다 -- 화면이
+        # 그 id를 폴링하므로 끝났다고 답할 자리가 있어야 합니다.
+        _note(job_id, state="done", elapsed=0.0)
+        return {"id": job_id, "total": 0, "kept": len(kept)}
+
+    def run():
+        try:
+            if _translate_rows(job_id, owner, spec, meta, cues, todo, genre):
+                _mark_translated(owner)
+                _note(job_id, state="done",
+                      elapsed=round(time.time() - _jobs[job_id]["started"], 1))
+        except (Exception, SystemExit) as exc:
+            # SystemExit도 받습니다. Exception이 아니라 놓치면 스레드가 조용히
+            # 죽고 작업은 `running`으로 영원히 남습니다.
+            _note(job_id, state="error", error=str(exc)[:300])
+
+    threading.Thread(target=run, daemon=True).start()
     return {"id": job_id, "total": len(todo), "kept": len(kept)}
 
 
-def _run_retranslate(job_id, owner, spec, meta, cues, todo, genre):
-    def note(**kw):
-        _note(job_id, **kw)
-
-    try:
-        tr = mw_translate.build(spec, genre)
-        bid = spec["id"]
-        tgt = meta.get("viewer_lang") or "ko"
-        by_id = {c["id"]: i for i, c in enumerate(cues)}
-        skipped = 0
-        for n, c in enumerate(todo):
-            with _lock:
-                if _jobs[job_id]["cancel"]:
-                    note(state="cancelled", done=n)
-                    return
-            # 원본 언어는 그 줄이 들고 있는 것을 먼저 씁니다. 「자동 판별」로
-            # 켠 세션은 메타의 source_lang 이 비어 있습니다.
-            src = c.get("lang") or meta.get("source_lang") or ""
-            if not src or src == tgt or not tr.should_translate(c["text"], src, tgt):
-                skipped += 1
-            else:
-                try:
-                    out = tr.translate(c["text"], src, tgt,
-                                       _context(cues, by_id.get(c["id"], 0)))
-                except Exception as exc:
-                    print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
-                    out = c["text"]
-                from_primary = getattr(tr, "last_used", "primary") == "primary"
-                if (out or "").strip():
-                    key = bid if from_primary else "local-m2m100"
-                    store.save_translation(owner, c["id"], key, out)
-                    # 보고 있는 창에도 바로 닿게 합니다.
-                    live.notify_translation(owner, c["id"], c["kind"], out)
-                with _lock:
-                    _jobs[job_id]["by_remote" if from_primary else "by_local"] += 1
-            if n % 5 == 0:
-                note(done=n, skipped=skipped,
-                     degraded=bool(getattr(tr, "tripped", False)),
-                     failures=getattr(tr, "failures", 0))
-        note(done=len(todo), skipped=skipped,
-             degraded=bool(getattr(tr, "tripped", False)),
-             failures=getattr(tr, "failures", 0))
-        if store.doc(owner) is not None:
-            d = store.doc(owner)
-            d["translated"] = True
-            store.save_doc(owner, d)
-        note(state="done", elapsed=round(time.time() - _jobs[job_id]["started"], 1))
-    except (Exception, SystemExit) as exc:
-        # SystemExit도 받습니다. Exception이 아니라 위에서 놓치면 스레드가
-        # 조용히 죽고 작업은 `running`으로 영원히 남습니다.
-        note(state="error", error=str(exc)[:300])
-
+# ---- 전사 -------------------------------------------------------------------
 
 def start_transcribe(url: str, lang: str | None, viewer_lang: str,
-                     backend_id: str = "local-m2m100",
-                     asr_id: str = "local-hayamimi",
-                     speakers: bool = False,
-                     genre: str | None = None) -> dict:
+                     backend_id: str = "", asr_id: str = "",
+                     speakers: bool = False, genre: str | None = None) -> dict:
     """Take a URL from the UI all the way to a playable cue file.
 
     Everything the CLI does, driven from the browser, with the phase reported
@@ -419,17 +336,12 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
     twenty seconds transcribing, and a progress bar that says nothing during
     the download reads as a hang.
     """
-    job_id = uuid.uuid4().hex[:12]
-    with _lock:
-        _jobs[job_id] = {"id": job_id, "kind": "transcribe", "url": url,
-                         "phase": "probe", "state": "running", "done": 0, "total": 0,
-                         "started": time.time(), "error": None, "cancel": False,
-                         "title": "", "video": None, "skipped": 0,
-                         "by_remote": 0, "by_local": 0, "degraded": False,
-                         "failures": 0, "asr": asr_id,
-                         "genre": genre or mw_translate.DEFAULT_GENRE}
-        snapshot = dict(_jobs[job_id])
-    store.save_job(snapshot)
+    cfg = config.load()
+    backend_id = backend_id or config.active("tr", cfg)
+    asr_id = asr_id or config.active("asr", cfg)
+    job_id = _new_job(kind="transcribe", url=url, phase="probe", title="",
+                      video=None, asr=asr_id,
+                      genre=genre or mw_translate.DEFAULT_GENRE)
     threading.Thread(target=_run_transcribe,
                      args=(job_id, url, lang, viewer_lang, backend_id, asr_id,
                            speakers, genre),
@@ -439,14 +351,13 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
 
 def _run_transcribe(job_id: str, url: str, lang: str | None,
                     viewer_lang: str, backend_id: str,
-                    asr_id: str = "local-hayamimi", speakers: bool = False,
+                    asr_id: str = "", speakers: bool = False,
                     genre: str | None = None):
     def note(**kw):
         _note(job_id, **kw)
 
     def cancelled() -> bool:
-        with _lock:
-            return _jobs[job_id]["cancel"]
+        return _cancelled(job_id)
 
     try:
         meta = vod.probe(url)
@@ -485,7 +396,7 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             # An external ASR that refuses the job should not cost the user
             # the download; fall back so they still get a transcript.
             note(asr_fallback=str(exc)[:160])
-            print(f"[job] external ASR failed ({exc}); using hayamimi", flush=True)
+            print(f"[job] external ASR failed ({exc}); using the local engine", flush=True)
             engine = mw_asr.LocalHayamimi()
             try:
                 cues = engine.transcribe(samples, lang,
@@ -502,9 +413,11 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             counts[c["lang"]] = counts.get(c["lang"], 0) + 1
         source_lang = lang or (max(counts, key=counts.get) if counts else "unknown")
 
-        # Re-adding a video must not throw away translations already paid
-        # for with another backend. Transcription is deterministic for the
-        # same audio, so a cue whose text is unchanged keeps what it had.
+        # 같은 영상을 다시 넣어도 다른 엔진으로 이미 만든 번역과 사람이
+        # 손댄 표시를 버리지 않습니다. 같은 오디오의 전사는 같으므로, 글자가
+        # 그대로인 줄은 가진 것을 그대로 물려받습니다. (원문 자체를 고쳤던
+        # 줄은 새 전사와 글자가 다르므로 물려받지 못합니다 -- 다시 전사한다는
+        # 것은 전사를 새로 받겠다는 뜻이니 그 편이 맞습니다.)
         previous = []
         if has_video(meta["id"]):
             try:
@@ -514,12 +427,13 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         kept = 0
         merged = []
         for i, c in enumerate(cues):
-            old_tr = {}
+            old_tr, old_edited = {}, ""
             if i < len(previous) and previous[i].get("text") == c["text"]:
                 old_tr = previous[i].get("translations", {}) or {}
+                old_edited = previous[i].get("edited") or ""
                 if old_tr:
                     kept += 1
-            merged.append({**c, "translations": dict(old_tr)})
+            merged.append({**c, "translations": dict(old_tr), "edited": old_edited})
         if kept:
             print(f"[job] kept {kept} existing translations", flush=True)
 
@@ -529,97 +443,29 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
                "audio_seconds": round(audio_s, 1), "cues": merged}
         save_video(meta["id"], doc)
         note(kept=kept)
-        note(phase="translate", done=0, total=len(cues))
 
         if source_lang == viewer_lang:
-            note(phase="done", state="done",
+            note(phase="done", state="done", done=len(cues), total=len(cues),
                  elapsed=round(time.time() - _jobs[job_id]["started"], 1))
             return
 
+        # 번역은 다른 두 경로와 같은 루프를 씁니다. 이 엔진으로 이미 번역된
+        # 줄(다시 넣은 영상)과 손으로 맞춘 줄은 건너뜁니다.
         spec = find_backend(backend_id) or {"backend": "local"}
-        tr = mw_translate.build(spec, genre)
-        bid = spec.get("id", "local-m2m100")
-        skipped = 0
-        for i, c in enumerate(doc["cues"]):
-            if cancelled():
-                save_video(meta["id"], doc)
-                note(state="cancelled"); return
-            if c["translations"].get(bid):
-                skipped += 1          # already done by this backend
-            elif not tr.should_translate(c["text"], source_lang, viewer_lang):
-                skipped += 1
-            else:
-                try:
-                    out = tr.translate(c["text"], source_lang, viewer_lang,
-                                       _context(doc["cues"], i))
-                except Exception as exc:
-                    # 실패했다고 줄을 버리면 그 발화가 없었던 것처럼 보입니다.
-                    # 원문을 남기고 왜 실패했는지만 적습니다.
-                    print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
-                    out = c["text"]
-                from_primary = getattr(tr, "last_used", "primary") == "primary"
-                # 번역이 원문과 같아도 저장합니다. 고유명사나 짧은 감탄사는
-                # 그대로 두는 것이 옳은 번역입니다.
-                if (out or "").strip():
-                    c["translations"][bid if from_primary else "local-m2m100"] = out
-                with _lock:
-                    _jobs[job_id]["by_remote" if from_primary else "by_local"] += 1
-            if i % 10 == 0:
-                note(done=i, skipped=skipped,
-                     degraded=bool(getattr(tr, "tripped", False)),
-                     failures=getattr(tr, "failures", 0))
-        doc["translated"] = True
-        save_video(meta["id"], doc)
-        note(phase="done", state="done", done=len(doc["cues"]), skipped=skipped,
+        bid = spec.get("id") or config.PROTECTED["tr"]
+        owner = meta["id"]
+        rows = store.cues(owner)
+        todo = [c for c in rows
+                if not c["translations"].get(bid) and not _hand_translated(c)]
+        note(phase="translate", done=0, total=len(todo),
+             skipped=len(rows) - len(todo))
+        finished = _translate_rows(job_id, owner, spec, doc, rows, todo, genre)
+        if not finished:
+            return                      # 취소는 루프가 이미 적었습니다
+        _mark_translated(owner)
+        note(phase="done", state="done", done=len(todo),
              elapsed=round(time.time() - _jobs[job_id]["started"], 1))
     except (Exception, SystemExit) as exc:
         # SystemExit도 받습니다. Exception이 아니라 위에서 놓치면 스레드가
         # 조용히 죽고 작업은 `running`으로 영원히 남습니다.
-        note(state="error", error=str(exc)[:300])
-
-
-def _run(job_id: str, vid: str, spec: dict, doc: dict,
-         genre: str | None = None):
-    def note(**kw):
-        _note(job_id, **kw)
-
-    try:
-        tr = mw_translate.build(spec, genre)
-        src, tgt = doc["source_lang"], doc["viewer_lang"]
-        bid = spec["id"]
-        skipped = 0
-        for i, c in enumerate(doc["cues"]):
-            with _lock:
-                if _jobs[job_id]["cancel"]:
-                    note(state="cancelled", done=i)
-                    save_video(vid, doc)   # keep whatever was finished
-                    return
-            if not tr.should_translate(c["text"], src, tgt):
-                skipped += 1
-            else:
-                try:
-                    out = tr.translate(c["text"], src, tgt,
-                                       _context(doc["cues"], i))
-                except Exception as exc:
-                    print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
-                    out = c["text"]
-                # 대체 백엔드가 낸 줄은 그 백엔드 이름으로 남깁니다. 닿지 않은
-                # 엔드포인트가 만든 것처럼 기록하면 비교가 성립하지 않습니다.
-                from_primary = getattr(tr, "last_used", "primary") == "primary"
-                if (out or "").strip():
-                    c["translations"][bid if from_primary else "local-m2m100"] = out
-                with _lock:
-                    key = "by_remote" if from_primary else "by_local"
-                    _jobs[job_id][key] += 1
-            if i % 10 == 0:
-                note(done=i, skipped=skipped,
-                     degraded=bool(getattr(tr, "tripped", False)),
-                     failures=getattr(tr, "failures", 0))
-        note(done=len(doc["cues"]), skipped=skipped,
-             degraded=bool(getattr(tr, "tripped", False)),
-             failures=getattr(tr, "failures", 0))
-        doc["translated"] = True
-        save_video(vid, doc)
-        note(state="done", elapsed=round(time.time() - _jobs[job_id]["started"], 1))
-    except Exception as exc:  # a failed job must not take the server with it
         note(state="error", error=str(exc)[:300])

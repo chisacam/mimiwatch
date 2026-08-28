@@ -1642,9 +1642,12 @@ function submitExport(e) {
   const t = exportTarget();
   if (!t) return;
   const f = e.target;
+  // 지금 보고 있는 번역 엔진의 것을 담습니다. 넘기지 않으면 서버가 있는 것
+  // 중에서 고르는데, 그것이 화면과 다른 엔진일 수 있습니다.
   const url = `/api/export?id=${encodeURIComponent(t.value)}`
             + `&fmt=${encodeURIComponent(f.fmt.value)}`
-            + `&view=${encodeURIComponent(f.view.value)}`;
+            + `&view=${encodeURIComponent(f.view.value)}`
+            + `&backend=${encodeURIComponent(state.backend || "")}`;
   // 서버가 Content-Disposition 을 붙여 주므로 그냥 가면 내려받습니다.
   // 우리 서버는 같은 출처이고 로컬이라 여기서 막힐 것이 없습니다.
   window.location.href = url;
@@ -2246,6 +2249,29 @@ async function deleteVideo(id, title) {
   await refreshVideoList(open ? list[0].id : undefined);
 }
 
+/* 지난 방송을 지웁니다. 받는 중인 세션은 서버가 거절합니다 -- 먼저 「중단」.
+ *
+ * 예전에는 세션을 지울 길이 없어 목록이 자라기만 했습니다. 시험용 세션과
+ * 실패한 세션이 쌓여 진짜 방송이 한도 밖으로 밀려났습니다. */
+async function deleteSession(sid, title) {
+  if (!confirm(`'${(title || "").slice(0, 50)}' 방송의 자막 내역을 삭제할까요?\n`
+               + "받아 적은 자막이 함께 지워집니다.")) return;
+  const res = await (await fetch("/api/live/delete", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: sid }),
+  })).json();
+  if (res.error) { alert(res.error); return; }
+  // 지운 것이 지금 보고 있는 것이면 화면을 비웁니다. 자막은 이제 없습니다.
+  if (state.live && state.live.id === sid) {
+    detachLive();
+    state.doc = null; state.cues = []; state.idx = -1;
+    buildScript();
+    setNowTitle(null);
+    if (overlay) overlay.clear();
+  }
+  await refreshVideoList();
+}
+
 /* 목록은 <select>가 아니라 행으로 그립니다.
  *
  * 고르기만 하던 때는 select로 충분했지만, 지우기와 상태 표시가 같은 자리에
@@ -2295,11 +2321,12 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   if (deletable) {
     const del = document.createElement("button");
     del.className = "vdel";
-    del.title = "이 전사를 삭제합니다";
+    del.title = session ? "이 방송의 자막 내역을 삭제합니다" : "이 전사를 삭제합니다";
     del.textContent = "🗑";
     del.addEventListener("click", (e) => {
       e.stopPropagation();          // 지우려다 열리면 안 됩니다
-      deleteVideo(value, title);
+      if (session) deleteSession(session, title);
+      else deleteVideo(value, title);
     });
     row.appendChild(del);
   } else {
@@ -2357,7 +2384,8 @@ async function refreshVideoList(selectId, pre) {
       value: "live:" + s.id, session: s.id,
       title: s.title || s.url, videoId: s.video_id || "",
       meta: `${s.cues}줄` + (running ? "" : `  ·  ${LIVE_STATE[s.state] || s.state}`),
-      live: true, stopped: !running, deletable: false,
+      // 끝난 방송만 지울 수 있습니다. 받는 중인 것은 「중단」이 먼저입니다.
+      live: true, stopped: !running, deletable: !running,
     }));
   });
   list.forEach(v => {

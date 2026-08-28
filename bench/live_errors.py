@@ -128,17 +128,16 @@ def main():
     s._recent = [{"t": 1.0, "text": "이미 받아 적은 줄"}]
     before_id = s.id
     live._sessions[s.id] = s
-    cfg = {"asr_backends": [{"id": "tcpp-lite", "backend": "tcpp",
-                             "model": "SenseVoiceSmall-Q8_0.gguf"}]}
-    import json as _json, io, builtins
-    real_open = builtins.open
-    builtins.open = lambda *a, **k: (io.StringIO(_json.dumps(cfg))
-                                     if str(a[0]).endswith("backends.json")
-                                     else real_open(*a, **k))
+    # 설정은 config.py가 답합니다. 예전에는 live.py가 backends.json을 직접
+    # 열어서 builtins.open을 갈아 끼웠는데, 이제 그 파일을 읽는 곳은
+    # config 하나라 그쪽 함수를 바꿔 끼우면 됩니다.
+    lite = {"id": "tcpp-lite", "backend": "tcpp", "model": "SenseVoiceSmall-Q8_0.gguf"}
+    real_find_asr = live.config.find_asr
+    live.config.find_asr = lambda bid: lite if bid == "tcpp-lite" else None
     try:
         res = live.set_asr(s.id, "tcpp-lite")
     finally:
-        builtins.open = real_open
+        live.config.find_asr = real_find_asr
         live._sessions.pop(s.id, None)
 
     check(not res.get("error"), f"갈아 끼웠다 ({res})")
@@ -159,13 +158,11 @@ def main():
     s2.asr_backend_id = "tcpp-best"
     s2.asr_label = "old-model"
     live._sessions[s2.id] = s2
-    builtins.open = lambda *a, **k: (io.StringIO(_json.dumps(cfg))
-                                     if str(a[0]).endswith("backends.json")
-                                     else real_open(*a, **k))
+    live.config.find_asr = lambda bid: lite if bid == "tcpp-lite" else None
     try:
         res2 = live.set_asr(s2.id, "tcpp-lite")
     finally:
-        builtins.open = real_open
+        live.config.find_asr = real_find_asr
         live._sessions.pop(s2.id, None)
     check("error" in res2, f"실패를 알린다 ({res2.get('error', '')[:40]})")
     check(s2.asr_backend_id == "tcpp-best" and s2.asr_label == "old-model",

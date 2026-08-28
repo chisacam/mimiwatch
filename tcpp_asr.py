@@ -72,12 +72,17 @@ def resolve_device(want: str) -> str:
 class TranscribeCppASR:
     """RoutedASR 자리에 들어가는 단일 언어 어댑터."""
 
-    def __init__(self, model_path: str, lang: str, threads: int = 4,
+    def __init__(self, model_path: str, lang: str | None, threads: int = 4,
                  label: str = "", device: str = "auto"):
         import transcribe_cpp as tc
 
         self.device = resolve_device(device)
-        self.forced_lang = lang
+        # 원본 언어를 자동 판별에 맡기면 여기로 None이 들어옵니다. 그대로
+        # 두면 transcribe가 내놓는 lang이 None이 되고, 그 값이 자막 한 줄을
+        # 타고 store.save_cue까지 가서 NOT NULL 제약에 걸립니다. 첫 확정
+        # 줄에서 세션이 통째로 끝났습니다. 판별을 맡긴다는 뜻은 이 코드
+        # 안에서 빈 문자열 하나로만 적습니다.
+        self.forced_lang = lang or ""
         self.min_switch_s = 0.0
         # os.path.basename을 씁니다. "/"로만 자르면 윈도우의 역슬래시
         # 경로에서 전체 경로가 통째로 화면의 엔진 이름이 됩니다.

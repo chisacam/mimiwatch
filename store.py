@@ -171,9 +171,13 @@ def save_cue(session_id: str, cue: dict):
            "ON CONFLICT(session, cue_id) DO UPDATE SET "
            "  kind=excluded.kind, t=excluded.t, text=excluded.text, "
            "  lang=excluded.lang, speaker=excluded.speaker, tr='{}'",
-           (session_id, int(cue["id"]), cue.get("kind", ""),
-            float(cue.get("t") or 0), cue.get("text", ""),
-            cue.get("lang", ""), cue.get("speaker", "")))
+           # `.get(k, "")`는 키가 없을 때만 기본값을 냅니다. 키가 있고
+           # 값이 None이면 None이 그대로 바인딩되어, 열의 DEFAULT ''도
+           # 적용되지 않은 채 NOT NULL에 걸립니다. 자막 한 줄을 잃는 것도
+           # 아니고 세션이 끝나므로, 값 쪽에서 한 번 더 거릅니다.
+           (session_id, int(cue["id"]), cue.get("kind") or "",
+            float(cue.get("t") or 0), cue.get("text") or "",
+            cue.get("lang") or "", cue.get("speaker") or ""))
 
 
 def drop_cues(session_id: str, cue_ids: list[int]):

@@ -221,6 +221,41 @@ def main():
     check(live.store.session("sess-1") is None,
           "시험용 세션이 저장소에 남지 않았다")
 
+    print("\n[8] 값이 None 인 자막을 저장해도 세션이 죽지 않는가")
+    # 원본 언어를 자동 판별에 맡기면 lang 이 None 으로 흘러갑니다. cues 열은
+    # NOT NULL 이고, `.get(k, "")` 는 **키가 있고 값이 None 이면** 기본값을
+    # 내지 않으므로 None 이 그대로 바인딩되어 첫 확정 줄에서 세션이
+    # 끝났습니다. 자막 한 줄을 잃는 것이 아니라 방송을 잃는 자리입니다.
+    import tempfile, shutil
+    tmp = tempfile.mkdtemp()
+    real_db, real_data, real_conn = live.store.DB, live.store.DATA, live.store._db
+    live.store.DB = os.path.join(tmp, "t.db")
+    live.store.DATA = tmp
+    live.store._db = None
+    try:
+        live.store.init()
+        live.store.save_cue("s", {"id": 1, "kind": "final", "t": 1.0,
+                                  "text": "안녕", "lang": None, "speaker": None})
+        row = live.store.cues("s")[0]
+        check(row["lang"] == "" and row["speaker"] == "",
+              f"None 이 빈 문자열로 저장된다 (lang={row['lang']!r})")
+        live.store.save_cue("s", {"id": 2, "kind": None, "t": None,
+                                  "text": None, "lang": None, "speaker": None})
+        check(len(live.store.cues("s")) == 2, "전부 None 이어도 저장된다")
+    except Exception as exc:                                # noqa: BLE001
+        check(False, f"저장에서 예외가 났다: {type(exc).__name__}: {exc}")
+    finally:
+        live.store.DB, live.store.DATA, live.store._db = real_db, real_data, real_conn
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # 자동 판별에 맡겨도 어댑터가 None 을 흘리지 않아야 합니다.
+    import tcpp_asr
+    a = tcpp_asr.TranscribeCppASR.__new__(tcpp_asr.TranscribeCppASR)
+    for lang in (None, "", "ja"):
+        a.forced_lang = lang or ""
+        check(a.forced_lang is not None and isinstance(a.forced_lang, str),
+              f"forced_lang 이 문자열이다 (입력 {lang!r} -> {a.forced_lang!r})")
+
     print()
     if FAIL:
         print(f"{len(FAIL)} 건 실패")

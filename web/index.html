@@ -49,26 +49,28 @@
       <!-- 전체화면에서는 상자 밖의 조절기가 그려지지 않습니다. 자막 모드만
            상자 안에도 둡니다. 창 모드에서는 아래 조절기가 있으므로 숨깁니다. -->
       <div id="fs-controls" class="fs-controls">
-        <div class="fs-row">
-          <span class="glabel">자막</span>
+        <span class="glabel">자막</span>
+        <div class="fs-row seg-row">
           <button class="seg" data-mode="off">끄기</button>
           <button class="seg" data-mode="both" data-needs-translation>둘 다</button>
           <button class="seg" data-mode="translation" data-needs-translation>번역만</button>
           <button class="seg" data-mode="source">원문만</button>
-          <span class="grow"></span>
-          <button id="fs-exit" class="seg">⛶ 창으로</button>
         </div>
+        <hr>
         <div class="fs-row">
           <label class="slider">글자 크기 <input type="range" min="16" max="56" data-ctl="size"></label>
           <label class="slider">배경 <input type="range" min="0" max="100" data-ctl="dim"></label>
           <label class="slider">위치 <input type="range" min="0" max="40" data-ctl="pos"></label>
         </div>
+        <hr>
+        <button id="fs-exit" class="seg">⛶ 창으로</button>
       </div>
 
       <!-- 조절기를 다시 부르는 자리.
            iframe이 상자를 덮고 있어 영상 위의 마우스 움직임은 우리에게
            오지 않습니다. 그래서 iframe 위에 얹은 이 띠가 필요합니다.
-           유튜브의 제어줄은 화면 맨 아래에 있으므로 그보다 위에 둡니다. -->
+           자막은 아래 가운데, 유튜브 제어줄은 맨 아래에 있으므로 둘 다
+           피해 오른쪽 가장자리의 가운데 높이에 둡니다. -->
       <div id="fs-hotzone" class="fs-hotzone" aria-hidden="true"></div>
     </div>
 

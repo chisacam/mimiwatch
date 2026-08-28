@@ -94,44 +94,49 @@ main.panel-hidden .panel{opacity:0; pointer-events:none}
  * 전체화면 요소의 하위 트리만 그려지므로, 상자 밖의 조절기는 그때 사라집니다.
  * 자막 모드만이라도 상자 안에서 바꿀 수 있어야 합니다. 창 모드에서는 바로
  * 아래에 같은 단추가 있으니 내보이지 않습니다. */
+/* 전체화면 조절기는 **오른쪽 가장자리에 세로로** 섭니다.
+ *
+ * 처음에는 아래쪽 가운데에 가로로 두었는데, 그 자리가 곧 자막 자리입니다.
+ * 자막은 화면 아래 가운데에 있으므로, 조절기는 높이의 한가운데로 비켜서고
+ * 폭도 좁게 잡아야 겹치지 않습니다. 배경도 옅게 둡니다 -- 떠 있는 동안에도
+ * 영상이 비쳐야 합니다. */
 .fs-controls{
-  display:none; position:absolute; left:50%; transform:translateX(-50%);
-  /* 유튜브의 제어줄이 화면 맨 아래를 차지하므로 그 위에 얹습니다. */
-  bottom:5.5rem; z-index:3; width:min(680px, 82%);
-  flex-direction:column; gap:.45rem; padding:.6rem .75rem;
-  background:rgba(6,8,12,.86); border:1px solid var(--line); border-radius:11px;
-  backdrop-filter:blur(8px); font-size:.8rem; color:var(--dim);
-  opacity:0; transition:opacity .18s ease; pointer-events:none;
+  display:none; position:absolute; right:1.2rem; top:50%; transform:translateY(-50%);
+  z-index:3; width:11rem;
+  flex-direction:column; gap:.5rem; padding:.7rem .75rem;
+  background:rgba(6,8,12,.42); border:1px solid rgba(255,255,255,.14);
+  border-radius:11px; backdrop-filter:blur(10px);
+  font-size:.76rem; color:var(--dim);
+  opacity:0; transition:opacity .18s ease, background .18s ease;
+  pointer-events:none;
 }
-.fs-row{ display:flex; align-items:center; gap:.5rem 1rem; flex-wrap:wrap }
-.fs-row .grow{ flex:1 }
+/* 실제로 만지는 동안에는 또렷하게. */
+.fs-controls:hover{ background:rgba(6,8,12,.82) }
+.fs-row{ display:flex; flex-direction:column; align-items:stretch; gap:.3rem }
+.fs-row.seg-row{ flex-direction:row; flex-wrap:wrap; gap:.25rem }
+.fs-row.seg-row .seg{ flex:1 1 auto }
+.fs-controls .slider{ display:flex; flex-direction:column; align-items:stretch; gap:.15rem }
+.fs-controls .slider input[type=range]{ width:100% }
+.fs-controls hr{ border:0; border-top:1px solid rgba(255,255,255,.12); margin:.1rem 0 }
 #player-wrap:fullscreen .fs-controls,
 #player-wrap:-webkit-full-screen .fs-controls{ display:flex }
 /* 마우스가 움직일 때만 뜹니다. 영상 위에 계속 떠 있으면 방해가 됩니다. */
 #player-wrap.fs-active .fs-controls{ opacity:1; pointer-events:auto }
-.fs-controls .glabel{ margin-right:.15rem }
 
 /* 조절기를 다시 부르는 띠.
  *
  * 영상 위의 마우스 움직임은 우리에게 오지 않습니다 -- iframe이 상자를 덮고
  * 있고, 그 안은 교차 출처라 이벤트가 넘어오지 않습니다. 그래서 iframe 위에
- * 얹은 이 띠로 받습니다. 유튜브의 제어줄(맨 아래 약 60px)을 가리지 않도록
- * 그보다 위에 두고, 폭도 가운데로 제한합니다. */
+ * 얹은 이 띠로 받습니다. 조절기가 서는 자리를 덮되, 자막(아래 가운데)과
+ * 유튜브 제어줄(맨 아래)은 건드리지 않도록 오른쪽 가장자리의 가운데
+ * 높이에만 둡니다. */
 .fs-hotzone{
-  display:none; position:absolute; left:50%; transform:translateX(-50%);
-  bottom:4.5rem; width:min(760px, 88%); height:8rem;
+  display:none; position:absolute; right:0; top:50%; transform:translateY(-50%);
+  width:16rem; height:60%;
   z-index:2; pointer-events:auto;
 }
 #player-wrap:fullscreen .fs-hotzone,
 #player-wrap:-webkit-full-screen .fs-hotzone{ display:block }
-
-/* 놀고 있는 동안 커서를 감추는 막.
- *
- * 커서가 iframe 위에 있으면 그 모양은 유튜브 문서가 정합니다. 바깥에서
- * cursor를 걸 방법이 없으므로, 잠깐 우리 막을 덮어 커서를 가져옵니다.
- * 대신 그동안의 클릭은 유튜브에 닿지 않습니다 -- 첫 움직임이나 첫 누름은
- * 막을 걷는 데 쓰이고, 그다음부터 정상입니다. */
-.fs-veil{ position:absolute; inset:0; z-index:1; cursor:none; background:transparent }
 .cue-main span,.cue-src span,.cue-prev span{
   background:rgba(6,8,12,var(--cue-bg,.55)); padding:.1em .4em; border-radius:4px;
   box-decoration-break:clone; -webkit-box-decoration-break:clone;

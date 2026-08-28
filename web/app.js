@@ -457,7 +457,6 @@ function fsFailed(msg) {
 }
 
 let fsIdleTimer = null;
-let fsVeil = null;
 
 function showFsControls() {
   if (!fsElement()) return;
@@ -465,41 +464,22 @@ function showFsControls() {
   wrap.classList.add("fs-active");
   // 전체화면에 들어간 뒤 처음 열릴 때, 그동안 창에서 바꾼 값을 반영합니다.
   syncControlInputs();
-  removeVeil();
   clearTimeout(fsIdleTimer);
   fsIdleTimer = setTimeout(hideFsControls, 2500);
 }
 
 function hideFsControls() {
-  const wrap = $("player-wrap");
-  wrap.classList.remove("fs-active");
-  if (fsElement()) addVeil();
+  $("player-wrap").classList.remove("fs-active");
 }
 
-/* 커서를 감추려면 커서가 우리 것이어야 합니다.
+/* 커서는 감추지 않습니다.
  *
- * 커서가 iframe 위에 있는 동안 그 모양은 유튜브 문서가 정합니다. 바깥에서
- * cursor를 거는 방법은 없습니다. 그래서 놀고 있는 동안만 투명한 막을 덮어
- * 커서를 가져오고, 움직이거나 누르는 순간 걷습니다.
- *
- * 대가가 하나 있습니다. 막이 덮여 있는 동안의 클릭은 유튜브에 닿지 않고
- * 막을 걷는 데 쓰입니다. 그다음 클릭부터는 평소대로입니다. */
-function addVeil() {
-  if (fsVeil || !fsElement()) return;
-  fsVeil = document.createElement("div");
-  fsVeil.className = "fs-veil";
-  const wake = () => { removeVeil(); showFsControls(); };
-  fsVeil.addEventListener("mousemove", wake);
-  fsVeil.addEventListener("mousedown", wake);
-  fsVeil.addEventListener("wheel", wake, { passive: true });
-  $("player-wrap").appendChild(fsVeil);
-}
-
-function removeVeil() {
-  if (!fsVeil) return;
-  fsVeil.remove();
-  fsVeil = null;
-}
+ * 커서가 iframe 위에 있는 동안 그 모양은 유튜브 문서가 정하므로, 바깥에서
+ * cursor를 걸 방법이 없습니다. 투명한 막을 덮어 커서를 가져오는 방법을
+ * 써 봤지만 듣지 않았습니다 -- 커서 모양은 **포인터가 움직일 때** 다시
+ * 평가되는데, 멈춘 뒤에 막을 덮으면 다음 움직임까지 반영되지 않고 그
+ * 움직임이 곧 막을 걷습니다. 게다가 막이 덮인 동안의 클릭은 유튜브에
+ * 닿지 않아, 듣지도 않으면서 대가만 치르는 셈이었습니다. */
 
 function onFullscreenChange() {
   const el = fsElement();
@@ -520,8 +500,6 @@ function onFullscreenChange() {
   } else {
     clearTimeout(fsIdleTimer);
     $("player-wrap").classList.remove("fs-active");
-    // 창으로 돌아왔는데 막이 남으면 영상을 아예 누를 수 없게 됩니다.
-    removeVeil();
   }
   // 상자 크기가 바뀐 뒤에 재야 합니다. 전환 직후에는 아직 옛 크기입니다.
   requestAnimationFrame(applyCueSize);

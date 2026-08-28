@@ -1412,6 +1412,34 @@ async function requestTabAudio() {
   return media;
 }
 
+/* 공유받은 탭의 제목.
+ *
+ * 크롬은 캡처 트랙의 label 에 고른 대상의 이름을 넣습니다 -- 탭이면 그 탭의
+ * 제목입니다. 이름 칸을 비웠을 때 「탭 오디오」라고만 적히던 자리를 이것으로
+ * 채웁니다. 무엇을 듣고 있었는지는 목록에서 그 한 줄로만 알 수 있습니다.
+ *
+ * 다만 label 은 구현이 정하는 값이라 늘 제목은 아닙니다. 화면 전체나 창을
+ * 고르면 그쪽 이름이 오고, `screen:0:0` 같은 내부 식별자가 오기도 합니다.
+ * 그런 것은 제목보다 나쁘므로 걸러 내고 빈 값을 돌려줍니다. */
+function tabTitleFrom(media) {
+  const v = media.getVideoTracks()[0];
+  const raw = ((v && v.label) || "").trim();
+  if (!raw) return "";
+  // screen:0:0, window:12:0, web-contents-media-stream://5/12 …
+  if (/^[a-z][a-z-]*:(\/\/)?[\d:/]/i.test(raw)) return "";
+  return raw.replace(/\s+[-–—]\s+(Google Chrome|Chromium|Chrome)$/i, "")
+            .slice(0, 200);
+}
+
+/* 탭이 아니라 창이나 화면 전체를 골랐는가. 소리가 따라오는지는 플랫폼마다
+ * 다른데, 탭은 어디서나 따라옵니다. */
+function isTabSurface(media) {
+  const v = media.getVideoTracks()[0];
+  const s = v && v.getSettings ? v.getSettings() : null;
+  // 설정을 못 읽으면 탭이라고 봅니다 -- 아니라면 소리가 없어 앞에서 걸립니다.
+  return !s || !s.displaySurface || s.displaySurface === "browser";
+}
+
 /* 받아 둔 스트림을 세션으로 흘려보냅니다. */
 async function pipeCapture(media, sessionId) {
   stopCapture();
@@ -1509,10 +1537,12 @@ async function startTabCapture(title, lang) {
   const media = await requestTabAudio();
   if (!media) { if (pending) pending.close(); state.scriptWin = null; return; }
   stopLive();
+  // 이름을 적었으면 그것을 씁니다. 비웠으면 고른 탭의 제목을 가져옵니다.
+  const name = title || tabTitleFrom(media);
   const res = await (await fetch("/api/live/capture", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      title, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
+      title: name, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
       asr: state.asr, refine: state.refine, genre: currentGenre(),
       profile: document.querySelector('#add-form select[name="profile"]').value,
     }),
@@ -1525,7 +1555,7 @@ async function startTabCapture(title, lang) {
     return;
   }
 
-  const probe = { id: "", title: title || "탭 오디오", is_live: true };
+  const probe = { id: "", title: name || "탭 오디오", is_live: true };
   state.doc = { id: probe.id, title: probe.title, source_lang: lang || "",
                 viewer_lang: $("viewer-lang").value, translated: false,
                 backends_done: [state.backend], live: true };
@@ -1558,7 +1588,12 @@ async function startTabCapture(title, lang) {
     pending.location = `/?script=${encodeURIComponent("live:" + res.id)}`;
   }
   showLiveNotice(
-    "이 브라우저의 다른 탭에서 나는 소리를 받아 적습니다. "
+    (isTabSurface(media)
+      ? "이 브라우저의 다른 탭에서 나는 소리를 받아 적습니다. "
+      // 창이나 화면 전체도 소리가 오면 받습니다. 다만 무엇이 섞여 들어올지
+      // 알 수 없으므로, 그렇게 골랐다는 것만 짚어 둡니다.
+      : "탭이 아니라 창·화면을 공유하고 있습니다. 그 소리를 받아 적습니다 — "
+        + "다른 소리가 섞이면 탭으로 다시 고르십시오. ")
     + "그 탭을 닫거나 공유를 멈추면 함께 끝납니다."
     + (pending ? "" : " 팝업이 막혀 대본 창을 띄우지 못했습니다 — "
                       + "오른쪽 「⧉ 대본 창」으로 여십시오."));

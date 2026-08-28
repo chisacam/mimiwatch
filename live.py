@@ -24,6 +24,7 @@ import re
 import subprocess
 import sys
 import threading
+import traceback
 import time
 import urllib.request
 import uuid
@@ -74,13 +75,20 @@ _lock = threading.Lock()
 
 def resolve_audio(url: str) -> tuple[str, dict]:
     """Audio-only rendition plus what the manifest says about media time."""
+    why = []
     for fmt in ("234", "233", "bestaudio"):
         out = subprocess.run(["yt-dlp", "--no-warnings", "-f", fmt, "-g", url],
                              capture_output=True, text=True)
         lines = out.stdout.strip().splitlines()
         if out.returncode == 0 and lines:
             return lines[0], manifest_info(lines[0])
-    raise RuntimeError("yt-dlp could not resolve an audio stream for this URL")
+        why.append(f"{fmt}: {(out.stderr or '').strip().splitlines()[-1]}"
+                   if (out.stderr or "").strip() else f"{fmt}: 빈 결과")
+    # yt-dlp가 한 말을 그대로 실어 보냅니다. "해석할 수 없습니다"만으로는
+    # 손댈 곳을 알 수 없습니다 -- 판올림이 필요한지, 로그인이 필요한지,
+    # 애초에 라이브가 아닌지가 저 줄에 적혀 있습니다.
+    raise RuntimeError("yt-dlp가 이 주소에서 오디오를 찾지 못했습니다. "
+                       + " / ".join(why))
 
 
 def manifest_info(m3u8: str) -> dict:
@@ -424,6 +432,12 @@ class LiveSession:
         self.state = "stopped"
 
     def _run(self):
+        # 이 넷을 미리 비워 둡니다. 아래 finally의 `del`이 이름을 지우는데,
+        # try가 그 이름들이 만들어지기 전에 실패하면 `del`이 UnboundLocalError를
+        # 냅니다. 그러면 **진짜 예외가 그 오류로 덮이고**, 더 나쁘게는 뒤따르는
+        # _release()와 _retire()가 실행되지 않아 모델이 얹힌 채 남습니다
+        # (세션 하나가 3GB입니다). 이슈 #1에서 실제로 그렇게 원인이 가려졌습니다.
+        asr = vad = history = refiner = None
         try:
             meta = subprocess.run(["yt-dlp", "--no-warnings", "-j", self.url],
                                   capture_output=True, text=True)
@@ -433,7 +447,11 @@ class LiveSession:
                 self.video_id = d.get("id", "") or ""
                 if not d.get("is_live"):
                     self.state = "error"
-                    self.error = "라이브가 아닙니다. 녹화본은 영상 추가로 처리하십시오."
+                    # 방금 끝난 방송도 여기로 옵니다. /api/probe가 볼 때는
+                    # 라이브였는데 그 사이 끝난 경우입니다.
+                    self.error = ("라이브가 아닙니다. 방송이 방금 끝났거나 "
+                                  "녹화본 주소일 수 있습니다. 녹화본은 "
+                                  "「＋ 영상 추가」로 처리하십시오.")
                     self._persist()
                     self.emit({"type": "status", **self.status()})
                     return
@@ -499,7 +517,11 @@ class LiveSession:
             self.emit({"type": "status", **self.status()})
         except Exception as exc:
             self.state = "error"
-            self.error = str(exc)[:300]
+            self.error = f"{type(exc).__name__}: {exc}"[:300]
+            # 화면에는 한 줄만 갑니다. 어디서 났는지는 로그에 남겨야
+            # 다음 보고가 진단 가능해집니다.
+            print(f"[live] 세션 {self.id} 실패:", file=sys.stderr)
+            traceback.print_exc()
             self._persist()
             self.emit({"type": "status", **self.status()})
         finally:

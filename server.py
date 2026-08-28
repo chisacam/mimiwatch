@@ -146,7 +146,11 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 self.wfile.write(f"data: {data}\n\n".encode())
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
+            # 시청자가 탭을 닫으면 끝나는 정상 경로입니다. 운영체제마다
+            # 다른 예외를 냅니다 -- 리눅스/맥은 BrokenPipe나 ConnectionReset,
+            # 윈도우는 ConnectionAborted(WinError 10053). 셋 다 ConnectionError
+            # 아래에 있으므로 부모로 받습니다.
             pass
         finally:
             if q is not None:

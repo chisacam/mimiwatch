@@ -165,6 +165,13 @@ def main():
         check("capture-worklet.js" in war,
               f"워클릿이 web_accessible_resources 에 있다 ({war})")
 
+    print("\n[6-1] 남의 페이지 글꼴에 휘둘리지 않는가")
+    # 유튜브는 `html` 을 10px 로 둡니다(보통 16px). rem 을 쓰면 우리 UI 가
+    # 62.5% 크기로 나옵니다 -- 12.8px 로 의도한 자막이 8px 이었습니다.
+    css = open(os.path.join(EXT, "overlay.css"), encoding="utf-8").read()
+    rems = re.findall(r"[\d.]+rem", css)
+    check(not rems, f"확장 CSS 에 rem 이 없다 ({rems or '없음'})")
+
     print("\n[7] 유튜브 문서에서 쓸 수 없는 것을 쓰지 않는가")
     # 유튜브는 Trusted Types 를 켜 두었습니다(`require-trusted-types-for
     # 'script'`). 그 문서에서 innerHTML 에 문자열을 넣으면 거부됩니다 --

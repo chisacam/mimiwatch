@@ -133,7 +133,7 @@ async function refreshState() {
     else if (!r.box || !r.box.w) bits.push("화면에 자리 없음");
     else if (!r.text) bits.push(r.mode === "off" ? "자막 끔" : "지금 구간에 자막 없음");
     if (!r.ticking) bits.push("시계 멈춤");
-    if (r.panel) bits.push(r.panelUp ? "대본 세움" : "대본 자리 못 찾음");
+    if (r.panel) bits.push(r.panelUp ? "자막 내역 세움" : "자리 못 찾음");
     $("state").textContent = bits.join(" · ");
   });
 }

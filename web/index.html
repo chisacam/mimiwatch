@@ -62,11 +62,11 @@
     </div>
   </div>
 
-  <button id="toggle-panel" class="seg" title="스크립트 영역 접기·펼치기 (S)">스크립트 ▸</button>
+  <button id="toggle-panel" class="seg" title="자막 내역 접기·펼치기 (S)">자막 내역 ▸</button>
 </header>
 
 <main id="layout">
-  <!-- 영상 관리. 스크립트 패널과 같은 방식으로 접고 펼칩니다. -->
+  <!-- 영상 관리. 자막 내역과 같은 방식으로 접고 펼칩니다. -->
   <aside class="library" id="library">
     <div class="panel-head">
       <h2>영상</h2>
@@ -135,18 +135,18 @@
 
   <aside class="panel">
     <div class="panel-head">
-      <h2>스크립트</h2>
+      <h2>자막 내역</h2>
       <button id="open-script-window" class="seg"
-              title="대본만 따로 띄웁니다. 임베드가 막힌 방송을 유튜브에서 보며 읽을 때 씁니다">⧉ 대본 창</button>
+              title="자막 내역만 따로 띄웁니다. 임베드가 막힌 방송을 유튜브에서 보며 읽을 때 씁니다">⧉ 따로 띄우기</button>
       <button id="open-export" class="seg" title="쌓인 자막을 파일로 내보냅니다">⤓ 내보내기</button>
       <label class="check"><input id="follow" type="checkbox" checked> 따라가기</label>
     </div>
 
-    <!-- 스크립트에서 줄을 누르면 무슨 일이 일어나는가.
+    <!-- 자막 내역에서 줄을 누르면 무슨 일이 일어나는가.
          기본은 예전 그대로 「그 지점으로 이동」입니다. 고치거나 고를 일은
          모드를 켠 동안에만 하도록 가릅니다 -- 읽다가 잘못 눌러서 편집기가
          열리거나 재생 위치가 튀는 일이 없어야 합니다. -->
-    <div class="script-modes" role="group" aria-label="스크립트 모드">
+    <div class="script-modes" role="group" aria-label="자막 내역 모드">
       <button class="seg" data-smode="read" title="줄을 누르면 그 지점으로 이동합니다">읽기</button>
       <button class="seg" data-smode="edit" title="줄을 누르면 원문·번역·시각을 고칩니다">✎ 편집</button>
       <button class="seg" data-smode="tr" title="줄을 골라 다시 번역합니다. shift로 구간을 잡습니다">⟳ 번역</button>
@@ -161,8 +161,8 @@
       <button id="tr-go" class="seg primary-seg">⟳ 재번역</button>
     </div>
 
-    <!-- 대본 창에서만 보이는 조절기. 영상이 없으므로 화면 위 자막 대신
-         스크립트 자체를 읽기 좋게 만드는 것들만 둡니다. -->
+    <!-- 따로 띄운 창에서만 보이는 조절기. 영상이 없으므로 화면 위 자막 대신
+         자막 내역 자체를 읽기 좋게 만드는 것들만 둡니다. -->
     <div id="script-tools" class="script-tools">
       <div class="fs-row seg-row">
         <button class="seg" data-sview="both">둘 다</button>
@@ -322,7 +322,7 @@
 </dialog>
 
 <!-- `async` 입니다. 이것을 동기로 두면 파서가 여기서 멈춰, 구글에서
-     스크립트를 받아 오는 동안 화면에 아무것도 그려지지 않습니다. 실측에서
+     자막 내역을 받아 오는 동안 화면에 아무것도 그려지지 않습니다. 실측에서
      이 한 줄이 4396ms 를 잡아먹었고 domInteractive 가 4435ms 였습니다 --
      우리 CSS·JS 는 각 10ms, API 응답은 각 1~10ms 였는데도 그랬습니다.
      app.js 의 whenApiReady() 가 onYouTubeIframeAPIReady 와 폴링으로 늦게

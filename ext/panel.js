@@ -48,7 +48,7 @@
     // (`require-trusted-types-for 'script'`), 그 문서에서 innerHTML 에
     // 문자열을 넣으면 거부됩니다. content script 가 면제되는지는 크롬 판에
     // 따라 다르므로 아예 기대지 않습니다.
-    head.append(el("b", "", "대본"), el("span", "mw-count", "0줄"));
+    head.append(el("b", "", "자막 내역"), el("span", "mw-count", "0줄"));
     const foll = el("label", "mw-follow");
     const box = document.createElement("input");
     box.type = "checkbox";

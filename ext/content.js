@@ -107,7 +107,7 @@
           const v = findVideo();
           if (v) { v.currentTime = t; v.play().catch(() => {}); }
         });
-        log("대본을 채팅 자리에 세웠습니다");
+        log("자막 내역을 채팅 자리에 세웠습니다");
       }
       MimiPanel.render(cues, { trKey });
     } else if (MimiPanel.mounted()) {

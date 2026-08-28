@@ -10,7 +10,7 @@
 .mw-overlay{
   position:absolute; left:50%; bottom:6%; transform:translateX(-50%);
   width:max-content; max-width:88%;
-  display:flex; flex-direction:column; align-items:center; gap:.3rem;
+  display:flex; flex-direction:column; align-items:center; gap:5px;
   pointer-events:none; text-align:center;
   /* 유튜브 컨트롤 바(z-index 60 언저리)보다 아래입니다. 자막이 재생
      단추를 덮으면 영상을 조작할 수 없습니다. */
@@ -42,7 +42,11 @@
   border-radius:3px; padding:.08em .3em; margin-right:.35em; vertical-align:.15em;
 }
 
-/* ---------- 채팅 자리에 세우는 대본 ---------- */
+/* ---------- 채팅 자리에 세우는 자막 내역 ---------- */
+/* 길이는 전부 px 입니다. rem 을 쓰면 host 페이지의 `html` 글꼴 크기에
+   휘둘리는데, 유튜브는 그것을 **10px** 로 둡니다(보통 16px). 그래서 처음에
+   글자가 62.5% 크기로 나왔습니다 -- 12.8px 로 의도한 자막이 8px 이었습니다.
+   남의 페이지에 얹는 것은 그 페이지가 무엇을 하든 제 크기를 지켜야 합니다. */
 .mw-panel{
   display:flex; flex-direction:column; height:520px; margin-bottom:12px;
   background:#0e1117; color:#e6e9f0; border:1px solid #222836; border-radius:12px;
@@ -50,28 +54,28 @@
   font-family:"Pretendard","Apple SD Gothic Neo",system-ui,sans-serif;
 }
 .mw-panel-head{
-  flex:none; display:flex; align-items:center; gap:.5rem;
-  padding:.5rem .75rem; border-bottom:1px solid #222836; font-size:.78rem;
+  flex:none; display:flex; align-items:center; gap:8px;
+  padding:8px 12px; border-bottom:1px solid #222836; font-size:12.5px;
 }
 .mw-panel-head b{font-weight:700}
-.mw-panel-head .mw-count{color:#8b95a7; font-size:.72rem}
+.mw-panel-head .mw-count{color:#8b95a7; font-size:11.5px}
 .mw-panel-head .mw-follow{
-  margin-left:auto; display:flex; align-items:center; gap:.3rem;
-  color:#8b95a7; font-size:.72rem; cursor:pointer;
+  margin-left:auto; display:flex; align-items:center; gap:5px;
+  color:#8b95a7; font-size:11.5px; cursor:pointer;
 }
 .mw-panel-head input{accent-color:#5eead4}
-.mw-panel-list{flex:1; overflow-y:auto; scrollbar-width:thin; padding:.25rem 0 1rem}
+.mw-panel-list{flex:1; overflow-y:auto; scrollbar-width:thin; padding:4px 0 16px}
 .mw-panel-list .mw-line{
-  display:grid; grid-template-columns:48px 1fr; gap:.5rem;
-  padding:.35rem .75rem; cursor:pointer; border-left:2px solid transparent;
+  display:grid; grid-template-columns:48px 1fr; gap:8px;
+  padding:5.5px 12px; cursor:pointer; border-left:2px solid transparent;
 }
 .mw-panel-list .mw-line:hover{background:#171b25; border-left-color:#5eead4}
 .mw-panel-list .mw-t{
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:.68rem; color:#8b95a7; padding-top:.12rem;
+  font-size:11px; color:#8b95a7; padding-top:2px;
 }
-.mw-panel-list .mw-tx{font-size:.8rem; line-height:1.45}
-.mw-panel-list .mw-tr{font-size:.76rem; line-height:1.45; color:#5eead4; opacity:.9}
+.mw-panel-list .mw-tx{font-size:13px; line-height:1.45}
+.mw-panel-list .mw-tr{font-size:12px; line-height:1.45; color:#5eead4; opacity:.9}
 .mw-panel-list .mw-tr:empty{display:none}
 /* 우리가 적은 안내(못 받은 구간)는 발화가 아닙니다. */
-.mw-panel-list .mw-note .mw-tx{color:#ffb454; font-size:.72rem; font-style:italic}
+.mw-panel-list .mw-note .mw-tx{color:#ffb454; font-size:11.5px; font-style:italic}

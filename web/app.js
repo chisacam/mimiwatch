@@ -1661,7 +1661,7 @@ function submitExport(e) {
  * clearPlayerError() 로 이 안내를 지우고 갑니다. */
 function tabStageNotice(tail) {
   playerError("이 방송은 여기서 재생하지 않습니다. 소리만 다른 탭에서 "
-              + "받아 적고 있습니다 — 유튜브 탭에서 보시고, 대본은 옆 "
+              + "받아 적고 있습니다 — 유튜브 탭에서 보시고, 자막 내역은 옆 "
               + "창이나 오른쪽 스크립트에서 읽으십시오."
               + (tail ? " " + tail : ""));
 }
@@ -1903,8 +1903,8 @@ function aimScriptWindow(pending, sessionId) {
     hideLiveNotice();
     return;
   }
-  showLiveNotice("팝업이 막혀 대본 창을 띄우지 못했습니다 — "
-                 + "오른쪽 「⧉ 대본 창」으로 여십시오.");
+  showLiveNotice("팝업이 막혀 자막 내역 창을 띄우지 못했습니다 — "
+                 + "오른쪽 「⧉ 따로 띄우기」로 여십시오.");
 }
 
 async function startLive(url, lang, probe) {
@@ -2004,7 +2004,7 @@ async function resumeLive(sessionId) {
   // 탭 세션에는 끼워 넣을 영상이 없습니다. attachLive 가 앞서 본 것의
   // 안내를 지우고 지나가므로, 그 뒤에 이 흐름의 안내를 다시 씁니다.
   if (st.source === "tab") {
-    tabStageNotice(running ? "" : "수신은 멈춰 있고, 쌓인 대본만 보고 있습니다.");
+    tabStageNotice(running ? "" : "수신은 멈춰 있고, 쌓인 자막 내역만 보고 있습니다.");
   }
 }
 
@@ -2449,13 +2449,13 @@ function openPendingScriptWindow() {
   const win = window.open("", "mimiwatch-script", SCRIPT_WIN);
   if (!win) return null;          // 팝업 차단
   win.document.write(
-    '<!doctype html><meta charset="utf-8"><title>대본</title>'
+    '<!doctype html><meta charset="utf-8"><title>자막 내역</title>'
     + '<style>html{color-scheme:dark light}'
     + 'body{margin:0;display:grid;place-items:center;height:100vh;'
     + 'font:14px/1.7 system-ui,sans-serif;background:#0e1117;color:#8b95a7;'
     + 'text-align:center;padding:2rem}'
     + '@media(prefers-color-scheme:light){body{background:#fff;color:#666}}'
-    + '</style><div>공유할 탭을 고르면<br>여기에 대본이 쌓입니다.</div>');
+    + '</style><div>공유할 탭을 고르면<br>여기에 자막이 쌓입니다.</div>');
   win.document.close();
   return win;
 }
@@ -2655,7 +2655,7 @@ function setScriptView(v) {
     // 가리킨 채 다시 열립니다. 여기까지 왔으면 정말로 없는 것입니다.
     setNowTitle(null);
     $("script").innerHTML =
-      '<div class="empty">이 대본은 더 이상 없습니다. 본 창에서 다시 여십시오.</div>';
+      '<div class="empty">이 자막 내역은 더 이상 없습니다. 본 창에서 다시 여십시오.</div>';
     return;
   }
   if (!list.length && !sessions.some(s => s.cues)) {

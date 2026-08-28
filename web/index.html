@@ -142,6 +142,15 @@
       <label class="check"><input id="follow" type="checkbox" checked> 따라가기</label>
     </div>
 
+    <!-- 스크립트에서 줄을 누르면 무슨 일이 일어나는가.
+         기본은 예전 그대로 「그 지점으로 이동」입니다. 고치거나 고를 일은
+         모드를 켠 동안에만 하도록 가릅니다 -- 읽다가 잘못 눌러서 편집기가
+         열리거나 재생 위치가 튀는 일이 없어야 합니다. -->
+    <div class="script-modes" role="group" aria-label="스크립트 모드">
+      <button class="seg" data-smode="read" title="줄을 누르면 그 지점으로 이동합니다">읽기</button>
+      <button class="seg" data-smode="edit" title="줄을 누르면 원문·번역·시각을 고칩니다">✎ 편집</button>
+    </div>
+
     <!-- 대본 창에서만 보이는 조절기. 영상이 없으므로 화면 위 자막 대신
          스크립트 자체를 읽기 좋게 만드는 것들만 둡니다. -->
     <div id="script-tools" class="script-tools">

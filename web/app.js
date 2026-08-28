@@ -11,6 +11,10 @@ const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
   libraryHidden: false, scriptOnly: false, capture: null, scriptWin: null,
+  // 스크립트에서 줄을 누르면 무슨 일이 일어나는가. 기본은 예전 그대로
+  // 「그 지점으로 이동」입니다. 켤 때마다 정합니다 -- 남겨 두면 다음에
+  // 읽으러 왔다가 잘못 눌러 편집기가 열립니다.
+  scriptMode: "read",
   genres: [],
   // 전체화면에 들어가기 직전의 플레이어 높이. 자막 크기 배율의 기준입니다.
   fsBaseHeight: 0, cuePx: 0,
@@ -175,10 +179,11 @@ function scriptRow(c, i) {
   const body = document.createElement("div");
   row.append(t, body);
   refreshScriptRow(row, c);
-  row.addEventListener("click", (e) => {
+  row.addEventListener("click", () => {
     // 편집 중인 줄에서는 눌러도 움직이지 않습니다. 글자를 고르려던 것이
     // 재생 위치를 옮겨 버리면 고칠 수가 없습니다.
     if (row.classList.contains("editing")) return;
+    if (state.scriptMode === "edit") { openCueEditor(row, c); return; }
     if (state.player) { state.player.seekTo(cueStart(c), true); state.player.playVideo(); }
   });
   return row;
@@ -866,6 +871,8 @@ function bind() {
     .addEventListener("change", syncExportHint);
   document.querySelectorAll("[data-sview]").forEach(b =>
     b.addEventListener("click", () => setScriptView(b.dataset.sview)));
+  document.querySelectorAll("[data-smode]").forEach(b =>
+    b.addEventListener("click", () => setScriptMode(b.dataset.smode)));
   $("script-size").addEventListener("input", e => {
     $("script").style.setProperty("--script-size", e.target.value + "px");
     savePrefs({ ...loadPrefs(), scriptSize: +e.target.value });
@@ -1020,6 +1027,7 @@ function restore() {
   applyCuePos();
   $("offset-val").textContent = state.offset.toFixed(1) + "s";
   syncControlInputs();
+  setScriptMode("read");     // 늘 읽기로 시작합니다. 저장하지 않습니다.
   setScriptView(p.scriptView || "both");
   if (p.scriptSize) {
     $("script-size").value = p.scriptSize;
@@ -2574,6 +2582,26 @@ function openPendingScriptWindow() {
     + '</style><div>공유할 탭을 고르면<br>여기에 대본이 쌓입니다.</div>');
   win.document.close();
   return win;
+}
+
+/* 스크립트에서 줄을 누르면 무슨 일이 일어나는가.
+ *
+ * 「무엇을 보일지」(setScriptView)와는 다른 축입니다. 저쪽은 원문·번역 중
+ * 무엇을 그릴지이고, 이쪽은 누르면 어떤 일이 일어날지입니다. */
+function setScriptMode(m) {
+  state.scriptMode = m;
+  const box = $("script");
+  box.classList.toggle("mode-edit", m === "edit");
+  document.querySelectorAll("[data-smode]").forEach(b =>
+    b.classList.toggle("on", b.dataset.smode === m));
+  // 모드를 옮기면 열려 있던 편집기는 닫습니다. 읽기로 돌아갔는데 편집기가
+  // 남아 있으면 그 줄만 규칙이 다른 상태가 됩니다.
+  if (m !== "edit") closeAllCueEditors();
+}
+
+function closeAllCueEditors() {
+  $("script").querySelectorAll(".line.editing .ce-bar button:last-child")
+    .forEach(b => b.click());          // 각 편집기의 「취소」
 }
 
 /* 스크립트 줄에서 무엇을 보일지. 화면 위 자막 모드와는 다른 축입니다 --

@@ -36,6 +36,7 @@ import threading
 import urllib.error
 import urllib.request
 
+import models
 import stream
 
 M2M_DIR = os.path.join(stream.model_dir(), "mojicast-m2m100-ct2")
@@ -226,6 +227,22 @@ class Translator:
         return len(stripped) >= self.min_chars
 
 
+class _M2MModel:
+    """M2M-100 한 벌. `models.shared`가 프로세스에 하나만 둡니다."""
+
+    def __init__(self, model_dir: str, device: str, compute_type: str):
+        import ctranslate2
+        import sentencepiece as spm
+
+        self.sp = spm.SentencePieceProcessor(
+            model_file=os.path.join(model_dir, "sentencepiece.model"))
+        # CTranslate2의 Translator는 여러 스레드에서 함께 써도 됩니다.
+        self.tr = ctranslate2.Translator(model_dir, device=device,
+                                         compute_type=compute_type)
+        with open(os.path.join(model_dir, "shared_vocabulary.json"), encoding="utf-8") as f:
+            self.vocab = set(json.load(f))
+
+
 class LocalM2M(Translator):
     """M2M-100 with the source language as a parameter rather than a constant."""
 
@@ -233,15 +250,9 @@ class LocalM2M(Translator):
 
     def __init__(self, model_dir: str = M2M_DIR, device: str = "cpu",
                  compute_type: str = "int8"):
-        import ctranslate2
-        import sentencepiece as spm
-
-        self._sp = spm.SentencePieceProcessor(
-            model_file=os.path.join(model_dir, "sentencepiece.model"))
-        self._tr = ctranslate2.Translator(model_dir, device=device,
-                                          compute_type=compute_type)
-        with open(os.path.join(model_dir, "shared_vocabulary.json"), encoding="utf-8") as f:
-            self._vocab = set(json.load(f))
+        m = models.shared(("m2m100", model_dir, device, compute_type),
+                          lambda: _M2MModel(model_dir, device, compute_type))
+        self._sp, self._tr, self._vocab = m.sp, m.tr, m.vocab
 
     def supports(self, lang: str) -> bool:
         return f"__{lang}__" in self._vocab
@@ -347,6 +358,33 @@ class OpenAICompatible(Translator):
             raise
 
 
+class _LlamaHolder:
+    """Gemma 한 벌과 그 자물쇠. 처음 청할 때 올립니다."""
+
+    def __init__(self, model_path: str, device: str, n_ctx: int, threads: int,
+                 n_gpu_layers: int):
+        self.model_path, self.device = model_path, device
+        self.n_ctx, self.threads, self.n_gpu_layers = n_ctx, threads, n_gpu_layers
+        self.lock = threading.Lock()
+        self.llm = None
+
+    def get(self):
+        with self.lock:
+            if self.llm is not None:
+                return self.llm
+            if not os.path.exists(self.model_path):
+                raise FileNotFoundError(
+                    f"Gemma 모델이 없습니다: {self.model_path}\n"
+                    "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+            from llama_cpp import Llama
+            print(f"[translate] Gemma · {self.device} · {self.threads}스레드",
+                  file=sys.stderr, flush=True)
+            self.llm = Llama(model_path=self.model_path, n_ctx=self.n_ctx,
+                             n_threads=self.threads,
+                             n_gpu_layers=self.n_gpu_layers, verbose=False)
+            return self.llm
+
+
 class LocalGemma(Translator):
     """Gemma를 이 프로세스 안에서 직접 돌립니다.
 
@@ -380,36 +418,29 @@ class LocalGemma(Translator):
         self.max_tokens = max_tokens
         self._n_ctx = n_ctx
         self._threads = threads
-        self._llm = None
+        # 모델은 프로세스에 한 벌입니다(models.py). 프롬프트(장르)는 이 객체의
+        # 것이고 모델은 공유하므로, 장르가 다른 세션과 작업이 같은 Gemma를
+        # 씁니다. 첫 번역 때 올립니다 -- 미리 올리면 세션 시작이 그만큼 늦습니다.
+        self._holder = models.shared(
+            ("gemma", self.model_path, self.device, n_ctx, threads, self.n_gpu_layers),
+            lambda: _LlamaHolder(self.model_path, self.device, n_ctx, threads,
+                                 self.n_gpu_layers))
         # llama.cpp의 컨텍스트는 동시 호출을 견디지 못합니다. 자막 한 줄마다
-        # 번역 스레드가 뜨므로 직렬화합니다.
-        self._lock = threading.Lock()
+        # 번역 스레드가 뜨므로 모델과 함께 사는 자물쇠로 직렬화합니다.
+        self._lock = self._holder.lock
 
     def _ensure(self):
-        if self._llm is not None:
-            return
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(
-                f"Gemma 모델이 없습니다: {self.model_path}\n"
-                "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
-        from llama_cpp import Llama
-        # 4GB짜리를 세션 시작마다 올리면 첫 자막이 그만큼 늦습니다. 처음
-        # 번역할 때 올리고 그 뒤로는 재사용합니다.
-        print(f"[translate] Gemma · {self.device} · {self._threads}스레드",
-              file=sys.stderr, flush=True)
-        self._llm = Llama(model_path=self.model_path, n_ctx=self._n_ctx,
-                          n_threads=self._threads,
-                          n_gpu_layers=self.n_gpu_layers, verbose=False)
+        return self._holder.get()
 
     def translate(self, text: str, src: str, tgt: str,
                   context: list[str] | None = None) -> str:
         stripped = (text or "").strip()
         if not stripped or src == tgt:
             return text
-        self._ensure()
+        llm = self._ensure()
         msg = render_prompt(self.prompt, src, tgt, stripped, context)
         with self._lock:
-            out = self._llm.create_chat_completion(
+            out = llm.create_chat_completion(
                 messages=[{"role": "user", "content": msg}],
                 temperature=0.2, max_tokens=self.max_tokens)
         answer = (out["choices"][0]["message"].get("content") or "").strip()
@@ -421,6 +452,35 @@ class LocalGemma(Translator):
         if looks_broken(answer, stripped):
             raise TranslationFailed(f"Gemma: {answer[:60]!r}")
         return answer
+
+
+class Lazy(Translator):
+    """첫 호출에서야 만듭니다.
+
+    대체용 M2M-100은 기본 엔진이 실패할 때만 필요한데, 예전에는 `build()`마다
+    미리 만들었습니다 -- 세션을 열 때마다 473MB를 (한 번은) 읽는 셈이었고,
+    모델 파일이 없는 기계에서는 Gemma가 멀쩡해도 여기서 넘어졌습니다.
+    """
+
+    name = "lazy"
+
+    def __init__(self, factory):
+        self._factory = factory
+        self._inst: Translator | None = None
+        self._lock = threading.Lock()
+
+    def _get(self) -> Translator:
+        with self._lock:
+            if self._inst is None:
+                self._inst = self._factory()
+                self.name = self._inst.name
+            return self._inst
+
+    def translate(self, text, src, tgt, context=None):
+        return self._get().translate(text, src, tgt, context)
+
+    def should_translate(self, text, src, tgt):
+        return self._get().should_translate(text, src, tgt)
 
 
 class WithFallback(Translator):
@@ -500,14 +560,14 @@ def build(spec: dict | None, genre: str | None = None) -> Translator:
         gemma.min_chars = min_chars
         # 모델 파일이 없거나 적재가 실패해도 자막이 원문으로 남지는 않도록
         # M2M-100을 뒤에 둡니다. 어느 쪽이 실제로 답했는지는 기록됩니다.
-        return WithFallback(gemma, LocalM2M())
+        return WithFallback(gemma, Lazy(LocalM2M))
     if spec.get("backend") == "openai":
         remote = OpenAICompatible(spec["base_url"], spec["model"],
                                   spec.get("api_key", ""),
                                   spec.get("prompt") or genre_prompt(genre),
                                   no_reasoning=spec.get("no_reasoning", True))
         remote.min_chars = min_chars
-        return WithFallback(remote, LocalM2M())
+        return WithFallback(remote, Lazy(LocalM2M))
     local = LocalM2M()
     local.min_chars = min_chars
     return local

@@ -19,6 +19,7 @@ from __future__ import annotations
 import difflib
 import json
 import queue
+from collections import deque
 import subprocess
 # 이름을 따로 들여옵니다. 시험(bench/live_errors.py)이 `live.subprocess`를
 # 가짜로 갈아 끼우는데, 그 가짜에는 예외 클래스가 없습니다.
@@ -78,6 +79,9 @@ PROFILES = {
 # 3초·6초·9초…로 늘어나 다 합쳐 1분 남짓입니다. 그 안에 돌아오지 않으면
 # 포기하고 「이어받기」에 맡깁니다 -- 그쪽은 사용자가 시키는 일입니다.
 HLS_RECONNECT_TRIES = 5
+
+# 세션이 들고 있는 최근 이벤트 수(SSE 재접속용). LiveSession.emit 참조.
+EVENT_LOG_MAX = 2000
 
 _sessions: dict[str, "LiveSession"] = {}
 _lock = threading.Lock()
@@ -301,6 +305,11 @@ class LiveSession:
         self.translated = 0
         self._seq = 0
         self._subs: list[queue.Queue] = []
+        # 나간 이벤트의 최근 기록. 끊겼다 다시 붙는 구독자가 `Last-Event-ID`를
+        # 들고 오면 여기서 빠진 것만 다시 보냅니다 -- 백로그 전부가 아니라.
+        # 2000개면 자막 몇 백 줄에 번역·상태까지 넉넉히 한 시간 남짓입니다.
+        self._eseq = 0
+        self._elog: deque[tuple[int, str]] = deque(maxlen=EVENT_LOG_MAX)
         self._stop = threading.Event()
         # 발행 경로의 자물쇠. 확정 줄은 수신 스레드가, 정제본은 정제 스레드가
         # 넣습니다 -- 둘이 동시에 `_recent`를 고치면 한쪽의 `remove`가 다른
@@ -337,8 +346,21 @@ class LiveSession:
     def emit(self, event: dict):
         data = json.dumps(event, ensure_ascii=False)
         with _lock:
+            self._eseq += 1
+            self._elog.append((self._eseq, data))
             for q in self._subs:
-                q.put(data)
+                q.put((self._eseq, data))
+
+    def replay_since(self, last_id) -> list[tuple[int, str]] | None:
+        """`last_id` 뒤에 나간 이벤트. 기록 밖이면 None -- 그때는 백로그 전부."""
+        try:
+            last = int(last_id)
+        except (TypeError, ValueError):
+            return None
+        with _lock:
+            if not self._elog or last < self._elog[0][0] - 1 or last > self._eseq:
+                return None
+            return [(seq, data) for seq, data in self._elog if seq > last]
 
     def status(self) -> dict:
         return {"id": self.id, "state": self.state, "error": self.error,
@@ -599,12 +621,14 @@ class LiveSession:
         return idx, idx * seg_dur
 
     def _release(self):
-        """Drop the models this session loaded.
+        """이 세션이 쥔 것을 놓습니다.
 
-        Each session builds its own RoutedASR and translator -- roughly 3GB
-        resident once the Japanese recogniser and M2M-100 are in. Holding a
-        finished session in the registry kept all of that alive: seven
-        sessions in one afternoon reached 23GB.
+        모델 가중치는 이제 `models.py`가 프로세스에 한 벌만 들고 있으므로
+        여기서 놓는 것은 이 세션의 해독 세션·번역기 껍데기·최근 줄입니다.
+        예전에는 세션마다 모델을 새로 올렸고 끝난 세션이 등록부에 남아 그것을
+        붙잡았습니다 -- 한 오후에 일곱 세션으로 23GB까지 갔습니다. 그 문제는
+        모델을 공유하는 것으로 뿌리에서 없어졌고, 여기는 참조를 끊는 자리로
+        남습니다.
         """
         self._asr = None
         self._tr = None

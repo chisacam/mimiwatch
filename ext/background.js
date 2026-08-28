@@ -233,8 +233,13 @@ async function stopCapture() {
 
 /* SSE 를 직접 풉니다. 서버가 보내는 것은 `data: {...}` 한 줄과 빈 줄뿐이라
  * 규격 전체를 다룰 필요가 없습니다. */
-async function pump(url, onEvent, signal) {
-  const res = await fetch(url, { signal });
+/* `cursor.lastId` 에 마지막으로 받은 `id:` 를 적어 둡니다. 다시 붙을 때
+ * `Last-Event-ID` 로 보내면 서버는 그 뒤만 다시 보냅니다 -- 예전에는 서버가
+ * 잠깐 멎을 때마다 두 시간치 백로그가 통째로 다시 왔습니다. */
+async function pump(url, onEvent, signal, cursor) {
+  const headers = {};
+  if (cursor && cursor.lastId) headers["Last-Event-ID"] = String(cursor.lastId);
+  const res = await fetch(url, { signal, headers });
   if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
   const reader = res.body.getReader();
   const dec = new TextDecoder();
@@ -249,11 +254,16 @@ async function pump(url, onEvent, signal) {
     while ((cut = buf.indexOf("\n\n")) >= 0) {
       const chunk = buf.slice(0, cut);
       buf = buf.slice(cut + 2);
+      let id = null, data = null;
       for (const line of chunk.split("\n")) {
-        if (!line.startsWith("data:")) continue;   // `: keepalive` 는 흘립니다
-        try { onEvent(JSON.parse(line.slice(5).trim())); }
-        catch (_) { /* 형식이 깨진 프레임은 버립니다 */ }
+        if (line.startsWith("id:")) id = line.slice(3).trim();
+        else if (line.startsWith("data:")) data = line.slice(5).trim();
+        // `: keepalive` 는 흘립니다
       }
+      if (data === null) continue;
+      try { onEvent(JSON.parse(data)); }
+      catch (_) { continue; /* 형식이 깨진 프레임은 버립니다 */ }
+      if (id && cursor) cursor.lastId = id;
     }
   }
 }
@@ -295,14 +305,15 @@ chrome.runtime.onConnect.addListener((port) => {
     }
 
     // 라이브는 끊길 수 있습니다 -- 서버 재시작, 방송 종료, 잠자기. 조용히
-    // 다시 붙습니다. 서버가 쌓인 자막을 접속 직후에 다시 보내 주므로
-    // 되붙어도 빠지는 줄이 없습니다.
+    // 다시 붙습니다. 서버가 빠진 것(또는 기록 밖이면 쌓인 자막 전부)을 접속
+    // 직후에 다시 보내 주므로 되붙어도 빠지는 줄이 없습니다.
+    const cursor = { lastId: null };
     while (!closed) {
       abort = new AbortController();
       try {
         await pump(`${b}/api/live/events/${encodeURIComponent(sid)}`,
                    (e) => { if (!closed) port.postMessage({ type: "event", data: e }); },
-                   abort.signal);
+                   abort.signal, cursor);
         if (closed) return;
         // 끝난 세션은 서버가 백로그를 다 보내고 닫습니다. 정상 종료입니다.
         port.postMessage({ type: "ended" });

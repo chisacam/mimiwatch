@@ -15,6 +15,7 @@ import threading
 import numpy as np
 from transcribe_cpp.errors import OutputTruncated, UnsupportedRequest
 
+import models
 import stream
 
 # 반복 폭주 판정: 4-gram 다양도가 이 값 아래면 환각으로 봅니다. 실측에서
@@ -69,6 +70,11 @@ def resolve_device(want: str) -> str:
     return "auto"
 
 
+def _shared_model(path: str, device: str):
+    import transcribe_cpp as tc
+    return models.shared(("tcpp", path, device), lambda: tc.Model(path, backend=device))
+
+
 class TranscribeCppASR:
     """RoutedASR 자리에 들어가는 단일 언어 어댑터."""
 
@@ -90,7 +96,10 @@ class TranscribeCppASR:
         self.hallucinations = 0
 
         self.threads = threads
-        self._model = tc.Model(model_path, backend=self.device)
+        # 모델(가중치)은 프로세스에 한 벌입니다(models.py). 해독 세션은 우리
+        # 것입니다 -- 상태를 들고 있어 세션마다 따로 두는 것이 맞고, 만드는
+        # 비용도 가중치 적재와는 비교가 되지 않습니다.
+        self._model = _shared_model(model_path, self.device)
         self._session = self._model.session(n_threads=threads)
         self._check_language()
         print(f"[asr] {self.label} · {self.device} · {threads}스레드",
@@ -119,7 +128,7 @@ class TranscribeCppASR:
         import transcribe_cpp as tc
 
         r = resolve_asr(spec, self.forced_lang)
-        model = tc.Model(r["path"], backend=r["device"])
+        model = _shared_model(r["path"], r["device"])
         session = model.session(n_threads=r["threads"])
         self._probe_language(session, r["label"])
         # 해독 한 번이 끝나기를 기다렸다 바꿉니다. transcribe 도 같은 자물쇠를

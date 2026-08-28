@@ -1,13 +1,19 @@
-"""Transcribe a finished video into timestamped, optionally translated cues.
+"""녹화본 한 편을 시각이 붙은 자막으로 만드는 조각들과, 그것을 명령줄에서
+돌리는 껍데기.
 
-The recorded-video flow needs no clock negotiation: the audio is transcribed
-ahead of playback, every cue carries a media-relative timestamp, and the
-browser lines them up against the YouTube player's own getCurrentTime(). The
-2026-08-27 live measurements showed why this path is worth doing first --
-the refine pass lags up to 20s behind a fast talker, which is fatal live but
-irrelevant when nothing is played until the whole file is done.
+녹화본 흐름에는 시계를 맞출 일이 없습니다. 재생보다 먼저 전부 전사하고,
+자막마다 미디어 기준 시각이 붙어 있으니 브라우저는 유튜브 플레이어의
+`getCurrentTime()`에 맞춰 찾기만 합니다. 2026-08-27 라이브 실측이 이 경로를
+먼저 만든 이유입니다 -- 정제는 빠른 화자에게 최대 20초 뒤처지는데, 다 만든
+뒤에 재생하는 녹화본에서는 그것이 문제가 되지 않습니다.
 
     python transcribe_vod.py --url https://youtu.be/... --viewer-lang ko
+
+**명령줄은 서버와 같은 길을 씁니다.** 예전에는 여기 번역 루프가 한 벌 더
+있었고 결과를 옛 모양(`data/<영상id>.json`)으로 썼습니다 -- 서버는 그 파일을
+다음 기동에서 표로 옮겨야 알아봤습니다. 이제 `jobs.start_transcribe`를 그대로
+부르고 진행률만 터미널에 찍습니다. 결과는 서버와 같은 `data/mimiwatch.db`에
+들어가고, 서버를 켜면 목록에 바로 보입니다.
 """
 from __future__ import annotations
 
@@ -22,10 +28,7 @@ import wave
 
 import numpy as np
 
-sys.stdout.reconfigure(encoding="utf-8")
-
 import stream
-import translate as mw_translate
 from stream import build_vad
 from tcpp_asr import build_live_asr
 
@@ -159,90 +162,58 @@ def transcribe(samples: np.ndarray, lang: str | None, on_progress=None,
     return cues
 
 
+# ---- 명령줄 ------------------------------------------------------------------
+
+PHASE_LABEL = {"probe": "영상 정보 확인", "download": "오디오 내려받는 중",
+               "transcribe": "전사 중", "translate": "번역 중", "done": "완료"}
+
+
 def main():
-    ap = argparse.ArgumentParser()
+    # 윈도우 콘솔의 기본 인코딩이 cp949라 한글 제목이 깨집니다. 예전에는 이 줄이
+    # 모듈 맨 위에 있어서 서버가 이 모듈을 import 하는 순간 서버의 stdout까지
+    # 바꿔 놓았습니다. 명령줄에서만 합니다.
+    sys.stdout.reconfigure(encoding="utf-8")
+    import translate as mw_translate
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--url", required=True)
-    ap.add_argument("--lang", help="pin the source language (skip detection)")
+    ap.add_argument("--lang", help="원본 언어를 고정합니다 (비우면 자동 판별)")
     ap.add_argument("--viewer-lang", default="ko",
-                    help="the viewer's language; translation is skipped when it matches")
-    ap.add_argument("--no-translate", action="store_true")
+                    help="내 언어. 원본과 같으면 번역하지 않습니다")
     ap.add_argument("--genre", default=mw_translate.DEFAULT_GENRE,
                     choices=sorted(mw_translate.GENRE_PROMPTS),
                     help="발화의 성격에 맞는 번역 프롬프트를 고릅니다")
+    ap.add_argument("--asr", default="", help="전사 엔진 id (비우면 설정의 기본)")
+    ap.add_argument("--backend", default="", help="번역 엔진 id (비우면 설정의 기본)")
     ap.add_argument("--speakers", action="store_true",
-                    help="label each cue with a speaker id (S1, S2, ...)")
-    ap.add_argument("--outdir", default="data")
+                    help="화자 딱지를 붙입니다 (S1, S2, ...)")
     args = ap.parse_args()
 
-    meta = probe(args.url)
-    if meta["is_live"]:
-        raise SystemExit("this is a live stream; the recorded-video flow needs a finished video")
-    os.makedirs(args.outdir, exist_ok=True)
-    vid = meta["id"]
-    print(f"[vod] {meta['title']}  ({meta['duration']}s)", file=sys.stderr)
-
-    wav = fetch_audio(args.url, os.path.join(args.outdir, f"{vid}.wav"))
-    samples = read_wav(wav)
-    audio_s = len(samples) / SAMPLE_RATE
-    print(f"[vod] transcribing {audio_s:.0f}s of audio...", file=sys.stderr)
-
-    t0 = time.time()
-    cues = transcribe(samples, args.lang, speakers=args.speakers,
-                      on_progress=lambda p: print(f"\r[vod] {p*100:5.1f}%",
-                                                  end="", file=sys.stderr, flush=True))
-    took = time.time() - t0
-    print(f"\r[vod] {len(cues)} cues in {took:.0f}s  (RTF {took/max(audio_s,1):.3f}, "
-          f"{audio_s/max(took,0.001):.0f}x realtime)", file=sys.stderr)
-
-    # R3.10: the detected language is reported, not silently assumed.
-    langs: dict[str, int] = {}
-    for c in cues:
-        langs[c["lang"]] = langs.get(c["lang"], 0) + 1
-    source_lang = args.lang or (max(langs, key=langs.get) if langs else "unknown")
-
-    # R3.8: matching languages means no translation at all -- no latency, no
-    # cost, and no chance of an mistranslation degrading a line the viewer
-    # could already read.
-    needs = source_lang != args.viewer_lang and not args.no_translate
-    if needs:
-        tr = mw_translate.build(None, args.genre)
-        print(f"[vod] translating {source_lang} -> {args.viewer_lang} "
-              f"({tr.name})...", file=sys.stderr)
-        t0 = time.time()
-        skipped = 0
-        for i, c in enumerate(cues):
-            if not tr.should_translate(c["text"], source_lang, args.viewer_lang):
-                skipped += 1
-                continue
-            try:
-                # 직전 자막 몇 줄을 참고로 함께 넘깁니다. 뒤쪽은 넘기지
-                # 않습니다 -- 라이브에는 없는 정보라 결과가 갈립니다.
-                out = tr.translate(
-                    c["text"], source_lang, args.viewer_lang,
-                    [p["text"] for p in
-                     cues[max(0, i - mw_translate.CONTEXT_LINES):i]])
-            except Exception as exc:
-                print(f"\n[vod] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
-                out = c["text"]
-            if (out or "").strip():
-                c["translation"] = out
-            if i % 50 == 0:
-                print(f"\r[vod] {i}/{len(cues)}", end="", file=sys.stderr, flush=True)
-        done = sum(1 for c in cues if "translation" in c)
-        note = f" ({skipped} fragments skipped)" if skipped else ""
-        print(f"\r[vod] translated {done}/{len(cues)} in {time.time()-t0:.0f}s{note}",
-              file=sys.stderr)
-    else:
-        why = "source matches viewer language" if source_lang == args.viewer_lang else "disabled"
-        print(f"[vod] translation skipped ({why})", file=sys.stderr)
-
-    doc = {**meta, "source_lang": source_lang, "lang_counts": langs,
-           "viewer_lang": args.viewer_lang, "translated": needs,
-           "audio_seconds": round(audio_s, 1), "cues": cues}
-    out = os.path.join(args.outdir, f"{vid}.json")
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump(doc, f, ensure_ascii=False, indent=1)
-    print(f"[vod] -> {out}", file=sys.stderr)
+    import jobs
+    import store
+    store.init()
+    res = jobs.start_transcribe(args.url, args.lang, args.viewer_lang,
+                                backend_id=args.backend, asr_id=args.asr,
+                                speakers=args.speakers, genre=args.genre)
+    job_id = res["id"]
+    last = ""
+    while True:
+        st = jobs.job_status(job_id) or {}
+        line = f"[vod] {PHASE_LABEL.get(st.get('phase'), st.get('phase', ''))}"
+        if st.get("total"):
+            line += f" {st.get('done', 0)}/{st['total']}"
+        if st.get("title"):
+            line += f"  · {st['title'][:40]}"
+        if line != last:
+            print("\r" + line.ljust(78), end="", file=sys.stderr, flush=True)
+            last = line
+        if st.get("state") in ("done", "error", "cancelled", "interrupted"):
+            break
+        time.sleep(0.5)
+    print(file=sys.stderr)
+    if st.get("state") != "done":
+        raise VodError(st.get("error") or st.get("state") or "실패")
+    print(f"[vod] 끝났습니다 ({st.get('elapsed', 0)}초). 영상 {st.get('video')} -- "
+          f"서버를 켜면 목록에 보입니다.", file=sys.stderr)
 
 
 if __name__ == "__main__":

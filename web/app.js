@@ -1127,7 +1127,7 @@ async function watchTranscribe(jobId) {
       : "…";
     if (st.asr_fallback) {
       $("job-source").classList.add("local");
-      $("job-source").textContent = "외부 전사 엔진 실패 · hayamimi 로컬로 대체";
+      $("job-source").textContent = "외부 전사 엔진 실패 · 로컬 엔진으로 대체";
     } else if (st.phase === "translate" && (st.by_remote || st.by_local)) {
       $("job-source").classList.toggle("local", !!st.degraded);
       $("job-source").textContent = st.degraded

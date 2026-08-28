@@ -382,7 +382,7 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         note(phase="transcribe", total=int(audio_s))
         engine = mw_asr.build(find_asr(asr_id))
         try:
-            kw = {"speakers": speakers} if engine.name == "local-hayamimi" else {}
+            kw = {"speakers": speakers} if engine.name == mw_asr.DEFAULT_NAME else {}
             cues = engine.transcribe(samples, lang, **kw,
                                      on_progress=lambda p: note(done=int(p * audio_s)),
                                      should_stop=cancelled)
@@ -391,13 +391,13 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             # 시도하면 멈추라는 말을 무시하는 셈이 됩니다.
             note(state="cancelled"); return
         except Exception as exc:
-            if engine.name == "local-hayamimi":
+            if engine.name == mw_asr.DEFAULT_NAME:
                 raise
             # An external ASR that refuses the job should not cost the user
             # the download; fall back so they still get a transcript.
             note(asr_fallback=str(exc)[:160])
             print(f"[job] external ASR failed ({exc}); using the local engine", flush=True)
-            engine = mw_asr.LocalHayamimi()
+            engine = mw_asr.DefaultLocal()
             try:
                 cues = engine.transcribe(samples, lang,
                                          on_progress=lambda p: note(done=int(p * audio_s)),

@@ -1,10 +1,13 @@
-"""Transcription backends: hayamimi locally, or an external ASR service.
+"""Transcription backends: the local GGUF runtime, or an external ASR service.
 
-hayamimi stays the default -- it is free, private, and runs at 38-88x
-realtime on this machine. The reason to reach outside is quality on hard
-audio: the 2026-08-27 samples showed conference talks transcribing cleanly
-while a four-way VTuber broadcast with overlapping speakers lost lines
-entirely.
+로컬(transcribe.cpp의 Whisper)이 기본입니다 -- 무료이고 밖으로 나가지 않으며
+이 기계에서 38~88배속입니다. 밖에 손을 뻗는 이유는 어려운 소리의 품질입니다:
+2026-08-27 표본에서 발표는 깨끗이 받아 적혔지만 네 명이 겹쳐 말하는 방송은
+줄을 통째로 잃었습니다.
+
+이름에 남아 있던 "hayamimi"는 이 프로젝트가 처음 전사 엔진으로 빌려 쓰던
+저장소입니다. 지금은 그 코드에 기대지 않으므로 이름도 함께 걷어냈습니다.
+옛 설정(`local-hayamimi`)은 그대로 기본 엔진으로 읽힙니다.
 
 Both backends must return the same thing: cues carrying media-relative
 timestamps, because the player aligns subtitles by looking them up against
@@ -43,16 +46,24 @@ class ASRBackend:
         raise NotImplementedError
 
 
-class LocalHayamimi(ASRBackend):
-    """The default: VAD-segment locally and decode with RoutedASR."""
+DEFAULT_NAME = "default"
+# 옛 설정과 요청이 쓰던 이름. 같은 것으로 읽습니다.
+LEGACY_DEFAULT_IDS = ("local-hayamimi",)
 
-    name = "local-hayamimi"
+
+class DefaultLocal(ASRBackend):
+    """The default: VAD-segment locally and decode with the bundled Whisper."""
+
+    name = DEFAULT_NAME
 
     def transcribe(self, samples, lang, on_progress=None, speakers=False,
                    should_stop=None):
         import transcribe_vod as vod
         return vod.transcribe(samples, lang, on_progress=on_progress,
                               speakers=speakers, should_stop=should_stop)
+
+
+LocalHayamimi = DefaultLocal       # 옛 이름. 시험과 스크립트가 부를 수 있습니다.
 
 
 class TranscribeCpp(ASRBackend):
@@ -198,4 +209,4 @@ def build(spec: dict | None) -> ASRBackend:
         return OpenAICompatibleASR(spec["base_url"], spec["model"],
                                    spec.get("api_key", ""),
                                    float(spec.get("window_s", 240)))
-    return LocalHayamimi()
+    return DefaultLocal()

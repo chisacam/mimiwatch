@@ -46,6 +46,14 @@ def main():
             except Exception as e:                          # noqa: BLE001
                 ver = f"(판을 묻지 못했습니다: {e})"
         line(bool(path), exe, ver or "없음")
+    # yt-dlp가 낡으면 유튜브에서 포맷을 하나도 받지 못합니다. 이슈 #1이
+    # 그랬습니다 -- 234도 233도 bestaudio도 전부 "not available"이었는데,
+    # 포맷이 없는 것이 아니라 목록을 못 읽은 것이었습니다.
+    import live
+    v = live.ytdlp_version()
+    if live.ytdlp_stale(v):
+        print(f"       ↳ yt-dlp {v} 는 석 달이 넘었습니다. `yt-dlp -U` 로 "
+              f"올리십시오 — 유튜브가 추출 경로를 자주 바꿉니다.")
 
     section("전사 런타임")
     try:

@@ -128,6 +128,7 @@ transcribe.cpp가 NPU 백엔드를 갖거나, whisper.cpp-amd가 서버를 내�
 | 내려받다 끊김 | — | 그냥 다시 실행하십시오. 받다 만 것은 `.part`로 남고 완성본만 인정합니다 |
 | `NativeCommandError`로 중간에 멈춤 | 0.1의 결함 (이슈 #1) | 최신 판을 받으십시오. Windows PowerShell 5.1이 명령의 stderr 한 줄을 종료 오류로 바꾸던 문제입니다 |
 | 전사가 시작되자마자 실패 | GPU에 모델을 못 올렸을 수 있습니다 | `bench/doctor.py`로 확인하고, `device=auto`만 실패하면 `backends.json`에 `"device": "cpu"`를 적으십시오 |
+| 라이브에서 "오디오를 찾지 못했습니다" | **yt-dlp가 낡았습니다** | `yt-dlp -U`. 유튜브가 추출 경로를 자주 바꿔서, 몇 달 지난 판은 포맷 목록을 통째로 못 받습니다 |
 
 ## 무엇을 확인했고 무엇을 확인하지 못했는가
 

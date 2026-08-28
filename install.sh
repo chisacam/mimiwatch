@@ -53,6 +53,23 @@ fi
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
   || die "Python 3.10 이상이 필요합니다."
 
+# yt-dlp가 낡으면 유튜브에서 포맷을 하나도 받지 못합니다 — 234도 233도
+# bestaudio도 전부 "not available"이 되는데, 포맷이 없는 것이 아니라 목록을
+# 못 읽은 것입니다. 판은 YYYY.MM.DD 입니다.
+YTV="$(yt-dlp --version 2>/dev/null | head -1)"
+if python3 - "$YTV" <<'PYAGE'
+import sys
+from datetime import date
+try:
+    y, m, d = (int(x) for x in sys.argv[1].split(".")[:3])
+    sys.exit(0 if (date.today() - date(y, m, d)).days > 90 else 1)
+except Exception:
+    sys.exit(1)
+PYAGE
+then
+  skip "yt-dlp $YTV 는 석 달이 넘었습니다 — 'yt-dlp -U' 로 올리십시오"
+fi
+
 # ── 1. 가상환경 ────────────────────────────────────────────────────────
 say "가상환경"
 if [ -x "$PY" ]; then skip "있음"; else python3 -m venv "$HERE/.venv"; ok "생성"; fi

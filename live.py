@@ -87,8 +87,44 @@ def resolve_audio(url: str) -> tuple[str, dict]:
     # yt-dlp가 한 말을 그대로 실어 보냅니다. "해석할 수 없습니다"만으로는
     # 손댈 곳을 알 수 없습니다 -- 판올림이 필요한지, 로그인이 필요한지,
     # 애초에 라이브가 아닌지가 저 줄에 적혀 있습니다.
-    raise RuntimeError("yt-dlp가 이 주소에서 오디오를 찾지 못했습니다. "
-                       + " / ".join(why))
+    ver = ytdlp_version()
+    hint = ""
+    if all("format is not available" in w for w in why):
+        # 셋 다 없다면 특정 포맷이 빠진 것이 아니라 목록을 통째로 못 받은
+        # 것입니다. 거의 언제나 yt-dlp가 낡아서입니다.
+        hint = (f" — 포맷을 하나도 받지 못했습니다. yt-dlp({ver or '판 미상'})가 "
+                f"낡았을 수 있습니다"
+                + (" (석 달 넘음)" if ytdlp_stale(ver) else "")
+                + ". `yt-dlp -U` 로 올린 뒤 다시 해 보십시오.")
+    raise RuntimeError("yt-dlp가 이 주소에서 오디오를 찾지 못했습니다."
+                       + hint + " [" + " / ".join(why) + "]")
+
+
+def ytdlp_version() -> str:
+    """설치된 yt-dlp의 판. 못 물으면 빈 문자열."""
+    try:
+        out = subprocess.run(["yt-dlp", "--version"], capture_output=True,
+                             text=True, timeout=20)
+        return (out.stdout or "").strip().splitlines()[0] if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def ytdlp_stale(version: str, days: int = 90) -> bool:
+    """이 판이 낡았는가.
+
+    yt-dlp의 판은 YYYY.MM.DD입니다. 유튜브가 추출 경로를 자주 바꾸고
+    yt-dlp가 그때마다 따라가므로, 몇 달 지난 판은 포맷 목록을 통째로 받지
+    못하는 일이 흔합니다. 그러면 234도 233도 bestaudio도 전부 "Requested
+    format is not available"이 됩니다 -- 포맷이 없는 것이 아니라 아무것도
+    못 읽은 것입니다.
+    """
+    try:
+        y, m, d = (int(x) for x in version.split(".")[:3])
+        from datetime import date
+        return (date.today() - date(y, m, d)).days > days
+    except Exception:
+        return False
 
 
 def manifest_info(m3u8: str) -> dict:

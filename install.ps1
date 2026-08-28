@@ -186,6 +186,18 @@ if (-not (Get-Command curl.exe -EA SilentlyContinue)) {
 foreach ($c in 'ffmpeg', 'yt-dlp') {
   if (Get-Command $c -EA SilentlyContinue) { Ok $c } else { $missing += $c }
 }
+# yt-dlp가 낡으면 유튜브에서 포맷을 하나도 받지 못합니다 -- 234도 233도
+# bestaudio도 전부 "not available"이 되는데, 포맷이 없는 것이 아니라 목록을
+# 못 읽은 것입니다(이슈 #1). 판은 YYYY.MM.DD 입니다.
+if ($missing -notcontains 'yt-dlp') {
+  $ytv = (Get-Native 'yt-dlp' @('--version')).Lines | Select-Object -First 1
+  if ("$ytv" -match '^(\d{4})\.(\d{2})\.(\d{2})') {
+    $age = (Get-Date) - (Get-Date -Year $Matches[1] -Month $Matches[2] -Day $Matches[3])
+    if ($age.Days -gt 90) {
+      Skip "yt-dlp $ytv 는 $([int]$age.Days)일 지났습니다 -- `yt-dlp -U` 로 올리십시오"
+    } else { Ok "yt-dlp $ytv" }
+  }
+}
 if ($missing.Count -gt 0) {
   $ids = @{ 'ffmpeg' = 'Gyan.FFmpeg'; 'yt-dlp' = 'yt-dlp.yt-dlp' }
   Write-Host "`n  없는 것: $($missing -join ', ')"

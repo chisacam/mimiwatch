@@ -83,8 +83,17 @@ class TranscribeCppASR:
     """RoutedASR 자리에 들어가는 단일 언어 어댑터."""
 
     def __init__(self, model_path: str, lang: str | None, threads: int = 4,
-                 label: str = "", device: str = "auto"):
+                 label: str = "", device: str = "auto", whisper: dict | None = None,
+                 refine_prompt: bool = False):
         self.device = resolve_device(device)
+        # Whisper 해독 손잡이. 설정(`asr_backends`)의 `whisper: {no_speech_thold, logprob_thold,
+        # compression_ratio_thold, condition_on_prev_tokens, temperature, temperature_inc}` 를
+        # 그대로 넘깁니다. 비어 있으면 런타임 기본값(0.6 / -1.0 / 2.4 / false / 0.0+0.2).
+        # 값을 바꾸는 근거는 bench/whisper_ab.py 로 재서 만듭니다 -- 기본은 그대로 둡니다.
+        self.whisper_opts = {k: v for k, v in (whisper or {}).items() if v is not None}
+        # 정제 패스에만 직전 정제본을 initial_prompt 로 넘길지. 빠른 패스에는 넣지 않습니다 --
+        # 이전 텍스트 조건화는 반복 환각을 키우는 것으로 알려져 있습니다(whisper.cpp #3744).
+        self.refine_prompt = bool(refine_prompt)
         # 원본 언어를 자동 판별에 맡기면 여기로 None이 들어옵니다. 그대로
         # 두면 transcribe가 내놓는 lang이 None이 되고, 그 값이 자막 한 줄을
         # 타고 store.save_cue까지 가서 NOT NULL 제약에 걸립니다. 첫 확정
@@ -172,10 +181,24 @@ class TranscribeCppASR:
         return ""
 
     # --- 본 전사 ----------------------------------------------------------
+    def _family(self, prompt: str | None):
+        """Whisper 계열 손잡이. 아무것도 정하지 않았으면 None(런타임 기본)."""
+        opts = dict(self.whisper_opts)
+        if prompt:
+            opts["initial_prompt"] = prompt
+        if not opts:
+            return None
+        import transcribe_cpp as tc
+        try:
+            return tc.WhisperRunOptions(**opts)
+        except TypeError as exc:
+            print(f"[asr] whisper 손잡이를 무시합니다: {exc}", file=sys.stderr, flush=True)
+            return None
+
     def transcribe(self, samples: np.ndarray, sample_rate: int,
                    known_lang: str | None = None,
                    speech_s: float | None = None,
-                   live: bool = True) -> dict:
+                   live: bool = True, prompt: str | None = None) -> dict:
         import time
 
         if sample_rate != 16000:
@@ -184,9 +207,13 @@ class TranscribeCppASR:
         pcm = np.ascontiguousarray(samples, dtype=np.float32)
         t0 = time.perf_counter()
         models.touch(self._key)          # 유휴 언로드가 켜져 있으면 "쓰는 중"이라고
+        family = self._family(prompt)
         try:
             with self._lock:
-                result = self._session.run(pcm, language=self.forced_lang)
+                if family is not None:
+                    result = self._session.run(pcm, language=self.forced_lang, family=family)
+                else:
+                    result = self._session.run(pcm, language=self.forced_lang)
         except OutputTruncated:
             # 생성 상한에 닿았다는 것은 몇 초짜리 조각에서 256토큰을 뽑아
             # 냈다는 뜻이고, 그런 조각은 사람의 발화가 아니라 같은 말을
@@ -265,7 +292,9 @@ def resolve_asr(spec: dict | None, lang: str | None) -> dict:
     # 도는지에 맞춰 정합니다.
     return {"path": path, "device": device,
             "threads": int(spec.get("threads") or stream.default_threads(device)),
-            "label": os.path.basename(path).replace(".gguf", "")}
+            "label": os.path.basename(path).replace(".gguf", ""),
+            "whisper": spec.get("whisper") or {},
+            "refine_prompt": bool(spec.get("refine_prompt", False))}
 
 
 def build_engine(spec: dict | None, lang: str | None, threads: int = 4):
@@ -280,7 +309,8 @@ def build_engine(spec: dict | None, lang: str | None, threads: int = 4):
         return OpenAIStreamASR(spec, lang)
     r = resolve_asr(spec, lang)
     return TranscribeCppASR(r["path"], lang, threads=r["threads"],
-                            label=r["label"], device=r["device"])
+                            label=r["label"], device=r["device"],
+                            whisper=r["whisper"], refine_prompt=r["refine_prompt"])
 
 
 class LiveASR:
@@ -359,8 +389,15 @@ class LiveASR:
     def partial(self, samples, sample_rate, lang_hint=None):
         return self._inner.partial(samples, sample_rate, lang_hint)
 
+    @property
+    def refine_prompt(self):
+        return getattr(self._inner, "refine_prompt", False)
+
     def transcribe(self, samples, sample_rate, known_lang=None, speech_s=None,
-                   live=True):
+                   live=True, prompt=None):
+        if prompt is not None:
+            return self._inner.transcribe(samples, sample_rate, known_lang=known_lang,
+                                          speech_s=speech_s, live=live, prompt=prompt)
         return self._inner.transcribe(samples, sample_rate, known_lang=known_lang,
                                       speech_s=speech_s, live=live)
 

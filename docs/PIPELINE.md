@@ -101,7 +101,13 @@ logprob_thold, compression_ratio_thold, …)`를 `Session.run(family=…)`로 �
 **VAD 조각 0.1초, 선행 1초, 30초 오디오 보관.** 0.1초마다 `np.concatenate`로
 30초 버퍼를 다시 만들지만 1.9MB × 10회/초는 비용이 아닙니다.
 
-## 4. 다음에 잴 것
+## 4. 잰 것과 다음에 잴 것
+
+2026-08-29 저녁에 둘을 잤습니다(`measurements/RESULTS.md` 41~42절): **Silero VAD v5는
+VTuber 방송에서 말의 90%를 버려 v4 유지**, **Whisper 임계값 강화(0.84/-1.3)는 4초 조각에서
+차이 없음**. 손잡이(`whisper: {...}`, `refine_prompt`, `MIMIWATCH_VAD_MODEL`)만 남겼습니다.
+
+남은 것:
 
 - 정제가 켜진 방송에서 번역 호출이 얼마나 줄었는가(2.2절).
 - collab 프로필(3초 끊기)에서 정제 대기 2초가 실제로 발동하는 비율 --

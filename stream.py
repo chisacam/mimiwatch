@@ -219,18 +219,24 @@ def default_threads(device: str) -> int:
     return 4
 
 
+# 어느 Silero 파일을 쓸지. 기본은 k2 재수출(v4 계열, 643KB). `silero_vad_v5.onnx`(2.3MB)도
+# 같은 자리에서 받을 수 있고 bench/vad_ab.py 가 둘을 맞대어 잽니다.
+VAD_FILE = os.environ.get("MIMIWATCH_VAD_MODEL") or "silero_vad.onnx"
+
+
 def build_vad(min_silence: float = 0.35,
-              max_speech: float = 12.0) -> sherpa_onnx.VoiceActivityDetector:
+              max_speech: float = 12.0,
+              model_file: str | None = None) -> sherpa_onnx.VoiceActivityDetector:
     """발화를 잘라 주는 Silero VAD.
 
     min_silence는 얼마나 조용해야 발화가 끝났다고 볼지, max_speech는 쉬지
     않고 말할 때 강제로 끊는 길이입니다. 짧게 끊을수록 자막이 빨리 나오지만
     문맥이 짧아지므로, 그 손해는 정제 단계가 되돌립니다.
     """
-    vad_model = os.path.join(model_dir(), "silero_vad.onnx")
+    vad_model = os.path.join(model_dir(), model_file or VAD_FILE)
     if not os.path.exists(vad_model):
         raise FileNotFoundError(
-            f"silero_vad.onnx가 없습니다: {vad_model}\n"
+            f"{os.path.basename(vad_model)}가 없습니다: {vad_model}\n"
             "「엔진 관리 › 모델·도구」에서 받거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
     cfg = sherpa_onnx.VadModelConfig(
         silero_vad=sherpa_onnx.SileroVadModelConfig(
@@ -290,6 +296,7 @@ class Refiner:
         self.sink = sink
         self.sr = sample_rate
         self.spans: list[tuple[int, int, str, str]] = []   # start, end, text, speaker
+        self._last_refined = ""          # refine_prompt 실험용: 직전 정제본
         # 작업 스레드는 하나입니다. 호출마다 스레드를 띄우면 start() 순서와
         # 실제 실행 순서가 달라져, 무음으로 닫힌 무리와 강제로 닫힌 무리가
         # 뒤바뀐 채 출력됩니다. 큐 하나를 한 소비자가 비우면 넣은 순서가
@@ -350,9 +357,14 @@ class Refiner:
             # 25초짜리 무리의 재해독은 0.5~1초가 걸립니다. 수신 경로에서
             # 그대로 돌리면 다음 발화의 확정본이 그만큼 늦어지므로 여기서
             # 처리합니다.
+            # 정제 패스에만 직전 정제본을 프롬프트로 넘길 수 있습니다(엔진 설정의
+            # `refine_prompt`). 고유명사 일관성을 노리는 실험용이고 기본은 꺼져 있습니다.
+            kw = {}
+            if getattr(self.asr, "refine_prompt", False) and self._last_refined:
+                kw["prompt"] = self._last_refined[-200:]
             got = self.asr.transcribe(buf, self.sr,
                                       speech_s=len(buf) / self.sr,
-                                      live=False)
+                                      live=False, **kw)
             text = got["text"].strip()
             if len(text) < REFINE_MIN_KEEP * len(fast_joined):
                 text = fast_joined
@@ -364,6 +376,7 @@ class Refiner:
             lang = got.get("lang") or self.asr.forced_lang
             tag = f"{speaker}|{lang}" if speaker else lang
             print(f"[refine/{tag}] {text}", flush=True)
+            self._last_refined = text
             self.sink.refine(text, lang, speaker)
 
         self._tasks.put(work)

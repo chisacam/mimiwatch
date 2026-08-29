@@ -27,9 +27,18 @@ def _stub_dir(tmp) -> str:
     """
     d = tmp / "stubs"
     d.mkdir(exist_ok=True)
-    if importlib.util.find_spec("sherpa_onnx") is None:
+
+    def real(name: str) -> bool:
+        # conftest 가 끼운 가짜 모듈에는 __spec__ 이 없어 find_spec 이 ValueError 를
+        # 냅니다. 그것도 "진짜가 없다"입니다.
+        try:
+            return importlib.util.find_spec(name) is not None
+        except ValueError:
+            return False
+
+    if not real("sherpa_onnx"):
         (d / "sherpa_onnx.py").write_text("# CI용 가짜 모듈. 서버는 import 만 합니다.\n")
-    if importlib.util.find_spec("transcribe_cpp") is None:
+    if not real("transcribe_cpp"):
         pkg = d / "transcribe_cpp"
         pkg.mkdir(exist_ok=True)
         (pkg / "__init__.py").write_text(

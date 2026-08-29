@@ -64,7 +64,11 @@ function makeTile() {
     h.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/mimiwatch-tile", tile.id);
       e.dataTransfer.effectAllowed = "move";
-      $("player-wrap").classList.add("dragging");
+      // 덮개는 투명해서 그것을 끌면 드래그 그림도 투명합니다. 띠(제목)를 그림으로 씁니다.
+      try { e.dataTransfer.setDragImage(bar, 12, 12); } catch (_) { /* 지원 안 하면 기본 그림 */ }
+      // 받는 막은 **다음 틱에** 띄웁니다. dragstart 안에서 커서 밑 요소를 바꾸면 크롬이
+      // 드래그를 그 자리에서 취소합니다 -- 그래서 타일 끌기가 아무 일도 하지 않았습니다.
+      setTimeout(() => $("player-wrap").classList.add("dragging"), 0);
     });
     h.addEventListener("dragend", () => $("player-wrap").classList.remove("dragging"));
   }

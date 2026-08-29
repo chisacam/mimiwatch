@@ -146,7 +146,7 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   row.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("text/mimiwatch-row", value);
     e.dataTransfer.effectAllowed = "copy";
-    $("player-wrap").classList.add("dragging");
+    setTimeout(() => $("player-wrap").classList.add("dragging"), 0);   // tiles.js 와 같은 이유
   });
   row.addEventListener("dragend", () => $("player-wrap").classList.remove("dragging"));
   return row;

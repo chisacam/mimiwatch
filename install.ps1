@@ -262,7 +262,9 @@ if ($Backend -eq 'cuda') {
                              'nvidia-cuda-runtime-cu12==12.4.*', 'nvidia-cublas-cu12==12.4.*')
   if ($code -ne 0) { Die 'CUDA 런타임 패키지 설치 실패. -Backend vulkan 으로 다시 해 보십시오.' }
   $site = ((Get-Native $Py @('-c', 'import sysconfig; print(sysconfig.get_paths()["purelib"])')).Lines | Select-Object -First 1).Trim()
-  $libDir = ((Get-Native $Py @('-c', 'import llama_cpp, os; print(os.path.join(os.path.dirname(llama_cpp.__file__), "lib"))')).Lines | Select-Object -First 1).Trim()
+  # llama_cpp 를 import 해서 묻지 않습니다 -- CUDA 휠의 llama.dll 은 이 DLL 들이 있어야 열립니다.
+  $libDir = Join-Path $site 'llama_cpp\lib'
+  if (-not (Test-Path $libDir)) { Die "llama_cpp\lib 가 없습니다: $libDir" }
   foreach ($pair in @(@('cuda_runtime', 'cudart64_12.dll'), @('cublas', 'cublas64_12.dll'), @('cublas', 'cublasLt64_12.dll'))) {
     $src = Join-Path $site "nvidia\$($pair[0])\bin\$($pair[1])"
     if (-not (Test-Path $src)) { Die "CUDA 런타임 DLL 이 없습니다: $src" }

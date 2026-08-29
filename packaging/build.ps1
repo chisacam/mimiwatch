@@ -77,8 +77,12 @@ if ($Backend -eq 'cuda') {
   # llama_cpp 는 그 디렉터리를 PATH 앞에 붙이고 나서 DLL 을 열므로 거기 있으면 찾습니다.
   # 12.4.* 로 맞춥니다. cu124 휠과 같은 판이어야 합니다.
   Run $Py @('-m', 'pip', 'install', '-q', 'nvidia-cuda-runtime-cu12==12.4.*', 'nvidia-cublas-cu12==12.4.*')
-  $site = (& $Py -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])').Trim()
-  $libDir = (& $Py -c 'import llama_cpp, os; print(os.path.join(os.path.dirname(llama_cpp.__file__), "lib"))').Trim()
+  # llama_cpp 를 import 해서 경로를 묻지 않습니다. CUDA 휠의 llama.dll 은 cudart 가 없으면
+  # 열리지 않고, NVIDIA 드라이버(nvcuda.dll)가 없는 러너에서는 넣은 뒤에도 열리지
+  # 않습니다 -- 그래서 이 판은 NVIDIA 기계에서만 돕니다. 경로는 site-packages 로 셈합니다.
+  $site = (& $Py -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' | Select-Object -Last 1).Trim()
+  $libDir = Join-Path $site 'llama_cpp\lib'
+  if (-not (Test-Path $libDir)) { throw "llama_cpp\lib 가 없습니다: $libDir" }
   foreach ($pair in @(@('cuda_runtime', 'cudart64_12.dll'), @('cublas', 'cublas64_12.dll'), @('cublas', 'cublasLt64_12.dll'))) {
     $src = Join-Path $site "nvidia\$($pair[0])\bin\$($pair[1])"
     if (-not (Test-Path $src)) { throw "CUDA 런타임 DLL 이 없습니다: $src" }
@@ -88,7 +92,11 @@ if ($Backend -eq 'cuda') {
 }
 
 Say '런타임 확인'
-Run $Py @('-c', 'import transcribe_cpp, llama_cpp, sherpa_onnx, ctranslate2, yt_dlp, certifi; print("  transcribe.cpp:", sorted({b.kind for b in transcribe_cpp.backends()}))')
+# CUDA 판은 여기서 llama_cpp 를 열어 보지 않습니다. 위와 같은 이유로 GPU 없는 러너에서는
+# 실패하고, 그것은 묶음의 결함이 아닙니다.
+$mods = if ($Backend -eq 'cuda') { 'transcribe_cpp, sherpa_onnx, ctranslate2, yt_dlp, certifi' }
+        else { 'transcribe_cpp, llama_cpp, sherpa_onnx, ctranslate2, yt_dlp, certifi' }
+Run $Py @('-c', "import $mods; print('  transcribe.cpp:', sorted({b.kind for b in transcribe_cpp.backends()}))")
 
 Say 'PyInstaller'
 $dist = Join-Path $Root 'dist'

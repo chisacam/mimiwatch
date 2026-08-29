@@ -179,12 +179,16 @@ of your licenses.
    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
    SOFTWARE.
 
-2. 함께 설치되거나 묶음에 들어가는 런타임은 이 저장소의 일부가 아니며 각자의
+2. 모델의 라이선스(사용자가 직접 내려받음): whisper-large-v3-turbo GGUF · CAM++ · Gemma 4 는
+   Apache-2.0, Moonshine base(영어) · M2M-100 · Silero VAD 는 MIT, **SenseVoice Small 은
+   FunASR Model Open Source License(모델명·귀속 표기 의무)** 입니다. 화면의 「모델·도구」와
+   문서에서 각 모델 이름을 그대로 적는 것이 그 귀속 표기입니다.
+
+3. 함께 설치되거나 묶음에 들어가는 런타임은 이 저장소의 일부가 아니며 각자의
    라이선스를 따릅니다: transcribe.cpp (MIT), llama.cpp / llama-cpp-python (MIT),
    sherpa-onnx (Apache-2.0), CTranslate2 (MIT), yt-dlp (Unlicense), NumPy (BSD-3),
    SentencePiece (Apache-2.0), certifi (MPL-2.0).
 
-3. 모델(Whisper large-v3-turbo, SenseVoice, Moonshine, Gemma, M2M-100, Silero VAD,
-   CAM++)과 ffmpeg 는 이 저장소에 담기지 않고 사용자가 첫 실행 때 직접 내려받습니다.
-   각 모델은 배포자가 정한 라이선스(예: Gemma Terms of Use)를 따르며, ffmpeg 정적
-   빌드는 GPL 입니다. 이 프로젝트가 그것들을 재배포하지는 않습니다.
+4. 모델과 ffmpeg·yt-dlp·deno 는 이 저장소에 담기지 않고 사용자가 첫 실행 때 직접
+   내려받습니다. ffmpeg 정적 빌드는 GPL, yt-dlp 는 Unlicense, deno 는 MIT 입니다. 이
+   프로젝트가 그것들을 재배포하지는 않습니다.

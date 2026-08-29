@@ -148,7 +148,7 @@ class Handler(BaseHTTPRequestHandler):
             items.append({k: d.get(k) for k in
                           ("id", "title", "duration", "uploader", "source_lang",
                            "viewer_lang", "translated", "audio_seconds",
-                           "backends_done")} |
+                           "backends_done", "url")} |
                          {"cues": store.cue_count(vid)})
         self._json(items)
 

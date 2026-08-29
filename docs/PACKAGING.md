@@ -96,12 +96,27 @@ entry point로 찾으므로** dist-info를 같이 넣습니다(`copy_metadata`) 
 
 ## 처음 열 때 걸리는 것
 
-**맥**: 서명이 없어 처음 열면 「확인되지 않은 개발자」로 막힙니다. 두 번 누른
-뒤 시스템 설정 › 개인정보 보호 및 보안 아래쪽의 「그래도 열기」, 또는 터미널에서:
+**맥**: 서명이 없어 처음 열면 막힙니다. Sequoia(15)부터 「우클릭 → 열기」 우회는
+없어졌고, 남은 길은 셋입니다.
 
-```sh
-xattr -dr com.apple.quarantine mimiwatch.app
-```
+1. **터미널로 받으면 처음부터 막히지 않습니다.** 브라우저가 붙이는 격리 속성이
+   `curl`에는 붙지 않습니다.
+   ```sh
+   curl -L -o mimiwatch.zip https://github.com/chisacam/mimiwatch/releases/latest/download/mimiwatch-<판>-macos-arm64.zip
+   ditto -x -k mimiwatch.zip .        # Archive Utility 와 같이 심볼릭 링크를 지켜 풉니다
+   open mimiwatch.app
+   ```
+2. 브라우저로 받았으면: 두 번 눌러 차단 창을 닫고 **1시간 안에** 시스템 설정 ›
+   개인정보 보호 및 보안 맨 아래의 「그래도 열기」를 누릅니다.
+3. 그래도 안 되면(Tahoe 26에서는 둘 다 필요한 경우가 있습니다):
+   ```sh
+   xattr -dr com.apple.quarantine mimiwatch.app
+   ```
+
+「손상되어 열 수 없습니다」가 뜨면 서명이 깨진 것입니다 — zip을 **Finder(Archive
+Utility)나 `ditto`로** 풀어야 합니다. 다른 압축 도구는 묶음 안의 심볼릭 링크를 실제
+파일로 풀어 서명 해시가 어긋납니다(PyInstaller 6의 .app은 Frameworks와 Resources를
+링크로 잇습니다).
 
 **윈도우**: SmartScreen이 「알 수 없는 게시자」로 막습니다. 「추가 정보 › 실행」.
 

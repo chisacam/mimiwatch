@@ -80,8 +80,10 @@ function rowActions({ value, session, title, stopped, deletable, videoId, st }) 
                          (st && st.source_lang) || "", title));
     }
   } else if (!session) {
+    // 저장된 주소를 씁니다. 유튜브가 아닌 녹화본(m3u8 등)은 id 로 주소를 지을 수 없습니다.
+    const url = (st && st.url) || `https://www.youtube.com/watch?v=${value}`;
     add("vre", "⟳", "다시 전사 — 같은 엔진으로도 됩니다. 글자가 같은 줄의 번역은 남습니다", () =>
-      openRetranscribe(`https://www.youtube.com/watch?v=${value}`, (st && st.source_lang) || "", title));
+      openRetranscribe(url, (st && st.source_lang) || "", title));
   }
   if (deletable) {
     add("vdel", "🗑", session ? "이 방송의 자막 내역을 삭제합니다" : "이 전사를 삭제합니다", () => {

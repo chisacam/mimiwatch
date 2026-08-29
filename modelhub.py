@@ -332,6 +332,10 @@ def overview() -> dict:
     items += other_files()
     ready = all(i["state"] in ("ready", "system") for i in items if i.get("required"))
     cfg = config.load()
+    if ready and not config.setup_done(cfg):
+        # 초기 설정 표시가 생기기 전부터 쓰던 사람: 필요한 것이 다 있으면 마친 것으로
+        # 칩니다. 그러지 않으면 나중에 무엇 하나 빠졌을 때 「처음이시군요」가 뜹니다.
+        cfg = config.mark_setup_done()
     return {"items": items, "ready": ready, "required": sorted(need),
             "setup_done": config.setup_done(cfg),
             "asr_active": config.active("asr", cfg), "active": config.active("tr", cfg),

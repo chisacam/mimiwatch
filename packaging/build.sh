@@ -24,6 +24,13 @@ say() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 say "빌드 가상환경 ($VENV)"
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
+# 맥 arm64 는 만든 쪽 인덱스에 Metal 휠(0.3.35, py3-none)이 있습니다. 먼저 그것을 받아
+# 소스 빌드(cmake, 5~10분)를 건너뜁니다. 없으면 아래 requirements 설치가 소스에서 만듭니다.
+if [ "$(uname)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+  "$VENV/bin/pip" install -q --only-binary=:all: \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal llama-cpp-python \
+    && echo "  llama-cpp-python: Metal 휠" || echo "  llama-cpp-python: Metal 휠이 없어 소스에서 빌드합니다"
+fi
 "$VENV/bin/pip" install -q -r "$ROOT/requirements.txt" -r "$HERE/requirements-build.txt"
 "$VENV/bin/pip" install -q -U "yt-dlp[default]" transcribe-cpp
 

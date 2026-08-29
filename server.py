@@ -477,8 +477,9 @@ class Handler(BaseHTTPRequestHandler):
         # 주소가 라이브인지 녹화본인지는 서버가 정합니다. 두 흐름은 기다리는
         # 방식부터 다르므로 화면이 시작하기 전에 알아야 합니다.
         import subprocess as sp
+        url = (body.get("url") or "").strip()
         try:
-            out = sp.run(stream.ytdlp_args("-j", url=(body.get("url") or "").strip()),
+            out = sp.run(stream.ytdlp_args("-j", url=url),
                          capture_output=True, text=True,
                          timeout=stream.YTDLP_TIMEOUT_S)
         except sp.TimeoutExpired:
@@ -495,10 +496,16 @@ class Handler(BaseHTTPRequestHandler):
             # 재생목록·채널 주소는 영상마다 한 줄씩 냅니다. 영상 하나를 가리키십시오.
             return self._json({"error": "영상 하나의 주소를 넣어 주십시오 "
                                         "(재생목록·채널 주소가 아니라)"}, 400)
+        info = live.site_of(d, url)
+        is_live = d.get("is_live")
+        if is_live is None and info["site"] == "other" and live.looks_like_m3u8(url):
+            # 생 m3u8 은 범용 추출기가 라이브인지 모릅니다. 이 입력은 라이브의 대체
+            # 경로(R1.2)이므로 모르면 라이브로 봅니다.
+            is_live = True
         self._json({"id": d.get("id"), "title": d.get("title"),
-                    "is_live": bool(d.get("is_live")),
+                    "is_live": bool(is_live),
                     "duration": d.get("duration"),
-                    "uploader": d.get("uploader")})
+                    "uploader": d.get("uploader"), **info})
 
     def post_live_start(self, body):
         url = (body.get("url") or "").strip()

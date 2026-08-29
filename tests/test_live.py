@@ -497,3 +497,19 @@ def test_multiview_groups_sessions_and_moves_focus(monkeypatch):
         bus.unsubscribe(q)
         live._sessions.clear()
         live._groups.clear()
+
+
+def test_site_of_tells_the_embed_apart():
+    yt = {"extractor_key": "Youtube", "webpage_url_domain": "youtube.com", "id": "abc123XYZ_-",
+          "channel_id": "UCx"}
+    assert live.site_of(yt) == {"site": "youtube", "video_id": "abc123XYZ_-", "channel": "UCx"}
+    tw = {"extractor_key": "TwitchStream", "webpage_url_domain": "twitch.tv", "id": "40500071752",
+          "uploader_id": "Monstercat", "display_id": "monstercat"}
+    assert live.site_of(tw) == {"site": "twitch", "video_id": "40500071752", "channel": "monstercat"}
+    # 정보가 비어도 주소에서 로그인명을 건집니다
+    assert live.site_of({}, "https://www.twitch.tv/Shroud?x=1")["channel"] == "shroud"
+    gen = {"extractor_key": "Generic", "webpage_url_domain": "cdn.example", "id": "master"}
+    assert live.site_of(gen, "https://cdn.example/live/master.m3u8") == {
+        "site": "other", "video_id": "master", "channel": ""}
+    assert live.looks_like_m3u8("https://cdn.example/a/b.m3u8?tok=1")
+    assert not live.looks_like_m3u8("https://www.youtube.com/watch?v=x")

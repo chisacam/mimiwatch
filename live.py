@@ -19,6 +19,7 @@ from __future__ import annotations
 import difflib
 import json
 import queue
+import re
 from collections import deque
 import subprocess
 # 이름을 따로 들여옵니다. 시험(bench/live_errors.py)이 `live.subprocess`를
@@ -181,13 +182,49 @@ _transcriber = threading.Lock()
 # 살아 있는 서버에서도 404가 되었습니다.
 
 
-def resolve_audio(url: str) -> tuple[str, dict]:
+_TWITCH_LOGIN = re.compile(r"twitch\.tv/(?!videos/)([A-Za-z0-9_]+)", re.I)
+_M3U8 = re.compile(r"\.m3u8(\?|$)", re.I)
+
+
+def site_of(d: dict, url: str = "") -> dict:
+    """yt-dlp `-j` 결과에서 화면이 임베드에 쓰는 것만 골라냅니다.
+
+    화면은 예전에 `video_id` 가 있으면 유튜브 플레이어에 넣었습니다. 이제 트위치와 생
+    m3u8 도 받으므로 어느 사이트인지를 서버가 말해 줘야 합니다 -- 트위치의 id 는 숫자
+    스트림 번호라 유튜브 플레이어에 넣으면 아무것도 나오지 않습니다.
+
+      site     "youtube" | "twitch" | "other"
+      channel  트위치 로그인명(임베드가 이것으로 채널을 찾습니다). 다른 사이트는 빈 값
+      video_id yt-dlp 의 id 그대로 (유튜브면 영상 id)
+    """
+    key = (d.get("extractor_key") or d.get("extractor") or "").lower()
+    dom = (d.get("webpage_url_domain") or "").lower()
+    vid = d.get("id") or ""
+    if key.startswith("youtube") or "youtube" in dom or "youtu.be" in dom:
+        return {"site": "youtube", "video_id": vid, "channel": d.get("channel_id") or ""}
+    if key.startswith("twitch") or "twitch" in dom or "twitch.tv/" in (url or "").lower():
+        login = d.get("uploader_id") or d.get("display_id") or ""
+        if not login:
+            m = _TWITCH_LOGIN.search(url or "")
+            login = m.group(1) if m else ""
+        return {"site": "twitch", "video_id": vid, "channel": login.lower()}
+    return {"site": "other", "video_id": vid, "channel": ""}
+
+
+def looks_like_m3u8(url: str) -> bool:
+    return bool(_M3U8.search(url or ""))
+
+
+def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
     """Audio-only rendition plus what the manifest says about media time."""
     why = []
     # 마지막의 `worst`는 영상이 섞인(muxed) 가장 작은 HLS 입니다. 2026-08에 7주 묵은
     # yt-dlp 가 오디오 전용 포맷을 하나도 못 받아 라이브가 통째로 죽었습니다 -- ffmpeg 은
     # 영상 섞인 스트림에서도 소리만 뽑으므로, 파이프가 조금 굵어질 뿐 받아 적기는 됩니다.
-    for fmt in ("234", "233", "bestaudio", "worst"):
+    # 234/233 은 유튜브의 오디오 전용 itag 입니다. 다른 사이트에서는 없는 것을 두 번
+    # 물어보느라 몇 초를 쓰므로 건너뜁니다.
+    fmts = ("234", "233", "bestaudio", "worst") if youtube else ("bestaudio", "worst")
+    for fmt in fmts:
         try:
             out = subprocess.run(stream.ytdlp_args("-f", fmt, "-g", url=url),
                                  capture_output=True, text=True,
@@ -431,6 +468,8 @@ class LiveSession:
         self._focus = threading.Event()
         self._focus.set()
         self.group = ""             # 멀티뷰 묶음 id. 비면 혼자 받는 세션
+        self.site = ""              # "youtube" | "twitch" | "other" (site_of). 화면이 임베드를 고릅니다
+        self.channel = ""           # 트위치 로그인명
         self._warm_persisted_s = 0.0   # 대기 중 마지막으로 상태를 적었을 때의 _recv_s
         self._asr = None            # released on stop; see _release()
         # 인식기 객체는 세션이 끝나면 놓아주지만 어떤 엔진이었는지는
@@ -511,6 +550,7 @@ class LiveSession:
                 "recv_t": round(self._recv_base + self._recv_s, 2),
                 "ring_s": round(self._ring.seconds(), 1),
                 "focused": self._focus.is_set(), "group": self.group,
+                "site": self.site, "channel": self.channel,
                 "elapsed": round(time.time() - self.started, 1),
                 "lines": self.lines, "translated": self.translated}
 
@@ -1071,7 +1111,14 @@ class LiveSession:
                 d = {}                    # 재생목록 주소. 아래 resolve_audio가 판단합니다
             self.title = d.get("title", "")
             self.video_id = d.get("id", "") or ""
-            if not d.get("is_live"):
+            info = site_of(d, self.url)
+            self.site, self.channel = info["site"], info["channel"]
+            # 생 m3u8 은 yt-dlp 의 범용 추출기가 라이브인지 모릅니다(is_live 가 None).
+            # 사용자가 라이브로 넣은 것이니 모르면 라이브로 봅니다. 아니라고 하면(False)
+            # 그때만 막습니다.
+            not_live = (d.get("is_live") is False if self.site == "other"
+                        else not d.get("is_live"))
+            if not_live:
                 if reconnect:
                     return None, None
                 self.state = "error"
@@ -1084,7 +1131,7 @@ class LiveSession:
                 self.emit({"type": "status", **self.status()})
                 return None, None
 
-        src, info = resolve_audio(self.url)
+        src, info = resolve_audio(self.url, youtube=self.site != "other" and self.site != "twitch")
         release_ts = None
         if meta.returncode == 0:
             release_ts = d.get("release_timestamp") or d.get("timestamp")
@@ -1734,6 +1781,8 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     s.id = session_id
     s.title = st.get("title") or ""
     s.video_id = st.get("video_id") or ""
+    s.site = st.get("site") or ""
+    s.channel = st.get("channel") or ""
     s.error = None                       # 왜 멈췄었는지는 이제 지난 일입니다
     # 이어 붙이려면 번호가 이어져야 합니다. 새 줄이 옛 줄의 id를 다시 쓰면
     # 화면에서 그 자리를 덮어씁니다.

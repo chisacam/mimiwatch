@@ -47,6 +47,9 @@ function connectBus() {
     if (m.type === "session") onSessionChanged(m);
     else if (m.type === "video") onVideoChanged(m);
     else if (m.type === "job") onJobChanged(m);
+    // 모델 내려받기의 진행·완료·실패. 대화상자가 열려 있으면 그 줄을 고치고,
+    // 필요한 것이 다 갖춰지면 위쪽 안내 띠를 내립니다.
+    else if (m.type === "model") onModelEvent(m);
   };
   bus.onopen = () => {
     if (busWasDown) scheduleListRefresh(0);   // 끊긴 사이의 변화를 메웁니다

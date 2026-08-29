@@ -11,6 +11,7 @@
     {"type": "session", ...세션 status..., "deleted"?: true}
     {"type": "video",   "id": <영상id>, "reason": "saved"|"translated"|"deleted"}
     {"type": "job",     ...작업 레코드...}
+    {"type": "model",   ...modelhub.status()...}   내려받기 진행과 완료
 
 받는 쪽은 그 부분만 갱신합니다(`web/app/bus.js`). 세션 알림은 자막 한 줄마다
 오므로 화면은 목록의 그 줄만 제자리에서 고치고, 모르는 세션이 나타났을 때만

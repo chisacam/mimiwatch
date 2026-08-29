@@ -8,8 +8,8 @@ llama-cpp-python>=0.3.30
 ctranslate2>=4.8
 sentencepiece>=0.2
 numpy>=2.0
-# 여러 파일로 된 모델을 받을 때만 씁니다 (install.sh)
-huggingface_hub>=0.30
+# 모델 내려받기는 modelhub.py 가 표준 라이브러리로 합니다. 예전에 여러 파일짜리
+# 모델(M2M-100)을 받으려고 두었던 huggingface_hub 는 더 쓰지 않습니다.
 # 영상 주소에서 오디오 스트림을 풀어냅니다.
 #
 # 시스템에 깔린 것을 쓰지 않고 여기 두는 이유가 있습니다. 유튜브가 추출

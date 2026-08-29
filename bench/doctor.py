@@ -12,7 +12,7 @@
 """
 from __future__ import annotations
 
-import os, platform, shutil, subprocess, sys, time, traceback
+import os, platform, subprocess, sys, time, traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -35,11 +35,12 @@ def main():
     print(f"  Python {sys.version.split()[0]} · 논리 코어 {os.cpu_count()}")
 
     section("준비물")
-    path = shutil.which("ffmpeg")
+    import paths
+    path = paths.which("ffmpeg")
     ver = ""
     if path:
         try:
-            r = subprocess.run(["ffmpeg", "--version"], capture_output=True,
+            r = subprocess.run([path, "-version"], capture_output=True,
                                text=True, timeout=20)
             ver = (r.stdout or r.stderr).strip().splitlines()[0][:40]
         except Exception as e:                              # noqa: BLE001
@@ -50,7 +51,13 @@ def main():
     # 있으면 그쪽을 쓰고, 없으면 PATH로 물러납니다.
     import stream, live
     cmd = stream.ytdlp_cmd()
-    where = "가상환경" if cmd[0] != "yt-dlp" else "PATH(시스템)"
+    # 어느 것을 부르는지: 도구 디렉터리의 독립 실행 파일 / 묶음 안 / 가상환경 / PATH.
+    if paths.tool("yt-dlp") and cmd[0] == paths.tool("yt-dlp"):
+        where = "도구 디렉터리(독립 실행 파일)"
+    elif cmd[0] == "yt-dlp":
+        where = "PATH(시스템)"
+    else:
+        where = "묶음 안" if paths.frozen() else "가상환경"
     v = live.ytdlp_version()
     line(bool(v), f"yt-dlp ({where})", v or "부를 수 없습니다")
     # 낡으면 유튜브에서 포맷을 하나도 받지 못합니다. 이슈 #1이 그랬습니다 --

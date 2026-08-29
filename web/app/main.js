@@ -71,6 +71,13 @@ function bind() {
   $("shutdown").addEventListener("click", shutdownServer);
   $("form-back").addEventListener("click", showEngineList);
   $("engine-form").addEventListener("submit", saveEngine);
+  // 모델·도구. 내려받기는 서버의 배경 스레드가 하고 진행은 bus 로 옵니다.
+  document.querySelectorAll("[data-add-model]").forEach(b =>
+    b.addEventListener("click", showModelForm));
+  $("model-form-back").addEventListener("click", showEngineList);
+  $("model-form").addEventListener("submit", saveModel);
+  $("setup-download").addEventListener("click", () => downloadModels("default", true));
+  $("setup-open").addEventListener("click", openSettings);
   document.querySelectorAll("[data-add]").forEach(b =>
     b.addEventListener("click", () => showEngineForm(b.dataset.add, null)));
   $("asr-picker").addEventListener("change", e => {
@@ -86,6 +93,7 @@ function bind() {
   $("add-video").addEventListener("click", () => {
     // 열 때마다 지금 값으로 맞춥니다. 엔진을 지웠거나 「관리」에서 바꾼
     // 것이 대화상자에 반영되어 있어야 합니다.
+    $("add-dialog").querySelector("h3").textContent = "영상 추가";   // 다시 전사 뒤에 되돌립니다
     renderAsrPicker();
     fillEngineSelect(document.querySelector('#add-form select[name="backend"]'),
                      state.backends, state.backend, LOCKED.tr);
@@ -172,12 +180,15 @@ function setLibrary(hidden) {
   }
   // 셋을 나란히 보냅니다. 서로 기다릴 이유가 없고, 예전에는 이 뒤에서
   // 같은 둘을 한 번 더 보냈습니다.
-  const [cfg, list, sessions] = await Promise.all([
+  const [cfg, list, sessions, models] = await Promise.all([
     fetch("/api/backends").then(r => r.json()),
     fetch("/api/videos").then(r => r.json()),
     fetch("/api/live/sessions").then(r => r.json()),
+    // 모델이 없으면 위쪽에 띠를 세웁니다. 실패해도 화면은 떠야 하므로 빈 값으로.
+    fetch("/api/models").then(r => r.json()).catch(() => null),
   ]);
   applyBackends(cfg);
+  if (models && !state.scriptOnly) applyModels(models);
   if (state.scriptOnly) {
     // 목록도 플레이어도 없습니다. 지목된 것 하나만 엽니다.
     await refreshVideoList(undefined, [list, sessions]);

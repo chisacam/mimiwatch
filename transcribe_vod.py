@@ -94,10 +94,15 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
     if proc.returncode != 0:
         raise VodError(f"yt-dlp download failed: {(err or '').strip()[:300]}")
     try:
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", tmp,
+        subprocess.run([stream.ffmpeg_cmd(), "-loglevel", "error", "-y", "-i", tmp,
                         "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), dest], check=True)
     except subprocess.CalledProcessError as exc:
         raise VodError(f"ffmpeg failed: {exc}") from exc
+    except FileNotFoundError as exc:
+        # ffmpeg가 없습니다. 내려받은 원본은 남겨 둡니다 -- 도구를 받은 뒤
+        # 다시 넣으면 `dest`가 없으니 여기부터 다시 하고, 원본은 yt-dlp가
+        # 같은 이름으로 덮어씁니다.
+        raise VodError(str(exc)) from exc
     os.remove(tmp)
     return dest
 

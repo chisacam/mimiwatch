@@ -23,9 +23,13 @@ import shutil
 import sys
 import threading
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+import paths
+
+BASE = paths.BASE
 # `MIMIWATCH_CONFIG`로 다른 파일을 쓸 수 있습니다(시험이 임시 파일을 씁니다).
-CONFIG = os.environ.get("MIMIWATCH_CONFIG") or os.path.join(BASE, "backends.json")
+# 묶음(PyInstaller)으로 돌 때는 묶음 안이 읽기 전용이라 사용자 영역으로 나갑니다.
+CONFIG = paths.config_path()
+# 예시 설정은 프로그램과 함께 다닙니다 -- 저장소 안, 또는 묶음 안.
 EXAMPLE_CONFIG = os.path.join(BASE, "backends.example.json")
 
 # 설정의 키 이름. 번역기는 `backends`/`active`, 전사기는 `asr_backends`/`asr_active`.
@@ -45,6 +49,7 @@ def load() -> dict:
     들여옵니다."""
     with _lock:
         if not os.path.exists(CONFIG) and os.path.exists(EXAMPLE_CONFIG):
+            os.makedirs(os.path.dirname(CONFIG) or ".", exist_ok=True)
             shutil.copy(EXAMPLE_CONFIG, CONFIG)
         with open(CONFIG, encoding="utf-8") as f:
             cfg = json.load(f)

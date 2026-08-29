@@ -149,7 +149,8 @@ function renderProfilePicker() {
  * delete an engine was to pretend to add a video. */
 function openSettings() {
   showEngineList();
-  $("settings-dialog").showModal();
+  loadModels();        // 열 때마다 새로 읽습니다. 파일을 손으로 넣었을 수 있습니다
+  if (!$("settings-dialog").open) $("settings-dialog").showModal();
 }
 
 /* 서버를 명시적으로 끕니다.
@@ -202,13 +203,15 @@ async function shutdownServer() {
   hint.textContent =
     (stopped ? `방송 ${stopped}건을 닫고 서버를 종료했습니다. `
              : "서버를 종료했습니다. ") +
-    "이 탭은 더 이상 갱신되지 않습니다. 다시 켜려면 터미널에서 ./run.sh.";
+    "이 탭은 더 이상 갱신되지 않습니다. 다시 켜려면 "
+    + (state.models && state.models.frozen ? "mimiwatch 를 다시 실행하십시오." : "터미널에서 ./run.sh.");
   btn.textContent = "종료됨";
   stopLive();
 }
 
 function showEngineList() {
   $("engine-form").hidden = true;
+  $("model-form").hidden = true;
   $("settings-body").hidden = false;
   renderEngineList("asr");
   renderEngineList("tr");
@@ -358,4 +361,219 @@ function setBackendPickers(id) {
   const b = document.querySelector('#add-form select[name="backend"]');
   if (a && [...a.options].some(o => o.value === id)) a.value = id;
   if (b) b.value = id;
+}
+
+/* ---------- 모델 · 도구 ----------
+ * 모델은 프로그램 밖에 둡니다(paths.py). 예전에는 설치 스크립트가 받아 주었고
+ * 화면에는 무엇이 있는지 볼 자리가 없었습니다 -- 파일이 없으면 세션이
+ * FileNotFoundError 로 끝나고 "./install.sh 를 실행하십시오"라는 말만 남았습니다.
+ * 묶음(PyInstaller)으로 받은 사람에게는 그 스크립트조차 없으므로, 여기서 받고
+ * 지우고 허깅페이스에서 더 가져옵니다. 진행은 서버가 bus 로 밀어 줍니다. */
+
+function fmtBytes(n) {
+  if (!n) return "";
+  if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + "GB";
+  if (n >= 1e6) return Math.round(n / 1e6) + "MB";
+  return Math.max(1, Math.round(n / 1e3)) + "KB";
+}
+
+async function loadModels() {
+  try { applyModels(await (await fetch("/api/models")).json()); }
+  catch (_) { /* 서버가 이 끝점을 모르는 예전 판. 구역은 비어 있습니다. */ }
+}
+
+function applyModels(ov) {
+  state.models = ov;
+  const dir = $("model-dir");
+  if (dir) dir.textContent = ov.model_dir || "";
+  renderModelList();
+  refreshSetupNotice();
+}
+
+/* 위쪽 띠. 전사에 반드시 필요한 것(VAD·whisper·M2M-100·ffmpeg)이 하나라도 없으면
+ * 세웁니다. 받는 중이면 그 진행을 같은 자리에 적습니다. */
+function refreshSetupNotice() {
+  const ov = state.models;
+  const box = $("setup-notice");
+  if (!box || !ov) return;
+  if (ov.ready) { box.hidden = true; return; }
+  const missing = ov.items.filter(i => i.required && !["ready", "system"].includes(i.state));
+  const busy = missing.filter(i => ["downloading", "queued"].includes(i.state));
+  const cur = missing.find(i => i.state === "downloading");
+  let text;
+  if (cur) {
+    const pct = cur.total ? Math.round(cur.done / cur.total * 100) + "%" : fmtBytes(cur.done);
+    text = `모델을 받는 중입니다 — ${cur.label} ${pct}` + (busy.length > 1 ? ` (남은 것 ${busy.length - 1}개)` : "");
+  } else if (busy.length) {
+    text = `모델 ${busy.length}개가 내려받기를 기다리고 있습니다.`;
+  } else {
+    text = "전사에 필요한 것이 아직 없습니다: " + missing.map(i => i.label).join(", ");
+  }
+  $("setup-text").textContent = text;
+  $("setup-download").hidden = busy.length > 0;
+  box.hidden = false;
+}
+
+function stateLabel(it) {
+  switch (it.state) {
+    case "ready": return "있음";
+    case "system": return "시스템 것 사용";
+    case "missing": return "없음";
+    case "partial": return `받다 만 것 ${fmtBytes(it.have)}`;
+    case "queued": return "기다리는 중";
+    case "downloading": return it.total
+      ? `${Math.round(it.done / it.total * 100)}% · ${fmtBytes(it.done)} / ${fmtBytes(it.total)}`
+      : `${fmtBytes(it.done)} 받음`;
+    case "error": return "실패";
+    default: return it.state;
+  }
+}
+
+function renderModelList() {
+  const box = $("model-list");
+  const ov = state.models;
+  if (!box || !ov) return;
+  box.textContent = "";
+  // 종류별로 묶어 보입니다. 전사 → 번역 → 보조 → 도구 → 목록에 없는 파일.
+  const order = { asr: 0, tr: 1, aux: 2, tool: 3, other: 4 };
+  const head = { asr: "전사", tr: "번역", aux: "보조", tool: "도구", other: "목록에 없는 파일" };
+  const items = [...ov.items].sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
+  let lastKind = null;
+  items.forEach(it => {
+    if (it.kind !== lastKind) {
+      lastKind = it.kind;
+      const h = document.createElement("div");
+      h.className = "model-kind";
+      h.textContent = head[it.kind] || it.kind;
+      box.appendChild(h);
+    }
+    box.appendChild(modelRow(it));
+  });
+}
+
+function modelRow(it) {
+  const row = document.createElement("div");
+  row.className = `engine-row model-row st-${it.state}` + (it.required ? " required" : "");
+  row.dataset.model = it.id;
+  const name = document.createElement("div");
+  name.className = "name";
+  name.textContent = it.label + (it.required ? " ·필수" : "");
+  const meta = document.createElement("span");
+  meta.className = "meta";
+  const bits = [stateLabel(it)];
+  if (["ready", "system"].includes(it.state)) bits.push(fmtBytes(it.have || it.size));
+  else if (it.size && it.state !== "downloading") bits.push(fmtBytes(it.size));
+  if (it.purpose) bits.push(it.purpose);
+  if (it.state === "system" && it.system) bits.push(it.system);
+  if (it.state === "error" && it.error) bits.push(it.error);
+  meta.textContent = bits.join(" · ");
+  name.appendChild(meta);
+  if (it.state === "downloading") {
+    const bar = document.createElement("span");
+    bar.className = "job-bar model-bar";
+    const fill = document.createElement("i");
+    fill.style.width = (it.total ? Math.round(it.done / it.total * 100) : 0) + "%";
+    bar.appendChild(fill);
+    name.appendChild(bar);
+  }
+  row.appendChild(name);
+
+  const act = document.createElement("button");
+  if (["downloading", "queued"].includes(it.state)) {
+    act.textContent = "중단";
+    act.addEventListener("click", () => postModel("/api/models/cancel", { id: it.id }));
+  } else if (["missing", "partial", "error", "system"].includes(it.state)) {
+    act.textContent = it.state === "partial" ? "이어 받기"
+                    : it.state === "error" ? "다시" : "받기";
+    act.addEventListener("click", () => downloadModels([it.id]));
+  } else {
+    act.textContent = "받기";
+    act.disabled = true;
+  }
+  const del = document.createElement("button");
+  del.className = "danger";
+  del.textContent = "삭제";
+  del.disabled = !["ready", "partial", "error"].includes(it.state) || !(it.have || it.state !== "ready");
+  del.addEventListener("click", () => deleteModel(it));
+  row.append(act, del);
+  return row;
+}
+
+async function postModel(url, body) {
+  const res = await (await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })).json();
+  if (res.error) alert(res.error);
+  await loadModels();
+  return res;
+}
+
+/* `ids` 는 배열이거나 "default"(기본 세트). `open` 이면 대화상자를 열어 진행을
+ * 보게 합니다 -- 위쪽 띠의 「기본 모델 받기」가 그렇습니다. 5GB는 몇 분 걸리고,
+ * 그 사이 무엇이 오는지 보이지 않으면 멎은 것으로 보입니다. */
+async function downloadModels(ids, open = false) {
+  const res = await postModel("/api/models/download", { ids });
+  if (open && !res.error) openSettings();
+}
+
+async function deleteModel(it) {
+  const what = it.kind === "tool" ? "도구" : "모델";
+  if (!confirm(`'${it.label}' ${what}을(를) 지울까요? (${fmtBytes(it.have || it.size)})\n`
+               + "다시 쓰려면 다시 받아야 합니다.")) return;
+  await postModel("/api/models/delete", { id: it.id });
+}
+
+/* bus 로 온 항목 하나의 새 상태. 목록의 그 항목만 바꿔 넣고, 필수 항목이
+ * 갖춰졐는지 다시 봅니다. 목록 밖의 항목(새로 추가된 것)이면 전부 다시 읽습니다. */
+function onModelEvent(m) {
+  const ov = state.models;
+  if (!ov) { loadModels(); return; }
+  const i = ov.items.findIndex(x => x.id === m.id);
+  if (i < 0) { loadModels(); return; }
+  const { type, ...rest } = m;
+  ov.items[i] = rest;
+  ov.ready = ov.items.every(x => !x.required || ["ready", "system"].includes(x.state));
+  const row = document.querySelector(`#model-list .model-row[data-model="${CSS.escape(m.id)}"]`);
+  if (row) row.replaceWith(modelRow(rest));
+  refreshSetupNotice();
+  // 받기가 끝난 모델이 엔진 설정에 항목을 넣었을 수 있습니다(허깅페이스 추가).
+  if (rest.state === "ready" && rest.custom) loadBackends();
+}
+
+function showModelForm() {
+  const f = $("model-form");
+  f.reset();
+  $("model-form-error").hidden = true;
+  $("settings-body").hidden = true;
+  $("engine-form").hidden = true;
+  f.hidden = false;
+}
+
+async function saveModel(e) {
+  e.preventDefault();
+  const f = e.target;
+  const body = {
+    kind: f.kind.value, repo: f.repo.value.trim(), file: f.file.value.trim(),
+    label: f.label.value.trim(), id: f.id.value.trim(), device: f.device.value,
+    token: f.token.value.trim(),
+  };
+  const btn = f.querySelector("button[type=submit]");
+  btn.disabled = true;
+  try {
+    const res = await (await fetch("/api/models/add", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })).json();
+    if (res.error) {
+      const err = $("model-form-error");
+      err.textContent = res.error;
+      err.hidden = false;
+      return;
+    }
+    await loadModels();
+    showEngineList();
+  } finally {
+    btn.disabled = false;
+  }
 }

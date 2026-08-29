@@ -34,6 +34,14 @@
   </div>
 
   <div id="live-notice" class="live-notice" hidden></div>
+  <!-- 첫 실행: 전사에 필요한 모델이 아직 없습니다. 예전에는 세션을 시작해야
+       FileNotFoundError 로 알았습니다. 묶음으로 받은 사람에게는 설치 스크립트가
+       없으므로 여기서 받게 합니다. -->
+  <div id="setup-notice" class="live-notice setup-notice" hidden>
+    <span id="setup-text">전사에 필요한 모델이 아직 없습니다.</span>
+    <button id="setup-download" class="seg primary-seg">기본 모델 받기</button>
+    <button id="setup-open" class="seg">고르기</button>
+  </div>
   <div id="lang-status" class="status"></div>
   <div class="spacer"></div>
 
@@ -269,6 +277,15 @@
       <button id="settings-close" class="seg">닫기</button>
     </div>
 
+    <section class="engine-group" id="models-group">
+      <div class="group-head">
+        <h4>모델 · 도구</h4>
+        <button class="seg ghost" data-add-model>＋ 허깅페이스에서 추가</button>
+      </div>
+      <p class="hint">모델은 프로그램 밖 <code id="model-dir">…</code> 에 둡니다. 저장소를 지우거나 새 판으로 바꿔도 다시 받지 않습니다. 받다 끊긴 것은 다시 받으면 이어 받습니다. <b>ffmpeg</b>는 시스템에 있으면 받을 필요가 없습니다.</p>
+      <div id="model-list" class="engine-list"></div>
+    </section>
+
     <section class="engine-group">
       <div class="group-head">
         <h4>전사 엔진</h4>
@@ -295,6 +312,42 @@
       <p class="hint">받는 중인 방송을 <b>먼저 제대로 닫고</b> 서버를 멈춥니다. 창을 그냥 닫거나 프로세스를 죽이면 그 세션은 「중단됨」으로 남습니다. 다시 켜려면 터미널에서 <code>./run.sh</code>.</p>
     </section>
   </div>
+
+  <!-- 허깅페이스의 GGUF 하나를 받아 엔진으로 등록합니다. 전사는 transcribe.cpp가
+       읽는 GGUF, 번역은 llama.cpp가 읽는 채팅 모델이어야 합니다 -- 그것은 받은 뒤
+       처음 쓸 때 드러납니다. -->
+  <form id="model-form" hidden>
+    <div class="dlg-head">
+      <h3>허깅페이스에서 모델 추가</h3>
+      <button type="button" id="model-form-back" class="seg">뒤로</button>
+    </div>
+    <label>종류
+      <select name="kind">
+        <option value="asr">전사 (transcribe.cpp GGUF — whisper·sensevoice·moonshine 계열)</option>
+        <option value="tr">번역 (llama.cpp 채팅 GGUF — gemma 등)</option>
+      </select>
+    </label>
+    <label>저장소 <input name="repo" placeholder="소유자/이름  예: handy-computer/whisper-large-v3-turbo-gguf" required></label>
+    <label>파일 <input name="file" placeholder="예: whisper-large-v3-turbo-Q8_0.gguf" required>
+      <small>저장소의 「Files」 탭에 보이는 .gguf 파일 이름입니다.</small>
+    </label>
+    <label>표시 이름 <input name="label" placeholder="(비우면 파일 이름)"></label>
+    <label>엔진 ID <input name="id" placeholder="(비우면 파일 이름에서 만듭니다)" pattern="[a-z0-9-]*"></label>
+    <label>장치
+      <select name="device">
+        <option value="auto">자동 (GPU가 있으면 GPU)</option>
+        <option value="cpu">CPU</option>
+      </select>
+    </label>
+    <label>허깅페이스 토큰 <input name="token" placeholder="(선택) 라이선스 동의가 필요한 저장소만">
+      <small>저장하지 않습니다. 이번 내려받기에만 씁니다. 환경변수 <code>HF_TOKEN</code>이 있으면 그것을 씁니다.</small>
+    </label>
+    <p class="hint" id="model-form-error" hidden></p>
+    <div class="row">
+      <span class="grow"></span>
+      <button type="submit" class="primary">받기 시작</button>
+    </div>
+  </form>
 
   <form id="engine-form" hidden>
     <div class="dlg-head">

@@ -119,23 +119,6 @@ function Invoke-PyFile {
   } finally { Remove-Item -LiteralPath $tmp -EA SilentlyContinue }
 }
 
-# 모델 한 개를 받습니다. 끊긴 다운로드가 완성본으로 보이지 않도록 .part로
-# 받고 다 받은 뒤에 이름을 바꿉니다 -- install.sh와 같은 규칙입니다.
-function Get-Model {
-  param([string] $Name, [string] $Url, [string] $Desc)
-  $dest = Join-Path $ModelDir $Name
-  if (Test-Path $dest) { Skip "$Desc 있음"; return }
-  Write-Host "  $Desc 내려받는 중..."
-  $part = "$dest.part"
-  # curl.exe는 윈도우 10 1803부터 기본으로 들어 있습니다. GB 단위 파일에서
-  # Invoke-WebRequest보다 훨씬 빠릅니다 -- 그쪽은 응답을 통째로 메모리에
-  # 들고 있다가 마지막에 씁니다.
-  $code = Invoke-Native 'curl.exe' @('-fL', '--progress-bar', '-o', $part, $Url)
-  if ($code -ne 0) { Remove-Item $part -EA SilentlyContinue; Die "$Desc 내려받기 실패 (curl $code)" }
-  Move-Item -Force $part $dest
-  Ok $Desc
-}
-
 # ---- 0. 준비물 -------------------------------------------------------------
 Say '준비물 확인'
 
@@ -177,23 +160,13 @@ if (-not $PythonExe) {
   Die '준비물을 설치한 뒤 다시 실행하십시오.'
 }
 
-$missing = @()
-# curl.exe는 윈도우 10 1803부터 기본 탑재입니다. 그보다 오래된 환경에서는
-# 모델 내려받기가 통째로 실패하므로 여기서 미리 걸러 냅니다.
-if (-not (Get-Command curl.exe -EA SilentlyContinue)) {
-  Die 'curl.exe가 없습니다. 윈도우 10 1803 이상이 필요합니다.'
-}
 # yt-dlp는 준비물이 아닙니다. 파이썬 패키지이므로 아래에서 가상환경 안에
 # 최신으로 넣습니다 -- 시스템에 깔린 것은 스스로 갱신되지 않아, 몇 달 지나면
 # 유튜브에서 포맷을 하나도 받지 못합니다(이슈 #1).
-if (Get-Command 'ffmpeg' -EA SilentlyContinue) { Ok 'ffmpeg' } else { $missing += 'ffmpeg' }
-if ($missing.Count -gt 0) {
-  $ids = @{ 'ffmpeg' = 'Gyan.FFmpeg' }
-  Write-Host "`n  없는 것: $($missing -join ', ')"
-  foreach ($m in $missing) { Write-Host "    winget install --id $($ids[$m])" }
-  Write-Host '  설치한 뒤 터미널을 새로 열고 다시 실행하십시오.'
-  Die '준비물을 설치한 뒤 다시 실행하십시오.'
-}
+# ffmpeg도 준비물이 아니라 권장입니다. 없으면 화면의 「엔진 관리 › 모델·도구」에서
+# 정적 빌드를 받을 수 있습니다 -- 마지막 확인 단계가 그렇게 안내합니다.
+if (Get-Command 'ffmpeg' -EA SilentlyContinue) { Ok 'ffmpeg' }
+else { Skip 'ffmpeg 없음 (winget install --id Gyan.FFmpeg, 또는 나중에 화면에서 받기)' }
 
 # git도 cmake도 확인하지 않습니다. 윈도우에서는 아무것도 빌드하지 않습니다.
 
@@ -298,53 +271,15 @@ else { Skip '백엔드 목록을 읽지 못했습니다 (전사는 CPU로도 돕
 
 # ---- 4. 모델 ---------------------------------------------------------------
 Say '모델'
+# 목록은 modelhub.py 한 곳에 있습니다 -- 화면의 「엔진 관리 › 모델·도구」와 같은
+# 표입니다. 이미 있는 것은 건너뛰고, 받다 끊긴 것(.part)은 이어 받습니다. 예전에는
+# 이 스크립트가 주소 목록을 따로 들고 curl 로 받았는데, 그러면 화면과 두 벌입니다.
 New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
-$HF = 'https://huggingface.co'
-$GH = 'https://github.com/k2-fsa/sherpa-onnx/releases/download'
-
-Get-Model 'silero_vad.onnx' `
-  "$GH/asr-models/silero_vad.onnx" `
-  'Silero VAD (632KB - 발화 구간 분할)'
-Get-Model 'whisper-large-v3-turbo-Q8_0.gguf' `
-  "$HF/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q8_0.gguf" `
-  'Whisper large-v3-turbo Q8_0 (845MB - 전사)'
-# 낮은 사양용 대체 전사기. 3.5배 작고 훨씬 빠릅니다. 기본이 버거운
-# 기계에서 「전사」 선택기로 고를 수 있게 항상 받아 둡니다.
-Get-Model 'SenseVoiceSmall-Q8_0.gguf' `
-  "$HF/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q8_0.gguf" `
-  'SenseVoice Small Q8_0 (241MB - 가벼운 전사)'
-# 영어 전용 경량 모델. 74MB로 기본의 11분의 1인데 영어 품질은 사실상
-# 같습니다(실측 35절). 다른 언어는 아예 거부하므로 영어 방송에만 씁니다.
-Get-Model 'moonshine-base-Q8_0.gguf' `
-  "$HF/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-Q8_0.gguf" `
-  'Moonshine base Q8_0 (74MB - 가벼운 영어 전사)'
-if (-not $SkipGemma) {
-  Get-Model 'gemma-4-E4B_q4_0-it.gguf' `
-    "$HF/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf" `
-    'Gemma 4 E4B q4_0 (4.9GB - 번역)'
-}
-
-# M2M-100은 여러 파일이라 스냅샷으로 받습니다. Gemma를 건너뛴 설치에서는
-# 이것이 유일한 번역기이므로 항상 받습니다.
-$m2m = Join-Path $ModelDir 'mojicast-m2m100-ct2'
-if (Test-Path $m2m) {
-  Skip 'M2M-100 있음'
-} else {
-  Write-Host '  M2M-100 (473MB - 대체 번역기) 내려받는 중...'
-  $getM2M = @'
-import sys
-from huggingface_hub import snapshot_download
-snapshot_download('ishiki-emo/mojicast-m2m100-ct2', local_dir=sys.argv[1])
-'@
-  $code = Invoke-PyFile $getM2M @($m2m) -Stream
-  if ($code -ne 0) { Die 'M2M-100 내려받기 실패' }
-  Ok 'M2M-100'
-}
-
-# 화자 태그는 녹화본 전용이라 없어도 나머지는 돕니다.
-Get-Model 'campplus_sv.onnx' `
-  "$GH/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx" `
-  'CAM++ (27MB - 녹화본 화자 태그)'
+$env:MIMIWATCH_MODEL_DIR = $ModelDir
+$mhArgs = @((Join-Path $Here 'modelhub.py'), 'download', 'default')
+if ($SkipGemma) { $mhArgs += '--skip-gemma' }
+$code = Invoke-Native $Py $mhArgs
+if ($code -ne 0) { Die '모델을 다 받지 못했습니다. 다시 실행하면 이어 받습니다.' }
 
 # ---- 5. 설정 ---------------------------------------------------------------
 Say '설정'
@@ -373,6 +308,10 @@ if missing:
     raise SystemExit(1)
 print('  모듈 적재 OK')
 print('  필수 모델 OK')
+try:
+    print('  ffmpeg:', stream.ffmpeg_cmd())
+except FileNotFoundError:
+    print('  ffmpeg 없음 -- winget install --id Gyan.FFmpeg, 또는 화면의 「엔진 관리 › 모델·도구」에서 받으십시오')
 '@
 $check = Invoke-PyFile $verify @($Here)
 $check.Lines | ForEach-Object { Write-Host $_ }

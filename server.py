@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import posixpath
+import sys
 import threading
 import time
 import urllib.parse
@@ -25,11 +26,14 @@ import config
 import export
 import jobs
 import live
+import modelhub
+import paths
 import store
 import stream
 import translate
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+# 화면 파일은 프로그램과 함께 다닙니다 -- 저장소 안, 또는 PyInstaller 묶음 안.
+BASE = paths.BASE
 WEB = os.path.join(BASE, "web")
 
 # 미디어 타입. 화면의 파일은 몇 종류뿐입니다.
@@ -179,6 +183,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send(body, ctype, headers={
             "Content-Disposition": f"attachment; filename=\"{plain}.{fmt}\"; "
                                    f"filename*=UTF-8''{quoted}"})
+
+    def get_models(self):
+        # 모델·도구의 목록과 상태. 첫 실행 화면이 이것으로 무엇이 없는지 압니다.
+        self._json(modelhub.overview())
 
     def get_bus(self):
         """전역 변화 알림(bus.py)을 SSE로. 화면이 하나 붙여 두고 목록·작업
@@ -503,6 +511,29 @@ class Handler(BaseHTTPRequestHandler):
     def post_job_cancel(self, body):
         self._json(jobs.cancel(body.get("id", "")))
 
+    # ---- 모델·도구 ---------------------------------------------------------
+    # 내려받기는 배경 스레드에서 돌고 진행은 /api/events 로 밀려 나갑니다.
+
+    def post_models_download(self, body):
+        ids = body.get("ids")
+        if isinstance(ids, str):
+            ids = modelhub.default_ids() if ids == "default" else [ids]
+        if not isinstance(ids, list) or not ids:
+            return self._json({"error": "ids 가 필요합니다"}, 400)
+        self._json(modelhub.download([str(i) for i in ids], body.get("token") or None))
+
+    def post_models_cancel(self, body):
+        self._json(modelhub.cancel(str(body.get("id") or "")))
+
+    def post_models_delete(self, body):
+        self._json(modelhub.delete(str(body.get("id") or "")))
+
+    def post_models_add(self, body):
+        self._json(modelhub.add_custom(
+            body.get("kind", ""), body.get("repo", ""), body.get("file", ""),
+            label=body.get("label", ""), engine_id=body.get("id", ""),
+            device=body.get("device") or "auto", token=body.get("token") or None))
+
 
 GET_ROUTES = {
     "/": Handler.get_index,
@@ -511,6 +542,7 @@ GET_ROUTES = {
     "/api/live/sessions": Handler.get_sessions,
     "/api/export": Handler.get_export,
     "/api/events": Handler.get_bus,
+    "/api/models": Handler.get_models,
 }
 # 뒤가 붙는 경로. 긴 접두가 먼저여야 `/api/video/`가 `/api/videos`를 삼키지
 # 않습니다 -- 정확한 경로는 위 사전에서 먼저 찾으므로 여기서는 순서만 지킵니다.
@@ -543,6 +575,10 @@ POST_ROUTES = {
     "/api/asr-backends/delete": Handler.post_asr_backends_delete,
     "/api/job/cancel": Handler.post_job_cancel,
     "/api/shutdown": Handler.post_shutdown,
+    "/api/models/download": Handler.post_models_download,
+    "/api/models/cancel": Handler.post_models_cancel,
+    "/api/models/delete": Handler.post_models_delete,
+    "/api/models/add": Handler.post_models_add,
 }
 
 
@@ -557,11 +593,17 @@ def _stop_server():
         _srv.shutdown()
 
 
-def main():
+def main(argv: list[str] | None = None):
+    """서버를 띄웁니다. `argv`는 시험과 묶음의 진입점(app.py)이 넘겨 줍니다.
+
+    `--open`은 붙자마자 기본 브라우저로 화면을 엽니다. 묶음을 두 번 눌러 띄운
+    사람에게는 터미널이 없어 주소를 볼 곳이 없기 때문입니다.
+    """
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8900)
-    args = ap.parse_args()
+    ap.add_argument("--open", action="store_true", help="브라우저로 화면을 엽니다")
+    args = ap.parse_args(argv)
 
     # 스키마 생성과 복구를 요청을 받기 전에 끝냅니다. 재시작 전에 돌던 작업과
     # 세션은 이어질 수 없으므로, 계속 도는 척하지 않고 중단됨으로 적습니다.
@@ -576,8 +618,23 @@ def main():
               f"{stale_live}건을 중단됨으로 표시했습니다", flush=True)
 
     global _srv
-    _srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"mimiwatch: http://localhost:{args.port}/")
+    try:
+        _srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    except OSError as exc:
+        # 이미 떠 있는 서버(또는 다른 프로그램)가 그 포트를 쥐고 있습니다. 묶음을
+        # 두 번 눌렀을 때가 대개 이 경우이니, 그 화면을 열어 주고 물러납니다.
+        print(f"mimiwatch: {args.port} 포트를 열 수 없습니다 ({exc}). "
+              "이미 떠 있으면 그 화면을 씁니다.", file=sys.stderr, flush=True)
+        if args.open:
+            import webbrowser
+            webbrowser.open(f"http://localhost:{args.port}/")
+        return 1
+    print(f"mimiwatch: http://localhost:{args.port}/", flush=True)
+    print(f"mimiwatch: 모델 {paths.model_dir()} · 저장소 {store.DATA} · 설정 {config.CONFIG}",
+          flush=True)
+    if args.open:
+        import webbrowser
+        threading.Timer(0.5, lambda: webbrowser.open(f"http://localhost:{args.port}/")).start()
     try:
         _srv.serve_forever()
     except KeyboardInterrupt:
@@ -587,7 +644,8 @@ def main():
         live.shutdown()
     _srv.server_close()
     print("mimiwatch: 종료되었습니다", flush=True)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

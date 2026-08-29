@@ -28,6 +28,8 @@ import time
 import numpy as np
 import sherpa_onnx
 
+import paths
+
 SAMPLE_RATE = 16000
 WINDOW_SIZE = 512      # VAD가 한 번에 보는 표본 수 (16kHz에서 약 32ms)
 
@@ -46,19 +48,12 @@ REFINE_MIN_KEEP = 0.7
 def model_dir() -> str:
     """모델을 두는 곳. `MIMIWATCH_MODEL_DIR`로 바꿀 수 있습니다.
 
-    윈도우는 `%LOCALAPPDATA%`를 씁니다. `~/.local/share`도 동작하기는
-    하지만, 그 자리에 수 GB를 두면 사용자가 찾지 못합니다 -- 윈도우에서
-    프로그램 데이터를 찾는 곳이 아닙니다.
+    규칙은 `paths.py`에 있습니다(윈도우는 `%LOCALAPPDATA%`, 그 밖은
+    `~/.local/share`). 예전에는 여기서 직접 계산했는데, 설정과 저장소가
+    묶음(PyInstaller)일 때 같은 뿌리로 나와야 해서 한 곳으로 모았습니다.
+    이 이름은 부르는 쪽이 많아 그대로 둡니다.
     """
-    env = os.environ.get("MIMIWATCH_MODEL_DIR")
-    if env:
-        return env
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or os.path.join(
-            os.path.expanduser("~"), "AppData", "Local")
-        return os.path.join(base, "mimiwatch", "models")
-    return os.path.join(os.path.expanduser("~"), ".local", "share",
-                        "mimiwatch", "models")
+    return paths.model_dir()
 
 
 class Cancelled(RuntimeError):
@@ -72,6 +67,7 @@ class Cancelled(RuntimeError):
 
 
 _YTDLP: list[str] | None = None
+_FFMPEG: str | None = None
 
 # yt-dlp 한 번 부르는 데 허용하는 시간(초). 유튜브 쪽이 멎으면 yt-dlp도 같이
 # 멎는데, 상한이 없으면 그 요청 스레드(또는 세션)가 영영 기다립니다. 주소
@@ -91,15 +87,62 @@ def ytdlp_cmd() -> list[str]:
     껍데기가 어디에 어떤 이름으로 놓였든 상관없습니다.
 
     없으면 PATH의 `yt-dlp`로 물러납니다. 예전 설치본이 그렇습니다.
+
+    **도구 디렉터리에 받아 둔 독립 실행 파일이 있으면 그것이 먼저입니다.**
+    묶음(PyInstaller)으로 배포하면 안에 든 yt-dlp는 판이 박혀 있어 몇 달
+    뒤에는 낡습니다 -- 가상환경에 두어 해결했던 그 문제가 묶음에서 되돌아옵니다.
+    yt-dlp가 배포하는 독립 실행 파일은 `-U`로 스스로 판올림하므로, 「엔진
+    관리 › 모델·도구」에서 받아 두면 묶음을 다시 만들지 않아도 최신을 씁니다.
+
+    묶음 안에서는 `python -m yt_dlp`를 부를 파이썬이 없습니다. 실행 파일
+    자신을 `--ytdlp`로 다시 띄우면 `app.py`가 그 인자를 보고 yt_dlp의
+    main으로 넘깁니다. 자식 프로세스로 두는 이유는 그대로입니다 -- 시간
+    상한을 걸고 죽일 수 있어야 합니다(유튜브가 멎으면 같이 멎습니다).
     """
     global _YTDLP
     if _YTDLP is None:
+        standalone = paths.tool("yt-dlp")
+        if standalone:
+            _YTDLP = [standalone]
         # find_spec은 모듈을 실행하지 않습니다. import 하면 1초 가까이
         # 걸리는데, 이 함수는 자주 불립니다.
-        found = importlib.util.find_spec("yt_dlp") is not None
-        _YTDLP = [sys.executable, "-m", "yt_dlp"] if found else ["yt-dlp"]
+        elif importlib.util.find_spec("yt_dlp") is not None:
+            _YTDLP = ([sys.executable, "--ytdlp"] if paths.frozen()
+                      else [sys.executable, "-m", "yt_dlp"])
+        else:
+            _YTDLP = ["yt-dlp"]
         _YTDLP += _cookie_args()
     return list(_YTDLP)
+
+
+def ffmpeg_cmd() -> str:
+    """ffmpeg 실행 파일. PATH → 흔한 자리(홈브루 등) → 도구 디렉터리 순입니다.
+
+    예전에는 `"ffmpeg"`라는 이름을 그대로 Popen에 넘겼습니다. 터미널에서는
+    되지만 Finder에서 띄운 묶음은 PATH가 짧아 홈브루 것을 못 찾고, 설치
+    스크립트 없이 묶음만 받은 사람에게는 ffmpeg 자체가 없습니다. 그 경우
+    「엔진 관리 › 모델·도구」에서 받아 도구 디렉터리에 둡니다(modelhub.py).
+
+    없으면 무엇을 하면 되는지를 담아 FileNotFoundError를 냅니다. 이 오류는
+    세션과 작업의 오류 칸에 그대로 실립니다.
+    """
+    global _FFMPEG
+    if _FFMPEG is None or not os.path.exists(_FFMPEG):
+        found = paths.which("ffmpeg")
+        if not found:
+            raise FileNotFoundError(
+                "ffmpeg가 없습니다. 「엔진 관리 › 모델·도구」에서 받거나 "
+                "(macOS) brew install ffmpeg / (윈도우) winget install Gyan.FFmpeg 로 "
+                "설치하십시오.")
+        _FFMPEG = found
+    return _FFMPEG
+
+
+def reset_tool_cache():
+    """도구를 새로 받았을 때 부릅니다. 위 둘은 한 번 찾은 값을 기억합니다."""
+    global _YTDLP, _FFMPEG
+    _YTDLP = None
+    _FFMPEG = None
 
 
 def _cookie_args() -> list[str]:

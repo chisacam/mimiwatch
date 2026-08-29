@@ -605,3 +605,29 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   .panel-head{flex-wrap:wrap; row-gap:.35rem}
 }
 
+
+/* ---------- 모델 · 도구 ---------- */
+/* 첫 실행 띠. 라이브 안내(.live-notice)와 같은 자리·모양을 쓰되 단추가 둘 들어갑니다. */
+.setup-notice{display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.setup-notice[hidden]{display:none}
+.setup-notice .seg{font-size:.72rem; padding:.2rem .55rem}
+.model-kind{font-size:.66rem; letter-spacing:.14em; color:var(--dim); margin:.35rem 0 -.1rem; font-weight:700}
+.model-row .name{min-width:0}
+.model-row .meta{white-space:normal}
+.model-row.st-missing .name, .model-row.st-partial .name{color:var(--dim)}
+.model-row.st-missing.required .meta::before{content:"필요 · "; color:var(--warn)}
+.model-row.st-error .meta{color:var(--warn)}
+.model-row.st-downloading .meta{color:var(--accent)}
+.model-bar{display:block; width:100%; margin-top:.3rem}
+#model-form-error{color:var(--warn)}
+
+/* 목록 줄 오른쪽의 단추 묶음: ▶ 이어받기 · ⟳ 다시 전사 · 🗑. 마우스를 올렸을 때만
+ * 보입니다 -- 목록은 읽는 자리이고 단추는 가끔 쓰는 것입니다. */
+.video-row .vact{display:flex; gap:.1rem; align-items:center}
+.video-row .vact button{
+  opacity:0; border:1px solid transparent; background:none; color:var(--dim);
+  cursor:pointer; border-radius:6px; padding:.15rem .35rem; font-size:.8rem;
+}
+.video-row:hover .vact button{opacity:1}
+.video-row .vact .vres:hover{border-color:var(--accent); color:var(--accent)}
+.video-row .vact .vre:hover{border-color:var(--line); color:var(--text)}

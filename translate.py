@@ -408,6 +408,10 @@ class LocalGemma(Translator):
 
         self.model_path = model_path or os.path.join(
             stream.model_dir(), "gemma-4-E4B_q4_0-it.gguf")
+        # 설정에는 파일 이름만 적을 수 있습니다(전사 쪽 `resolve_asr`와 같은
+        # 규칙). 허깅페이스에서 받은 모델(modelhub)이 그렇게 등록됩니다.
+        if not os.path.isabs(self.model_path) and not os.path.exists(self.model_path):
+            self.model_path = os.path.join(stream.model_dir(), self.model_path)
         # `cpu`면 한 층도 GPU에 올리지 않습니다. 내장 그래픽처럼 전사와
         # 나눠 쓰기 빠듯한 기계에서, 번역만이라도 CPU로 돌려 두면 자막이
         # 서로를 기다리지 않습니다. 번역은 줄당 0.2초라 CPU로도 충분합니다.

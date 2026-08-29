@@ -47,8 +47,10 @@ def slice_script():
     b_s = find(lambda l: l.startswith("Say '백엔드'"))
     b_e = next(i for i, l in enumerate(src, 1) if i > b_s and l == "}")
     fn_s = find(lambda l: l.startswith("function Say"))
+    # 헬퍼 블록은 Invoke-PyFile 의 닫는 괄호까지입니다. 예전에는 Get-Model 이 그 뒤에
+    # 있었는데, 모델 내려받기는 modelhub.py 로 옮겨 갔습니다(pytest 가 지킵니다).
     fn_e = next(i for i, l in enumerate(src, 1) if i > fn_s and l == "}"
-                and src[i - 2].strip().startswith("Ok $Desc"))
+                and "Remove-Item -LiteralPath $tmp" in src[i - 2])
     # 범위를 잘못 잡으면 모델 내려받기 구간까지 실행됩니다. 한 번 그렇게
     # 2.2GB를 받았습니다.
     assert v_e - v_s < 25, f"확인 블록이 {v_e - v_s}행 -- 범위를 잘못 잡았습니다"
@@ -66,11 +68,6 @@ if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
 }
 """
 
-VAD = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-       "asr-models/silero_vad.onnx")
-GONE = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-        "asr-models/DOES-NOT-EXIST")
-
 
 def build(p, tmp):
     n = "mimiwatch" + chr(92) + "models"
@@ -84,17 +81,8 @@ function Assert($c, $w) {{
 {p['fns']}
 $ModelDir = $env:TESTMODELS
 
-Get-Model 'silero_vad.onnx' '{VAD}' 'Silero VAD' | Out-Null
-$f = Join-Path $ModelDir 'silero_vad.onnx'
-Assert (Test-Path $f) '[1] 내려받아 완성본을 만든다'
-Assert (-not (Test-Path "$f.part")) '[1] .part 가 남지 않는다'
-$b = (Get-Item $f).LastWriteTime
-Get-Model 'silero_vad.onnx' 'https://example.invalid/nope' 'Silero VAD' | Out-Null
-Assert ((Get-Item $f).LastWriteTime -eq $b) '[2] 이미 있으면 건드리지 않는다'
-
-$null = & pwsh -NoProfile -File $env:FAILTEST 2>&1
-Assert ($LASTEXITCODE -eq 1) '[3] 실패를 exit 1 로 알린다'
-Assert (-not (Test-Path (Join-Path $ModelDir 'nope.bin.part'))) '[3] 실패한 .part 를 치운다'
+# [1]~[3] 은 Get-Model(모델 내려받기)의 시험이었습니다. 내려받기는 modelhub.py 로
+# 옮겨 갔고 tests/test_modelhub.py 가 완성본·.part·이어 받기·실패를 지킵니다.
 
 {p['python']}
 Assert ($null -ne $PythonExe) "[4] 앞선 명령이 exit 1 이어도 파이썬을 찾는다 ($PythonExe)"
@@ -150,10 +138,7 @@ Write-Host ""
 if ($fail) {{ Write-Host "$fail 건 실패" -ForegroundColor Red; exit 1 }}
 Write-Host '전부 통과' -ForegroundColor Green
 """
-    fail = f"{HEAD}{p['fns']}\n$ModelDir = $env:TESTMODELS\n" \
-           f"Get-Model 'nope.bin' '{GONE}' '없는 것'\n"
     open(f"{tmp}/harness.ps1", "w", encoding="utf-8").write(harness)
-    open(f"{tmp}/failtest.ps1", "w", encoding="utf-8").write(fail)
 
 
 def main():
@@ -187,7 +172,6 @@ if ($e.Count) {{ $e | ForEach-Object {{ $_.Message }}; exit 1 }}
 
         env = {**os.environ,
                "TESTMODELS": f"{tmp}/models",
-               "FAILTEST": f"{tmp}/failtest.ps1",
                "REPO": ROOT,
                "REALMODELS": os.environ.get(
                    "MIMIWATCH_MODEL_DIR",

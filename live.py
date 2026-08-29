@@ -331,6 +331,22 @@ class LiveSession:
         # the text hayamimi already emitted is enough here because a refined
         # group repeats its members' words.
         self._recent: list[dict] = []
+        # 번역은 **작업 스레드 하나**가 넣은 순서대로 합니다.
+        #
+        # 예전에는 자막 한 줄마다 스레드를 새로 띄웠습니다. 모델 자물쇠가
+        # 어차피 하나라 나란히 돌 수도 없었고, 두 시간 방송이면 스레드가
+        # 수천 번 만들어졌으며, 무엇보다 **끝나는 순서가 정해지지 않았습니다.**
+        # 정제본은 흡수한 첫 확정 줄의 id를 물려받는데, 그 확정 줄의 번역
+        # 스레드가 정제본의 번역보다 늦게 끝나면 같은 id로 옛 부분 번역이
+        # 발행·저장되어 정제본 아래에 엉뚱한 번역이 남았습니다. 큐 하나를
+        # 한 소비자가 비우면 순서가 곧 발행 순서이고, 아래 `_text_of`로
+        # 이미 덮인 줄의 번역은 건너뜁니다 -- Gemma 시간도 그만큼 아낍니다.
+        self._tr_q: queue.Queue = queue.Queue()
+        self._tr_thread: threading.Thread | None = None
+        # id별 지금 화면에 있는 원문. 번역이 끝났을 때 그 줄이 아직 이 글자인지
+        # 확인하는 데 씁니다. 정제본이 흡수한 줄은 여기서 빠지고, 물려받은
+        # id는 정제본의 글자로 바뀝니다.
+        self._text_of: dict[int, str] = {}
 
     # ---- fan-out ----------------------------------------------------------
     def subscribe(self) -> queue.Queue:
@@ -406,6 +422,8 @@ class LiveSession:
                    "lang": lang, "speaker": speaker}
             self._recent.append(cue)
             del self._recent[:-40]
+            self._text_of[cue["id"]] = text
+            self._trim_text_of()
             store.save_cue(self.id, cue)
             self.emit(cue)
             # 줄 수는 상태에 들어 있으므로 자막 한 줄마다 상태도 같이 적습니다.
@@ -460,6 +478,8 @@ class LiveSession:
                    "replaces": [c["id"] for c in covered]}
             for c in covered:
                 self._recent.remove(c)
+                self._text_of.pop(c["id"], None)
+            self._text_of[cue["id"]] = text
             # 정제본이 흡수한 줄은 화면에서 사라지므로 저장분에서도 지웁니다.
             # 자기 id를 물려받은 한 줄만 남기고 그 자리를 정제본으로 덮습니다.
             store.drop_cues(self.id, [c["id"] for c in covered
@@ -482,25 +502,54 @@ class LiveSession:
                  if c["t"] < cue["t"] and c.get("kind") != "note"]
         return older[-mw_translate.CONTEXT_LINES:]
 
+    def _trim_text_of(self, keep: int = 500):
+        """`_text_of`가 방송 길이만큼 자라지 않게 합니다. 번역은 발행 직후
+        줄을 서므로 몇백 줄 뒤의 것을 다시 볼 일은 없습니다."""
+        if len(self._text_of) > keep * 2:
+            for k in sorted(self._text_of)[:-keep]:
+                del self._text_of[k]
+
     def _translate_async(self, cue: dict):
         # 우리가 적은 안내입니다. 번역기에 넘길 것이 아닙니다.
         if cue.get("kind") == "note":
             return
         if self.lang and self.lang == self.viewer_lang:
             return
-        # 문맥은 여기서 붙잡습니다. 번역 스레드가 도는 사이에도 자막은 계속
-        # 들어오므로, 스레드 안에서 읽으면 그때의 `_recent`는 이 줄의 앞이
-        # 아닙니다.
+        # 문맥은 여기서 붙잡습니다. 번역이 차례를 기다리는 사이에도 자막은
+        # 계속 들어오므로, 작업 스레드 안에서 읽으면 그때의 `_recent`는 이
+        # 줄의 앞이 아닙니다.
         ctx = self._context_for(cue)
-        threading.Thread(target=self._translate, args=(cue, ctx),
-                         daemon=True).start()
+        self._tr_q.put((dict(cue), ctx))
+        if self._tr_thread is None or not self._tr_thread.is_alive():
+            self._tr_thread = threading.Thread(target=self._translate_loop,
+                                               daemon=True, name=f"tr-{self.id}")
+            self._tr_thread.start()
+
+    def _translate_loop(self):
+        while True:
+            item = self._tr_q.get()
+            if item is None:                      # _release()가 보낸 끝 표시
+                return
+            cue, ctx = item
+            try:
+                self._translate(cue, ctx)
+            except Exception as exc:              # 한 줄의 실패가 뒤 줄을 막으면 안 됩니다
+                print(f"[live] 번역 루프 오류: {exc}", file=sys.stderr, flush=True)
+
+    def _superseded(self, cue: dict) -> bool:
+        """이 줄이 그 사이 정제본에 흡수되었거나 글자가 바뀌었는가."""
+        return self._text_of.get(cue["id"]) != cue["text"]
 
     def _translate(self, cue: dict, context: list[str] | None = None):
         src = cue.get("lang") or self.lang or ""
         if not src or src == self.viewer_lang:
             return
+        # 차례를 기다리는 동안 정제본이 이 줄을 흡수했으면 번역할 것이 없습니다.
+        # 정제본 자신의 번역이 뒤에 줄 서 있습니다.
+        if self._superseded(cue):
+            return
         # 한 번 붙잡아 둡니다. 세션이 끝나면 `_release()`가 `_tr`를 None으로
-        # 놓는데, 마지막 줄의 번역 스레드는 그 뒤에도 돌고 있을 수 있습니다.
+        # 놓는데, 큐에 남은 줄은 그 전에 비웁니다(`_close_translator`).
         tr = self._tr
         if tr is None:
             return
@@ -515,6 +564,11 @@ class LiveSession:
             print(f"[live] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
             out = cue["text"]
         if not (out or "").strip():
+            return
+        # 번역하는 몇백 밀리초 사이에 정제본이 들어왔을 수 있습니다. 그러면
+        # 이 결과는 이미 화면에 없는 글자의 번역이고, 같은 id를 물려받은
+        # 정제본의 번역을 덮어쓰게 됩니다 -- 버립니다.
+        if self._superseded(cue):
             return
         # 번역이 원문과 같아도 저장합니다. 고유명사나 짧은 감탄사는 그대로
         # 두는 것이 옳은 번역이고, 예전에는 이 경우를 실패로 보아 줄이
@@ -636,6 +690,7 @@ class LiveSession:
         남습니다.
         """
         self._asr = None
+        self._close_translator()
         self._tr = None
         self._recent.clear()
         if self._ff:
@@ -645,13 +700,26 @@ class LiveSession:
                 pass
             self._ff = None
 
+    def _close_translator(self, timeout: float = 10.0):
+        """번역 작업 스레드를 끝냅니다. 줄 서 있는 것은 마저 번역하고 나옵니다.
+
+        마지막 몇 줄의 번역이 세션이 끝났다는 이유로 사라지면, 방송 끝의
+        인사가 원문으로만 남습니다. 대신 한없이 기다리지는 않습니다 -- 번역기가
+        멎어 있으면 10초 뒤 그냥 놓습니다.
+        """
+        t = self._tr_thread
+        if t is None or not t.is_alive():
+            return
+        self._tr_q.put(None)
+        t.join(timeout)
+
     def _spawn_ffmpeg(self, src: str, start_index):
         # -live_start_index -2 starts two segments from the end of the
         # playlist. Without it ffmpeg reads a full-DVR playlist from the top
         # and transcribes the broadcast's opening greetings while the viewer
         # watches its live edge.
         self._ff = subprocess.Popen(
-            ["ffmpeg", "-loglevel", "error",
+            [stream.ffmpeg_cmd(), "-loglevel", "error",
              "-live_start_index", str(start_index), "-i", src,
              "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
             stdout=subprocess.PIPE)

@@ -119,3 +119,89 @@ def test_delete_refuses_running_session(session):
     store.save_session(session.status())
     assert live.delete(session.id) == {"deleted": session.id}
     assert live.delete(session.id) == {"error": "no such session"}
+
+
+# ---- 번역 순서와 정제본에 덮인 줄 ------------------------------------------------
+
+class _SlowTranslator:
+    """부르는 순서와, 그 사이에 정제본이 들어올 틈을 만들어 주는 번역기."""
+
+    def __init__(self, delay=0.0, hook=None):
+        self.calls = []
+        self.delay = delay
+        self.hook = hook
+
+    def should_translate(self, text, src, tgt):
+        return True
+
+    def translate(self, text, src, tgt, context=None):
+        self.calls.append(text)
+        if self.hook:
+            self.hook(text)
+        import time
+        time.sleep(self.delay)
+        return "T:" + text
+
+
+def _translations(s):
+    return [(e["id"], e["text"]) for e in s.emitted if e.get("type") == "translation"]
+
+
+def test_translations_arrive_in_publish_order(session):
+    s = session
+    s._tr = _SlowTranslator()
+    for n in range(6):
+        s.audio_s = n * 1.0
+        s.publish_line("final", f"line {n}", "ja", "")
+    s._close_translator()
+    assert [t for _, t in _translations(s)] == [f"T:line {n}" for n in range(6)]
+    assert s.translated == 6
+
+
+def test_superseded_final_is_not_translated_after_refine(session):
+    """정제본이 흡수한 확정 줄의 번역이 늦게 도착해 정제본의 번역을 덮던 경합.
+
+    번역기가 첫 줄을 옮기는 사이에 정제본이 그 줄을 흡수합니다. 예전에는 그
+    옛 번역이 같은 id(정제본이 물려받은 것)로 발행·저장되어, 화면과 DB에
+    정제본 아래 부분 번역이 남았습니다.
+    """
+    s = session
+    fired = []
+
+    def during_first(text):
+        if text == "こんにちは" and not fired:
+            fired.append(1)
+            s.audio_s = 3.0
+            s.publish_line("refine", "こんにちは 元気ですか", "ja", "")
+
+    s._tr = _SlowTranslator(hook=during_first)
+    s.publish_line("final", "こんにちは", "ja", "")
+    s.audio_s = 1.5
+    s.publish_line("final", "元気ですか", "ja", "")
+    # 정제본은 첫 줄을 번역하는 도중에 줄에 서므로, 끝 표시를 넣기 전에 그것이
+    # 처리될 때까지 기다립니다(세션이 끝날 때는 정제기가 먼저 닫히므로 실제로는
+    # 이 순서가 저절로 지켜집니다).
+    import time
+    deadline = time.time() + 5
+    while time.time() < deadline and len(s._tr.calls) < 2:
+        time.sleep(0.01)
+    s._close_translator()
+    got = _translations(s)
+    # 확정 둘의 번역은 버려지고, 정제본(id 1)의 번역만 나갑니다.
+    assert got == [(1, "T:こんにちは 元気ですか")]
+    rows = store.cues(s.id)
+    assert [(c["id"], c["translations"]) for c in rows] == \
+        [(1, {"local-m2m100": "T:こんにちは 元気ですか"})]
+    # 흡수된 둘째 줄은 번역기를 부르지도 않았습니다 -- Gemma 시간을 아낍니다.
+    assert s._tr.calls == ["こんにちは", "こんにちは 元気ですか"]
+
+
+def test_close_translator_drains_pending_lines(session):
+    s = session
+    s._tr = _SlowTranslator(delay=0.01)
+    for n in range(5):
+        s.audio_s = n * 1.0
+        s.publish_line("final", f"tail {n}", "ja", "")
+    s._release()                                  # 세션이 끝날 때 부르는 것
+    assert len(_translations(s)) == 5
+    assert s._tr is None

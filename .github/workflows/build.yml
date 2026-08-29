@@ -26,10 +26,10 @@ jobs:
             name: windows-x64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0          # git describe 로 판 이름을 얻습니다
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: 묶음 만들기 (macOS)
@@ -41,7 +41,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\packaging\build.ps1 -Backend vulkan
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mimiwatch-${{ matrix.name }}
           path: |
@@ -50,7 +50,7 @@ jobs:
           if-no-files-found: error
       - name: 릴리스에 붙이기
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.zip

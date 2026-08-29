@@ -2,16 +2,21 @@
 # 시험이 가짜 모듈로 대신합니다(tests/conftest.py). 모델을 올리는 시험은 없습니다.
 name: check
 
+# main 에 미는 것과 main 을 향한 PR 에서만 돕니다. 태그를 밀 때는 돌리지 않습니다 --
+# 태그는 이미 검사가 끝난 main 의 커밋에 붙이는 것이고, 무료 사용 시간을 두 번 쓸
+# 이유가 없습니다.
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install numpy pytest ruff

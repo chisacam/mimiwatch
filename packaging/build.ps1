@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+#Requires -Version 7
 <#
 .SYNOPSIS
   윈도우용 묶음을 만듭니다. dist\mimiwatch\mimiwatch.exe 와 그 zip.
@@ -36,20 +36,20 @@ if (-not $env:MIMIWATCH_VERSION) {
 function Say { param($m) Write-Host "`n> $m" -ForegroundColor White }
 function Run {
   param([string] $File, [string[]] $Args)
-  # Start-Process 는 PATH 의 이름을 스스로 풀지 못하는 경우가 있습니다(액션 러너의
-  # `python` 이 그랬습니다 -- "The system cannot find the file specified"). 전체
-  # 경로로 바꿔 넘깁니다. 이미 경로면 그대로입니다.
-  if (-not (Test-Path -LiteralPath $File)) {
-    $cmd = Get-Command $File -EA SilentlyContinue
-    if ($cmd -and $cmd.Source) { $File = $cmd.Source }
-  }
-  $p = Start-Process -FilePath $File -ArgumentList $Args -NoNewWindow -Wait -PassThru
-  if ($p.ExitCode -ne 0) { throw "$File $($Args -join ' ') -> 종료 코드 $($p.ExitCode)" }
+  # install.ps1 과 달리 Start-Process 를 쓰지 않습니다. 액션 러너에서 그것이 PATH 의
+  # `python` 을 두 번이나 못 찾았습니다("The system cannot find the file specified").
+  # 이 스크립트는 pwsh 7 전용이라 5.1 의 stderr-종료 오류 문제가 없으므로 호출
+  # 연산자로 그냥 부릅니다. 출력은 그대로 흘러나옵니다.
+  & $File @Args
+  if ($LASTEXITCODE -ne 0) { throw "$File $($Args -join ' ') -> 종료 코드 $LASTEXITCODE" }
 }
 
 Say "빌드 가상환경 ($Venv)"
 if (-not (Test-Path $Py)) {
-  $python = if (Get-Command python -EA SilentlyContinue) { 'python' } else { 'py' }
+  # setup-python 액션은 pythonLocation 에 자리를 적어 둡니다. 그것이 있으면 이름 해석에
+  # 기대지 않고 그 실행 파일을 씁니다.
+  $python = if ($env:pythonLocation) { Join-Path $env:pythonLocation 'python.exe' }
+            elseif (Get-Command python -EA SilentlyContinue) { 'python' } else { 'py' }
   Run $python @('-m', 'venv', $Venv)
 }
 Run $Py @('-m', 'pip', 'install', '-q', '--upgrade', 'pip')

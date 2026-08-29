@@ -50,9 +50,10 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 함께 들어옵니다.
 
 ```powershell
-.\install.ps1                    # 알아서 고릅니다
+.\install.ps1                    # 알아서 고릅니다 (NVIDIA면 cuda, 다른 GPU면 vulkan)
 .\install.ps1 -Backend cpu       # GPU를 쓰지 않습니다
 .\install.ps1 -Backend vulkan    # 자동 판단을 무시하고 강제합니다
+.\install.ps1 -Backend cuda      # NVIDIA 전용 (아래 절)
 ```
 
 설치가 끝나면 실제로 무엇이 잡혔는지 찍어 줍니다.
@@ -96,6 +97,40 @@ iGPU를 다투는 일을 피할 수 있습니다.
 
 `asr_backends`에 넣으면 화면의 「전사」 선택기에 나타납니다. 자세한 것은
 README의 「CPU로 돌리기」를 보십시오.
+
+## NVIDIA: CUDA 전용 판이 따로 있습니다
+
+릴리스에는 윈도우 묶음이 둘입니다.
+
+| 묶음 | GPU 경로 | 크기 | 누가 |
+|---|---|---|---|
+| `mimiwatch-*-windows-x64.zip` | Vulkan (전사·번역 모두) | 약 100MB | AMD · Intel · NVIDIA 누구나 |
+| `mimiwatch-*-windows-x64-cuda.zip` | **번역은 CUDA**, 전사는 Vulkan | 약 600MB | 아래 표의 NVIDIA GPU |
+
+NVIDIA 에서는 llama.cpp 가 CUDA 로 돌 때가 Vulkan 보다 빠르고 안정적입니다. 그래서
+전용 판을 따로 만듭니다. 전사(transcribe.cpp)는 아직 CUDA 휠이 배포되지 않아 두 판
+모두 Vulkan 입니다 -- 그쪽 휠이 나오면 바꿉니다. 저장소에서 설치할 때는
+`.\install.ps1`이 NVIDIA 를 알아보고 같은 조합(`-Backend cuda`)을 고릅니다.
+
+**지원하는 GPU.** CUDA 판의 커널이 어떤 세대를 위해 컴파일되었는지 휠을 열어
+확인했습니다(llama-cpp-python 0.3.35 cu124, `ggml-cuda.dll`의 fatbin 헤더).
+
+| 세대 | 대표 제품 | 컴파일된 대상 | 지원 |
+|---|---|---|---|
+| Pascal | GeForce GTX 1050~1080 Ti, TITAN Xp | sm_60 · sm_61 | ✓ |
+| Volta | TITAN V, Tesla V100 | sm_70 | ✓ |
+| Turing | GTX 1650~1660 Ti, RTX 2060~2080 Ti | sm_75 | ✓ |
+| Ampere | RTX 3050~3090 Ti, A100 | sm_86 · sm_80 | ✓ |
+| Ada Lovelace | RTX 4050~4090 | sm_89 | ✓ |
+| Hopper | H100 | sm_90 | ✓ |
+| Blackwell | RTX 5050~5090 | 없음 (sm_90 PTX 를 드라이버가 JIT) | **미확인** -- 안 되면 Vulkan 판 |
+| Maxwell 이하 | GTX 900 · 700 이전 | 없음 | ✗ Vulkan 판을 쓰십시오 |
+
+**드라이버는 551.61 이상**(CUDA 12.4 런타임)이어야 합니다. 더 오래된 드라이버에서는
+번역기가 CUDA 장치를 못 열어 실패합니다 -- 그때는 드라이버를 올리거나 Vulkan 판을
+쓰십시오. CUDA 툴킷은 깔 필요가 없습니다: 필요한 런타임(cudart64_12, cublas64_12,
+cublasLt64_12)은 묶음 안에 들어 있습니다(`nvidia-*-cu12` PyPI 패키지에서 꺼내 llama_cpp
+옆에 둡니다).
 
 ## AMD: whisper.cpp-amd 는 왜 안 쓰는가
 

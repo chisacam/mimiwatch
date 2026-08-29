@@ -54,7 +54,7 @@ def slice_script():
     # 범위를 잘못 잡으면 모델 내려받기 구간까지 실행됩니다. 한 번 그렇게
     # 2.2GB를 받았습니다.
     assert v_e - v_s < 25, f"확인 블록이 {v_e - v_s}행 -- 범위를 잘못 잡았습니다"
-    assert b_e - b_s < 45, f"백엔드 블록이 {b_e - b_s}행 -- 범위를 잘못 잡았습니다"
+    assert b_e - b_s < 60, f"백엔드 블록이 {b_e - b_s}행 -- 범위를 잘못 잡았습니다"
     L = lambda a, b: "\n".join(src[a - 1:b])
     return {"fns": L(fn_s, fn_e), "python": L(py_s, py_e),
             "verify": L(v_s, v_e), "backend": L(b_s, b_e),

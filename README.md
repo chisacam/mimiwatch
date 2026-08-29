@@ -43,7 +43,7 @@ brew install ffmpeg        # 윈도우: winget install --id Gyan.FFmpeg
 ## 두 가지 길
 
 **묶음으로.** 릴리스에서 `mimiwatch-*-macos-arm64.zip` 또는
-`mimiwatch-*-windows-x64.zip`을 받아 풀고 두 번 누릅니다. 브라우저에 화면이
+`mimiwatch-*-windows-x64.zip`(NVIDIA GTX 10~RTX 40이면 `-cuda`판)을 받아 풀고 두 번 누릅니다. 브라우저에 화면이
 열리고, 첫 실행이면 「초기 설정」이 떠서 엔진을 고르고 그에 맞는 모델을 받습니다. 파이썬도 설치
 스크립트도 없습니다. 처음 열 때 걸리는 게이트키퍼·SmartScreen 안내와
 파일이 어디에 놓이는지는 [docs/PACKAGING.md](docs/PACKAGING.md)에 있습니다.

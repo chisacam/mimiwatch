@@ -18,8 +18,10 @@
   이미 끝난 단계는 건너뜁니다. 중간에 끊기면 그냥 다시 실행하십시오.
 
 .PARAMETER Backend
-  auto(기본) / vulkan / cpu.
-  auto는 GPU를 보고 정합니다. GPU가 있으면 vulkan, 없으면 cpu입니다.
+  auto(기본) / cuda / vulkan / cpu.
+  auto는 GPU를 보고 정합니다. NVIDIA면 cuda, 다른 GPU면 vulkan, 없으면 cpu입니다.
+  cuda는 번역(llama.cpp)만 CUDA로 돕니다 -- 전사(transcribe.cpp)는 CUDA 휠이 아직
+  없어 Vulkan입니다. 지원 GPU(GTX 10 ~ RTX 40, 드라이버 551.61 이상)는 docs/WINDOWS.md.
 
 .PARAMETER WithGemma
   번역용 Gemma(4.9GB)도 함께 받습니다. 기본 설정은 가벼운 CPU 엔진(SenseVoice
@@ -36,7 +38,7 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('auto', 'vulkan', 'cpu')] [string] $Backend = 'auto',
+  [ValidateSet('auto', 'cuda', 'vulkan', 'cpu')] [string] $Backend = 'auto',
   [switch] $WithGemma,
   [string] $ModelDir
 )
@@ -195,7 +197,13 @@ if ($Backend -eq 'auto') {
   $sysroot = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
   $loader = "$sysroot\System32\vulkan-1.dll"
   $hasLoader = Test-Path -LiteralPath $loader -EA SilentlyContinue
-  if ($gpus.Count -gt 0 -and $hasLoader) {
+  # NVIDIA 는 전용 CUDA 판이 낫습니다. nvcuda.dll 은 NVIDIA 드라이버가 깔아 둡니다.
+  $hasCuda = Test-Path -LiteralPath "$sysroot\System32\nvcuda.dll" -EA SilentlyContinue
+  $nvidia = @($gpus | Where-Object { $_ -match 'NVIDIA|GeForce|Quadro|RTX' }).Count -gt 0
+  if ($nvidia -and $hasCuda) {
+    $Backend = 'cuda'
+    Ok "cuda ($($gpus -join ', ')) -- 드라이버 551.61 이상이어야 합니다. 안 되면 -Backend vulkan"
+  } elseif ($gpus.Count -gt 0 -and $hasLoader) {
     $Backend = 'vulkan'
     Ok "vulkan ($($gpus -join ', '))"
   } else {
@@ -223,7 +231,9 @@ Say '의존성'
 # llama-cpp-python은 PyPI에 윈도우 휠이 없습니다. 만든 쪽이 따로 두는
 # 인덱스에는 있고, 거기에는 Vulkan 판도 있습니다. requirements.txt에
 # 적어 두지 않는 이유는 이 인덱스가 윈도우에서만 필요하기 때문입니다.
-$llamaIndex = "https://abetlen.github.io/llama-cpp-python/whl/$Backend"
+# cuda 는 만든 쪽 인덱스 이름이 cu124 입니다.
+$llamaFlavor = if ($Backend -eq 'cuda') { 'cu124' } else { $Backend }
+$llamaIndex = "https://abetlen.github.io/llama-cpp-python/whl/$llamaFlavor"
 $code = Invoke-Native $Py @('-m', 'pip', 'install', '--extra-index-url', $llamaIndex,
                            '-r', (Join-Path $Here 'requirements.txt'))
 if ($code -eq 0) {
@@ -242,6 +252,24 @@ if ($code -ne 0) {
 }
 $ytv = (Get-Native $Py @('-m', 'yt_dlp', '--version')).Lines | Select-Object -First 1
 Ok "설치 (yt-dlp $ytv)"
+
+if ($Backend -eq 'cuda') {
+  Say 'CUDA 런타임 (cudart · cuBLAS)'
+  # llama.cpp 의 CUDA 휠은 cudart64_12.dll·cublas64_12.dll 을 부르지만 담고 있지는
+  # 않습니다. NVIDIA 의 PyPI 런타임 패키지에서 꺼내 llama_cpp\lib 에 둡니다 -- llama_cpp 는
+  # 그 디렉터리를 PATH 앞에 붙이고 DLL 을 열므로 거기 있으면 찾습니다. cu124 와 같은 12.4.*.
+  $code = Invoke-Native $Py @('-m', 'pip', 'install', '-q',
+                             'nvidia-cuda-runtime-cu12==12.4.*', 'nvidia-cublas-cu12==12.4.*')
+  if ($code -ne 0) { Die 'CUDA 런타임 패키지 설치 실패. -Backend vulkan 으로 다시 해 보십시오.' }
+  $site = ((Get-Native $Py @('-c', 'import sysconfig; print(sysconfig.get_paths()["purelib"])')).Lines | Select-Object -First 1).Trim()
+  $libDir = ((Get-Native $Py @('-c', 'import llama_cpp, os; print(os.path.join(os.path.dirname(llama_cpp.__file__), "lib"))')).Lines | Select-Object -First 1).Trim()
+  foreach ($pair in @(@('cuda_runtime', 'cudart64_12.dll'), @('cublas', 'cublas64_12.dll'), @('cublas', 'cublasLt64_12.dll'))) {
+    $src = Join-Path $site "nvidia\$($pair[0])\bin\$($pair[1])"
+    if (-not (Test-Path $src)) { Die "CUDA 런타임 DLL 이 없습니다: $src" }
+    Copy-Item -Force $src (Join-Path $libDir $pair[1])
+  }
+  Ok 'cudart64_12 · cublas64_12 · cublasLt64_12 를 llama_cpp\lib 에 넣음'
+}
 
 # ---- 3. 전사 런타임 --------------------------------------------------------
 Say '전사 런타임 (transcribe.cpp)'

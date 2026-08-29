@@ -24,6 +24,12 @@ jobs:
             name: macos-arm64
           - os: windows-latest
             name: windows-x64
+            backend: vulkan
+          # NVIDIA 전용. 번역이 CUDA 로 돕니다(전사는 Vulkan 그대로). 런타임 DLL 까지
+          # 넣어 600MB 남짓입니다. 지원 GPU 는 docs/WINDOWS.md.
+          - os: windows-latest
+            name: windows-x64-cuda
+            backend: cuda
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -40,7 +46,7 @@ jobs:
       - name: 묶음 만들기 (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\packaging\build.ps1 -Backend vulkan
+        run: .\packaging\build.ps1 -Backend ${{ matrix.backend }}
       - uses: actions/upload-artifact@v7
         with:
           name: mimiwatch-${{ matrix.name }}

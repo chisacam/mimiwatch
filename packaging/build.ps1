@@ -9,16 +9,23 @@
   윈도우 휠이 없어 만든 쪽의 인덱스(cpu / vulkan)를 씁니다. install.ps1 과 같습니다.
 
   Vulkan 판을 넣으면 GPU 가 없는 기계에서도 돕니다 -- llama.cpp 가 장치를 못 찾으면
-  CPU 로 내려갑니다. 그래서 배포용은 vulkan 이 기본입니다.
+  CPU 로 내려갑니다. 그래서 배포용 기본은 vulkan 입니다.
+
+  -Backend cuda 는 NVIDIA 전용 판입니다. 번역(llama.cpp)이 CUDA 로 돕니다 -- 전사
+  (transcribe.cpp)는 CUDA 휠이 아직 없어 그대로 Vulkan 입니다. CUDA 휠에는 런타임
+  DLL(cudart64_12, cublas64_12, cublasLt64_12)이 들어 있지 않으므로 nvidia-*-cu12
+  패키지에서 꺼내 llama_cpp\lib 에 함께 둡니다. 묶음이 600MB 남짓 커집니다.
+  지원 GPU 는 docs/WINDOWS.md 에 적어 두었습니다(GTX 10 ~ RTX 40, 드라이버 551.61+).
 
 .EXAMPLE
   .\packaging\build.ps1
+  .\packaging\build.ps1 -Backend cuda
   .\packaging\build.ps1 -Backend cpu
   $env:MIMIWATCH_VERSION = '0.3.0'; .\packaging\build.ps1
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('vulkan', 'cpu')] [string] $Backend = 'vulkan'
+  [ValidateSet('vulkan', 'cuda', 'cpu')] [string] $Backend = 'vulkan'
 )
 $ErrorActionPreference = 'Stop'
 if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
@@ -55,11 +62,30 @@ if (-not (Test-Path $Py)) {
   Run $python @('-m', 'venv', $Venv)
 }
 Run $Py @('-m', 'pip', 'install', '-q', '--upgrade', 'pip')
-$llamaIndex = "https://abetlen.github.io/llama-cpp-python/whl/$Backend"
+# cuda 는 만든 쪽 인덱스 이름이 cu124 입니다(CUDA 12.4 런타임 · 드라이버 551.61 이상).
+$llamaFlavor = if ($Backend -eq 'cuda') { 'cu124' } else { $Backend }
+$llamaIndex = "https://abetlen.github.io/llama-cpp-python/whl/$llamaFlavor"
 Run $Py @('-m', 'pip', 'install', '-q', '--extra-index-url', $llamaIndex,
           '-r', (Join-Path $Root 'requirements.txt'),
           '-r', (Join-Path $Here 'requirements-build.txt'))
 Run $Py @('-m', 'pip', 'install', '-q', '-U', 'yt-dlp', 'transcribe-cpp')
+
+if ($Backend -eq 'cuda') {
+  Say 'CUDA 런타임 (cudart · cuBLAS)'
+  # llama.cpp 의 CUDA 휠은 cudart64_12.dll·cublas64_12.dll 을 부르지만 담고 있지는
+  # 않습니다. NVIDIA 가 PyPI 에 올리는 런타임 패키지에서 꺼내 llama_cpp\lib 에 둡니다 --
+  # llama_cpp 는 그 디렉터리를 PATH 앞에 붙이고 나서 DLL 을 열므로 거기 있으면 찾습니다.
+  # 12.4.* 로 맞춥니다. cu124 휠과 같은 판이어야 합니다.
+  Run $Py @('-m', 'pip', 'install', '-q', 'nvidia-cuda-runtime-cu12==12.4.*', 'nvidia-cublas-cu12==12.4.*')
+  $site = (& $Py -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])').Trim()
+  $libDir = (& $Py -c 'import llama_cpp, os; print(os.path.join(os.path.dirname(llama_cpp.__file__), "lib"))').Trim()
+  foreach ($pair in @(@('cuda_runtime', 'cudart64_12.dll'), @('cublas', 'cublas64_12.dll'), @('cublas', 'cublasLt64_12.dll'))) {
+    $src = Join-Path $site "nvidia\$($pair[0])\bin\$($pair[1])"
+    if (-not (Test-Path $src)) { throw "CUDA 런타임 DLL 이 없습니다: $src" }
+    Copy-Item -Force $src (Join-Path $libDir $pair[1])
+  }
+  Write-Host "  llama_cpp\lib 에 넣음: cudart64_12.dll, cublas64_12.dll, cublasLt64_12.dll"
+}
 
 Say '런타임 확인'
 Run $Py @('-c', 'import transcribe_cpp, llama_cpp, sherpa_onnx, ctranslate2, yt_dlp, certifi; print("  transcribe.cpp:", sorted({b.kind for b in transcribe_cpp.backends()}))')
@@ -75,7 +101,8 @@ Say '동작 확인'
 Run (Join-Path $dist 'mimiwatch\mimiwatch.exe') @('--ytdlp', '--version')
 
 Say '압축'
-$out = Join-Path $dist "mimiwatch-$($env:MIMIWATCH_VERSION)-windows-x64.zip"
+$suffix = if ($Backend -eq 'cuda') { '-cuda' } elseif ($Backend -eq 'cpu') { '-cpu' } else { '' }
+$out = Join-Path $dist "mimiwatch-$($env:MIMIWATCH_VERSION)-windows-x64$suffix.zip"
 if (Test-Path $out) { Remove-Item $out }
 Compress-Archive -Path (Join-Path $dist 'mimiwatch') -DestinationPath $out
 Get-Item $out | Format-Table Name, Length

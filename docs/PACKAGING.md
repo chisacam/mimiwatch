@@ -8,6 +8,10 @@ mimiwatch.app            macOS -- Finder에서 두 번 누르면 브라우저에
 mimiwatch\mimiwatch.exe  Windows -- 두 번 누르면 콘솔 창이 하나 뜨고 브라우저가 열립니다
 ```
 
+윈도우는 둘입니다: `windows-x64`(Vulkan, 누구나)와 `windows-x64-cuda`(NVIDIA 전용,
+번역이 CUDA). 어느 GPU 가 지원되는지는 [WINDOWS.md](WINDOWS.md)의 NVIDIA 절에
+표로 있습니다.
+
 ## 묶음에 무엇이 들고 무엇이 들지 않는가
 
 **듭니다**: 파이썬, 서버와 화면, 네 런타임(transcribe.cpp·llama.cpp·sherpa-onnx·
@@ -75,6 +79,8 @@ packaging/build.sh                 # 맥·리눅스 → dist/mimiwatch-<판>-mac
   처음 한 번 5~10분, 그 뒤로는 pip이 만든 휠을 기억해 1분 남짓입니다.
 - **윈도우**: 아무것도 빌드하지 않습니다. `llama-cpp-python`은 만든 쪽 인덱스의
   Vulkan 휠(GPU가 없으면 CPU로 내려갑니다), `transcribe-cpp`는 PyPI 휠입니다.
+  `-Backend cuda`는 cu124 휠을 받고, 휠에 없는 런타임 DLL(cudart·cuBLAS)을
+  `nvidia-*-cu12` 패키지에서 꺼내 `llama_cpp\lib`에 넣습니다 -- 그래서 600MB 남짓입니다.
 - **깃허브 액션**(`.github/workflows/build.yml`): `v*` 태그를 밀면 두 플랫폼을
   만들어 릴리스에 붙입니다. 수동으로도(`workflow_dispatch`) 돌릴 수 있습니다.
 

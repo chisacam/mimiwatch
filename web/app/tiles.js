@@ -100,19 +100,24 @@ function dragHasOurs(e) {
   return types.includes("text/mimiwatch-tile") || types.includes("text/mimiwatch-row");
 }
 
-/* 두 타일의 자리를 바꿉니다. DOM 순서와 state.tiles 순서가 곧 자리입니다(1+2/1+3 의 큰
- * 자리는 초점이 차지하므로 거기서는 작은 칸들의 순서가 바뀝니다). */
+/* 두 타일의 자리를 바꿉니다. state.tiles 의 순서가 곧 자리이고, 화면에는 CSS `order` 로만
+ * 옮깁니다. **DOM 노드를 옮기면 안 됩니다** -- iframe 은 DOM 에서 자리를 옮기는 순간 다시
+ * 로드되어 플레이어가 처음 상태로 돌아가고(재생 단추, 처음부터), IFrame API 객체는 사라진
+ * 플레이어를 가리켜 영영 로딩 중이 됩니다. 실제로 그랬습니다. 1+2/1+3 의 큰 자리는 초점이
+ * 차지하므로 거기서는 작은 칸들의 순서가 바뀝니다. */
 function swapTiles(a, b) {
   if (!a || !b || a === b) return;
   const i = state.tiles.indexOf(a), j = state.tiles.indexOf(b);
   state.tiles[i] = b;
   state.tiles[j] = a;
-  const marker = document.createComment("");
-  a.el.replaceWith(marker);
-  b.el.replaceWith(a.el);
-  marker.replaceWith(b.el);
+  syncTileOrder();
   syncMvControls();
   requestAnimationFrame(applyCueSize);
+}
+
+/* state.tiles 의 순서를 격자 자리로. 격자의 자동 배치는 DOM 순서가 아니라 `order` 를 따릅니다. */
+function syncTileOrder() {
+  state.tiles.forEach((t, i) => { t.el.style.order = String(i); });
 }
 
 /* 단일 소스 경로가 지나는 문. 타일을 하나로 접고 그것을 돌려줍니다 -- 녹화본을
@@ -236,6 +241,7 @@ function applyLayout(name) {
   }
   const use = n <= 1 ? "1" : (layoutFits(state.mvLayout, n) ? state.mvLayout : DEFAULT_LAYOUT[n] || "2x2");
   const wrap = $("player-wrap");
+  syncTileOrder();
   // className 을 통째로 갈지 않습니다 -- 전체화면의 fs-active 가 같은 요소에 붙습니다.
   [...wrap.classList].filter(c => c.startsWith("mv-")).forEach(c => wrap.classList.remove(c));
   wrap.classList.add("mv-" + use);

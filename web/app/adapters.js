@@ -202,3 +202,62 @@ function hlsAdapter() {
   };
   return a;
 }
+
+/* 트위치. 공식 Embed JS(player.twitch.tv/js/embed/v1.js)를 첫 타일이 필요로 할 때 읽습니다.
+ * iframe 만 얹는 길도 있지만 소리를 끄고 켜는 문서화된 방법이 이쪽뿐입니다
+ * (setMuted). `parent` 는 우리 페이지의 호스트 이름 -- 서버는 localhost 와
+ * 127.0.0.1 로만 열리고 트위치는 그 둘을 부모로 허용합니다.
+ *
+ * 트위치의 iframe 은 allowfullscreen 을 달고 나옵니다. 그것을 떼어 두어 플레이어의
+ * 전체화면 단추가 iframe 만 키우지 않게 합니다 -- 그러면 자막이 사라집니다. 못
+ * 떼어도 onFullscreenChange 의 가드가 되돌립니다. */
+function twitchAdapter() {
+  const a = { kind: "twitch", ready: false, player: null, obs: null };
+  a.mount = async (host, src, opts = {}) => {
+    await loadScriptOnce("https://player.twitch.tv/js/embed/v1.js",
+                         () => !!(window.Twitch && window.Twitch.Player));
+    if (!(window.Twitch && window.Twitch.Player)) {
+      throw new Error("Twitch 플레이어를 불러오지 못했습니다. 네트워크를 확인해 주세요.");
+    }
+    const el = document.createElement("div");
+    el.id = "tw-host-" + (++_hostSeq);
+    host.appendChild(el);
+    const strip = () => host.querySelectorAll("iframe").forEach(f => {
+      f.removeAttribute("allowfullscreen");
+      f.removeAttribute("allow");
+    });
+    a.obs = new MutationObserver(strip);
+    a.obs.observe(el, { childList: true, subtree: true });
+    await new Promise((resolve) => {
+      let done = false;
+      const settle = () => { if (!done) { done = true; resolve(); } };
+      a.player = new Twitch.Player(el.id, {
+        channel: src.channel, parent: [location.hostname],
+        width: "100%", height: "100%", autoplay: true, muted: !!opts.muted,
+      });
+      a.player.addEventListener(Twitch.Player.READY, () => {
+        a.ready = true;
+        strip();
+        a.player.setMuted(!!opts.muted);
+        settle();
+      });
+      a.player.addEventListener(Twitch.Player.OFFLINE, () => {
+        if (opts.onError) opts.onError(`트위치 채널 ${src.channel} 이 방송 중이 아닙니다.`);
+        settle();
+      });
+      setTimeout(settle, 15000);
+    });
+  };
+  a.getCurrentTime = () => (a.player && a.ready ? (a.player.getCurrentTime() || 0) : 0);
+  a.seekTo = (t) => { if (a.player && a.ready) a.player.seek(t); };
+  a.playVideo = () => { if (a.player && a.ready) a.player.play(); };
+  a.setMuted = (m) => { if (a.player && a.ready) a.player.setMuted(!!m); };
+  a.destroy = () => {
+    if (a.obs) a.obs.disconnect();
+    a.obs = null;
+    try { if (a.player && a.player.destroy) a.player.destroy(); } catch (_) { /* 이미 사라짐 */ }
+    a.player = null;
+    a.ready = false;
+  };
+  return a;
+}

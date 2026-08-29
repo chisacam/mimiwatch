@@ -129,6 +129,9 @@ async function refillPicker() {
  * 서버에서 늘리거나 값을 손볼 때마다 어긋납니다 -- 특히 콘텐츠 유형은
  * 실제로 몇 초에 끊을지가 그 표에 들어 있습니다. */
 let profiles = [];
+/* 고르개에 올린 세션들의 상태. 「이어받기」를 멈춘 방송에만 살리는 데 씁니다. */
+let sessionInfo = {};
+const RUNNING = ["starting", "loading", "running"];
 
 async function fillChoices() {
   const r = await send({ type: "backends" });
@@ -165,14 +168,35 @@ async function fillPicker() {
     return;
   }
   fail("");
-  for (const x of (s.data || []).filter((x) => x.cues)) {
-    sel.append(new Option(`${x.title || x.id} · ${x.cues}줄`, "live:" + x.id));
+  sessionInfo = {};
+  for (const x of (s.data || []).filter((x) => x.cues || RUNNING.includes(x.state))) {
+    sessionInfo[x.id] = x;
+    const running = RUNNING.includes(x.state);
+    // 멈춘 것은 그렇게 적어 둡니다. 「이어받기」가 무엇을 가리키는지 보이게요.
+    const tail = running ? "" : x.stopped_by === "ended" ? " · 끝난 방송" : " · 멈춤";
+    sel.append(new Option(`${x.title || x.id} · ${x.cues || 0}줄${tail}`, "live:" + x.id));
   }
   for (const x of (v && v.data) || []) {
     sel.append(new Option(`${x.title || x.id} · ${x.cues}줄`, x.id));
   }
   const now = await send({ type: "watching", tabId });
   if (now && now.data) sel.value = now.data;
+  syncResumeButton();
+}
+
+/* 「이어받기」는 고른 것이 멈춘 방송일 때만 살아 있습니다. 끝난 방송은 이어받을
+ * 것이 없습니다 -- 전체 영상 전사는 mimiwatch 페이지에서 합니다. */
+function syncResumeButton() {
+  const v = $("pick").value || "";
+  const st = v.startsWith("live:") ? sessionInfo[v.slice(5)] : null;
+  const can = !!st && !RUNNING.includes(st.state) && st.stopped_by !== "ended"
+              && (st.source === "tab" || !!st.url);
+  $("resume").disabled = !can;
+  $("resume").title = !st ? "고른 방송이 멈춰 있으면 같은 세션에 이어서 받습니다"
+    : RUNNING.includes(st.state) ? "받는 중입니다"
+    : st.stopped_by === "ended" ? "끝난 방송입니다. 전체 영상 전사는 mimiwatch 페이지에서"
+    : st.source === "tab" ? "이 탭의 소리를 다시 잡아 같은 세션에 이어 받습니다"
+    : "같은 세션에 이어서 받습니다";
 }
 
 async function refreshState() {
@@ -208,6 +232,7 @@ async function pushPrefs() {
 }
 
 $("pick").addEventListener("change", async (e) => {
+  syncResumeButton();
   const r = await send({ type: "watch", tabId, value: e.target.value });
   if (r && !r.ok) { fail(r.error || "붙이지 못했습니다"); return; }
   // 페이지가 아직 우리 것을 들고 있지 않아 새로고침했습니다. 조용히 하면
@@ -281,6 +306,35 @@ $("stop").addEventListener("click", async () => {
   await fillPicker();
   setTimeout(refreshState, 400);
 });
+/* 멈춘 세션을 같은 세션으로 이어 붙입니다. 라이브는 사용자가 잠깐 멈추고
+ * 돌아오는 일이 잦고, 서버가 죽어 끊기기도 합니다. 그때 새 세션을 시작하면
+ * 자막이 두 벌로 갈리므로, 확장에서도 이어받을 수 있어야 합니다. 탭 소리로 받던
+ * 세션이면 이 탭의 소리를 다시 잡습니다 -- 서버는 그 소리를 되감을 수 없습니다. */
+$("resume").addEventListener("click", async () => {
+  const value = $("pick").value;
+  const id = value.startsWith("live:") ? value.slice(5) : "";
+  if (!id) return;
+  $("resume").disabled = true;
+  $("start-hint").textContent = "이어받는 중…";
+  fail("");
+  const r = await send({ type: "resumeSession", sessionId: id, tabId });
+  if (!r || !r.ok) {
+    fail((r && r.error) || "이어받지 못했습니다");
+    $("start-hint").textContent = "";
+    syncResumeButton();
+    return;
+  }
+  $("start-hint").textContent = r.source === "tab"
+    ? "이 탭의 소리를 다시 받습니다. 쌓인 자막 뒤에 이어 붙습니다."
+    : "이어서 받는 중입니다. 멈춘 사이가 되감기 창 안이면 빠진 것 없이 메워집니다.";
+  $("pick").length = 1;
+  await fillPicker();
+  $("pick").value = "live:" + id;
+  syncResumeButton();
+  await syncHideButton();
+  setTimeout(refreshState, 800);
+});
+
 /* ---------- 이 탭에서 새로 시작 ---------- */
 
 async function startWith(type) {

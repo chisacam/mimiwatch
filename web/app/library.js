@@ -52,7 +52,47 @@ async function deleteSession(sid, title) {
  * 있어야 하고 제목도 한 줄로 잘리지 않아야 합니다. 삭제 단추가 헤더에
  * 따로 있으면 "지금 열려 있는 것"만 지울 수 있어, 목록에서 보이는 것과
  * 지워지는 것이 어긋납니다. */
-function videoRow({ value, session, title, meta, live, stopped, deletable, videoId }) {
+/* 줄 오른쪽의 단추 묶음. 멈춘 방송에는 ▶ 이어받기와 ⟳ 전체 영상 전사, 녹화본에는
+ * ⟳ 다시 전사, 끝난 것에는 🗑. 받는 중인 줄에는 아무것도 없습니다 -- 「중단」이
+ * 먼저입니다. 처음 그릴 때와 상태가 바뀔 때(updateSessionRow) 같은 것을 씁니다. */
+function rowActions({ value, session, title, stopped, deletable, videoId, st }) {
+  const box = document.createElement("span");
+  box.className = "vact";
+  const add = (cls, text, tip, fn) => {
+    const b = document.createElement("button");
+    b.className = cls;
+    b.title = tip;
+    b.textContent = text;
+    b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+    box.appendChild(b);
+  };
+  if (session && stopped) {
+    const why = st ? stopReason(st) : "stopped";
+    if (why !== "ended") {
+      add("vres", "▶", "이어받기 — 같은 세션에 이어서 받습니다", async () => {
+        openFromList(value);
+        await resumeSession(session, why);
+      });
+    }
+    if (videoId) {
+      add("vre", "⟳", "전체 영상 전사 — 끝난 방송의 녹화본을 통째로 다시 전사합니다", () =>
+        openRetranscribe(`https://www.youtube.com/watch?v=${videoId}`,
+                         (st && st.source_lang) || "", title));
+    }
+  } else if (!session) {
+    add("vre", "⟳", "다시 전사 — 같은 엔진으로도 됩니다. 글자가 같은 줄의 번역은 남습니다", () =>
+      openRetranscribe(`https://www.youtube.com/watch?v=${value}`, (st && st.source_lang) || "", title));
+  }
+  if (deletable) {
+    add("vdel", "🗑", session ? "이 방송의 자막 내역을 삭제합니다" : "이 전사를 삭제합니다", () => {
+      if (session) deleteSession(session, title);
+      else deleteVideo(value, title);
+    });
+  }
+  return box;
+}
+
+function videoRow({ value, session, title, meta, live, stopped, deletable, videoId, st }) {
   const row = document.createElement("div");
   row.className = "video-row" + (live ? " live" : "") + (stopped ? " stopped" : "");
   row.dataset.value = value;
@@ -92,20 +132,7 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   }
   row.appendChild(body);
 
-  if (deletable) {
-    const del = document.createElement("button");
-    del.className = "vdel";
-    del.title = session ? "이 방송의 자막 내역을 삭제합니다" : "이 전사를 삭제합니다";
-    del.textContent = "🗑";
-    del.addEventListener("click", (e) => {
-      e.stopPropagation();          // 지우려다 열리면 안 됩니다
-      if (session) deleteSession(session, title);
-      else deleteVideo(value, title);
-    });
-    row.appendChild(del);
-  } else {
-    row.appendChild(document.createElement("span"));
-  }
+  row.appendChild(rowActions({ value, session, title, stopped, deletable, videoId, st }));
 
   row.addEventListener("click", () => openFromList(value));
   return row;
@@ -129,18 +156,12 @@ function updateSessionRow(row, s) {
     if (t) t.textContent = title;
     if (row.classList.contains("on") && !document.querySelector(".title-edit")) setNowTitle(title);
   }
-  // 끝난 방송만 지울 수 있습니다. 받는 중이던 줄이 끝나면 🗑 이 생겨야 합니다.
-  const hasDel = !!row.querySelector(".vdel");
-  if (!running && !hasDel) {
-    const del = document.createElement("button");
-    del.className = "vdel";
-    del.title = "이 방송의 자막 내역을 삭제합니다";
-    del.textContent = "🗑";
-    del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id, row.dataset.title); });
-    row.lastElementChild.replaceWith(del);
-  } else if (running && hasDel) {
-    row.querySelector(".vdel").replaceWith(document.createElement("span"));
-  }
+  // 단추 묶음은 상태에 따라 다릅니다. 받는 중이던 줄이 끝나면 ▶·⟳·🗑 이 생겨야
+  // 하고, 이어받아 다시 받는 중이면 사라져야 합니다.
+  row.lastElementChild.replaceWith(rowActions({
+    value: "live:" + s.id, session: s.id, title, stopped: !running,
+    deletable: !running, videoId: s.video_id || "", st: s,
+  }));
 }
 
 function openFromList(value) {
@@ -205,7 +226,7 @@ async function refreshVideoList(selectId, pre) {
       title: s.title || s.url, videoId: s.video_id || "",
       meta: `${s.cues}줄` + (running ? "" : `  ·  ${LIVE_STATE[s.state] || s.state}`),
       // 끝난 방송만 지울 수 있습니다. 받는 중인 것은 「중단」이 먼저입니다.
-      live: true, stopped: !running, deletable: !running,
+      live: true, stopped: !running, deletable: !running, st: s,
     }));
   });
   list.forEach(v => {
@@ -214,7 +235,7 @@ async function refreshVideoList(selectId, pre) {
       value: v.id, title: v.title, videoId: v.id,
       meta: [v.source_lang + (v.translated ? `→${v.viewer_lang}` : ""), mins]
         .filter(Boolean).join("  ·  "),
-      deletable: true,
+      deletable: true, st: v,
     }));
   });
   if (!box.children.length) {

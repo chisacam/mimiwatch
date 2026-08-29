@@ -64,6 +64,10 @@
     <button id="hide" class="seg">화면에서 내리기</button>
   </div>
   <div class="row">
+    <!-- 멈춘 세션을 같은 세션으로 이어 붙입니다. 고르개에서 멈춘 방송을 골랐을 때만
+         살아납니다. 탭 소리로 받던 세션이면 이 탭의 소리를 다시 잡습니다. -->
+    <button id="resume" class="seg wide" disabled
+            title="고른 방송이 멈춰 있으면 같은 세션에 이어서 받습니다">▶ 이어받기</button>
     <button id="stop" class="seg danger wide" title="이 탭의 세션을 서버에서 끝냅니다">■ 받아 적기 중단</button>
   </div>
   <p class="hint" id="state">—</p>

@@ -16,61 +16,116 @@ function hideLiveNotice() {
 /* `why` 는 왜 멈췄는지입니다. 서버가 죽은 것과 공유가 끝난 것은 다른 일이고,
  * 다시 시작하려면 해야 할 일도 다릅니다 -- 탭 소리는 브라우저가 다시
  * 들려줘야 합니다. */
-function offerResume(sessionId, why) {
+/* 멈춘 세션의 안내 띠. 왜 멈췄는지에 따라 문구가 다르고, 할 수 있는 일을 단추로
+ * 붙입니다 -- 「이어받기」와, 영상 id가 있으면 「전체 영상 전사」.
+ *
+ * 사용자가 스스로 「중단」한 세션(`stopped`)도 이어받을 수 있습니다. 예전에는
+ * 되묻는 것이 성가시다고 권하지 않았는데, 라이브는 사용자가 잠깐 멈추고 돌아오는
+ * 일이 잦고 그때 이어 붙일 길이 없으면 자막이 두 세션으로 갈립니다. 방송이 이미
+ * 끝난 것(`stopped_by: ended`)만 예외입니다 -- 그때는 이어받을 것이 없고, 대신
+ * 녹화본으로 남은 전체 영상을 전사할 수 있습니다. */
+function offerResume(sessionId, why, st) {
   const box = $("live-notice");
   box.textContent = {
     tab: "자막 수신이 멈춰 있습니다. 탭을 다시 공유하면 이어서 쌓입니다 — ",
     error: "오류로 멈췄습니다. 원인이 사라졌으면 이어서 받을 수 있습니다 — ",
-  }[why] || "서버가 멈춰 수신이 끊겼습니다 — ";
-  const b = document.createElement("button");
-  b.className = "seg";
-  b.textContent = "이어받기";
-  b.onclick = async () => {
-    b.disabled = true;
-    b.textContent = "이어받는 중…";
-    // 대본 창을 여기서 잡습니다. 이 클릭이 살아 있는 유일한 지점입니다 --
-    // 아래 공유 창을 고르고 나면 크롬이 window.open 을 막습니다. 시작할
-    // 때와 같은 이유이고 같은 순서입니다.
-    const pending = why === "tab" ? openPendingScriptWindow() : null;
-    if (pending) state.scriptWin = pending;
-
-    const res = await (await fetch("/api/live/resume", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: sessionId }),
-    })).json();
-    if (res.error) {
-      if (pending) { pending.close(); state.scriptWin = null; }
-      showLiveNotice(`이어받지 못했습니다 — ${res.error}`);
-      return;
-    }
-    hideLiveNotice();
-    // 같은 세션이므로 다시 붙기만 하면 됩니다. detachLive 로 지금 붙어
-    // 있는 것을 끊고 새로 열어야 상태 이벤트를 처음부터 받습니다.
-    detachLive();
-    state.live = null;
-    await resumeLive(sessionId);
-    await refreshVideoList();
-    // 탭 소리는 서버가 되감을 수 없습니다. 브라우저가 다시 들려줘야
-    // 이어집니다 -- 세션만 살아나고 소리가 오지 않으면 「받는 중」인 채로
-    // 한 줄도 늘지 않습니다.
-    if (res.source !== "tab") return;
-    const media = await requestTabAudio();
-    if (!media) {
-      if (pending) { pending.close(); state.scriptWin = null; }
-      // 세션은 이미 살아났는데 소리가 오지 않습니다. 그 상태를 화면에
-      // 적어 두지 않으면 「받는 중」인 채로 한 줄도 늘지 않는 이유를
-      // 알 길이 없습니다.
-      tabStageNotice("탭을 다시 공유해야 이어집니다.");
-      showLiveNotice("탭을 다시 공유해야 이어집니다. 목록에서 다시 "
-                     + "「이어받기」를 누르십시오.");
-      return;
-    }
-    await pipeCapture(media, sessionId);
-    tabStageNotice();
-    aimScriptWindow(pending, sessionId);
-  };
-  box.appendChild(b);
+    interrupted: "서버가 멈춰 수신이 끊겼습니다 — ",
+    stopped: "수신을 멈춘 방송입니다. 아직 진행 중이면 이어서 받을 수 있습니다 — ",
+    ended: "끝난 방송입니다. 남은 녹화본을 통째로 전사할 수 있습니다 — ",
+  }[why] || "수신이 멈춰 있습니다 — ";
+  if (why !== "ended") {
+    const b = document.createElement("button");
+    b.className = "seg";
+    b.textContent = "이어받기";
+    b.onclick = () => resumeSession(sessionId, why, b);
+    box.appendChild(b);
+  }
+  const vid = st && st.video_id;
+  if (vid) {
+    const r = document.createElement("button");
+    r.className = "seg";
+    r.textContent = "⟳ 전체 영상 전사";
+    r.title = "방송이 끝나 녹화본으로 남았으면, 그 영상 전체를 다시 전사합니다";
+    r.onclick = () => openRetranscribe(`https://www.youtube.com/watch?v=${vid}`,
+                                       st.source_lang || "", st.title || "");
+    box.appendChild(r);
+  }
   box.hidden = false;
+}
+
+/* 끊긴 세션을 **같은 세션으로** 이어 붙입니다. 안내 띠의 단추와 목록 줄의 ▶ 가
+ * 둘 다 여기로 옵니다. `btn` 은 누른 단추(있으면 진행을 적습니다). */
+async function resumeSession(sessionId, why, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "이어받는 중…"; }
+  // 대본 창을 여기서 잡습니다. 이 클릭이 살아 있는 유일한 지점입니다 --
+  // 아래 공유 창을 고르고 나면 크롬이 window.open 을 막습니다. 시작할
+  // 때와 같은 이유이고 같은 순서입니다.
+  const pending = why === "tab" ? openPendingScriptWindow() : null;
+  if (pending) state.scriptWin = pending;
+
+  const res = await (await fetch("/api/live/resume", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: sessionId }),
+  })).json();
+  if (res.error) {
+    if (pending) { pending.close(); state.scriptWin = null; }
+    showLiveNotice(`이어받지 못했습니다 — ${res.error}`);
+    if (btn) { btn.disabled = false; btn.textContent = "이어받기"; }
+    return;
+  }
+  hideLiveNotice();
+  // 같은 세션이므로 다시 붙기만 하면 됩니다. detachLive 로 지금 붙어
+  // 있는 것을 끊고 새로 열어야 상태 이벤트를 처음부터 받습니다.
+  detachLive();
+  state.live = null;
+  await resumeLive(sessionId);
+  await refreshVideoList();
+  // 탭 소리는 서버가 되감을 수 없습니다. 브라우저가 다시 들려줘야
+  // 이어집니다 -- 세션만 살아나고 소리가 오지 않으면 「받는 중」인 채로
+  // 한 줄도 늘지 않습니다.
+  if (res.source !== "tab") return;
+  const media = await requestTabAudio();
+  if (!media) {
+    if (pending) { pending.close(); state.scriptWin = null; }
+    // 세션은 이미 살아났는데 소리가 오지 않습니다. 그 상태를 화면에
+    // 적어 두지 않으면 「받는 중」인 채로 한 줄도 늘지 않는 이유를
+    // 알 길이 없습니다.
+    tabStageNotice("탭을 다시 공유해야 이어집니다.");
+    showLiveNotice("탭을 다시 공유해야 이어집니다. 목록에서 다시 "
+                   + "「이어받기」를 누르십시오.");
+    return;
+  }
+  await pipeCapture(media, sessionId);
+  tabStageNotice();
+  aimScriptWindow(pending, sessionId);
+}
+
+/* 왜 멈췄는지를 안내 띠의 문구 열쇠로. `resumeLive` 와 목록 줄이 같은 규칙을 씁니다. */
+function stopReason(st) {
+  if (st.source === "tab") return "tab";
+  if (st.stopped_by === "ended") return "ended";
+  if (st.state === "interrupted") return "interrupted";
+  if (st.state === "error" || st.stopped_by === "stream") return "error";
+  return "stopped";
+}
+
+/* 녹화본을 다시 전사합니다 -- 같은 엔진으로도 됩니다.
+ *
+ * 「영상 추가」 대화상자에 주소를 채워 엽니다. 거기서 전사 엔진·언어·장르를 고르고
+ * 「시작」을 누르면 서버는 이미 있는 영상도 다시 전사합니다(글자가 같은 줄의
+ * 번역과 손편집은 물려받습니다). 예전에는 다시 전사할 길이 이 대화상자에 같은
+ * 주소를 다시 붙여 넣는 것뿐이라 그런 일이 되는지조차 알 수 없었습니다. */
+function openRetranscribe(url, lang, title) {
+  const f = $("add-form");
+  renderAsrPicker();
+  fillEngineSelect(f.querySelector('select[name="backend"]'), state.backends, state.backend, LOCKED.tr);
+  f.source.value = "url";
+  setAddSource("url");
+  f.url.value = url;
+  if ([...f.lang.options].some(o => o.value === (lang || ""))) f.lang.value = lang || "";
+  const h = $("add-dialog").querySelector("h3");
+  h.textContent = title ? `다시 전사 · ${title.slice(0, 40)}` : "다시 전사";
+  $("add-dialog").showModal();
 }
 
 function showLiveNotice(text) {
@@ -191,19 +246,11 @@ async function resumeLive(sessionId) {
   // 끝나는데, 그것이 정상 종료 경로입니다 -- 서버를 정상으로 내려도
   // 마찬가지입니다. 그러니 멈춰 있으면 언제나 권합니다. 같은 세션으로
   // 이어야 스크립트가 한 줄기로 남습니다.
-  if (!running) {
-    if (st.source === "tab") offerResume(st.id, "tab");
-    // 오류로 끝난 세션도 이어받을 수 있어야 합니다. 모델 파일을 못 찾았다든가
-    // 하는 이유는 대개 고치고 나면 사라지는 것이고, 그때 이어붙일 자리가
-    // 없으면 받아 둔 자막을 버리고 새로 시작하는 수밖에 없습니다.
-    //
-    // `stopped`여도 서버가 「수신이 끊겨서」(stopped_by=stream)라고 적어 두었으면
-    // 권합니다. 사용자가 「중단」한 것(user)과 방송이 끝난 것(ended)은 아닙니다.
-    else if (st.url && (st.state === "interrupted" || st.state === "error"
-                        || (st.state === "stopped" && st.stopped_by === "stream"))) {
-      offerResume(st.id, st.state === "stopped" ? "error" : st.state);
-    }
-  }
+  // 멈춘 세션은 어떤 이유로 멈췄든 이어받을 수 있습니다 -- 사용자가 「중단」한
+  // 것도요. 방송이 끝난 것만 이어받을 것이 없고, 그때는 전체 영상 전사를
+  // 권합니다. 자동으로 하지는 않습니다. 다시 받기 시작하는 것은 눌러서 시킬
+  // 일입니다.
+  if (!running && (st.source === "tab" || st.url)) offerResume(st.id, stopReason(st), st);
   await attachLive(st.id, st.video_id);
   // 탭 세션에는 끼워 넣을 영상이 없습니다. attachLive 가 앞서 본 것의
   // 안내를 지우고 지나가므로, 그 뒤에 이 흐름의 안내를 다시 씁니다.

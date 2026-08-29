@@ -85,6 +85,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         reply(await startFromUrl(msg));
       } else if (msg.type === "startCapture") {
         reply(await startFromTab(msg));
+      } else if (msg.type === "resumeSession") {
+        reply(await resumeSession(msg));
       } else if (msg.type === "stopSession") {
         await stopCapture();
         if (msg.sessionId) await post("/api/live/stop", { id: msg.sessionId });
@@ -206,6 +208,32 @@ async function startFromTab(msg) {
   if (vid) await chrome.storage.local.set({ ["vid:" + res.id]: vid });
   const w = await setWatch(msg.tabId, "live:" + res.id, { noReload: true });
   return { ok: true, id: res.id, ...w };
+}
+
+/* 멈춘 세션을 같은 세션으로 이어 붙입니다. 서버가 세션을 되살리고(주소로 받던
+ * 것은 되감기 창 안이면 빠진 것 없이), 탭 소리로 받던 것이면 이 탭의 소리를 다시
+ * 잡아 그 세션에 올립니다. 그 뒤 이 탭에 얹습니다. */
+async function resumeSession(msg) {
+  const res = await post("/api/live/resume", { id: msg.sessionId });
+  if (res.error) return { ok: false, error: res.error };
+  const tab = res.source === "tab";
+  if (tab) {
+    await stopCapture();                  // 다른 세션의 소리를 잡고 있었으면 놓습니다
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
+    await ensureOffscreen();
+    const started = await chrome.runtime.sendMessage({
+      target: "offscreen", type: "capture",
+      streamId, sessionId: res.id, base: await base(),
+    });
+    if (!started || !started.ok) {
+      // 세션은 살아났지만 소리가 가지 않습니다. 끝내지는 않습니다 -- 다시 누르면
+      // 서버는 「이미 받는 중」이라 하므로, 그때는 중단한 뒤 다시 이어받아야 합니다.
+      return { ok: false, error: (started && started.error)
+        || "소리를 잡지 못했습니다. 「중단」한 뒤 다시 「이어받기」를 누르십시오." };
+    }
+  }
+  const w = await setWatch(msg.tabId, "live:" + res.id, { noReload: tab });
+  return { ok: true, id: res.id, source: res.source, ...w };
 }
 
 async function ensureOffscreen() {

@@ -55,7 +55,10 @@ function bind() {
   });
   $("toggle-panel").addEventListener("click", () => setPanel(!state.panelHidden));
   $("toggle-library").addEventListener("click", () => setLibrary(!state.libraryHidden));
-  $("backend-picker").addEventListener("change", e => selectBackend(e.target.value));
+  $("backend-picker").addEventListener("change", e => {
+    syncActive("tr", e.target.value);
+    selectBackend(e.target.value);
+  });
   $("open-manage").addEventListener("click", (e) => {
     e.stopPropagation();
     toggleManage($("manage-menu").hidden);
@@ -86,13 +89,15 @@ function bind() {
     b.addEventListener("click", () => showEngineForm(b.dataset.add, null)));
   $("asr-picker").addEventListener("change", e => {
     setAsr(e.target.value);
+    syncActive("asr", e.target.value);
     if (state.live) askLiveRestart();
   });
   document.querySelector('#add-form select[name="asr"]')
-    .addEventListener("change", e => setAsr(e.target.value));
+    .addEventListener("change", e => { setAsr(e.target.value); syncActive("asr", e.target.value); });
   document.querySelector('#add-form select[name="backend"]')
     .addEventListener("change", e => { state.backend = e.target.value;
-                                       setBackendPickers(state.backend); persist(); });
+                                       setBackendPickers(state.backend); persist();
+                                       syncActive("tr", state.backend); });
   $("job-cancel").addEventListener("click", cancelJob);
   $("add-video").addEventListener("click", () => {
     // 열 때마다 지금 값으로 맞춥니다. 엔진을 지웠거나 「관리」에서 바꾼

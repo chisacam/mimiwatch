@@ -216,7 +216,9 @@ async function startFromTab(msg) {
  * 것은 되감기 창 안이면 빠진 것 없이), 탭 소리로 받던 것이면 이 탭의 소리를 다시
  * 잡아 그 세션에 올립니다. 그 뒤 이 탭에 얹습니다. */
 async function resumeSession(msg) {
-  const res = await post("/api/live/resume", { id: msg.sessionId });
+  // 서버의 기본 엔진으로 이어받습니다 -- mimiwatch 페이지의 「관리」 선택이 곧 그 값입니다.
+  const cfg = await api("/api/backends");
+  const res = await post("/api/live/resume", { id: msg.sessionId, asr: cfg.asr_active, backend: cfg.active });
   if (res.error) return { ok: false, error: res.error };
   const tab = res.source === "tab";
   if (tab) {

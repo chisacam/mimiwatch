@@ -1229,7 +1229,7 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     return {"backend": backend_id}
 
 
-def resume(session_id: str) -> dict:
+def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "") -> dict:
     """끊긴 세션의 수신을 **같은 세션으로** 이어 붙입니다.
 
     지금까지는 서버가 죽으면 그 세션은 거기서 끝이었습니다. 이어받은 척하면
@@ -1262,10 +1262,16 @@ def resume(session_id: str) -> dict:
         if old is not None:
             old.stop()
 
+    # 엔진은 부르는 쪽이 준 것이 우선입니다(「관리」에서 바꾼 뒤 이어받기). 설정에 없는
+    # id 면 저장된 것을 씁니다 -- 이어받기가 엔진 이름 하나 때문에 실패하면 안 됩니다.
+    cfg = config.load()
+    asr_id = (asr_backend_id if config.find("asr", asr_backend_id, cfg)
+              else (st.get("asr_backend") or ""))
+    tr_id = backend_id if config.find("tr", backend_id, cfg) else (st.get("backend") or "")
     s = LiveSession(st.get("url") or "", st.get("source_lang") or None,
-                    st.get("viewer_lang") or "ko", st.get("backend") or "",
+                    st.get("viewer_lang") or "ko", tr_id,
                     profile=st.get("profile") or "broadcast",
-                    asr_backend_id=st.get("asr_backend") or "",
+                    asr_backend_id=asr_id,
                     refine=bool(st.get("refine")), genre=st.get("genre"),
                     source="tab" if tab else "hls")
     s.id = session_id

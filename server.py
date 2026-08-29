@@ -514,7 +514,25 @@ class Handler(BaseHTTPRequestHandler):
         self._json(live.stop(body.get("id", "")))
 
     def post_live_resume(self, body):
-        self._json(live.resume(body.get("id", "")))
+        # 이어받을 때 엔진을 바꿔 줄 수 있습니다. 예전에는 저장된 세션의 엔진을 그대로 써서,
+        # 「관리」에서 바꿔 놓고 이어받아도 옛 엔진으로 돌았습니다.
+        self._json(live.resume(body.get("id", ""), asr_backend_id=body.get("asr") or "",
+                               backend_id=body.get("backend") or ""))
+
+    def post_active(self, body):
+        """기본 전사·번역 엔진을 바꿉니다. 화면의 「관리」 선택기가 부릅니다.
+
+        예전에는 그 선택이 브라우저(localStorage)에만 남았습니다. 확장은 서버의 `active`를
+        읽어 세션을 시작하므로, 화면에서 무엇을 골랐든 확장은 늘 기본(경량) 엔진으로
+        시작했습니다. 이제 선택기가 곧 서버의 기본값입니다.
+        """
+        kind = body.get("kind")
+        if kind not in config.KINDS:
+            return self._json({"error": "kind 는 asr 또는 tr"}, 400)
+        got = config.set_active(kind, str(body.get("id") or ""))
+        if "error" in got:
+            return self._json(got, 400)
+        self.get_backends()
 
     def post_live_delete(self, body):
         self._json(live.delete((body.get("id") or "").strip()))
@@ -643,6 +661,7 @@ POST_ROUTES = {
     "/api/live/asr": Handler.post_live_asr,
     "/api/live/stop": Handler.post_live_stop,
     "/api/live/resume": Handler.post_live_resume,
+    "/api/active": Handler.post_active,
     "/api/live/delete": Handler.post_live_delete,
     "/api/cue": Handler.post_cue,
     "/api/cue/delete": Handler.post_cue_delete,

@@ -205,3 +205,22 @@ def test_close_translator_drains_pending_lines(session):
     s._release()                                  # 세션이 끝날 때 부르는 것
     assert len(_translations(s)) == 5
     assert s._tr is None
+
+
+def test_resume_uses_the_engines_the_caller_picked(monkeypatch):
+    """멈춘 사이 「관리」에서 바꾼 엔진으로 이어받습니다. 모르는 id 면 저장된 것을 씁니다."""
+    st = {"id": "resume-1", "state": "stopped", "stopped_by": "user", "url": "https://x/live",
+          "source": "hls", "source_lang": "ja", "viewer_lang": "ko", "backend": "local-m2m100",
+          "asr_backend": "tcpp-lite", "media_base": 10.0, "audio_s": 5.0, "lines": 0}
+    store.save_session(st, "")
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)   # 실제로 받지는 않습니다
+    got = live.resume("resume-1", asr_backend_id="tcpp-best", backend_id="local-gemma")
+    assert got["resumed"]
+    s = live.get("resume-1")
+    assert s.asr_backend_id == "tcpp-best" and s.backend_id == "local-gemma"
+    live._sessions.clear()
+    store.save_session(st, "")                 # _run 이 가짜라 상태가 starting 으로 남았습니다
+    got = live.resume("resume-1", asr_backend_id="no-such", backend_id="")
+    s = live.get("resume-1")
+    assert s.asr_backend_id == "tcpp-lite" and s.backend_id == "local-m2m100"
+    live._sessions.clear()

@@ -63,9 +63,11 @@ async function resumeSession(sessionId, why, btn) {
   const pending = why === "tab" ? openPendingScriptWindow() : null;
   if (pending) state.scriptWin = pending;
 
+  // 지금 선택기가 가리키는 엔진으로 이어받습니다. 멈춘 사이에 「관리」에서 바꾼 것이 있으면
+  // 그것이 새 구간부터 쓰입니다.
   const res = await (await fetch("/api/live/resume", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: sessionId }),
+    body: JSON.stringify({ id: sessionId, asr: state.asr, backend: state.backend }),
   })).json();
   if (res.error) {
     if (pending) { pending.close(); state.scriptWin = null; }
@@ -143,7 +145,10 @@ function showLiveNotice(text) {
 async function askLiveRestart() {
   const stale = state.live && state.live.state
                 && !LIVE_RUNNING.includes(state.live.state);
-  if (!state.live || state.live.asr === state.asr || stale) {
+  // 멈춘 세션에서는 바꿀 것이 없습니다 -- 다음 이어받기가 새 엔진으로 시작합니다. 여기서
+  // 안내 띠를 지우면 안 됩니다: 예전에는 엔진을 바꾸는 순간 「이어받기」 단추가 사라졌습니다.
+  if (stale) return;
+  if (!state.live || state.live.asr === state.asr) {
     hideLiveNotice();
     return;
   }
@@ -413,7 +418,16 @@ function onLiveStatus(m) {
     el.className = "status warn";
     el.innerHTML = `${LIVE_STATE.interrupted} · ${m.lines || 0}줄까지 남아 있습니다`;
     $("live-badge").hidden = true;
+    offerResume(m.id, stopReason(m), m);
     return;
+  }
+  if (m.state === "stopped") {
+    // 다른 창이나 확장에서 「중단」했습니다. 예전에는 이 분기가 없어 배지가 「● LIVE」인
+    // 채로 남았습니다. 수신만 멈춘 것이니 자막은 두고, 이어받을 길을 띠에 둡니다.
+    stopCapture();
+    $("live-badge").hidden = true;
+    markLiveStopped();
+    if (m.source === "tab" || m.url) offerResume(m.id, stopReason(m), m);
   }
   el.className = "status";
   const src = m.source_lang || "auto";

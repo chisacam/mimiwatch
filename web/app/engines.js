@@ -347,6 +347,16 @@ function renderAsrPicker() {
                    state.asrBackends, state.asr, LOCKED.asr);
 }
 
+/* 「관리」에서 고른 엔진을 서버의 기본값으로도 적습니다. 확장은 서버의 기본값으로 세션을
+ * 시작하므로, 여기서 적지 않으면 화면에서 무엇을 골랐든 확장은 경량 엔진으로 시작합니다.
+ * 실패는 조용히 지나갑니다 -- 화면의 선택은 이미 바뀌었고, 예전 서버(끝점 없음)일 수 있습니다. */
+function syncActive(kind, id) {
+  fetch("/api/active", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, id }),
+  }).then(r => r.ok ? r.json() : null).then(cfg => { if (cfg) adoptConfig(cfg); }).catch(() => {});
+}
+
 function setAsr(id) {
   state.asr = id;
   const a = $("asr-picker");

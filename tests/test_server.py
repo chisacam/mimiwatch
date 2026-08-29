@@ -139,6 +139,19 @@ def test_api_keys_are_masked_and_kept(server):
     assert saved()["api_key"] == ""
 
 
+def test_active_engine_is_set_on_the_server(server):
+    """「관리」 선택기가 서버의 기본 엔진을 바꿉니다 -- 확장이 그 값으로 세션을 시작합니다."""
+    base, _ = server
+    s, b = req(base, "/api/active", body={"kind": "asr", "id": "tcpp-best"})
+    assert s == 200 and json.loads(b)["asr_active"] == "tcpp-best"
+    s, b = req(base, "/api/active", body={"kind": "tr", "id": "local-gemma"})
+    assert s == 200 and json.loads(b)["active"] == "local-gemma"
+    assert req(base, "/api/active", body={"kind": "tr", "id": "nope"})[0] == 400
+    assert req(base, "/api/active", body={"kind": "zz", "id": "x"})[0] == 400
+    s, b = req(base, "/api/backends")
+    assert json.loads(b)["asr_active"] == "tcpp-best"
+
+
 def test_static_and_index(server):
     base, _ = server
     assert req(base, "/")[0] == 200

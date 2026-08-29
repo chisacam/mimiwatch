@@ -180,11 +180,8 @@ function openFromList(value) {
     // 화면에 이미 타일로 있으면 초점만 옮깁니다. 묶음의 멤버면 묶음을 통째로 엽니다.
     const t = tileBySession(sid);
     if (t) { setFocus(t); return; }
-    if (row.dataset.group && state.mv && state.mv.id !== row.dataset.group) {
-      openMultiview(row.dataset.group).then(ok => { if (!ok) resumeLive(sid); });
-      return;
-    }
-    if (row.dataset.group && !state.mv) {
+    // 대본 창은 세션 하나만 읽습니다 -- 묶음을 통째로 열면 보이지 않는 타일마다 SSE 를 엽니다.
+    if (row.dataset.group && !state.scriptOnly && (!state.mv || state.mv.id !== row.dataset.group)) {
       openMultiview(row.dataset.group).then(ok => { if (!ok) resumeLive(sid); });
       return;
     }

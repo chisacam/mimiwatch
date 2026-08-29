@@ -39,7 +39,8 @@ WEB = os.path.join(BASE, "web")
 # 화면에 보내는 API 키 자리표시. 진짜 키는 backends.json 밖으로 나가지 않습니다.
 KEY_MASK = "••••••••"
 # SSE 한 연결의 수명. MV3 서비스 워커의 "단일 요청 5분" 규칙보다 짧게 잡습니다.
-SSE_ROTATE_S = 270.0
+# 시험은 환경 변수로 몇 초로 줄여 회전 뒤 소켓이 정말 닫히는지 봅니다.
+SSE_ROTATE_S = float(os.environ.get("MIMIWATCH_SSE_ROTATE_S") or 270.0)
 # JSON 몸통 상한. 자막 한 줄 고치기·엔진 설정이 전부라 1MB 면 넉넉합니다. 오디오(ingest)는
 # 따로 갑니다.
 JSON_MAX = 1 << 20
@@ -282,12 +283,21 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
             started = time.time()
             while True:
-                if time.time() - started > SSE_ROTATE_S:
+                # 회전 시각까지 남은 시간만큼만 기다립니다. 예전에는 15초 단위로만
+                # 깨어나서 회전이 최대 15초 늦었습니다.
+                left = SSE_ROTATE_S - (time.time() - started)
+                if left <= 0:
                     self.wfile.write(b'data: {"type": "rotate"}\n\n')
                     self.wfile.flush()
+                    # 여기서 소켓을 **정말로** 닫아야 합니다. SSE 헤더의
+                    # `Connection: keep-alive` 가 close_connection 을 False 로
+                    # 돌려 놓아서, 그냥 돌아가면 handle() 이 같은 소켓에서 다음
+                    # 요청을 기다리고 브라우저는 본문이 더 오길 기다립니다 --
+                    # onerror 도 재접속도 없이 4.5분마다 자막이 조용히 멎었습니다.
+                    self.close_connection = True
                     return
                 try:
-                    data = q.get(timeout=15)
+                    data = q.get(timeout=min(15, left))
                 except Exception:
                     self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
@@ -355,15 +365,24 @@ class Handler(BaseHTTPRequestHandler):
                 return
             started = time.time()
             while True:
-                if time.time() - started > SSE_ROTATE_S:
+                # 회전 시각까지 남은 시간만큼만 기다립니다. 예전에는 15초 단위로만
+                # 깨어나서 회전이 최대 15초 늦었습니다.
+                left = SSE_ROTATE_S - (time.time() - started)
+                if left <= 0:
                     # 스트림을 일부러 끊습니다. 확장의 서비스 워커는 한 요청이 5분을 넘으면
                     # 크롬이 내리므로, 그 전에 우리가 닫고 클라이언트가 Last-Event-ID 로
                     # 곧 다시 붙게 합니다. 화면(EventSource)도 같은 규칙으로 되붙습니다.
                     self.wfile.write(b'data: {"type": "rotate"}\n\n')
                     self.wfile.flush()
+                    # 여기서 소켓을 **정말로** 닫아야 합니다. SSE 헤더의
+                    # `Connection: keep-alive` 가 close_connection 을 False 로
+                    # 돌려 놓아서, 그냥 돌아가면 handle() 이 같은 소켓에서 다음
+                    # 요청을 기다리고 브라우저는 본문이 더 오길 기다립니다 --
+                    # onerror 도 재접속도 없이 4.5분마다 자막이 조용히 멎었습니다.
+                    self.close_connection = True
                     return
                 try:
-                    seq, data = q.get(timeout=15)
+                    seq, data = q.get(timeout=min(15, left))
                 except Exception:
                     self.wfile.write(b": keepalive\n\n")   # keep proxies honest
                     self.wfile.flush()

@@ -73,6 +73,8 @@ def server(tmp_path_factory):
     env = {**os.environ, "MIMIWATCH_DATA_DIR": str(tmp / "data"),
            "MIMIWATCH_CONFIG": str(tmp / "backends.json"),
            "MIMIWATCH_HOME": str(tmp / "home"),
+           # SSE 회전을 2초로. 회전 뒤 소켓이 정말 닫히는지 몇 초 안에 봅니다.
+           "MIMIWATCH_SSE_ROTATE_S": "2",
            "PYTHONPATH": stubs + (os.pathsep + os.environ["PYTHONPATH"]
                                   if os.environ.get("PYTHONPATH") else "")}
     proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py"), "--port", str(port)],
@@ -237,6 +239,30 @@ def test_event_bus_stream_says_hello(server):
         assert resp.headers.get("Content-Type", "").startswith("text/event-stream")
         first = resp.readline()
         assert first.strip() == b'data: {"type": "hello"}'
+
+
+def test_event_bus_rotate_really_closes_the_socket(server):
+    """회전(rotate) 뒤 서버가 소켓을 **닫아야** 합니다.
+
+    SSE 응답의 `Connection: keep-alive` 가 close_connection 을 False 로 돌려 놓아,
+    핸들러가 그냥 돌아가면 서버는 같은 소켓에서 다음 요청을, 브라우저는 본문이 더
+    오길 서로 기다렸습니다. EventSource 는 onerror 없이 조용히 죽어 4.5분마다 자막이
+    멎었습니다. 여기서는 회전 프레임 뒤 곧 EOF 가 와야 합니다."""
+    _, port = server
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                  b"Accept: text/event-stream\r\nConnection: keep-alive\r\n\r\n")
+        s.settimeout(8)              # 회전 2초 + 여유. 안 닫히면 여기서 timeout 으로 실패
+        got, t0 = b"", time.time()
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break                # EOF -- 서버가 닫았습니다
+            got += chunk
+    assert b'data: {"type": "hello"}' in got
+    assert b'data: {"type": "rotate"}' in got
+    # 회전이 정시에 옵니다(예전에는 15초 keepalive 틱까지 밀렸습니다).
+    assert time.time() - t0 < 6
 
 
 def test_engine_config_roundtrip(server):

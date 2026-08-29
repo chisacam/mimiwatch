@@ -184,23 +184,22 @@ async function fillPicker() {
   syncResumeButton();
 }
 
-/* 「이어받기」는 고른 것이 멈춘 방송일 때만 살아 있습니다. 끝난 방송은 이어받을
- * 것이 없습니다 -- 전체 영상 전사는 mimiwatch 페이지에서 합니다. */
+/* 고른 것이 멈춘 방송이면 시작 단추가 이어받기로 바뀝니다. 끝난 방송은 이어받을 것이
+ * 없습니다 -- 전체 영상 전사는 mimiwatch 페이지에서 합니다. */
 function syncResumeButton() {
   const v = $("pick").value || "";
   const st = v.startsWith("live:") ? sessionInfo[v.slice(5)] : null;
   const can = !!st && !RUNNING.includes(st.state) && st.stopped_by !== "ended";
-  $("resume").disabled = !can;
   // 멈춘 방송을 골라 두었으면 「새로 받아 적기」 단추 **둘 다** 이어받기가 됩니다 -- 출처는 바꿔
   // 이어받을 수 있습니다(주소로 받던 방송이 멤버십 전용으로 바뀌면 탭 소리로). 예전에는 그
   // 상태로 「주소로」를 누르면 같은 방송이 새 세션으로 갈라졌습니다.
   $("start-url").textContent = can ? "▶ 이어받기 (주소로)" : "주소로";
   $("start-tab").textContent = can ? "▶ 이어받기 (이 탭 소리로)" : "이 탭 소리로";
-  $("resume").title = !st ? "고른 방송이 멈춰 있으면 같은 세션에 이어서 받습니다"
-    : RUNNING.includes(st.state) ? "받는 중입니다"
-    : st.stopped_by === "ended" ? "끝난 방송입니다. 전체 영상 전사는 mimiwatch 페이지에서"
-    : st.source === "tab" ? "이 탭의 소리를 다시 잡아 같은 세션에 이어 받습니다"
-    : "같은 세션에 이어서 받습니다";
+  $("start-url-cookies").textContent = can ? "🔑 로그인 쿠키 넘기고 이어받기 (주소로)" : "🔑 로그인 쿠키 넘기고 주소로";
+  $("start-hint").textContent = can
+    ? `멈춘 방송을 골랐습니다. 누르는 쪽의 소리 출처로 같은 세션에 이어 붙입니다${st.stopped_by === "stream" ? " (수신이 끊겨 멈춤)" : ""}.`
+    : st && st.stopped_by === "ended" ? "끝난 방송입니다. 전체 영상 전사는 mimiwatch 페이지에서 합니다."
+    : "주소로 받으면 브라우저를 닫아도 서버가 계속 받습니다. 멤버십 전용처럼 서버가 받지 못하는 방송은 탭 소리로 받으십시오.";
 }
 
 async function refreshState() {
@@ -319,7 +318,6 @@ async function resumePicked(source, tab) {
   const value = $("pick").value;
   const id = value.startsWith("live:") ? value.slice(5) : "";
   if (!id) return;
-  $("resume").disabled = true;
   $("start-box").classList.add("busy");
   $("start-hint").textContent = "이어받는 중…";
   fail("");
@@ -343,11 +341,6 @@ async function resumePicked(source, tab) {
   setTimeout(refreshState, 800);
 }
 
-$("resume").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  await resumePicked("", tab);
-});
-
 /* ---------- 이 탭에서 새로 시작 ---------- */
 
 /* 고르개의 세션이 멈춘 것이면 새로 시작하는 대신 그 세션에 이어 붙입니다. 시작 방식이
@@ -359,9 +352,16 @@ function pickedResumable() {
   return st;
 }
 
-async function startWith(type) {
+async function startWith(type, opts = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
+  if (opts.cookies) {
+    // 멤버십 전용 방송: 지금 이 브라우저의 로그인 쿠키를 서버에 넘긴 뒤 주소로 갑니다. 켜 두는
+    // 것이 아니라 이 한 번만입니다 -- 서버에 남은 파일은 mimiwatch 페이지에서 지웁니다.
+    $("start-hint").textContent = "로그인 쿠키를 넘기는 중…";
+    const c = await send({ type: "pushCookies" });
+    if (!c || !c.ok) { fail((c && c.error) || "쿠키를 넘기지 못했습니다"); $("start-hint").textContent = ""; return; }
+  }
   if (pickedResumable()) {
     await resumePicked(type === "startCapture" ? "tab" : "hls", tab);
     return;
@@ -409,6 +409,7 @@ $("profile").addEventListener("change", (e) => {
 $("viewer").addEventListener("change", (e) => { start.viewerLang = e.target.value; saveStart(); });
 
 $("start-url").addEventListener("click", () => startWith("startUrl"));
+$("start-url-cookies").addEventListener("click", () => startWith("startUrl", { cookies: true }));
 $("start-tab").addEventListener("click", () => startWith("startCapture"));
 
 /* 서버 주소를 바꾸면 전부 다시 읽습니다. 배경 워커는 저장된 주소를 요청마다

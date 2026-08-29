@@ -198,6 +198,11 @@ def _cookie_args() -> list[str]:
     path = (os.environ.get("MIMIWATCH_YTDLP_COOKIES") or "").strip()
     if path:
         return ["--cookies", path]
+    # 확장이 넘겨 준 쿠키(POST /api/cookies/youtube). 환경변수가 있으면 그쪽이 우선입니다.
+    # 파일을 지우면(화면의 「지우기」) 다음 호출부터 빠집니다 -- reset_tool_cache 가 같이 불립니다.
+    pushed = paths.cookies_path()
+    if os.path.isfile(pushed):
+        return ["--cookies", pushed]
     browser = (os.environ.get("MIMIWATCH_YTDLP_COOKIES_BROWSER") or "").strip()
     if browser:
         return ["--cookies-from-browser", browser]

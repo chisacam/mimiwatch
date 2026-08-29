@@ -648,3 +648,12 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 .setup-choice:hover{background:#171b25}
 .setup-choice input{margin-top:.25rem}
 .setup-choice small{font-family:var(--mono); font-size:.66rem; color:var(--dim)}
+
+/* ---------- 종료 ---------- */
+.bar .quit{border-color:#5a2b2b; color:#e07a7a; margin-left:.35rem}
+.bar .quit:hover{background:#2a1616; color:#ff9c95}
+.bar .quit:disabled{opacity:.6; cursor:default}
+.quit-screen{display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; gap:.6rem; text-align:center; color:var(--text)}
+.quit-screen h1{font-size:1.4rem; margin:0}
+.quit-screen h1 em{color:var(--accent); font-style:normal}
+.quit-screen .dim{color:var(--dim); font-size:.85rem; line-height:1.6}

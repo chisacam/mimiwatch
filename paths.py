@@ -106,6 +106,12 @@ def which(name: str) -> str | None:
     return tool(name)
 
 
+def cookies_path() -> str:
+    """확장이 넘겨 준 유튜브 로그인 쿠키(Netscape 형식). 계정의 열쇠이므로 설정·로그와
+    섞지 않고 따로 두며, 쓰는 쪽이 0600 으로 만듭니다."""
+    return os.path.join(home(), "cookies", "youtube.txt")
+
+
 def log_path() -> str:
     """묶음이 창 없이 돌 때 표준 출력을 받아 두는 파일."""
     return os.path.join(home(), "mimiwatch.log")

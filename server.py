@@ -223,6 +223,47 @@ class Handler(BaseHTTPRequestHandler):
         # 모델·도구의 목록과 상태. 첫 실행 화면이 이것으로 무엇이 없는지 압니다.
         self._json(modelhub.overview())
 
+    # ---- 유튜브 쿠키 -------------------------------------------------------
+    # 확장이 브라우저의 로그인 쿠키를 읽어 넘겨 줍니다(사용자가 그때그때 누를 때만). 멤버십
+    # 전용 방송을 「주소로」 받는 유일한 길입니다. 계정의 열쇠라서: 파일은 0600, 내용은 어디에도
+    # 적지 않고, 있음/없음과 받은 시각만 화면에 보이며, 언제든 지울 수 있습니다.
+
+    def get_cookies(self):
+        self._json(_cookies_status())
+
+    def post_cookies_youtube(self, body):
+        text = body.get("cookies")
+        if not isinstance(text, str) or "\t" not in text:
+            return self._json({"error": "Netscape 형식의 쿠키 텍스트가 필요합니다"}, 400)
+        lines = [ln for ln in text.splitlines() if _is_cookie_line(ln)]
+        if not lines:
+            return self._json({"error": "쿠키가 비어 있습니다 -- 유튜브에 로그인되어 있습니까?"},
+                              400)
+        path = paths.cookies_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("# Netscape HTTP Cookie File\n"
+                    "# mimiwatch 확장이 넘긴 유튜브 로그인 쿠키. 계정의 열쇠입니다.\n")
+            f.write(text if text.endswith("\n") else text + "\n")
+        os.replace(path + ".tmp", path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass                        # 윈도우는 모드가 없습니다
+        stream.reset_tool_cache()       # 다음 yt-dlp 호출부터 --cookies 가 붙습니다
+        print(f"[cookies] 유튜브 쿠키 {len(lines)}개를 받았습니다", file=sys.stderr, flush=True)
+        self._json(_cookies_status())
+
+    def post_cookies_delete(self, body):
+        path = paths.cookies_path()
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        stream.reset_tool_cache()
+        self._json(_cookies_status())
+
     def get_setup(self):
         # 초기 설정 화면의 선택지: 엔진마다 필요한 모델과 그 크기·유무.
         self._json(modelhub.setup_options())
@@ -640,6 +681,7 @@ GET_ROUTES = {
     "/api/events": Handler.get_bus,
     "/api/models": Handler.get_models,
     "/api/setup": Handler.get_setup,
+    "/api/cookies": Handler.get_cookies,
 }
 # 뒤가 붙는 경로. 긴 접두가 먼저여야 `/api/video/`가 `/api/videos`를 삼키지
 # 않습니다 -- 정확한 경로는 위 사전에서 먼저 찾으므로 여기서는 순서만 지킵니다.
@@ -678,7 +720,28 @@ POST_ROUTES = {
     "/api/models/delete": Handler.post_models_delete,
     "/api/models/add": Handler.post_models_add,
     "/api/setup": Handler.post_setup,
+    "/api/cookies/youtube": Handler.post_cookies_youtube,
+    "/api/cookies/delete": Handler.post_cookies_delete,
 }
+
+
+def _is_cookie_line(ln: str) -> bool:
+    ln = ln.strip()
+    return bool(ln) and (not ln.startswith("#") or ln.startswith("#HttpOnly_"))
+
+
+def _cookies_status() -> dict:
+    """쿠키 파일의 있음/없음과 받은 시각. 내용은 절대 내보내지 않습니다."""
+    path = paths.cookies_path()
+    env = (os.environ.get("MIMIWATCH_YTDLP_COOKIES") or "").strip()
+    if not os.path.isfile(path):
+        return {"present": False, "env": bool(env)}
+    try:
+        with open(path, encoding="utf-8") as f:
+            n = sum(1 for ln in f if _is_cookie_line(ln))
+    except OSError:
+        n = 0
+    return {"present": True, "count": n, "updated": os.path.getmtime(path), "env": bool(env)}
 
 
 # serve_forever()를 멈추려면 서버 객체가 있어야 하는데, 핸들러는 클래스라

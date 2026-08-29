@@ -72,6 +72,9 @@
   </div>
 
   <button id="toggle-panel" class="seg" title="자막 내역 접기·펼치기 (S)">자막 내역 ▸</button>
+  <!-- 묶음으로 쓰면 터미널이 없어 Ctrl-C 로 끌 수 없습니다. 눈에 띄는 자리에 둡니다.
+       받는 중인 방송을 먼저 제대로 닫고 서버를 멈춘 뒤, 이 창(과 대본 창)도 닫습니다. -->
+  <button id="quit" class="seg quit" title="받는 중인 방송을 닫고 서버를 멈춘 뒤 이 창을 닫습니다">⏻ 종료</button>
 </header>
 
 <main id="layout">
@@ -344,6 +347,14 @@
         <button id="setup-again" class="seg ghost">초기 설정 다시</button>
       </div>
       <p class="hint">기본 전사·번역 엔진을 다시 고릅니다. 고른 조합에 필요한 모델을 받기 시작합니다.</p>
+    </section>
+
+    <section class="engine-group" id="cookies-group">
+      <div class="group-head">
+        <h4>유튜브 로그인 쿠키</h4>
+        <button id="cookies-delete" class="seg danger" hidden>지우기</button>
+      </div>
+      <p class="hint" id="cookies-hint">없음. 멤버십 전용 방송을 주소로 받으려면 확장 팝업의 「🔑 로그인 쿠키 넘기고 주소로」를 누르십시오 — 그때만 이 브라우저의 쿠키가 서버로 옵니다.</p>
     </section>
 
     <section class="engine-group" id="shutdown-group">

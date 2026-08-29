@@ -72,6 +72,8 @@ function bind() {
   $("open-settings").addEventListener("click", () => { toggleManage(false); openSettings(); });
   $("settings-close").addEventListener("click", () => $("settings-dialog").close());
   $("shutdown").addEventListener("click", shutdownServer);
+  $("quit").addEventListener("click", shutdownServer);
+  $("cookies-delete").addEventListener("click", deleteCookies);
   $("form-back").addEventListener("click", showEngineList);
   $("engine-form").addEventListener("submit", saveEngine);
   // 모델·도구. 내려받기는 서버의 배경 스레드가 하고 진행은 bus 로 옵니다.

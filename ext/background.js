@@ -85,6 +85,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         reply(await startFromUrl(msg));
       } else if (msg.type === "startCapture") {
         reply(await startFromTab(msg));
+      } else if (msg.type === "pushCookies") {
+        reply(await pushCookies());
       } else if (msg.type === "resumeSession") {
         reply(await resumeSession(msg));
       } else if (msg.type === "stopSession") {
@@ -155,6 +157,35 @@ async function expectedVideo(value) {
   } catch (_) {
     return "";
   }
+}
+
+/* ---------- 유튜브 로그인 쿠키 넘기기 ----------
+ *
+ * 멤버십 전용 방송을 「주소로」 받으려면 서버의 yt-dlp 에 로그인 쿠키가 있어야 합니다. 확장은
+ * `cookies` 권한으로 HttpOnly 쿠키까지 읽을 수 있으므로, 사용자가 누른 그 순간의 쿠키를
+ * Netscape 형식으로 만들어 서버에 넘깁니다. **누를 때만** 합니다 -- 켜 두는 스위치가 아닙니다.
+ * 매번 새로 읽으므로 유튜브가 탭의 쿠키를 갈아 치워도(회전) 그 시점의 최신 것이 갑니다.
+ *
+ * 위험은 사용자의 것입니다: 평소 계정으로 yt-dlp 를 돌리면 유튜브가 봇 확인이나 일시 제한을
+ * 걸 수 있습니다. 팝업의 단추 옆에 그렇게 적어 둡니다. */
+async function pushCookies() {
+  const all = [];
+  for (const domain of ["youtube.com", "google.com"]) {
+    all.push(...await chrome.cookies.getAll({ domain }));
+  }
+  if (!all.some((c) => c.name === "SAPISID" || c.name === "__Secure-3PAPISID")) {
+    return { ok: false, error: "유튜브에 로그인되어 있지 않은 것 같습니다 (로그인 쿠키가 없음)." };
+  }
+  // Netscape 형식: domain  includeSubdomains  path  secure  expiry  name  value.
+  // HttpOnly 는 curl·yt-dlp 가 쓰는 `#HttpOnly_` 접두로 표시합니다.
+  const lines = all.map((c) => {
+    const domain = (c.hostOnly ? "" : ".") + c.domain.replace(/^\./, "");
+    return [(c.httpOnly ? "#HttpOnly_" : "") + domain, c.hostOnly ? "FALSE" : "TRUE", c.path,
+            c.secure ? "TRUE" : "FALSE", Math.floor(c.expirationDate || 0), c.name, c.value].join("\t");
+  });
+  const res = await post("/api/cookies/youtube", { cookies: lines.join("\n") + "\n" });
+  if (res.error) return { ok: false, error: res.error };
+  return { ok: true, count: res.count };
 }
 
 /* ---------- 세션 시작 ---------- */

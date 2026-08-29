@@ -150,6 +150,7 @@ function renderProfilePicker() {
 function openSettings() {
   showEngineList();
   loadModels();        // 열 때마다 새로 읽습니다. 파일을 손으로 넣었을 수 있습니다
+  loadCookies();
   if (!$("settings-dialog").open) $("settings-dialog").showModal();
 }
 
@@ -171,6 +172,8 @@ async function shutdownServer() {
   const hint = $("shutdown-group").querySelector(".hint");
   btn.disabled = true;
   btn.textContent = "종료하는 중…";
+  $("quit").disabled = true;
+  $("quit").textContent = "종료하는 중…";
 
   let stopped = null;                     // null = 답을 못 받음
   try {
@@ -193,6 +196,8 @@ async function shutdownServer() {
         "예전 판일 수 있습니다. 터미널에서 Ctrl-C 로 끄십시오.";
       btn.disabled = false;
       btn.textContent = "종료";
+      $("quit").disabled = false;
+      $("quit").textContent = "⏻ 종료";
       return;
     }
   }
@@ -206,7 +211,32 @@ async function shutdownServer() {
     "이 탭은 더 이상 갱신되지 않습니다. 다시 켜려면 "
     + (state.models && state.models.frozen ? "mimiwatch 를 다시 실행하십시오." : "터미널에서 ./run.sh.");
   btn.textContent = "종료됨";
+  $("quit").textContent = "종료됨";
   stopLive();
+  closeWindows(stopped);
+}
+
+/* 서버가 멈춘 뒤 창을 닫습니다. 묶음으로 쓰는 사람에게 남는 것은 이 탭뿐이라, 서버만 끄고
+ * 탭을 두면 "아직 켜져 있나" 싶습니다.
+ *
+ * 크롬은 스크립트가 열지 않은 탭도 **방문 기록이 하나뿐이면** `window.close()` 로 닫게
+ * 해 줍니다 -- 묶음이 브라우저로 여는 탭이 그렇습니다. 즐겨찾기로 들어와 여러 페이지를
+ * 거친 탭은 닫히지 않으므로, 그때는 닫히지 않았다고 화면에 적습니다. */
+function closeWindows(stopped) {
+  if (state.scriptWin && !state.scriptWin.closed) {
+    try { state.scriptWin.close(); } catch (_) { /* 다른 출처면 못 닫습니다 */ }
+  }
+  setTimeout(() => {
+    window.close();
+    setTimeout(() => {
+      if (window.closed) return;
+      document.body.innerHTML =
+        `<div class="quit-screen"><h1>mimi<em>watch</em></h1>`
+        + `<p>${stopped ? `방송 ${stopped}건을 닫고 ` : ""}서버를 종료했습니다.</p>`
+        + `<p class="dim">이 탭은 브라우저가 스크립트로 닫게 두지 않습니다. 직접 닫으십시오.<br>`
+        + `다시 켜려면 ${state.models && state.models.frozen ? "mimiwatch 를 다시 실행하십시오." : "터미널에서 ./run.sh."}</p></div>`;
+    }, 400);
+  }, 300);
 }
 
 function showEngineList() {
@@ -680,4 +710,30 @@ async function submitSetup(e) {
   persist();
   await loadModels();
   if ((res.queued || []).length) openSettings();     // 내려받기 진행을 보여 줍니다
+}
+
+/* ---------- 유튜브 로그인 쿠키 ----------
+ * 확장이 넘겨 준 쿠키가 서버에 있는지 보여 주고 지웁니다. 내용은 서버가 내보내지 않습니다 --
+ * 있음/없음·개수·받은 시각만. 계정의 열쇠라서 쓸 일이 끝나면 지우는 것이 맞습니다. */
+async function loadCookies() {
+  let st;
+  try { st = await (await fetch("/api/cookies")).json(); } catch (_) { return; }
+  const hint = $("cookies-hint"), del = $("cookies-delete");
+  if (!hint) return;
+  if (st.present) {
+    const when = st.updated ? new Date(st.updated * 1000).toLocaleString() : "";
+    hint.textContent = `쿠키 ${st.count || 0}개가 서버에 있습니다 (${when}에 받음). 주소로 받는 방송에 yt-dlp 가 이 쿠키를 씁니다. `
+      + "쓸 일이 끝났으면 지우십시오 — 계정의 열쇠입니다.";
+    del.hidden = false;
+  } else {
+    hint.textContent = (st.env ? "환경변수 MIMIWATCH_YTDLP_COOKIES 의 파일을 씁니다. " : "없음. ")
+      + "멤버십 전용 방송을 주소로 받으려면 확장 팝업의 「🔑 로그인 쿠키 넘기고 주소로」를 누르십시오 — 그때만 이 브라우저의 쿠키가 서버로 옵니다.";
+    del.hidden = true;
+  }
+}
+
+async function deleteCookies() {
+  if (!confirm("서버에 있는 유튜브 로그인 쿠키를 지울까요? 받는 중인 방송은 다음 재접속부터 쿠키 없이 갑니다.")) return;
+  await fetch("/api/cookies/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  await loadCookies();
 }

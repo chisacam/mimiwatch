@@ -17,6 +17,7 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_CONFIG = None
+SERVER_HOME = None
 
 
 def _stub_dir(tmp) -> str:
@@ -66,10 +67,12 @@ def server(tmp_path_factory):
     stubs = _stub_dir(tmp)
     # 서버 프로세스의 설정 파일. conftest 가 이 프로세스의 config 를 다른 임시 파일로
     # 돌려 두므로, 서버가 저장한 것을 보려면 그 파일을 직접 읽어야 합니다.
-    global SERVER_CONFIG
+    global SERVER_CONFIG, SERVER_HOME
     SERVER_CONFIG = tmp / "backends.json"
+    SERVER_HOME = tmp / "home"
     env = {**os.environ, "MIMIWATCH_DATA_DIR": str(tmp / "data"),
            "MIMIWATCH_CONFIG": str(tmp / "backends.json"),
+           "MIMIWATCH_HOME": str(tmp / "home"),
            "PYTHONPATH": stubs + (os.pathsep + os.environ["PYTHONPATH"]
                                   if os.environ.get("PYTHONPATH") else "")}
     proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py"), "--port", str(port)],
@@ -150,6 +153,37 @@ def test_active_engine_is_set_on_the_server(server):
     assert req(base, "/api/active", body={"kind": "zz", "id": "x"})[0] == 400
     s, b = req(base, "/api/backends")
     assert json.loads(b)["asr_active"] == "tcpp-best"
+
+
+def test_pushed_cookies_are_stored_privately_and_used(server):
+    """확장이 넘긴 쿠키: 0600 으로 저장, 내용은 응답에 없음, yt-dlp 인자에 붙음, 지우면 빠짐."""
+    base, _ = server
+    s, b = req(base, "/api/cookies")
+    assert s == 200 and json.loads(b)["present"] is False
+    assert req(base, "/api/cookies/youtube", body={"cookies": "no tabs here"})[0] == 400
+    txt = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsecret-value\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PSID\tsecret2\n"
+    s, b = req(base, "/api/cookies/youtube", body={"cookies": txt})
+    st = json.loads(b)
+    assert s == 200 and st["present"] and st["count"] == 2 and "secret" not in b.decode()
+    import paths
+    path = os.path.join(SERVER_HOME, "cookies", "youtube.txt")
+    assert os.path.exists(path)
+    if os.name != "nt":
+        assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+    assert "secret-value" in open(path, encoding="utf-8").read()
+    # 서버 프로세스의 yt-dlp 인자에 붙는지는 stream 을 같은 HOME 으로 직접 확인합니다.
+    import stream
+    stream.reset_tool_cache()
+    os.environ["MIMIWATCH_HOME"] = str(SERVER_HOME)
+    try:
+        assert paths.cookies_path() == path
+        args = stream._cookie_args()
+        assert args[:1] == ["--cookies"] and args[1] == path
+    finally:
+        del os.environ["MIMIWATCH_HOME"]
+        stream.reset_tool_cache()
+    s, b = req(base, "/api/cookies/delete", body={})
+    assert json.loads(b)["present"] is False and not os.path.exists(path)
 
 
 def test_static_and_index(server):

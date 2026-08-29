@@ -55,6 +55,11 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       else if (msg.type === "base") reply({ ok: true, data: await base() });
       else if (msg.type === "setBase") {
         await chrome.storage.local.set({ [BASE_KEY]: msg.base });
+        // 붙어 있는 유튜브 탭들은 옛 주소의 자막 줄기를 쥐고 있습니다. 새
+        // 주소로 다시 붙게 합니다. content script 가 없는 탭은 조용히 실패합니다.
+        const tabs = await chrome.tabs.query({ url: "https://www.youtube.com/*" });
+        await Promise.all(tabs.map((t) =>
+          chrome.tabs.sendMessage(t.id, { type: "reattach" }).catch(() => {})));
         reply({ ok: true });
       } else if (msg.type === "watch") {
         reply({ ok: true, ...(await setWatch(msg.tabId, msg.value || "")) });

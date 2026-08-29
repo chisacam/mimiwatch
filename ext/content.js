@@ -41,6 +41,7 @@
   /* 이 자막이 어느 영상의 것인가. 빈 문자열이면 알아내지 못한 것입니다 --
    * 그때는 내리지 않고 묻습니다. */
   let expectVideo = "";
+  let currentValue = "";        // 지금 얹고 있는 것. 서버 주소가 바뀌면 다시 붙는 데 씁니다.
   const videoIdOf = MimiYtId.videoIdOf;      // 배경 워커와 같은 한 벌(ytid.js)
 
   let ov = null;           // overlay 모듈의 조종기
@@ -197,6 +198,7 @@
   }
 
   function attach(value, videoId) {
+    currentValue = value;
     store.reset(); live = false; receiving = false; stalled = false;
     trKey = LIVE_KEY;
     expectVideo = videoId || "";
@@ -239,6 +241,11 @@
 
   chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     if (msg.type === "attach") { attach(msg.value, msg.videoId); reply({ ok: true }); }
+    else if (msg.type === "reattach") {
+      // 서버 주소가 바뀌었습니다. 붙어 있던 것을 새 주소로 다시 붙입니다.
+      if (port && currentValue) attach(currentValue, expectVideo);
+      reply({ ok: true });
+    }
     else if (msg.type === "detach") { unmount(); reply({ ok: true }); }
     else if (msg.type === "prefs") {
       Object.assign(prefs, msg.prefs || {});

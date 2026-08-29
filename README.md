@@ -770,7 +770,7 @@ mimiwatch 페이지의 「중단」입니다.
 
 | | |
 | --- | --- |
-| `ext/manifest.json` | MV3. 유튜브에서만, 로컬 8900 에만 닿습니다 |
+| `ext/manifest.json` | MV3. 유튜브에서만, 로컬 서버(어느 포트든)에만 닿습니다. 포트는 팝업의 「서버」 칸에서 바꿉니다 |
 | `ext/content.js` | 유튜브 페이지에 오버레이 주입, `<video>` 시계 읽기 |
 | `ext/background.js` | 서버와의 통신, 세션 시작, 탭 캡처 조율 |
 | `ext/offscreen.*` | 탭 소리를 실제로 잡는 곳 |

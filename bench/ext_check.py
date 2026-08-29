@@ -124,12 +124,14 @@ def main():
 
     print("\n[3] 권한")
     hosts = m.get("host_permissions", [])
-    check(any("8900" in h for h in hosts), f"로컬 서버에 닿을 수 있다 ({hosts})")
+    # 포트를 적지 않은 패턴은 어느 포트에나 닿습니다. 예전에는 8900에 못 박혀
+    # 있어서 서버를 다른 포트에 띄우면 팝업의 「서버」 칸을 바꿔도 CORS 에 막혔습니다.
+    check(any(h in ("http://localhost/*", "http://127.0.0.1/*") for h in hosts),
+          f"로컬 서버에 어느 포트로든 닿을 수 있다 ({hosts})")
     # 유튜브 호스트 권한은 tabs.sendMessage 때문에 필요합니다 -- activeTab 은
     # 팝업을 누른 그 순간에만 줍니다. 그 둘 말고는 아무 데도 닿지 않아야
     # 합니다.
-    ALLOWED = ("http://localhost:8900/", "http://127.0.0.1:8900/",
-               "https://www.youtube.com/")
+    ALLOWED = ("http://localhost/", "http://127.0.0.1/", "https://www.youtube.com/")
     stray = [h for h in hosts if not any(h.startswith(a) for a in ALLOWED)]
     check(not stray, f"허락한 곳 밖으로는 열지 않는다 ({stray or '없음'})")
     matches = [x for cs in m.get("content_scripts", []) for x in cs.get("matches", [])]

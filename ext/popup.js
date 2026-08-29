@@ -60,6 +60,18 @@ async function init() {
   const sp = await chrome.storage.local.get(SKEY);
   if (sp[SKEY]) Object.assign(start, sp[SKEY]);
 
+  await loadFromServer();
+  // 유튜브 탭이 아니면 시작할 것도 없습니다.
+  $("start-box").classList.toggle("busy", !onYouTube);
+}
+
+/* 서버에서 읽어 오는 것 전부. 처음 열 때와 「서버」 주소를 바꿀 때 부릅니다.
+ *
+ * 예전에는 주소를 바꾸면 고르개만 다시 채웠습니다. 서버가 8900 에 없어 처음에
+ * 실패했으면 장르·콘텐츠 유형은 빈 채로 남고 변화 알림도 옛 주소를 듣고
+ * 있어서, 주소를 고쳐도 팝업은 여전히 쓸 수 없었습니다. */
+async function loadFromServer() {
+  $("pick").length = 1;
   await fillPicker();
   await fillChoices();
   // 고르개를 채운 **뒤에** 값을 앉힙니다. 비어 있는 select 에 value 를 넣으면
@@ -75,8 +87,6 @@ async function init() {
   syncProfileHint();
   await refreshState();
   await syncHideButton();
-  // 유튜브 탭이 아니면 시작할 것도 없습니다.
-  $("start-box").classList.toggle("busy", !onYouTube);
   watchServer();
 }
 
@@ -124,11 +134,13 @@ async function fillChoices() {
   const r = await send({ type: "backends" });
   if (!r || !r.ok) return;
   const g = $("genre");
+  g.length = 0;                             // 주소를 바꿔 다시 읽을 때 겹치지 않게
   for (const x of (r.data.genres || [])) g.append(new Option(x.label || x.id, x.id));
   if (!g.length) g.append(new Option("일반", "general"));
 
   profiles = r.data.live_profiles || [];
   const p = $("profile");
+  p.length = 0;
   for (const x of profiles) p.append(new Option(x.label || x.id, x.id));
   if (!p.length) p.append(new Option("일반 방송", "broadcast"));
 }
@@ -147,7 +159,11 @@ function syncProfileHint() {
 async function fillPicker() {
   const sel = $("pick");
   const [s, v] = await Promise.all([send({ type: "sessions" }), send({ type: "videos" })]);
-  if (!s || !s.ok) { fail("서버에 닿지 못했습니다: " + ((s && s.error) || "응답 없음")); return; }
+  if (!s || !s.ok) {
+    fail("서버에 닿지 못했습니다: " + ((s && s.error) || "응답 없음")
+         + " — 아래 「서버」 칸의 주소를 확인하십시오. 바꾸면 곧바로 다시 붙습니다.");
+    return;
+  }
   fail("");
   for (const x of (s.data || []).filter((x) => x.cues)) {
     sel.append(new Option(`${x.title || x.id} · ${x.cues}줄`, "live:" + x.id));
@@ -315,11 +331,14 @@ $("viewer").addEventListener("change", (e) => { start.viewerLang = e.target.valu
 $("start-url").addEventListener("click", () => startWith("startUrl"));
 $("start-tab").addEventListener("click", () => startWith("startCapture"));
 
+/* 서버 주소를 바꾸면 전부 다시 읽습니다. 배경 워커는 저장된 주소를 요청마다
+ * 읽고, 붙어 있는 유튜브 탭들은 배경이 새 주소로 다시 붙게 합니다. */
 $("base").addEventListener("change", async (e) => {
-  await send({ type: "setBase", base: e.target.value.replace(/\/+$/, "") });
-  $("pick").length = 1;
-  await fillPicker();
-  watchServer();                            // 새 주소의 변화를 듣습니다
+  const base = e.target.value.trim().replace(/\/+$/, "") || "http://localhost:8900";
+  e.target.value = base;
+  await send({ type: "setBase", base });
+  fail("");
+  await loadFromServer();
 });
 
 init();

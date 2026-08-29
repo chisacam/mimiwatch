@@ -10,8 +10,8 @@
     "offscreen"
   ],
   "host_permissions": [
-    "http://localhost:8900/*",
-    "http://127.0.0.1:8900/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
     "https://www.youtube.com/*"
   ],
   "background": {

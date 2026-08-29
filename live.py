@@ -1199,26 +1199,265 @@ class LiveSession:
             del vad, history, refiner
             _transcriber.release()
 
+RUNNING_STATES = ("starting", "loading", "running")
+
+
+def _evict_outside(keep_group: str):
+    """다른 세션을 멈춥니다. `keep_group` 이 비면 전부 -- 「한 사람이 한 방송을 본다」는
+    예전 규칙 그대로입니다. 멀티뷰는 제 묶음만 남기고 나머지를 멈춥니다. 남겨 두면
+    ffmpeg 과 링이 아무도 보지 않는 방송을 위해 돌아갑니다."""
+    for sid in list(_sessions):
+        s = get(sid)
+        if s is not None and (not keep_group or s.group != keep_group):
+            s.stop()
+
+
+def _new_session(url: str, lang: str | None, viewer_lang: str, backend_id: str,
+                 profile: str, asr_backend_id: str, refine: bool, genre: str | None,
+                 source: str, title: str, group: str = "",
+                 focused: bool = True) -> LiveSession:
+    s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile,
+                    asr_backend_id=asr_backend_id, refine=refine, genre=genre,
+                    source=source, title=title)
+    s.group = group
+    if not focused:
+        # 대기 세션으로 태어납니다. set_focus() 는 상태를 내보내는데 아직 등록도
+        # 되지 않았으니 깃발만 내립니다.
+        s._focus.clear()
+        if s.source == "tab":
+            s._ring.set_max(RING_S)
+    with _lock:
+        _sessions[s.id] = s
+    # 첫 자막이 나오기 전에 서버가 죽어도 세션이 있었다는 사실은 남습니다.
+    s._persist()
+    s.start()
+    return s
+
+
 def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
           profile: str = "broadcast", asr_backend_id: str = "",
           refine: bool = True, genre: str | None = None,
           source: str = "hls", title: str = "") -> dict:
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
-    for old_id in list(_sessions):
-        old = get(old_id)
-        if old is not None:
-            old.stop()
-
-    s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile,
-                    asr_backend_id=asr_backend_id, refine=refine, genre=genre,
-                    source=source, title=title)
-    with _lock:
-        _sessions[s.id] = s
-    # 첫 자막이 나오기 전에 서버가 죽어도 세션이 있었다는 사실은 남습니다.
-    s._persist()
-    s.start()
+    _evict_outside("")
+    s = _new_session(url, lang, viewer_lang, backend_id, profile, asr_backend_id,
+                     refine, genre, source, title)
     return {"id": s.id, "source": s.source}
+
+
+# ---- 멀티뷰 ---------------------------------------------------------------------
+#
+# 여러 방송을 한 화면에 두고 보되 소리와 자막은 **초점** 하나만. 서버에서 묶음(Group)은
+# 얇습니다 -- 멤버 세션 id 와 초점이 어느 것인지. 초점이 아닌 멤버는 소리만 받고(링)
+# 받아 적지 않으며, 초점이 옮겨 가면 옛 것이 물러난 뒤 새 것이 링에 고인 것부터 잇습니다.
+# 묶음은 메모리에만 있습니다. 재시작하면 멤버 세션은 「중단됨」으로 남고 묶음은 없어집니다
+# -- 다시 묶는 것은 사용자가 시킬 일입니다.
+
+MULTIVIEW_MAX = 4          # 화면이 4분할까지입니다. ffmpeg 도 그만큼 뜹니다
+
+
+class Group:
+    def __init__(self):
+        self.id = uuid.uuid4().hex[:8]
+        self.members: list[str] = []
+        self.focus: str | None = None
+
+    def status(self) -> dict:
+        return {"id": self.id, "focus": self.focus,
+                "members": [status_of(m) or {"id": m} for m in self.members]}
+
+
+_groups: dict[str, Group] = {}
+
+
+def _publish_group(g: Group, deleted: bool = False):
+    ev = {"type": "multiview", "id": g.id, "focus": g.focus, "members": list(g.members)}
+    if deleted:
+        ev["deleted"] = True
+    bus.publish(ev)
+
+
+def _apply_focus(g: Group, sid: str):
+    """묶음의 초점을 `sid` 로. **옛 것을 먼저 끕니다** -- 그래야 옛 세션의 run_stream 이
+    정제까지 끝내고 전사 토큰을 놓은 뒤 새 세션이 잡습니다(같은 모델을 두 세션이 동시에
+    돌리지 않습니다). 그 사이 새 세션의 소리는 링에 있으므로 잃지 않습니다."""
+    g.focus = sid
+    for m in g.members:
+        s = get(m)
+        if s is not None and m != sid:
+            s.set_focus(False)
+    s = get(sid)
+    if s is not None:
+        s.set_focus(True)
+
+
+def _leave_group(s: LiveSession):
+    """끝난 세션을 묶음에서 뺍니다. 초점이었으면 남은 첫 멤버로 옮기고, 비면 묶음을 지웁니다."""
+    g = _groups.get(s.group) if s.group else None
+    s.group = ""                     # 끝난 세션은 묶음의 것이 아닙니다(목록의 ⊞ 표시가 남지 않게)
+    if g is None or s.id not in g.members:
+        return
+    g.members.remove(s.id)
+    if not g.members:
+        with _lock:
+            _groups.pop(g.id, None)
+        _publish_group(g, deleted=True)
+        return
+    if g.focus == s.id:
+        _apply_focus(g, g.members[0])
+    _publish_group(g)
+
+
+def _source_ok(src: dict) -> str:
+    if src.get("session"):
+        return ""
+    if src.get("source") == "tab":
+        return ""
+    if not (src.get("url") or "").strip():
+        return "주소가 없는 소스가 있습니다"
+    return ""
+
+
+def _member_from(src: dict, gid: str, lang, viewer_lang, backend_id, profile,
+                 asr_backend_id, refine, genre) -> LiveSession | dict:
+    """소스 하나를 묶음의 멤버로. 이미 받는 중인 세션(`session`)이면 편입하고, 아니면
+    대기 세션으로 새로 만듭니다."""
+    sid = src.get("session")
+    if sid:
+        s = get(sid)
+        if s is None or s.state not in RUNNING_STATES:
+            return {"error": f"'{sid}' 세션이 받는 중이 아닙니다"}
+        s.group = gid
+        return s
+    tab = src.get("source") == "tab"
+    return _new_session((src.get("url") or "").strip(), lang, viewer_lang, backend_id,
+                        profile, asr_backend_id, refine, genre,
+                        source="tab" if tab else "hls", title=src.get("title") or "",
+                        group=gid, focused=False)
+
+
+def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
+                    backend_id: str, profile: str = "broadcast",
+                    asr_backend_id: str = "", refine: bool = True,
+                    genre: str | None = None, focus: str | None = None) -> dict:
+    """묶음을 만듭니다. `sources` 의 각 항목은 `{"session": id}`(지금 보는 것을 편입) 또는
+    `{"url": ...}` / `{"source": "tab", "title": ...}`(새 대기 세션)입니다. 초점은 `focus`
+    가 가리키는 세션, 없으면 첫 멤버입니다. 묶음 밖의 세션은 전부 멈춥니다."""
+    sources = list(sources or [])
+    if not sources:
+        return {"error": "소스가 없습니다"}
+    if len(sources) > MULTIVIEW_MAX:
+        return {"error": f"멀티뷰는 최대 {MULTIVIEW_MAX}개까지입니다"}
+    for src in sources:
+        why = _source_ok(src)
+        if why:
+            return {"error": why}
+    g = Group()
+    members: list[LiveSession] = []
+    for src in sources:
+        m = _member_from(src, g.id, lang, viewer_lang, backend_id, profile,
+                         asr_backend_id, refine, genre)
+        if isinstance(m, dict):
+            # 편입할 세션이 없습니다. 방금 만든 대기 세션들은 되돌립니다.
+            for made in members:
+                if not any(sr.get("session") == made.id for sr in sources):
+                    made.stop()
+            for made in members:
+                made.group = ""
+            return m
+        members.append(m)
+    g.members = [m.id for m in members]
+    with _lock:
+        _groups[g.id] = g
+    _evict_outside(g.id)
+    _apply_focus(g, focus if focus in g.members else g.members[0])
+    _publish_group(g)
+    return g.status()
+
+
+def multiview_status(gid: str) -> dict | None:
+    g = _groups.get(gid)
+    return g.status() if g else None
+
+
+def multiview_focus(gid: str, sid: str) -> dict:
+    g = _groups.get(gid)
+    if g is None:
+        return {"error": "no such group"}
+    if sid not in g.members:
+        return {"error": "그 세션은 이 묶음에 없습니다"}
+    prev = g.focus
+    if prev != sid:
+        _apply_focus(g, sid)
+        _publish_group(g)
+    return {"group": g.id, "focus": g.focus, "previous": prev}
+
+
+def multiview_add(gid: str, src: dict, lang: str | None, viewer_lang: str,
+                  backend_id: str, profile: str = "broadcast",
+                  asr_backend_id: str = "", refine: bool = True,
+                  genre: str | None = None) -> dict:
+    g = _groups.get(gid)
+    if g is None:
+        return {"error": "no such group"}
+    if len(g.members) >= MULTIVIEW_MAX:
+        return {"error": f"멀티뷰는 최대 {MULTIVIEW_MAX}개까지입니다"}
+    why = _source_ok(src)
+    if why:
+        return {"error": why}
+    m = _member_from(src, g.id, lang, viewer_lang, backend_id, profile,
+                     asr_backend_id, refine, genre)
+    if isinstance(m, dict):
+        return m
+    if m.id not in g.members:
+        g.members.append(m.id)
+    if m.id != g.focus:
+        m.set_focus(False)           # 편입한 세션이 혼자 초점을 쥐고 있었을 수 있습니다
+    _evict_outside(g.id)
+    _publish_group(g)
+    return m.status()
+
+
+def multiview_remove(gid: str, sid: str) -> dict:
+    """타일을 닫습니다 = 그 세션을 멈추고 묶음에서 뺍니다."""
+    g = _groups.get(gid)
+    if g is None:
+        return {"error": "no such group"}
+    if sid not in g.members:
+        return {"error": "그 세션은 이 묶음에 없습니다"}
+    s = get(sid)
+    if s is not None:
+        s.stop()                     # 끝나면 _retire → _leave_group 이 뒷정리를 하지만,
+    g.members.remove(sid)            # 화면은 지금 답을 받아야 하므로 여기서 먼저 뺍니다
+    if s is not None:
+        s.group = ""
+    if not g.members:
+        with _lock:
+            _groups.pop(g.id, None)
+        _publish_group(g, deleted=True)
+        return {"ok": True, "focus": None}
+    if g.focus == sid:
+        _apply_focus(g, g.members[0])
+    _publish_group(g)
+    return {"ok": True, "focus": g.focus}
+
+
+def multiview_stop(gid: str) -> dict:
+    g = _groups.get(gid)
+    if g is None:
+        return {"error": "no such group"}
+    ids = list(g.members)
+    for sid in ids:
+        s = get(sid)
+        if s is not None:
+            s.group = ""
+            s.stop()
+    g.members = []
+    with _lock:
+        _groups.pop(g.id, None)
+    _publish_group(g, deleted=True)
+    return {"stopped": ids}
 
 
 def set_title(session_id: str, title: str) -> dict:
@@ -1344,6 +1583,7 @@ def _retire(session: "LiveSession"):
             _sessions.pop(session.id, None)
         else:
             return                          # 이미 다른(이어받은) 세션이 그 자리에 있습니다
+    _leave_group(session)
     session._persist()
 
 
@@ -1476,10 +1716,7 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
 
     # 한 번에 한 방송만 받습니다. start() 와 같은 규칙입니다 -- 모델을 두 벌
     # 올려 둘 이유가 없습니다.
-    for old_id in list(_sessions):
-        old = get(old_id)
-        if old is not None:
-            old.stop()
+    _evict_outside("")
 
     # 엔진은 부르는 쪽이 준 것이 우선입니다(「관리」에서 바꾼 뒤 이어받기). 설정에 없는
     # id 면 저장된 것을 씁니다 -- 이어받기가 엔진 이름 하나 때문에 실패하면 안 됩니다.

@@ -425,3 +425,75 @@ def test_resume_prefers_the_received_position(monkeypatch):
     live.resume("old-1")
     assert live.get("old-1").resume_from == 15.0
     live._sessions.clear()
+
+
+# ---- 멀티뷰 묶음 ------------------------------------------------------------------
+
+def _drain(q):
+    out = []
+    while True:
+        try:
+            out.append(__import__("json").loads(q.get_nowait()))
+        except Exception:
+            return out
+
+
+def test_multiview_groups_sessions_and_moves_focus(monkeypatch):
+    import bus
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)   # 실제로 받지는 않습니다
+    q = bus.subscribe()
+    try:
+        mk = lambda u: live._new_session(u, "ja", "ko", "local-m2m100", "broadcast", "", True, None, "hls", "")
+        outsider, a = mk("https://x/out"), mk("https://x/a")
+        g = live.multiview_start([{"session": a.id}, {"url": "https://x/b"}],
+                                 "ja", "ko", "local-m2m100", focus=a.id)
+        gid = g["id"]
+        assert g["focus"] == a.id and len(g["members"]) == 2
+        b = live.get(g["members"][1]["id"])
+        assert a.group == gid and b.group == gid and b.url == "https://x/b"
+        assert a._focus.is_set() and not b._focus.is_set()      # 보던 것이 초점, 새것은 대기
+        assert outsider._stop.is_set() and outsider.stopped_by == "user"   # 묶음 밖은 멈춤
+        assert not a._stop.is_set() and not b._stop.is_set()
+        assert any(e["type"] == "multiview" and e["focus"] == a.id for e in _drain(q))
+
+        got = live.multiview_focus(gid, b.id)
+        assert got["previous"] == a.id and got["focus"] == b.id
+        assert b._focus.is_set() and not a._focus.is_set()
+        assert live.multiview_focus(gid, "nope")["error"]
+        assert live.multiview_focus("nope", b.id)["error"]
+
+        c = live.get(live.multiview_add(gid, {"url": "https://x/c"}, "ja", "ko", "local-m2m100")["id"])
+        assert c.group == gid and not c._focus.is_set() and len(live.multiview_status(gid)["members"]) == 3
+
+        # 초점 타일을 닫으면 그 세션은 멈추고 초점은 남은 첫 멤버로
+        got = live.multiview_remove(gid, b.id)
+        assert b._stop.is_set() and got["focus"] == a.id and a._focus.is_set() and b.group == ""
+
+        # 세션이 스스로 끝나도(_retire) 묶음이 따라옵니다. 마지막 멤버가 끝나면 묶음도 없어집니다.
+        live._retire(a)
+        assert live.multiview_status(gid)["focus"] == c.id and c._focus.is_set() and a.group == ""
+        live._retire(c)
+        assert live.multiview_status(gid) is None
+        assert any(e["type"] == "multiview" and e.get("deleted") for e in _drain(q))
+
+        # 잘못된 묶음 요청은 아무것도 남기지 않습니다
+        assert live.multiview_start([], "ja", "ko", "local-m2m100")["error"]
+        assert live.multiview_start([{"url": f"https://x/{i}"} for i in range(5)], "ja", "ko", "local-m2m100")["error"]
+        before = set(live._sessions)
+        assert live.multiview_start([{"url": "https://x/d"}, {"session": "nope"}], "ja", "ko", "local-m2m100")["error"]
+        leftovers = [live.get(i) for i in set(live._sessions) - before]
+        assert all(s._stop.is_set() and s.group == "" for s in leftovers)
+        assert not live._groups
+
+        # 혼자 받기(start) 는 예전처럼 전부 멈춥니다 -- 묶음 멤버도요
+        g2 = live.multiview_start([{"url": "https://x/e"}, {"url": "https://x/f"}], "ja", "ko", "local-m2m100")
+        e, f = (live.get(m["id"]) for m in g2["members"])
+        assert e._focus.is_set() and not f._focus.is_set()        # focus 를 안 주면 첫 멤버
+        live.start("https://x/solo", "ja", "ko", "local-m2m100")
+        assert e._stop.is_set() and f._stop.is_set()
+        live.multiview_stop(g2["id"])
+        assert live.multiview_status(g2["id"]) is None
+    finally:
+        bus.unsubscribe(q)
+        live._sessions.clear()
+        live._groups.clear()

@@ -1,0 +1,197 @@
+"""사람이 만든 **번역 자막**(예: 한국어 SAMI)을 정답으로, 전사→번역 끝단을 채점합니다.
+
+    .venv/bin/python bench/gold_e2e.py data/gold/kagami.wav data/gold/kagami.ko.smi
+    .venv/bin/python bench/gold_e2e.py ... --vad-threshold 0.5 --tag vad0.5
+    .venv/bin/python bench/gold_e2e.py ... --translate local-gemma --genre general
+
+전사 정답이 없는 표본(애니메이션·드라마)에서도 셀 수 있는 것 둘입니다.
+
+  대사 포착률   정답 자막의 각 큐 시각에 전사 구간이 겹치는 비율. VAD 가 대사를 놓치면 떨어집니다.
+                효과음·BGM 이 섞인 116분에서 VAD 문턱을 재는 데 씁니다.
+  chrF          번역 결과와 사람 번역을 60초 창으로 묶어 글자 n-gram(1~6) F2. 절대값은 팬자막의
+                의역 때문에 낮고, 번역 엔진·장르 프롬프트·전사 설정 사이의 **차이**를 봅니다.
+
+전사 결과는 `<wav>.<tag>.asr.json` 에 저장해 번역 설정만 바꿔 다시 돌릴 때 재사용합니다.
+"""
+from __future__ import annotations
+import argparse, html, json, os, re, sys, time, unicodedata, wave
+from collections import Counter
+import numpy as np
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import config, stream, tcpp_asr
+from live import PROFILES
+
+SR = 16000
+
+
+# ---- 정답 자막 -------------------------------------------------------------------
+
+def read_smi(path: str) -> list[dict]:
+    """SAMI → [{start, end, text}]. 빈 큐(&nbsp;)가 앞 큐의 끝을 정합니다."""
+    raw = open(path, encoding="utf-8-sig", errors="replace").read()
+    cues = []
+    for m in re.finditer(r"<Sync\s+Start=(\d+)[^>]*>(.*?)(?=<Sync\s|</BODY>)", raw, re.S | re.I):
+        start = int(m.group(1)) / 1000
+        body = re.sub(r"<br\s*/?>", " ", m.group(2), flags=re.I)
+        body = html.unescape(re.sub(r"<[^>]+>", "", body)).replace("​", "").strip()
+        if cues:
+            cues[-1]["end"] = start
+        if not body:
+            continue
+        # 화면 글자([마음의 교실])·제작진 크레딧은 대사가 아닙니다.
+        if re.fullmatch(r"\[.*\]", body) or "@" in body:
+            continue
+        cues.append({"start": start, "end": start + 4.0, "text": body})
+    return cues
+
+
+def read_ref(path: str) -> list[dict]:
+    if path.lower().endswith(".smi"):
+        return read_smi(path)
+    cues, cur = [], None
+    for ln in open(path, encoding="utf-8-sig"):
+        ln = ln.strip()
+        m = re.match(r"(\d+):(\d+):(\d+)[,.](\d+)\s+-->\s+(\d+):(\d+):(\d+)[,.](\d+)", ln)
+        if m:
+            h1, m1, s1, ms1, h2, m2, s2, ms2 = map(int, m.groups())
+            cur = {"start": h1 * 3600 + m1 * 60 + s1 + ms1 / 1000,
+                   "end": h2 * 3600 + m2 * 60 + s2 + ms2 / 1000, "text": ""}
+            cues.append(cur)
+        elif cur is not None and ln and not ln.isdigit():
+            cur["text"] = (cur["text"] + " " + re.sub(r"<[^>]+>", "", ln)).strip()
+    return [c for c in cues if c["text"]]
+
+
+# ---- 전사 -----------------------------------------------------------------------
+
+def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float) -> list[dict]:
+    with wave.open(wav) as w:
+        pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+    prof = PROFILES[profile]
+    vad = stream.build_vad(min_silence=prof["min_silence"], max_speech=prof["max_speech"],
+                           threshold=threshold)
+    hist = stream.AudioHistory()
+    asr = tcpp_asr.build_live_asr(spec, lang)
+    out = []
+    t0 = time.time()
+
+    def drain():
+        while not vad.empty():
+            s = vad.front; a = np.asarray(s.samples, dtype=np.float32)
+            start, end = s.start / SR, (s.start + len(a)) / SR
+            got = asr.transcribe(hist.with_preroll(s.start, a), SR)
+            vad.pop()
+            if got["text"].strip():
+                out.append({"start": round(start, 2), "end": round(end, 2), "text": got["text"].strip()})
+
+    for i in range(0, len(pcm), 1600):
+        c = pcm[i:i + 1600]; vad.accept_waveform(c); hist.push(c); drain()
+    vad.flush(); drain()
+    return {"segments": out, "hallucinations": asr.hallucinations,
+            "audio_s": len(pcm) / SR, "elapsed_s": round(time.time() - t0, 1)}
+
+
+# ---- 지표 -----------------------------------------------------------------------
+
+def coverage(ref: list[dict], segs: list[dict], slack: float = 0.5) -> tuple[int, int]:
+    """정답 큐 중 그 시각(±slack)에 전사 구간이 겹치는 것의 수."""
+    starts = np.array([s["start"] for s in segs]); ends = np.array([s["end"] for s in segs])
+    hit = 0
+    for c in ref:
+        if np.any((starts <= c["end"] + slack) & (ends >= c["start"] - slack)):
+            hit += 1
+    return hit, len(ref)
+
+
+def _chars(s: str) -> str:
+    return re.sub(r"[\s、。，．,.!?！？「」『』…・~〜\-—–\"'“”‘’:;：；♪\[\]()]", "",
+                  unicodedata.normalize("NFKC", s or ""))
+
+
+def chrf(hyp: str, ref: str, n_max: int = 6, beta: float = 2.0) -> float:
+    h, r = _chars(hyp), _chars(ref)
+    if not h or not r:
+        return 0.0
+    ps, rs = [], []
+    for n in range(1, n_max + 1):
+        hg = Counter(h[i:i + n] for i in range(len(h) - n + 1))
+        rg = Counter(r[i:i + n] for i in range(len(r) - n + 1))
+        if not hg or not rg:
+            continue
+        ov = sum((hg & rg).values())
+        ps.append(ov / max(1, sum(hg.values()))); rs.append(ov / max(1, sum(rg.values())))
+    p, rc = sum(ps) / len(ps), sum(rs) / len(rs)
+    return 0.0 if p + rc == 0 else (1 + beta ** 2) * p * rc / (beta ** 2 * p + rc)
+
+
+def windowed_chrf(ref: list[dict], hyp: list[dict], win: float) -> float:
+    end = max([c["end"] for c in ref] + [h["end"] for h in hyp])
+    scores = []
+    for t in np.arange(0, end, win):
+        r = " ".join(c["text"] for c in ref if t <= c["start"] < t + win)
+        h = " ".join(c["tr"] for c in hyp if t <= c["start"] < t + win and c.get("tr"))
+        if r:
+            scores.append(chrf(h, r))
+    return sum(scores) / max(1, len(scores))
+
+
+# ---- 번역 -----------------------------------------------------------------------
+
+def translate_all(segs: list[dict], backend_id: str, genre: str, src: str, tgt: str) -> None:
+    import translate as mw_translate
+    tr = mw_translate.build(config.find("tr", backend_id) or {"backend": "local"}, genre)
+    t0 = time.time()
+    for i, s in enumerate(segs):
+        ctx = [x["text"] for x in segs[max(0, i - mw_translate.CONTEXT_LINES):i]]
+        try:
+            s["tr"] = tr.translate(s["text"], src, tgt, ctx)
+        except Exception as exc:
+            s["tr"] = s["text"]; s["tr_error"] = str(exc)[:80]
+        if i % 100 == 0:
+            print(f"    번역 {i}/{len(segs)}", file=sys.stderr, flush=True)
+    return round(time.time() - t0, 1)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("wav"); ap.add_argument("ref")
+    ap.add_argument("--lang", default="ja"); ap.add_argument("--tgt", default="ko")
+    ap.add_argument("--asr", default=""); ap.add_argument("--model", default=""); ap.add_argument("--device", default="")
+    ap.add_argument("--profile", default="talk", choices=sorted(PROFILES))
+    ap.add_argument("--vad-threshold", type=float, default=stream.VAD_THRESHOLD)
+    ap.add_argument("--tag", default="")
+    ap.add_argument("--translate", default="", help="번역 엔진 id. 비우면 전사만")
+    ap.add_argument("--genre", default="general")
+    ap.add_argument("--window", type=float, default=60.0)
+    a = ap.parse_args()
+
+    ref = read_ref(a.ref)
+    spec = dict(config.find_asr(a.asr or config.active("asr")) or {"backend": "tcpp"})
+    if a.model: spec["model"] = a.model
+    if a.device: spec["device"] = a.device
+    tag = a.tag or f"{(spec.get('model') or 'whisper')[:12]}-{a.profile}-vad{a.vad_threshold}"
+    cache = f"{a.wav}.{tag}.asr.json"
+    if os.path.exists(cache):
+        got = json.load(open(cache, encoding="utf-8"))
+        print(f"[{tag}] 전사 재사용 {cache}")
+    else:
+        got = transcribe(a.wav, spec, a.lang, a.profile, a.vad_threshold)
+        json.dump(got, open(cache, "w", encoding="utf-8"), ensure_ascii=False)
+    segs = got["segments"]
+    hit, n = coverage(ref, segs)
+    speech = sum(s["end"] - s["start"] for s in segs)
+    print(f"[{tag}] 정답 큐 {n}  대사 포착률 {hit / n * 100:.1f}%  전사 구간 {len(segs)}  "
+          f"말 {speech:.0f}s/{got['audio_s']:.0f}s  환각차단 {got['hallucinations']}  "
+          f"전사 {got['audio_s'] / max(1, got['elapsed_s']):.0f}x")
+    if a.translate:
+        el = translate_all(segs, a.translate, a.genre, a.lang, a.tgt)
+        json.dump(got, open(f"{a.wav}.{tag}.{a.translate}.{a.genre}.json", "w", encoding="utf-8"),
+                  ensure_ascii=False)
+        score = windowed_chrf(ref, segs, a.window)
+        errs = sum(1 for s in segs if s.get("tr_error"))
+        print(f"[{tag} → {a.translate}/{a.genre}] chrF({a.window:.0f}s 창) {score * 100:.1f}  "
+              f"번역 {len(segs)}줄 {el}s  실패 {errs}")
+
+
+if __name__ == "__main__":
+    main()

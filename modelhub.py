@@ -67,11 +67,11 @@ CATALOG: list[dict] = [
      "url": f"{GH_SHERPA}/asr-models/silero_vad.onnx", "size": 643_854,
      "required": True, "default": True},
     {"id": "whisper-large-v3-turbo", "kind": "asr", "label": "Whisper large-v3-turbo Q8_0",
-     "purpose": "전사 (모든 언어) · 기본 전사기", "file": "whisper-large-v3-turbo-Q8_0.gguf",
+     "purpose": "전사 (모든 언어) · 품질 · GPU 권장", "file": "whisper-large-v3-turbo-Q8_0.gguf",
      "repo": "handy-computer/whisper-large-v3-turbo-gguf", "size": 886_381_760,
      "required": True, "default": True},
     {"id": "sensevoice-small", "kind": "asr", "label": "SenseVoice Small Q8_0",
-     "purpose": "가벼운 전사 · 낮은 사양용 (CPU에서 whisper의 8배)",
+     "purpose": "전사 · 기본 (가벼움 · CPU, whisper의 8배 빠름)",
      "file": "SenseVoiceSmall-Q8_0.gguf",
      "repo": "handy-computer/SenseVoiceSmall-gguf", "size": 252_684_608,
      "required": False, "default": True},
@@ -81,12 +81,12 @@ CATALOG: list[dict] = [
      "repo": "handy-computer/moonshine-base-gguf", "size": 77_476_480,
      "required": False, "default": True},
     {"id": "gemma-4-e4b", "kind": "tr", "label": "Gemma 4 E4B q4_0",
-     "purpose": "번역 · 기본 번역기 (4.9GB, 품질 차이가 큼)",
+     "purpose": "번역 · 품질 · GPU 권장 (4.9GB, M2M-100과 품질 차이가 큼)",
      "file": "gemma-4-E4B_q4_0-it.gguf",
      "repo": "google/gemma-4-E4B-it-qat-q4_0-gguf", "size": 5_154_941_280,
      "required": False, "default": True},
     {"id": "m2m100", "kind": "tr", "label": "M2M-100 (CTranslate2)",
-     "purpose": "번역 대체용 · Gemma가 없거나 실패할 때", "dir": "mojicast-m2m100-ct2",
+     "purpose": "번역 · 기본 (가벼움 · CPU) · Gemma의 대체용도 겸함", "dir": "mojicast-m2m100-ct2",
      "repo": "ishiki-emo/mojicast-m2m100-ct2", "size": 473_000_000,
      "required": True, "default": True},
     {"id": "campplus", "kind": "aux", "label": "CAM++",
@@ -264,13 +264,103 @@ def other_files() -> list[dict]:
     return out
 
 
+def _entry_for_file(name: str) -> dict | None:
+    """파일 이름(또는 디렉터리 이름)으로 목록 항목을 찾습니다."""
+    base = os.path.basename(name)
+    for e in entries():
+        if e.get("file") == base or e.get("dir") == base:
+            return e
+    return None
+
+
+def required_ids(cfg: dict | None = None) -> list[str]:
+    """지금 설정으로 돌리는 데 **반드시** 있어야 하는 것.
+
+    고정된 표가 아닙니다. 기본 전사기가 SenseVoice 면 whisper 는 없어도 되고, 번역이
+    M2M-100 이면 Gemma 는 없어도 됩니다. 예전에는 whisper 를 늘 필수로 적어 두어,
+    가벼운 엔진만 쓰려는 사람에게도 845MB 를 받으라고 띠를 세웠습니다.
+
+      - Silero VAD: 어떤 전사기든 구간을 자릅니다
+      - 기본 전사 엔진의 모델 파일
+      - M2M-100: 번역 대체 경로가 늘 뒤에 둡니다 (기본 번역기가 M2M 이면 그 자체)
+      - Gemma: 기본 번역 엔진이 gemma 일 때만
+      - ffmpeg: 시스템에 있으면 status 가 `system` 으로 답하므로 받을 필요는 없습니다
+    """
+    cfg = cfg or config.load()
+    need = ["silero-vad"]
+    asr = config.find("asr", config.active("asr", cfg), cfg) or {}
+    if asr.get("backend", "tcpp") == "tcpp":
+        e = _entry_for_file(asr.get("model") or "whisper-large-v3-turbo-Q8_0.gguf")
+        if e:
+            need.append(e["id"])
+    need.append("m2m100")
+    tr = config.find("tr", config.active("tr", cfg), cfg) or {}
+    if tr.get("backend") == "gemma":
+        e = _entry_for_file(tr.get("model_path") or "gemma-4-E4B_q4_0-it.gguf")
+        if e:
+            need.append(e["id"])
+    need.append("ffmpeg")
+    return need
+
+
 def overview() -> dict:
-    items = [status(e) for e in entries()] + other_files()
+    need = set(required_ids())
+    items = []
+    for e in entries():
+        st = status(e)
+        st["required"] = e["id"] in need        # 표의 고정값이 아니라 지금 설정 기준
+        items.append(st)
+    items += other_files()
     ready = all(i["state"] in ("ready", "system") for i in items if i.get("required"))
-    return {"items": items, "ready": ready,
+    cfg = config.load()
+    return {"items": items, "ready": ready, "required": sorted(need),
+            "setup_done": config.setup_done(cfg),
+            "asr_active": config.active("asr", cfg), "active": config.active("tr", cfg),
             "model_dir": paths.model_dir(), "tools_dir": paths.tools_dir(),
             "frozen": paths.frozen(), "platform": f"{sys.platform}/{platform.machine()}",
             "hf_token": bool(os.environ.get("HF_TOKEN"))}
+
+
+def setup_options() -> dict:
+    """초기 설정 화면이 보여 줄 선택지. 엔진마다 어떤 모델이 필요하고 몇 MB 인지,
+    이미 있는지를 붙입니다 -- 고르는 순간 무엇을 받게 되는지 보여야 합니다."""
+    cfg = config.load()
+
+    def describe(kind, b):
+        out = {"id": b["id"], "label": b.get("label") or b["id"], "backend": b.get("backend"),
+               "device": b.get("device", "auto"), "model": None}
+        e = None
+        if kind == "asr" and b.get("backend", "tcpp") == "tcpp":
+            e = _entry_for_file(b.get("model") or "whisper-large-v3-turbo-Q8_0.gguf")
+        elif kind == "tr" and b.get("backend") == "gemma":
+            e = _entry_for_file(b.get("model_path") or "gemma-4-E4B_q4_0-it.gguf")
+        elif kind == "tr" and b.get("backend") == "local":
+            e = find("m2m100")
+        if e:
+            st = status(e)
+            out["model"] = {"id": e["id"], "label": e["label"], "size": e.get("size"),
+                            "state": st["state"], "purpose": e.get("purpose")}
+        return out
+
+    return {"asr": [describe("asr", b) for b in config.entries("asr", cfg)],
+            "tr": [describe("tr", b) for b in config.entries("tr", cfg)],
+            "asr_active": config.active("asr", cfg), "active": config.active("tr", cfg),
+            "setup_done": config.setup_done(cfg)}
+
+
+def apply_setup(asr_id: str, tr_id: str, start_download: bool = True) -> dict:
+    """초기 설정을 적용합니다: 기본 엔진 둘을 정하고, 그 조합에 필요한 것을 받기 시작합니다."""
+    for kind, eid in (("asr", asr_id), ("tr", tr_id)):
+        if eid:
+            got = config.set_active(kind, eid)
+            if "error" in got:
+                return got
+    config.mark_setup_done()
+    result = {"ok": True, "required": required_ids()}
+    if start_download:
+        result.update(download([i for i in required_ids() if i != "ffmpeg"
+                                or status(find("ffmpeg"))["state"] == "missing"]))
+    return result
 
 
 # ---- 내려받기 ------------------------------------------------------------------
@@ -278,7 +368,15 @@ def overview() -> dict:
 def _publish(entry_id: str):
     e = find(entry_id)
     if e is not None:
-        bus.publish({"type": "model", **status(e)})
+        st = status(e)
+        # 화면은 이 알림으로 그 줄을 통째로 갈아 끼우므로, overview()와 같은 기준의
+        # 「필수」 표시를 실어야 합니다. 표의 고정값을 보내면 받는 중인 기본 전사기가
+        # 필수 아닌 것으로 바뀌어 보였습니다.
+        try:
+            st["required"] = entry_id in set(required_ids())
+        except Exception:
+            pass
+        bus.publish({"type": "model", **st})
 
 
 def _open(url: str, headers: dict | None = None, timeout: float = 60.0):
@@ -488,15 +586,20 @@ def download(ids: list[str], token: str | None = None) -> dict:
     return {"queued": queued, "skipped": skipped, "unknown": unknown}
 
 
-def default_ids(with_gemma: bool = True) -> list[str]:
-    """설치 스크립트가 받는 기본 세트. 도구는 시스템에 없을 때만."""
-    out = []
-    for e in CATALOG:
-        if not e.get("default"):
-            continue
-        if e["id"] == "gemma-4-e4b" and not with_gemma:
-            continue
-        out.append(e["id"])
+def default_ids(with_gemma: bool = False) -> list[str]:
+    """설치 스크립트가 받는 기본 세트: 지금 설정에 필요한 것 + 작은 것들.
+
+    기본 설정은 가벼운 CPU 엔진(SenseVoice Small + M2M-100)이라 여기서 Gemma 나
+    whisper 를 받지 않습니다 -- 6GB 를 받게 해 놓고 사양이 안 되는 기계에서 돌지
+    않는 것보다, 일단 도는 것을 받고 화면에서 올리는 편이 낫습니다. `with_gemma` 는
+    예전 스크립트 옵션과의 호환용입니다.
+    """
+    out = [i for i in required_ids() if i != "ffmpeg"]
+    for extra in ("moonshine-base", "campplus"):
+        if extra not in out:
+            out.append(extra)
+    if with_gemma and "gemma-4-e4b" not in out:
+        out.append("gemma-4-e4b")
     return out
 
 
@@ -620,7 +723,9 @@ def _cli(argv: list[str]) -> int:
     sub.add_parser("list", help="목록과 상태")
     d = sub.add_parser("download", help="받습니다. 'default' 는 기본 세트, 'all' 은 전부")
     d.add_argument("ids", nargs="+")
-    d.add_argument("--skip-gemma", action="store_true", help="기본 세트에서 Gemma(4.9GB)를 뺍니다")
+    d.add_argument("--with-gemma", action="store_true", help="기본 세트에 Gemma(4.9GB)를 넣습니다")
+    d.add_argument("--skip-gemma", action="store_true",
+                   help="(예전 옵션, 지금은 기본이 그렇습니다)")
     d.add_argument("--with-tools", action="store_true",
                    help="ffmpeg·yt-dlp 독립 실행 파일도 받습니다 (시스템에 없을 때)")
     x = sub.add_parser("delete", help="지웁니다")
@@ -642,7 +747,7 @@ def _cli(argv: list[str]) -> int:
     ids: list[str] = []
     for want in args.ids:
         if want == "default":
-            ids += default_ids(with_gemma=not args.skip_gemma)
+            ids += default_ids(with_gemma=args.with_gemma)
         elif want == "all":
             ids += [e["id"] for e in entries() if not e.get("tool")]
         else:

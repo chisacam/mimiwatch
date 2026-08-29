@@ -83,17 +83,24 @@ def main():
         return 1
 
     section("전사 모델 올리기")
-    import stream, tcpp_asr
-    path = os.path.join(stream.model_dir(), "whisper-large-v3-turbo-Q8_0.gguf")
+    import config, stream, tcpp_asr
+    # 기본 전사 엔진의 모델을 봅니다. 예전에는 whisper 를 박아 두어, 기본이 가벼운
+    # 엔진인 설치에서는 "모델 파일 없음"으로 멈췄습니다.
+    spec = config.find_asr(config.active("asr")) or {"backend": "tcpp"}
+    if spec.get("backend", "tcpp") != "tcpp":
+        line(True, f"기본 전사기는 원격({spec.get('id')})입니다. 로컬 적재는 건너뜁니다")
+        spec = {"backend": "tcpp"}
+    path = os.path.join(stream.model_dir(), spec.get("model") or "whisper-large-v3-turbo-Q8_0.gguf")
     line(os.path.exists(path), "모델 파일", path)
     if not os.path.exists(path):
+        print("       ↳ 화면의 「엔진 관리 › 모델·도구」에서 받거나 modelhub.py download default")
         return 1
     # auto 와 cpu 를 따로 봅니다. GPU에서만 터지는 경우가 있고, 그때는
     # backends.json 에 device: cpu 를 적는 것이 곧 해결책입니다.
     for device in ("auto", "cpu"):
         t0 = time.time()
         try:
-            asr = tcpp_asr.build_live_asr({"backend": "tcpp", "device": device}, "ja")
+            asr = tcpp_asr.build_live_asr({**spec, "device": device}, "ja")
             line(True, f"device={device}", f"{asr.device} · {asr.threads}스레드 · "
                                            f"{time.time() - t0:.1f}초")
             del asr

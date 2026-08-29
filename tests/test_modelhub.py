@@ -50,12 +50,48 @@ def _wait(pred, timeout=5.0):
     return False
 
 
-def test_catalog_has_the_install_script_set():
+def test_catalog_and_defaults_follow_the_light_config():
     ids = {e["id"] for e in modelhub.CATALOG}
     assert {"silero-vad", "whisper-large-v3-turbo", "gemma-4-e4b", "m2m100", "ffmpeg"} <= ids
+    # 예시 설정의 기본은 가벼운 CPU 엔진입니다. 필수도 기본 세트도 그것을 따릅니다.
+    need = modelhub.required_ids()
+    assert need == ["silero-vad", "sensevoice-small", "m2m100", "ffmpeg"]
     default = modelhub.default_ids()
-    assert "gemma-4-e4b" in default and "ffmpeg" not in default      # 도구는 따로
-    assert "gemma-4-e4b" not in modelhub.default_ids(with_gemma=False)
+    assert "sensevoice-small" in default and "m2m100" in default
+    assert "gemma-4-e4b" not in default and "whisper-large-v3-turbo" not in default
+    assert "ffmpeg" not in default                                      # 도구는 따로
+    assert "gemma-4-e4b" in modelhub.default_ids(with_gemma=True)
+
+
+def test_required_follows_the_active_engines(monkeypatch):
+    config.set_active("asr", "tcpp-best")
+    config.set_active("tr", "local-gemma")
+    need = modelhub.required_ids()
+    assert "whisper-large-v3-turbo" in need and "gemma-4-e4b" in need
+    assert "sensevoice-small" not in need and "m2m100" in need          # 대체 경로는 늘 필요
+    ov = modelhub.overview()
+    flagged = {i["id"] for i in ov["items"] if i.get("required")}
+    assert flagged == set(need)
+    assert ov["asr_active"] == "tcpp-best" and ov["setup_done"] is False
+
+
+def test_setup_options_and_apply(monkeypatch):
+    opts = modelhub.setup_options()
+    asr = {o["id"]: o for o in opts["asr"]}
+    assert asr["tcpp-lite"]["model"]["id"] == "sensevoice-small"
+    assert asr["tcpp-best"]["model"]["id"] == "whisper-large-v3-turbo"
+    tr = {o["id"]: o for o in opts["tr"]}
+    assert tr["local-gemma"]["model"]["id"] == "gemma-4-e4b"
+    assert tr["local-m2m100"]["model"]["id"] == "m2m100"
+    assert tr["gemma4-e4b"]["model"] is None                            # 원격은 받을 것이 없습니다
+
+    queued = []
+    monkeypatch.setattr(modelhub, "download", lambda ids, token=None: (queued.extend(ids), {"queued": ids})[1])
+    got = modelhub.apply_setup("tcpp-best", "local-gemma")
+    assert got["ok"] and config.active("asr") == "tcpp-best" and config.active("tr") == "local-gemma"
+    assert config.setup_done() is True
+    assert "whisper-large-v3-turbo" in queued and "gemma-4-e4b" in queued and "m2m100" in queued
+    assert "error" in modelhub.apply_setup("no-such", "local-gemma")
 
 
 def test_status_reads_files_and_parts(model_dir):

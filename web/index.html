@@ -39,8 +39,9 @@
        없으므로 여기서 받게 합니다. -->
   <div id="setup-notice" class="live-notice setup-notice" hidden>
     <span id="setup-text">전사에 필요한 모델이 아직 없습니다.</span>
-    <button id="setup-download" class="seg primary-seg">기본 모델 받기</button>
-    <button id="setup-open" class="seg">고르기</button>
+    <button id="setup-start" class="seg primary-seg">초기 설정</button>
+    <button id="setup-download" class="seg">지금 설정대로 받기</button>
+    <button id="setup-open" class="seg">모델·도구</button>
   </div>
   <div id="lang-status" class="status"></div>
   <div class="spacer"></div>
@@ -270,6 +271,39 @@
   </form>
 </dialog>
 
+<!-- 초기 설정. 사양은 기계마다 달라 기본값 하나가 다 맞을 수 없습니다. 기본은
+     가벼운 CPU 엔진(SenseVoice Small + M2M-100)이고, 여기서 무거운 쪽으로 올리면
+     그 조합에 필요한 것을 받기 시작합니다. 「관리 › ⚙ 엔진 관리 › 초기 설정 다시」로
+     언제든 다시 엽니다. -->
+<dialog id="setup-dialog">
+  <form method="dialog" id="setup-form">
+    <h3>초기 설정</h3>
+    <p class="hint">이 기계에서 돌릴 엔진을 고릅니다. <b>기본은 가벼운 CPU 엔진</b>이라 어디서든 돌지만 품질은 무거운 쪽이 낫습니다 — GPU(Metal·Vulkan)가 있고 메모리가 넉넉하면 올리십시오. 고른 조합에 필요한 모델만 받습니다. 나중에 「관리」에서 언제든 바꿀 수 있습니다.</p>
+    <fieldset class="setup-group">
+      <legend>전사 (음성 → 글자)</legend>
+      <div id="setup-asr" class="setup-choices"></div>
+    </fieldset>
+    <fieldset class="setup-group">
+      <legend>번역 (원문 → 내 언어)</legend>
+      <div id="setup-tr" class="setup-choices"></div>
+    </fieldset>
+    <label>내 언어
+      <select name="viewer_lang">
+        <option value="ko">한국어</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="zh">中文</option>
+      </select>
+    </label>
+    <p class="hint" id="setup-total">—</p>
+    <div class="row">
+      <span class="grow"></span>
+      <button value="cancel" formnovalidate>나중에</button>
+      <button value="save" class="primary" id="setup-go">이대로 시작</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="settings-dialog">
   <div id="settings-body">
     <div class="dlg-head">
@@ -302,6 +336,14 @@
       </div>
       <p class="hint">인식한 문장을 시청자 언어로 옮깁니다. OpenAI 호환 <code>/v1/chat/completions</code> 규약을 씁니다.</p>
       <div id="tr-list" class="engine-list"></div>
+    </section>
+
+    <section class="engine-group">
+      <div class="group-head">
+        <h4>초기 설정</h4>
+        <button id="setup-again" class="seg ghost">초기 설정 다시</button>
+      </div>
+      <p class="hint">기본 전사·번역 엔진을 다시 고릅니다. 고른 조합에 필요한 모델을 받기 시작합니다.</p>
     </section>
 
     <section class="engine-group" id="shutdown-group">

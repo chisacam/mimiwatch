@@ -76,8 +76,12 @@ function bind() {
     b.addEventListener("click", showModelForm));
   $("model-form-back").addEventListener("click", showEngineList);
   $("model-form").addEventListener("submit", saveModel);
-  $("setup-download").addEventListener("click", () => downloadModels("default", true));
+  $("setup-download").addEventListener("click", () =>
+    downloadModels((state.models && state.models.required) || "default", true));
   $("setup-open").addEventListener("click", openSettings);
+  $("setup-start").addEventListener("click", openSetup);
+  $("setup-again").addEventListener("click", () => { $("settings-dialog").close(); openSetup(); });
+  $("setup-form").addEventListener("submit", submitSetup);
   document.querySelectorAll("[data-add]").forEach(b =>
     b.addEventListener("click", () => showEngineForm(b.dataset.add, null)));
   $("asr-picker").addEventListener("change", e => {
@@ -188,7 +192,12 @@ function setLibrary(hidden) {
     fetch("/api/models").then(r => r.json()).catch(() => null),
   ]);
   applyBackends(cfg);
-  if (models && !state.scriptOnly) applyModels(models);
+  if (models && !state.scriptOnly) {
+    applyModels(models);
+    // 첫 실행: 초기 설정을 아직 안 했고 필요한 것도 없습니다. 고르게 합니다.
+    // 예전부터 쓰던 사람(설정 표시는 없지만 모델은 다 있음)에게는 묻지 않습니다.
+    if (!models.setup_done && !models.ready) openSetup();
+  }
   if (state.scriptOnly) {
     // 목록도 플레이어도 없습니다. 지목된 것 하나만 엽니다.
     await refreshVideoList(undefined, [list, sessions]);

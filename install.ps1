@@ -21,9 +21,10 @@
   auto(기본) / vulkan / cpu.
   auto는 GPU를 보고 정합니다. GPU가 있으면 vulkan, 없으면 cpu입니다.
 
-.PARAMETER SkipGemma
-  번역용 Gemma(4.9GB)를 건너뜁니다. 가벼운 M2M-100만 쓰게 되는데
-  품질 차이가 큽니다(measurements/RESULTS.md 참조).
+.PARAMETER WithGemma
+  번역용 Gemma(4.9GB)도 함께 받습니다. 기본 설정은 가벼운 CPU 엔진(SenseVoice
+  Small + M2M-100)이라 기본으로는 받지 않습니다. 화면의 「초기 설정」에서 골라도
+  그때 받습니다.
 
 .PARAMETER ModelDir
   모델을 둘 곳. 기본은 %LOCALAPPDATA%\mimiwatch\models 입니다.
@@ -31,12 +32,12 @@
 
 .EXAMPLE
   .\install.ps1
-  .\install.ps1 -Backend cpu -SkipGemma
+  .\install.ps1 -Backend cpu -WithGemma
 #>
 [CmdletBinding()]
 param(
   [ValidateSet('auto', 'vulkan', 'cpu')] [string] $Backend = 'auto',
-  [switch] $SkipGemma,
+  [switch] $WithGemma,
   [string] $ModelDir
 )
 
@@ -277,7 +278,7 @@ Say '모델'
 New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
 $env:MIMIWATCH_MODEL_DIR = $ModelDir
 $mhArgs = @((Join-Path $Here 'modelhub.py'), 'download', 'default')
-if ($SkipGemma) { $mhArgs += '--skip-gemma' }
+if ($WithGemma) { $mhArgs += '--with-gemma' }
 $code = Invoke-Native $Py $mhArgs
 if ($code -ne 0) { Die '모델을 다 받지 못했습니다. 다시 실행하면 이어 받습니다.' }
 
@@ -300,7 +301,7 @@ import os, sys
 sys.path.insert(0, sys.argv[1])
 import stream, tcpp_asr                                   # noqa: F401
 need = {'silero_vad.onnx': '구간 분할',
-        'whisper-large-v3-turbo-Q8_0.gguf': '전사'}
+        'SenseVoiceSmall-Q8_0.gguf': '전사 (기본 · 가벼운 CPU 엔진)'}
 missing = [f'{v}: {k}' for k, v in need.items()
            if not os.path.exists(os.path.join(stream.model_dir(), k))]
 if missing:

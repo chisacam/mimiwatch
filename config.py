@@ -137,6 +137,32 @@ def active(kind: str, cfg: dict | None = None) -> str:
     return (cfg or load()).get(active_key) or PROTECTED[kind]
 
 
+def set_active(kind: str, engine_id: str) -> dict:
+    """기본으로 쓸 엔진을 바꿉니다. 초기 설정 화면이 부릅니다."""
+    key, active_key = KINDS[kind]
+    with _lock:
+        cfg = load()
+        if not any(b["id"] == engine_id for b in cfg.get(key, [])):
+            return {"error": f"'{engine_id}' 엔진이 없습니다"}
+        cfg[active_key] = engine_id
+        save(cfg)
+        return cfg
+
+
+def setup_done(cfg: dict | None = None) -> bool:
+    """초기 설정을 마쳤는가. 이 표시가 생기기 전의 설정 파일에는 없습니다 -- 그때는
+    필요한 모델이 다 있으면 마친 것으로 봅니다(화면 쪽 판단)."""
+    return bool((cfg or load()).get("setup_done"))
+
+
+def mark_setup_done() -> dict:
+    with _lock:
+        cfg = load()
+        cfg["setup_done"] = True
+        save(cfg)
+        return cfg
+
+
 def example_default(kind: str) -> str:
     """예시 설정의 기본 활성 엔진. 활성 엔진을 지웠을 때 되돌아갈 자리입니다."""
     _, active_key = KINDS[kind]

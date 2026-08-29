@@ -21,7 +21,9 @@
 #
 # 환경변수로 위치를 바꿀 수 있습니다.
 #   MIMIWATCH_MODEL_DIR  모델 (기본: ~/.local/share/mimiwatch/models)
-#   SKIP_GEMMA=1         번역용 Gemma(4.9GB)를 건너뜁니다. M2M-100만 씁니다.
+#   WITH_GEMMA=1         번역용 Gemma(4.9GB)도 함께 받습니다. 기본 설정은 가벼운 CPU
+#                        엔진(SenseVoice Small + M2M-100)이라 기본으로는 받지 않습니다.
+#                        화면의 「초기 설정」에서 골라도 그때 받습니다.
 #   TRANSCRIBE_CPP_DIR   (선택) 직접 빌드한 transcribe.cpp 체크아웃
 
 set -euo pipefail
@@ -84,7 +86,7 @@ say "모델"
 # 목록은 modelhub.py 한 곳에 있습니다. 화면의 「모델·도구」와 같은 표입니다.
 # 이미 있는 것은 건너뛰고, 받다 끊긴 것은 이어 받습니다.
 MH_ARGS=(download default)
-[ "${SKIP_GEMMA:-0}" = "1" ] && MH_ARGS+=(--skip-gemma)
+[ "${WITH_GEMMA:-0}" = "1" ] && MH_ARGS+=(--with-gemma)
 MIMIWATCH_MODEL_DIR="$MODELS" "$PY" "$HERE/modelhub.py" "${MH_ARGS[@]}" \
   || die "모델을 다 받지 못했습니다. 다시 실행하면 이어 받습니다."
 
@@ -105,7 +107,7 @@ import os, sys
 sys.path.insert(0, sys.argv[1])
 import stream, tcpp_asr                                   # noqa: F401
 need = {"silero_vad.onnx": "구간 분할",
-        "whisper-large-v3-turbo-Q8_0.gguf": "전사"}
+        "SenseVoiceSmall-Q8_0.gguf": "전사 (기본 · 가벼운 CPU 엔진)"}
 missing = [f"{v}: {k}" for k, v in need.items()
            if not os.path.exists(os.path.join(stream.model_dir(), k))]
 if missing:

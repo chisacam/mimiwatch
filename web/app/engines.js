@@ -407,10 +407,12 @@ function refreshSetupNotice() {
   } else if (busy.length) {
     text = `모델 ${busy.length}개가 내려받기를 기다리고 있습니다.`;
   } else {
-    text = "전사에 필요한 것이 아직 없습니다: " + missing.map(i => i.label).join(", ");
+    text = (ov.setup_done ? "필요한 것이 아직 없습니다: " : "처음이시군요. 이 기계에 맞는 엔진을 고르십시오. 없는 것: ")
+           + missing.map(i => i.label).join(", ");
   }
   $("setup-text").textContent = text;
-  $("setup-download").hidden = busy.length > 0;
+  $("setup-start").hidden = busy.length > 0;
+  $("setup-download").hidden = busy.length > 0 || !ov.setup_done;
   box.hidden = false;
 }
 
@@ -576,4 +578,96 @@ async function saveModel(e) {
   } finally {
     btn.disabled = false;
   }
+}
+
+/* ---------- 초기 설정 ----------
+ * 사양은 기계마다 다릅니다. 기본은 가벼운 CPU 엔진(SenseVoice Small + M2M-100)이지만
+ * GPU 가 있는 기계라면 whisper 와 Gemma 가 훨씬 낫습니다. 첫 실행에 고르게 하고,
+ * 고른 조합에 필요한 모델만 받습니다. 예전에는 무거운 쪽이 기본이라 6GB 를 받고서야
+ * 이 기계에서는 버겁다는 것을 알았습니다. */
+
+async function openSetup() {
+  const opts = await (await fetch("/api/setup")).json();
+  state.setupOpts = opts;
+  renderSetupChoices("asr", opts.asr, opts.asr_active);
+  renderSetupChoices("tr", opts.tr, opts.active);
+  const f = $("setup-form");
+  f.viewer_lang.value = $("viewer-lang").value;
+  syncSetupTotal();
+  if (!$("setup-dialog").open) $("setup-dialog").showModal();
+}
+
+function renderSetupChoices(kind, list, current) {
+  const box = $(kind === "asr" ? "setup-asr" : "setup-tr");
+  box.textContent = "";
+  list.forEach(o => {
+    const lab = document.createElement("label");
+    lab.className = "setup-choice";
+    const r = document.createElement("input");
+    r.type = "radio"; r.name = "setup-" + kind; r.value = o.id;
+    r.checked = o.id === current;
+    r.addEventListener("change", syncSetupTotal);
+    const body = document.createElement("span");
+    const name = document.createElement("b");
+    name.textContent = o.label;
+    const meta = document.createElement("small");
+    const bits = [];
+    if (o.backend === "openai") bits.push("원격 서버 · 받을 것 없음 · 그 서버가 떠 있어야 합니다");
+    else if (o.model) {
+      bits.push(o.model.label);
+      bits.push(o.model.state === "ready" ? "있음" : `${fmtBytes(o.model.size)} 받음`);
+      // M2M-100 은 CTranslate2 를 CPU 로 고정해 씁니다(translate.py).
+      bits.push(o.backend === "local" || o.device === "cpu" ? "CPU" : "GPU가 있으면 GPU");
+    }
+    meta.textContent = bits.join(" · ");
+    body.append(name, document.createElement("br"), meta);
+    lab.append(r, body);
+    box.appendChild(lab);
+  });
+}
+
+/* 고른 조합으로 새로 받을 용량. 「이대로 시작」 옆에 적어 두면 5GB 를 받게 될지
+ * 미리 압니다. */
+function syncSetupTotal() {
+  const opts = state.setupOpts;
+  if (!opts) return;
+  const f = $("setup-form");
+  const pick = (kind, list) => list.find(o => o.id === (f.elements["setup-" + kind].value));
+  const chosen = [pick("asr", opts.asr), pick("tr", opts.tr)];
+  let bytes = 0;
+  const names = [];
+  chosen.forEach(o => {
+    if (o && o.model && o.model.state !== "ready" && o.model.state !== "system") {
+      bytes += o.model.size || 0; names.push(o.model.label);
+    }
+  });
+  // M2M-100 은 번역 대체 경로가 늘 필요합니다. Gemma 를 골라도 함께 받습니다.
+  const m2m = (state.models || { items: [] }).items.find(i => i.id === "m2m100");
+  if (m2m && m2m.state !== "ready" && !names.includes(m2m.label)) {
+    bytes += m2m.size || 0; names.push(m2m.label + " (번역 대체용)");
+  }
+  $("setup-total").textContent = bytes
+    ? `받을 것: ${names.join(", ")} — 약 ${fmtBytes(bytes)}`
+    : "필요한 모델이 다 있습니다. 바로 쓸 수 있습니다.";
+}
+
+async function submitSetup(e) {
+  if (e.submitter && e.submitter.value === "cancel") return;
+  const f = e.target;
+  $("viewer-lang").value = f.viewer_lang.value;
+  persist();
+  const res = await (await fetch("/api/setup", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ asr: f.elements["setup-asr"].value,
+                           tr: f.elements["setup-tr"].value, download: true }),
+  })).json();
+  if (res.error) { alert(res.error); return; }
+  // 기본 엔진이 바뀌었으니 선택기도 그리로 맞춥니다.
+  await loadBackends();
+  setAsr(f.elements["setup-asr"].value);
+  state.backend = f.elements["setup-tr"].value;
+  setBackendPickers(state.backend);
+  persist();
+  await loadModels();
+  if ((res.queued || []).length) openSettings();     // 내려받기 진행을 보여 줍니다
 }

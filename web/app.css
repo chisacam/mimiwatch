@@ -631,3 +631,20 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 .video-row:hover .vact button{opacity:1}
 .video-row .vact .vres:hover{border-color:var(--accent); color:var(--accent)}
 .video-row .vact .vre:hover{border-color:var(--line); color:var(--text)}
+
+/* ---------- 초기 설정 ---------- */
+#setup-dialog{background:var(--panel); color:var(--text); border:1px solid var(--line);
+  border-radius:12px; padding:1.1rem 1.25rem; width:min(560px, 92vw)}
+#setup-dialog::backdrop{background:rgba(4,6,10,.7)}
+#setup-form{display:flex; flex-direction:column; gap:.7rem}
+#setup-form h3{margin:0; font-size:1rem}
+#setup-form .hint{margin:0; font-size:.78rem; color:var(--dim); line-height:1.6}
+#setup-form .hint b{color:var(--text)}
+.setup-group{border:1px solid var(--line); border-radius:8px; padding:.5rem .7rem .6rem; margin:0}
+.setup-group legend{font-size:.72rem; letter-spacing:.14em; color:var(--dim); font-weight:700; padding:0 .3rem}
+.setup-choices{display:flex; flex-direction:column; gap:.3rem}
+.setup-choice{display:grid; grid-template-columns:auto 1fr; gap:.55rem; align-items:start;
+  padding:.4rem .5rem; border-radius:6px; cursor:pointer; font-size:.84rem}
+.setup-choice:hover{background:#171b25}
+.setup-choice input{margin-top:.25rem}
+.setup-choice small{font-family:var(--mono); font-size:.66rem; color:var(--dim)}

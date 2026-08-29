@@ -52,6 +52,17 @@ def test_upsert_and_delete():
     assert "error" in config.delete("tr", "x")
 
 
+def test_set_active_and_setup_flag():
+    assert config.active("asr") == "tcpp-lite"            # 예시의 기본은 가벼운 CPU 엔진
+    assert config.active("tr") == "local-m2m100"
+    assert "error" in config.set_active("asr", "nope")
+    config.set_active("asr", "tcpp-best")
+    assert config.load()["asr_active"] == "tcpp-best"
+    assert config.setup_done() is False
+    config.mark_setup_done()
+    assert config.setup_done() is True
+
+
 def test_protected_engines_cannot_be_deleted():
     assert "error" in config.delete("tr", config.PROTECTED["tr"])
     assert "error" in config.delete("asr", config.PROTECTED["asr"])

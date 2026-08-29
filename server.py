@@ -188,6 +188,10 @@ class Handler(BaseHTTPRequestHandler):
         # 모델·도구의 목록과 상태. 첫 실행 화면이 이것으로 무엇이 없는지 압니다.
         self._json(modelhub.overview())
 
+    def get_setup(self):
+        # 초기 설정 화면의 선택지: 엔진마다 필요한 모델과 그 크기·유무.
+        self._json(modelhub.setup_options())
+
     def get_bus(self):
         """전역 변화 알림(bus.py)을 SSE로. 화면이 하나 붙여 두고 목록·작업
         상자를 그때그때 고칩니다. 첫 프레임은 붙었다는 표시입니다."""
@@ -528,6 +532,12 @@ class Handler(BaseHTTPRequestHandler):
     def post_models_delete(self, body):
         self._json(modelhub.delete(str(body.get("id") or "")))
 
+    def post_setup(self, body):
+        # 기본 엔진 둘을 정하고 그 조합에 필요한 것을 받기 시작합니다. 사양이 다양한
+        # 기계에 기본값 하나가 맞을 수 없어, 첫 실행에서 고르게 합니다.
+        self._json(modelhub.apply_setup(str(body.get("asr") or ""), str(body.get("tr") or ""),
+                                        start_download=bool(body.get("download", True))))
+
     def post_models_add(self, body):
         self._json(modelhub.add_custom(
             body.get("kind", ""), body.get("repo", ""), body.get("file", ""),
@@ -543,6 +553,7 @@ GET_ROUTES = {
     "/api/export": Handler.get_export,
     "/api/events": Handler.get_bus,
     "/api/models": Handler.get_models,
+    "/api/setup": Handler.get_setup,
 }
 # 뒤가 붙는 경로. 긴 접두가 먼저여야 `/api/video/`가 `/api/videos`를 삼키지
 # 않습니다 -- 정확한 경로는 위 사전에서 먼저 찾으므로 여기서는 순서만 지킵니다.
@@ -579,6 +590,7 @@ POST_ROUTES = {
     "/api/models/cancel": Handler.post_models_cancel,
     "/api/models/delete": Handler.post_models_delete,
     "/api/models/add": Handler.post_models_add,
+    "/api/setup": Handler.post_setup,
 }
 
 

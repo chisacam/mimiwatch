@@ -427,7 +427,12 @@ class LiveSession:
         # 이어받을 때, 끊기기 직전까지 받아 둔 미디어 위치입니다. 0이면
         # 새로 시작하는 세션이라 되감을 것이 없습니다.
         self.resume_from = 0.0
-        # 되감아도 메우지 못한 구간(초). 0보다 크면 자막에 그렇게 적습니다.
+        # resume_from 까지 되감아 메울지. 세션 안의 자동 재접속만 그렇게 합니다 -- 끊긴 지
+        # 몇 초라 DVR 창 안에서 바로 이어집니다. 사용자의 「이어받기」는 되감지 않습니다:
+        # 한 시간 멈춘 뒤 이어받으면 한 시간치를 먼저 받아 적느라 지금 보는 자리의 자막이
+        # 한참 뒤에나 나왔습니다. 지금 라이브 끝에서 시작하고 빠진 구간은 한 줄로 적습니다.
+        self._rewind = False
+        # 메우지 못한 구간(초). 0보다 크면 자막에 그렇게 적습니다.
         self.gap_s = 0.0
         # hls는 yt-dlp가 채우고, tab은 브라우저가 넣어 줍니다.
         self.title = title
@@ -1033,6 +1038,7 @@ class LiveSession:
         # 지금까지 받은 자리. 새 재생목록의 시각 기준(_recv_base)이 여기서
         # 다시 계산되므로 _recv_s는 0부터 다시 셉니다 -- media_t = base + s.
         self.resume_from = self._recv_base + self._recv_s
+        self._rewind = True                  # 방금 끊긴 자리는 DVR 창 안입니다. 메웁니다
         try:
             src, start_index = self._resolve_hls(reconnect=True)
         except Exception as exc:
@@ -1152,9 +1158,12 @@ class LiveSession:
         # media_base has to account for everything we deliberately passed.
         self.window_s = info.get("window_s") or 0.0
         start_index, skipped = -2, self.window_s
-        if self.resume_from:
+        if self.resume_from and self._rewind:
             start_index, skipped = self._resume_point(info, release_ts)
         self._recv_base = media_base_from(info.get("pdt"), release_ts, skipped)
+        if self.resume_from and not self._rewind:
+            # 이어받기: 라이브 끝에서 시작합니다. 멈춘 자리와의 거리가 빠진 구간입니다.
+            self.gap_s = max(0.0, self._recv_base - self.resume_from) if self._recv_base else 0.0
         print(f"[live] playlist: {info.get('segments')} segments / "
               f"{self.window_s:.0f}s window, media_base={self._recv_base:.0f}s"
               + (f", 이어받기 index={start_index} 빠진 구간={self.gap_s:.0f}s"
@@ -1399,10 +1408,15 @@ def _member_from(src: dict, gid: str, lang, viewer_lang, backend_id, profile,
     sid = src.get("session")
     if sid:
         s = get(sid)
-        if s is None or s.state not in RUNNING_STATES:
-            return {"error": f"'{sid}' 세션이 받는 중이 아닙니다"}
-        s.group = gid
-        return s
+        if s is not None and s.state in RUNNING_STATES:
+            s.group = gid
+            return s
+        # 멈춘 방송입니다. 같은 세션으로 이어받아 대기 멤버로 넣습니다 -- 목록에서 끌어다
+        # 놓은 지난 방송이 여기로 옵니다.
+        got = resume(sid, asr_backend_id=asr_backend_id, backend_id=backend_id, group=gid)
+        if "error" in got:
+            return got
+        return get(sid)
     tab = src.get("source") == "tab"
     return _new_session((src.get("url") or "").strip(), lang, viewer_lang, backend_id,
                         profile, asr_backend_id, refine, genre,
@@ -1427,22 +1441,24 @@ def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
         if why:
             return {"error": why}
     g = Group()
+    with _lock:
+        _groups[g.id] = g                # 멤버가 이어받기로 들어올 때 찾을 수 있어야 합니다
     members: list[LiveSession] = []
     for src in sources:
         m = _member_from(src, g.id, lang, viewer_lang, backend_id, profile,
                          asr_backend_id, refine, genre)
         if isinstance(m, dict):
-            # 편입할 세션이 없습니다. 방금 만든 대기 세션들은 되돌립니다.
+            # 편입할 세션이 없습니다. 방금 만든 대기 세션들은 되돌리고 묶음도 지웁니다.
             for made in members:
                 if not any(sr.get("session") == made.id for sr in sources):
                     made.stop()
             for made in members:
                 made.group = ""
+            with _lock:
+                _groups.pop(g.id, None)
             return m
         members.append(m)
     g.members = [m.id for m in members]
-    with _lock:
-        _groups[g.id] = g
     _evict_outside(g.id)
     _apply_focus(g, focus if focus in g.members else g.members[0])
     _publish_group(g)
@@ -1756,18 +1772,23 @@ def set_backend(session_id: str, backend_id: str) -> dict:
 
 
 def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
-           source: str = "", url: str = "") -> dict:
+           source: str = "", url: str = "", group: str = "") -> dict:
     """끊긴 세션의 수신을 **같은 세션으로** 이어 붙입니다.
 
     지금까지는 서버가 죽으면 그 세션은 거기서 끝이었습니다. 이어받은 척하면
     조용한 구멍이 생긴다는 이유였는데, 구멍을 조용하지 않게 만들면 그 이유가
-    없어집니다. 두 가지로 그렇게 합니다.
+    없어집니다 -- 빠진 초를 자막 한 줄로 적습니다.
 
-      - 유튜브의 DVR 창 안이면 되감아 **한 조각도 잃지 않고** 받습니다.
-      - 창보다 오래 멈춰 있었으면 못 메운 초를 자막 한 줄로 적습니다.
+    **되감지 않습니다.** 예전에는 DVR 창 안이면 멈춘 자리까지 되감아 메웠는데,
+    그러면 이어받기가 늦을수록 그만큼을 먼저 받아 적느라 지금 보는 자리의 자막은
+    한참 뒤에 나왔습니다(느린 엔진이면 더). 사용자가 보는 것은 지금이므로 지금
+    라이브 끝에서 시작합니다. 세션 안의 자동 재접속(몇 초 끊김)만 되감습니다.
 
     세션 id를 그대로 쓰므로 자막은 이어집니다. 자동으로 하지 않습니다 --
     서버를 켰다고 방송을 다시 받기 시작하는 것은 사용자가 시킨 일이 아닙니다.
+
+    `group` 을 주면 그 멀티뷰 묶음의 멤버로 살아납니다(대기 세션 -- 묶음에 초점이
+    없을 때만 초점을 받습니다). 목록의 멈춘 방송을 화면에 끌어다 놓는 길입니다.
     """
     st = store.session(session_id)
     if not st:
@@ -1788,8 +1809,11 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
         return {"error": "주소가 남아 있지 않아 이어받을 수 없습니다. 탭 소리로 이어받으십시오."}
 
     # 한 번에 한 방송만 받습니다. start() 와 같은 규칙입니다 -- 모델을 두 벌
-    # 올려 둘 이유가 없습니다.
-    _evict_outside("")
+    # 올려 둘 이유가 없습니다. 묶음에 들어가는 것이면 그 묶음만 남깁니다.
+    g = _groups.get(group) if group else None
+    if group and g is None:
+        return {"error": "no such group"}
+    _evict_outside(group)
 
     # 엔진은 부르는 쪽이 준 것이 우선입니다(「관리」에서 바꾼 뒤 이어받기). 설정에 없는
     # id 면 저장된 것을 씁니다 -- 이어받기가 엔진 이름 하나 때문에 실패하면 안 됩니다.
@@ -1820,11 +1844,23 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     # 본 구간을 다시 받아 적게 됩니다. 옛 기록에는 recv_t 가 없으므로 그때는 예전 식으로.
     s.resume_from = float(st.get("recv_t")
                           or (float(st.get("media_base") or 0.0) + float(st.get("audio_s") or 0.0)))
+    if g is not None:
+        s.group = g.id
+        if g.focus in (None, s.id):
+            g.focus = s.id               # 초점이 없는 묶음이면 이것이 초점
+        else:
+            s._focus.clear()             # 있으면 대기 세션으로 살아납니다
+            if s.source == "tab":
+                s._ring.set_max(RING_S)
+        if s.id not in g.members:
+            g.members.append(s.id)
 
     with _lock:
         _sessions[s.id] = s
     s._persist()
     s.start()
+    if g is not None:
+        _publish_group(g)
     # 브라우저는 source를 보고 탭 공유를 다시 물을지 정합니다. 탭 세션은
     # 서버가 되감을 수 없으므로 소리를 다시 들려주지 않으면 한 줄도 늘지
     # 않은 채 「받는 중」으로 남습니다.

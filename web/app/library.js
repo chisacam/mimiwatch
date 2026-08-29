@@ -141,6 +141,14 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   row.appendChild(rowActions({ value, session, title, stopped, deletable, videoId, st }));
 
   row.addEventListener("click", () => openFromList(value));
+  // 플레이어 영역에 끌어다 놓으면 지금 보는 방송 옆에 타일로 붙습니다(tiles.js 의 dropRow).
+  row.draggable = true;
+  row.addEventListener("dragstart", (e) => {
+    e.dataTransfer.setData("text/mimiwatch-row", value);
+    e.dataTransfer.effectAllowed = "copy";
+    $("player-wrap").classList.add("dragging");
+  });
+  row.addEventListener("dragend", () => $("player-wrap").classList.remove("dragging"));
   return row;
 }
 

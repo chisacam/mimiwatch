@@ -1,4 +1,5 @@
 """라이브 세션의 발행 경로와 재접속. 모델은 올리지 않습니다."""
+import json
 import numpy as np
 import pytest
 import threading
@@ -520,3 +521,54 @@ def test_manifest_info_sees_the_end_of_a_recording():
     live_ = "data:application/vnd.apple.mpegurl,%23EXTM3U%0A%23EXT-X-TARGETDURATION:2%0A%23EXTINF:2.0,%0Aa.ts%0A"
     assert live.manifest_info(vod)["ended"] is True and live.manifest_info(vod)["window_s"] == 18.0
     assert live.manifest_info(live_)["ended"] is False
+
+
+def _fake_playlist(monkeypatch, session, pdt="2026-01-01T00:20:00Z", release_ts=None, window_s=600.0):
+    """yt-dlp -j 와 재생목록 읽기를 흉내 냅니다. 첫 조각은 방송 시작 1200초 뒤, 창은 600초."""
+    import datetime, subprocess as sp
+    rel = release_ts if release_ts is not None else datetime.datetime.fromisoformat("2026-01-01T00:00:00+00:00").timestamp()
+    meta = json.dumps({"is_live": True, "id": "vid", "title": "t", "extractor_key": "Youtube",
+                       "release_timestamp": rel})
+    monkeypatch.setattr(live.subprocess, "run",
+                        lambda *a, **k: sp.CompletedProcess(args=[], returncode=0, stdout=meta, stderr=""))
+    monkeypatch.setattr(live, "resolve_audio",
+                        lambda url, youtube=True: ("src", {"pdt": pdt, "window_s": window_s,
+                                                           "segments": int(window_s / 2), "target": 2.0}))
+
+
+def test_user_resume_starts_at_the_live_edge_and_notes_the_gap(session, monkeypatch):
+    s = session
+    _fake_playlist(monkeypatch, s)
+    s.resume_from = 1000.0                    # 1000초에 멈췼고, 지금 라이브 끝은 1200+600=1800초
+    src, idx = s._resolve_hls()
+    assert idx == -2 and s._recv_base == 1800.0 and s.gap_s == 800.0   # 되감지 않고 빠진 800초만 적습니다
+
+
+def test_reconnect_inside_the_session_still_rewinds(session, monkeypatch):
+    s = session
+    _fake_playlist(monkeypatch, s)
+    s.resume_from = 1500.0                    # 창(1200~1800) 안에서 끊겼습니다
+    s._rewind = True                          # _reconnect 가 세우는 깃발
+    src, idx = s._resolve_hls(reconnect=True)
+    assert idx == 150 and s.gap_s == 0.0      # 300초 뒤 = 2초짜리 150번째 조각부터, 잃는 것 없음
+
+
+def test_multiview_add_resumes_a_stopped_session_as_a_warm_member(monkeypatch):
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
+    store.save_session({"id": "old-9", "state": "stopped", "stopped_by": "user", "url": "https://x/old",
+                        "source": "hls", "source_lang": "ja", "viewer_lang": "ko",
+                        "backend": "local-m2m100", "asr_backend": "tcpp-lite", "lines": 0,
+                        "media_base": 0.0, "audio_s": 5.0, "recv_t": 5.0}, "")
+    try:
+        a = live._new_session("https://x/a", "ja", "ko", "local-m2m100", "broadcast", "", True, None, "hls", "")
+        g = live.multiview_start([{"session": a.id}, {"session": "old-9"}], "ja", "ko", "local-m2m100", focus=a.id)
+        old = live.get("old-9")
+        assert old is not None and old.group == g["id"] and not old._focus.is_set()
+        assert a._focus.is_set() and [m["id"] for m in g["members"]] == [a.id, "old-9"]
+        assert not old._rewind and old.resume_from == 5.0
+        # 없는 세션은 실패하고 묶음도 남지 않습니다
+        assert live.multiview_start([{"session": "nope"}], "ja", "ko", "local-m2m100")["error"]
+        assert list(live._groups) == [g["id"]]
+    finally:
+        live._sessions.clear()
+        live._groups.clear()

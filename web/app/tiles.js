@@ -51,16 +51,64 @@ function makeTile() {
   // 끌어서 놓을 때마다 저장합니다. 자막 자리는 한 벌이고 초점 타일에 적용됩니다.
   tile.overlay.onPos = (p) => { state.cuePos = p; persist(); };
   if (state.cuePos) tile.overlay.setPos(state.cuePos);
-  el.querySelector(".tile-cover").addEventListener("click", () => setFocus(tile));
+  const cover = el.querySelector(".tile-cover"), bar = el.querySelector(".tile-bar");
+  cover.addEventListener("click", () => setFocus(tile));
+  bar.addEventListener("click", () => setFocus(tile));
   el.querySelector(".tile-close").addEventListener("click", (e) => {
     e.stopPropagation();
     removeTile(tile);
+  });
+  // 끌어서 자리 바꾸기. 손잡이는 덮개(초점 아닌 타일)와 띠(모든 타일)입니다.
+  for (const h of [cover, bar]) {
+    h.draggable = true;
+    h.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/mimiwatch-tile", tile.id);
+      e.dataTransfer.effectAllowed = "move";
+      $("player-wrap").classList.add("dragging");
+    });
+    h.addEventListener("dragend", () => $("player-wrap").classList.remove("dragging"));
+  }
+  const drop = el.querySelector(".tile-drop");
+  drop.addEventListener("dragover", (e) => {
+    if (!dragHasOurs(e)) return;
+    e.preventDefault();
+    drop.classList.add("over");
+  });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    $("player-wrap").classList.remove("dragging");
+    const tid = e.dataTransfer.getData("text/mimiwatch-tile");
+    const row = e.dataTransfer.getData("text/mimiwatch-row");
+    if (tid) swapTiles(state.tiles.find(t => t.id === tid), tile);
+    else if (row) dropRow(row);
   });
   // 덮개 위의 움직임도 전체화면 조절기를 부릅니다(iframe 위는 우리에게 오지 않습니다).
   el.addEventListener("mousemove", showFsControls);
   $("player-wrap").insertBefore(el, $("fs-controls"));
   state.tiles.push(tile);
   return tile;
+}
+
+function dragHasOurs(e) {
+  const types = [...(e.dataTransfer.types || [])];
+  return types.includes("text/mimiwatch-tile") || types.includes("text/mimiwatch-row");
+}
+
+/* 두 타일의 자리를 바꿉니다. DOM 순서와 state.tiles 순서가 곧 자리입니다(1+2/1+3 의 큰
+ * 자리는 초점이 차지하므로 거기서는 작은 칸들의 순서가 바뀝니다). */
+function swapTiles(a, b) {
+  if (!a || !b || a === b) return;
+  const i = state.tiles.indexOf(a), j = state.tiles.indexOf(b);
+  state.tiles[i] = b;
+  state.tiles[j] = a;
+  const marker = document.createComment("");
+  a.el.replaceWith(marker);
+  b.el.replaceWith(a.el);
+  marker.replaceWith(b.el);
+  syncMvControls();
+  requestAnimationFrame(applyCueSize);
 }
 
 /* 단일 소스 경로가 지나는 문. 타일을 하나로 접고 그것을 돌려줍니다 -- 녹화본을
@@ -169,7 +217,7 @@ function updateTileBar(tile) {
  * 타일 수마다 기본 배치가 있고, 사용자가 고른 것은 prefs 에 남습니다. 1+2 와
  * 1+3 에서는 초점 타일이 큰 자리를 차지합니다 -- CSS 가 .focused 로 그렇게
  * 앉히므로 초점을 옮겨도 DOM 은 그대로입니다. */
-const LAYOUTS = { "2": [2, 2], "1p2": [3, 3], "1p3": [4, 4], "2x2": [3, 4] };   // 이름 → [최소, 최대] 타일 수
+const LAYOUTS = { "2": [2, 2], "2h": [2, 2], "1p2": [3, 3], "1p3": [4, 4], "2x2": [3, 4] };   // 이름 → [최소, 최대] 타일 수
 const DEFAULT_LAYOUT = { 1: "1", 2: "2", 3: "1p2", 4: "2x2" };
 
 function layoutFits(name, n) {
@@ -289,19 +337,52 @@ async function addTile(url, lang, probe) {
     state.mv.members.push(res.id);
     members = [res];
   }
+  // 새 세션은 yt-dlp 가 답하기 전이라 site·video_id 가 비어 있습니다. probe 가 방금
+  // 알아낸 것으로 메워 플레이어를 바로 앉힙니다.
+  await mountMembers(members, { url, site: probe.site, video_id: probe.id,
+                                channel: probe.channel, title: probe.title || url });
+}
+
+/* 서버가 돌려준 멤버들 중 아직 타일이 없는 것을 타일로. `fill` 은 상태에 빈 칸이 있을 때 메울 값. */
+async function mountMembers(members, fill = {}) {
   for (const m of members) {
     if (tileBySession(m.id)) continue;
     const t = makeTile();
-    // 새 세션은 yt-dlp 가 답하기 전이라 site·video_id 가 비어 있습니다. probe 가 방금
-    // 알아낸 것으로 메워 플레이어를 바로 앉힙니다.
-    await openSessionInTile(t, {
-      ...m, url: m.url || url, site: m.site || probe.site,
-      video_id: m.video_id || probe.id, channel: m.channel || probe.channel,
-      title: m.title || probe.title || url,
-    });
+    const st = { ...m };
+    for (const k of ["url", "site", "video_id", "channel", "title"]) if (!st[k] && fill[k]) st[k] = fill[k];
+    await openSessionInTile(t, st);
     await attachLive(t);
   }
   applyLayout();
+}
+
+/* 목록 줄을 플레이어 영역에 끌어다 놓았습니다. 라이브 세션이면 지금 보는 방송 옆에 타일로
+ * 붙입니다 -- 받는 중이면 그대로 편입하고, 멈춘 것이면 서버가 같은 세션으로 이어받아 대기
+ * 타일로 넣습니다. 아무것도 보고 있지 않으면 그냥 엽니다. */
+async function dropRow(value) {
+  const row = $("video-list").querySelector(`.video-row[data-value="${CSS.escape(value)}"]`);
+  const sid = row && row.dataset.session;
+  if (!row) return;
+  if (!sid) { jobError("녹화본은 타일로 붙일 수 없습니다 — 멀티뷰에는 라이브만 들어갑니다."); return; }
+  const have = tileBySession(sid);
+  if (have) { setFocus(have); return; }
+  const cur = focusedTile();
+  if (!cur || !cur.live) { openFromList(value); return; }
+  if (state.tiles.length >= 4) { jobError("타일은 넷까지입니다."); return; }
+  const args = liveStartArgs(null);
+  let res, members;
+  if (!state.mv) {
+    res = await mvCreate({ sessions: [cur.live.id, sid], focus: cur.live.id, ...args });
+    if (res.error) { jobError(res.error); return; }
+    state.mv = { id: res.id, focus: res.focus, members: res.members.map(m => m.id) };
+    members = res.members;
+  } else {
+    res = await mvAdd(state.mv.id, { session: sid, ...args });
+    if (res.error) { jobError(res.error); return; }
+    state.mv.members.push(res.id);
+    members = [res];
+  }
+  await mountMembers(members, { title: row.dataset.title });
 }
 
 /* 서버가 들고 있는 묶음을 화면에 그대로. 새로고침이나 목록에서 멤버를 눌렀을 때. */

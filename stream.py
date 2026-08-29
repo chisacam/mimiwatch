@@ -111,8 +111,29 @@ def ytdlp_cmd() -> list[str]:
                       else [sys.executable, "-m", "yt_dlp"])
         else:
             _YTDLP = ["yt-dlp"]
+        _YTDLP += _js_runtime_args()
         _YTDLP += _cookie_args()
     return list(_YTDLP)
+
+
+def deno_path() -> str | None:
+    """유튜브 JS 챌런지를 풀 deno. 도구 디렉터리 → 흔한 자리 → PATH."""
+    return paths.which("deno")
+
+
+def _js_runtime_args() -> list[str]:
+    """yt-dlp에 JS 런타임 자리를 알려 줍니다.
+
+    2025.11부터 유튜브 추출은 외부 JS 런타임(deno)이 있어야 온전합니다. yt-dlp는 맥·
+    리눅스에서 **PATH만** 뒤지므로, Finder에서 띄운 묶음(PATH가 짧음)은 홈브루 deno를
+    못 찾고 「모델·도구」로 받은 것도 모릅니다 -- 그래서 경로를 직접 넘깁니다.
+    `--remote-components ejs:github`은 풀이 스크립트(yt-dlp-ejs)가 없거나 판이 어긋날 때
+    깃허브에서 받아 오게 하는 보험입니다. 기본은 꺼져 있어 조용히 포맷만 사라집니다.
+    """
+    deno = deno_path()
+    if not deno:
+        return []
+    return ["--js-runtimes", f"deno:{deno}", "--remote-components", "ejs:github"]
 
 
 def ytdlp_args(*opts: str, url: str) -> list[str]:
@@ -210,7 +231,7 @@ def build_vad(min_silence: float = 0.35,
     if not os.path.exists(vad_model):
         raise FileNotFoundError(
             f"silero_vad.onnx가 없습니다: {vad_model}\n"
-            "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+            "「엔진 관리 › 모델·도구」에서 받거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
     cfg = sherpa_onnx.VadModelConfig(
         silero_vad=sherpa_onnx.SileroVadModelConfig(
             model=vad_model,

@@ -25,7 +25,7 @@ say "빌드 가상환경 ($VENV)"
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
 "$VENV/bin/pip" install -q -r "$ROOT/requirements.txt" -r "$HERE/requirements-build.txt"
-"$VENV/bin/pip" install -q -U yt-dlp transcribe-cpp
+"$VENV/bin/pip" install -q -U "yt-dlp[default]" transcribe-cpp
 
 say "런타임 확인"
 "$VENV/bin/python" - <<'PY'

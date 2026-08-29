@@ -47,6 +47,7 @@ def test_ffmpeg_cmd_prefers_path_then_tools_dir(monkeypatch, tmp_path):
 
 def test_ytdlp_cmd_prefers_standalone_then_module(monkeypatch, tmp_path):
     stream.reset_tool_cache()
+    monkeypatch.setattr(stream, "deno_path", lambda: None)     # 이 기계의 deno 는 빼고 봅니다
     monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES", raising=False)
     monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES_BROWSER", raising=False)
     exe = tmp_path / "yt-dlp"
@@ -68,6 +69,7 @@ def test_ytdlp_cmd_prefers_standalone_then_module(monkeypatch, tmp_path):
 
 def test_ytdlp_args_puts_the_url_behind_a_double_dash(monkeypatch):
     stream.reset_tool_cache()
+    monkeypatch.setattr(stream, "deno_path", lambda: None)
     monkeypatch.setattr(paths, "tool", lambda n: None)
     monkeypatch.setattr(stream.importlib.util, "find_spec", lambda n: None)
     monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES", raising=False)
@@ -76,4 +78,19 @@ def test_ytdlp_args_puts_the_url_behind_a_double_dash(monkeypatch):
     assert cmd[-2:] == ["--", "--version"]              # 옵션으로 읽히지 않습니다
     assert "--no-playlist" in cmd and "--no-warnings" in cmd
     assert cmd.index("-g") < cmd.index("--")
+    stream.reset_tool_cache()
+
+
+def test_ytdlp_cmd_passes_the_js_runtime_when_deno_is_found(monkeypatch, tmp_path):
+    """유튜브 JS 챌린지용 deno 를 찾으면 경로를 직접 넘깁니다 -- yt-dlp 는 PATH 만 보는데
+    Finder 에서 띄운 묶음의 PATH 는 짧습니다."""
+    stream.reset_tool_cache()
+    monkeypatch.setattr(paths, "tool", lambda n: None)
+    monkeypatch.setattr(stream.importlib.util, "find_spec", lambda n: None)
+    monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES", raising=False)
+    monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES_BROWSER", raising=False)
+    monkeypatch.setattr(stream, "deno_path", lambda: "/x/deno")
+    cmd = stream.ytdlp_cmd()
+    assert cmd[cmd.index("--js-runtimes") + 1] == "deno:/x/deno"
+    assert "ejs:github" in cmd
     stream.reset_tool_cache()

@@ -43,7 +43,7 @@ brew install ffmpeg        # 윈도우: winget install --id Gyan.FFmpeg
 ## 두 가지 길
 
 **묶음으로.** 릴리스에서 `mimiwatch-*-macos-arm64.zip` 또는
-`mimiwatch-*-windows-x64.zip`(NVIDIA GTX 10~RTX 40이면 `-cuda`판)을 받아 풀고 두 번 누릅니다. 브라우저에 화면이
+`mimiwatch-*-windows-x64.zip`을 받아 풀고 두 번 누릅니다. 브라우저에 화면이
 열리고, 첫 실행이면 「초기 설정」이 떠서 엔진을 고르고 그에 맞는 모델을 받습니다. 파이썬도 설치
 스크립트도 없습니다. 처음 열 때 걸리는 게이트키퍼·SmartScreen 안내와
 파일이 어디에 놓이는지는 [docs/PACKAGING.md](docs/PACKAGING.md)에 있습니다.
@@ -615,6 +615,23 @@ yt-dlp가 그때마다 따라가는데, `winget`이나 `brew`로 깐 것은 스�
 대신 「모델·도구」의 **yt-dlp 독립 실행 파일**을 받으십시오 — 도구
 디렉터리에 있으면 그것을 먼저 쓰고, 그 파일은 `-U`로 스스로 판올림합니다.
 자세한 것은 [docs/PACKAGING.md](docs/PACKAGING.md).
+
+**두 달만 묵어도 라이브가 끊길 수 있습니다.** 2026-08 실측에서 7주 전 판이
+이미 라이브 오디오 포맷을 하나도 받지 못했습니다. 서버는 45일 넘은 판을
+낡았다고 알리고, 그때는 도구를 다시 받거나 `yt-dlp --update-to nightly`로
+올리십시오(yt-dlp가 일반 사용자에게 권하는 채널이 nightly입니다).
+
+### 유튜브에는 JS 런타임(deno)이 필요합니다
+
+2025년 11월부터 yt-dlp는 유튜브의 서명 챌린지를 풀기 위해 **외부 JavaScript
+런타임**을 씁니다. 공개 라이브(HLS)는 없어도 되지만, **녹화본과 쿠키로 받는
+멤버십 방송은 deno가 없으면 포맷이 사라집니다.** 「엔진 관리 › 모델·도구」에서
+deno를 받거나(`brew install deno`도 됩니다) — 시스템에 있으면 그것을 씁니다.
+서버는 찾은 deno의 경로를 yt-dlp에 직접 알려 주므로(`--js-runtimes`), Finder에서
+띄운 묶음처럼 PATH가 짧은 환경에서도 됩니다. 풀이 스크립트(`yt-dlp-ejs`)는
+묶음과 가상환경에 함께 들어 있고, 판이 어긋나면 깃허브에서 받아 옵니다.
+무엇을 쓰고 있는지는 `bench/doctor.py`(묶음은 `mimiwatch --doctor`)가 보여 줍니다.
+[yt-dlp EJS 위키](https://github.com/yt-dlp/yt-dlp/wiki/EJS)
 
 ## 멤버십 전용 방송
 

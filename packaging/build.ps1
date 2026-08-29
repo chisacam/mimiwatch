@@ -68,7 +68,7 @@ $llamaIndex = "https://abetlen.github.io/llama-cpp-python/whl/$llamaFlavor"
 Run $Py @('-m', 'pip', 'install', '-q', '--extra-index-url', $llamaIndex,
           '-r', (Join-Path $Root 'requirements.txt'),
           '-r', (Join-Path $Here 'requirements-build.txt'))
-Run $Py @('-m', 'pip', 'install', '-q', '-U', 'yt-dlp', 'transcribe-cpp')
+Run $Py @('-m', 'pip', 'install', '-q', '-U', 'yt-dlp[default]', 'transcribe-cpp')
 
 if ($Backend -eq 'cuda') {
   Say 'CUDA 런타임 (cudart · cuBLAS)'

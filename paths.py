@@ -88,8 +88,10 @@ def tool(name: str) -> str | None:
 # Finder나 시작 메뉴에서 띄운 묶음은 PATH가 짧습니다(맥은 /usr/bin:/bin 정도).
 # 터미널에서는 잘 찾던 홈브루 ffmpeg을 그 자리에서는 못 찾으므로 흔한 자리를
 # 함께 봅니다.
-_EXTRA_PATH = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"] \
-    if sys.platform != "win32" else []
+_EXTRA_PATH = (["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin",
+                os.path.join(os.path.expanduser("~"), ".deno", "bin")]
+               if sys.platform != "win32"
+               else [os.path.join(os.path.expanduser("~"), ".deno", "bin")])
 
 
 def which(name: str) -> str | None:

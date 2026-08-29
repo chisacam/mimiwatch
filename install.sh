@@ -59,7 +59,7 @@ if [ -x "$PY" ]; then skip "있음"; else python3 -m venv "$HERE/.venv"; ok "생
 # 그대로 두므로 다시 실행해도 판올림이 되지 않습니다. 유튜브가 추출 경로를
 # 바꾸면 낡은 판은 포맷을 하나도 받지 못하므로(이슈 #1), 이 한 줄이
 # "다시 설치하면 고쳐진다"를 성립시킵니다.
-"$PIP" install -q -U yt-dlp
+"$PIP" install -q -U "yt-dlp[default]"
 ok "의존성 설치 (yt-dlp $("$PY" -m yt_dlp --version 2>/dev/null | head -1))"
 
 # ── 2. transcribe.cpp ──────────────────────────────────────────────────
@@ -106,12 +106,14 @@ MIMIWATCH_MODEL_DIR="$MODELS" "$PY" - "$HERE" <<'PYCHECK'
 import os, sys
 sys.path.insert(0, sys.argv[1])
 import stream, tcpp_asr                                   # noqa: F401
-need = {"silero_vad.onnx": "구간 분할",
-        "SenseVoiceSmall-Q8_0.gguf": "전사 (기본 · 가벼운 CPU 엔진)"}
-missing = [f"{v}: {k}" for k, v in need.items()
-           if not os.path.exists(os.path.join(stream.model_dir(), k))]
+import modelhub
+# 파일 이름을 박아 두지 않습니다. 필수 모델은 지금 설정의 기본 엔진을 따르므로(기존
+# 사용자는 whisper, 새 설치는 SenseVoice) 목록이 판정합니다.
+ov = modelhub.overview()
+missing = [i["label"] for i in ov["items"]
+           if i.get("required") and i["state"] not in ("ready", "system")]
 if missing:
-    print("  없음:\n    " + "\n    ".join(missing))
+    print("  없음: " + ", ".join(missing))
     raise SystemExit(1)
 print("  모듈 적재 OK")
 print("  필수 모델 OK")

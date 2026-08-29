@@ -101,6 +101,11 @@ CATALOG: list[dict] = [
     {"id": "yt-dlp", "kind": "tool", "label": "yt-dlp (독립 실행 파일)",
      "purpose": "영상 주소 해석 · 스스로 판올림하는 판. 묶음으로 쓸 때 권장",
      "tool": "yt-dlp", "size": 37_000_000, "required": False, "default": False},
+    # 유튜브가 2025.11부터 요구하는 JS 런타임. 공개 라이브(HLS)는 없어도 되지만 녹화본과
+    # 쿠키(멤버십) 경로는 이것이 없으면 포맷이 사라집니다. 시스템에 deno 가 있으면 그것.
+    {"id": "deno", "kind": "tool", "label": "deno (유튜브 JS 런타임)",
+     "purpose": "유튜브 추출에 필요한 JS 런타임 · 녹화본·멤버십 방송에 권장",
+     "tool": "deno", "size": 45_000_000, "required": False, "default": False},
 ]
 
 # 사용자가 허깅페이스에서 직접 추가한 모델. 모델 디렉터리 안에 함께 둡니다 --
@@ -150,9 +155,19 @@ def find(model_id: str) -> dict | None:
     return None
 
 
+DENO_LATEST = "https://github.com/denoland/deno/releases/latest/download"
+
+
 def _tool_asset(name: str) -> tuple[str, bool]:
-    """(주소, gzip 여부). 플랫폼에 맞는 실행 파일 하나."""
+    """(주소, gzip 여부). 플랫폼에 맞는 실행 파일 하나. zip 주소는 `_download_one`이 풉니다."""
     arch = platform.machine().lower()
+    if name == "deno":
+        if sys.platform == "darwin":
+            a = "aarch64" if arch in ("arm64", "aarch64") else "x86_64"
+            return f"{DENO_LATEST}/deno-{a}-apple-darwin.zip", False
+        if sys.platform == "win32":
+            return f"{DENO_LATEST}/deno-x86_64-pc-windows-msvc.zip", False
+        return f"{DENO_LATEST}/deno-x86_64-unknown-linux-gnu.zip", False
     if name == "ffmpeg":
         if sys.platform == "darwin":
             mac_arch = "arm64" if arch in ("arm64", "aarch64") else "x64"
@@ -474,7 +489,22 @@ def _download_one(entry: dict, token: str | None):
     _publish(eid)
     if entry.get("tool"):
         url, gz = _tool_asset(entry["tool"])
-        _fetch_file(eid, url, dest, {}, gz=gz, total_hint=entry.get("size") or 0)
+        if url.endswith(".zip"):
+            # zip 안에 실행 파일 하나가 든 배포(deno). zip 을 받아 그 파일만 꺼냅니다.
+            import zipfile
+            zpath = dest + ".zip"
+            _fetch_file(eid, url, zpath, {}, total_hint=entry.get("size") or 0)
+            want = os.path.basename(dest)
+            with zipfile.ZipFile(zpath) as z:
+                names = [n for n in z.namelist() if os.path.basename(n) == want]
+                if not names:
+                    raise RuntimeError(f"zip 안에 {want} 가 없습니다: {z.namelist()[:5]}")
+                with z.open(names[0]) as src, open(dest + ".part", "wb") as out:
+                    shutil.copyfileobj(src, out)
+            os.remove(zpath)
+            os.replace(dest + ".part", dest)
+        else:
+            _fetch_file(eid, url, dest, {}, gz=gz, total_hint=entry.get("size") or 0)
         os.chmod(dest, os.stat(dest).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         import stream
         stream.reset_tool_cache()               # 다음 호출부터 새 도구를 봅니다
@@ -578,11 +608,17 @@ def download(ids: list[str], token: str | None = None) -> dict:
         if e is None:
             unknown.append(mid)
             continue
-        st = status(e)
-        if st["state"] in ("ready", "downloading", "queued"):
+        # 상태 확인과 줄 세우기를 한 락 안에서. 빠른 두 요청이 같은 것을 두 번 세우면
+        # 둘째가 완성본을 지우고 다시 받습니다.
+        with _lock:
+            already = mid in _queued or (_progress.get(mid) or {}).get("state") == "downloading"
+        if already or status(e)["state"] == "ready":
             skipped.append(mid)
             continue
         with _lock:
+            if mid in _queued:
+                skipped.append(mid)
+                continue
             _progress.pop(mid, None)            # 지난 실패는 지웁니다
             _queued.append(mid)
         _queue.put((mid, token))

@@ -8,9 +8,8 @@ mimiwatch.app            macOS -- Finder에서 두 번 누르면 브라우저에
 mimiwatch\mimiwatch.exe  Windows -- 두 번 누르면 콘솔 창이 하나 뜨고 브라우저가 열립니다
 ```
 
-윈도우는 둘입니다: `windows-x64`(Vulkan, 누구나)와 `windows-x64-cuda`(NVIDIA 전용,
-번역이 CUDA). 어느 GPU 가 지원되는지는 [WINDOWS.md](WINDOWS.md)의 NVIDIA 절에
-표로 있습니다.
+윈도우 묶음은 Vulkan 하나입니다(NVIDIA 포함). CUDA 판은 RTX 50 을 담지 못해 릴리스에서
+뺐습니다 -- 사정과 직접 만드는 법은 [WINDOWS.md](WINDOWS.md)의 NVIDIA 절에 있습니다.
 
 ## 묶음에 무엇이 들고 무엇이 들지 않는가
 
@@ -60,6 +59,11 @@ ffmpeg는 시스템에 있으면 그것을 쓰고(홈브루 자리도 봅니다)
 먼저 쓰입니다. 라이브가 "포맷을 하나도 받지 못했습니다"라고 하면 그것을
 받거나(있으면 다시 받아 최신으로) 하면 됩니다. 묶음을 새로 만들 필요가 없습니다.
 
+**유튜브는 JS 런타임(deno)도 요구합니다**(2025.11~). 녹화본·멤버십 방송에 필요하고 공개
+라이브 HLS 는 없어도 됩니다. 「모델·도구」에서 받으면 서버가 `--js-runtimes deno:<경로>`로
+직접 알려 주므로 Finder 에서 띄운 .app(PATH 짧음)에서도 됩니다. 풀이 스크립트(yt-dlp-ejs)는
+묶음에 들어 있습니다.
+
 묶음 안의 yt-dlp는 `mimiwatch --ytdlp …`로 부릅니다 -- 묶음에는 `python -m
 yt_dlp`를 부를 파이썬이 없어 서버가 자기 자신을 다시 띄우는 것입니다. 자식
 프로세스로 두는 이유는 그대로입니다(시간 상한, 죽일 수 있어야 함).
@@ -79,8 +83,8 @@ packaging/build.sh                 # 맥·리눅스 → dist/mimiwatch-<판>-mac
   처음 한 번 5~10분, 그 뒤로는 pip이 만든 휠을 기억해 1분 남짓입니다.
 - **윈도우**: 아무것도 빌드하지 않습니다. `llama-cpp-python`은 만든 쪽 인덱스의
   Vulkan 휠(GPU가 없으면 CPU로 내려갑니다), `transcribe-cpp`는 PyPI 휠입니다.
-  `-Backend cuda`는 cu124 휠을 받고, 휠에 없는 런타임 DLL(cudart·cuBLAS)을
-  `nvidia-*-cu12` 패키지에서 꺼내 `llama_cpp\lib`에 넣습니다 -- 그래서 600MB 남짓입니다.
+  `-Backend cuda`(릴리스에는 안 넣음)는 cu124 휠을 받고, 휠에 없는 런타임 DLL(cudart·
+  cuBLAS)을 `nvidia-*-cu12` 패키지에서 꺼내 `llama_cpp\lib`에 넣습니다 -- 726MB 남짓입니다.
 - **깃허브 액션**(`.github/workflows/build.yml`): `v*` 태그를 밀면 두 플랫폼을
   만들어 릴리스에 붙입니다. 수동으로도(`workflow_dispatch`) 돌릴 수 있습니다.
 

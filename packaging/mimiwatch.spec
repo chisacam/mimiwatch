@@ -44,8 +44,16 @@ for pkg in ("transcribe_cpp_native", "llama_cpp", "sherpa_onnx", "ctranslate2"):
     binaries += b
     hiddenimports += h
 datas += copy_metadata("transcribe_cpp_native") + copy_metadata("transcribe_cpp")
-# yt-dlp 는 추출기 천여 개를 필요할 때 가져옵니다. 전부 넣습니다.
+# yt-dlp 는 추출기 천여 개를 필요할 때 가져옵니다. 전부 넣습니다. 유튜브 JS 챌린지 풀이
+# 스크립트(yt-dlp-ejs, .js 두 개)는 데이터 파일이라 따로 모아야 합니다 -- 빠지면 조용히
+# "some formats may be missing" 이 됩니다.
 hiddenimports += collect_submodules("yt_dlp")
+try:
+    d, b, h = collect_all("yt_dlp_ejs")
+    datas += d
+    hiddenimports += h
+except Exception:
+    print("[spec] yt_dlp_ejs 가 없습니다 -- pip install 'yt-dlp[default]' 을 확인하십시오")
 
 a = Analysis(
     [os.path.join(ROOT, "app.py")],

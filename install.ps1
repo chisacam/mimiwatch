@@ -19,9 +19,10 @@
 
 .PARAMETER Backend
   auto(기본) / cuda / vulkan / cpu.
-  auto는 GPU를 보고 정합니다. NVIDIA면 cuda, 다른 GPU면 vulkan, 없으면 cpu입니다.
-  cuda는 번역(llama.cpp)만 CUDA로 돕니다 -- 전사(transcribe.cpp)는 CUDA 휠이 아직
-  없어 Vulkan입니다. 지원 GPU(GTX 10 ~ RTX 40, 드라이버 551.61 이상)는 docs/WINDOWS.md.
+  auto는 GPU를 보고 정합니다. GPU가 있으면 vulkan(NVIDIA 포함), 없으면 cpu입니다.
+  cuda는 직접 골랐을 때만 씁니다: 번역(llama.cpp)만 CUDA로 돕니다 -- 전사는 CUDA 휠이
+  아직 없어 Vulkan이고, cu124 휠은 RTX 50(sm_120)을 담지 않습니다. GTX 10 ~ RTX 40,
+  드라이버 551.61 이상에서만 뜻이 있습니다. 자세한 것은 docs/WINDOWS.md.
 
 .PARAMETER WithGemma
   번역용 Gemma(4.9GB)도 함께 받습니다. 기본 설정은 가벼운 CPU 엔진(SenseVoice
@@ -197,13 +198,9 @@ if ($Backend -eq 'auto') {
   $sysroot = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
   $loader = "$sysroot\System32\vulkan-1.dll"
   $hasLoader = Test-Path -LiteralPath $loader -EA SilentlyContinue
-  # NVIDIA 는 전용 CUDA 판이 낫습니다. nvcuda.dll 은 NVIDIA 드라이버가 깔아 둡니다.
-  $hasCuda = Test-Path -LiteralPath "$sysroot\System32\nvcuda.dll" -EA SilentlyContinue
-  $nvidia = @($gpus | Where-Object { $_ -match 'NVIDIA|GeForce|Quadro|RTX' }).Count -gt 0
-  if ($nvidia -and $hasCuda) {
-    $Backend = 'cuda'
-    Ok "cuda ($($gpus -join ', ')) -- 드라이버 551.61 이상이어야 합니다. 안 되면 -Backend vulkan"
-  } elseif ($gpus.Count -gt 0 -and $hasLoader) {
+  # NVIDIA 도 자동으로는 vulkan 입니다. CUDA 판(cu124)은 RTX 50 을 담지 않아 최신 카드에서
+  # 열리지 않으므로, 아는 사람이 -Backend cuda 로 직접 고르게 둡니다.
+  if ($gpus.Count -gt 0 -and $hasLoader) {
     $Backend = 'vulkan'
     Ok "vulkan ($($gpus -join ', '))"
   } else {
@@ -241,7 +238,7 @@ if ($code -eq 0) {
   # 그대로 두므로, 다시 실행해도 판올림이 되지 않습니다. 유튜브가 추출
   # 경로를 바꾸면 낡은 판은 포맷을 하나도 받지 못하므로(이슈 #1), 이 한
   # 줄이 "다시 설치하면 고쳐진다"를 성립시킵니다.
-  $code = Invoke-Native $Py @('-m', 'pip', 'install', '-q', '-U', 'yt-dlp')
+  $code = Invoke-Native $Py @('-m', 'pip', 'install', '-q', '-U', 'yt-dlp[default]')
 }
 if ($code -ne 0) {
   Die @"
@@ -330,12 +327,13 @@ $verify = @'
 import os, sys
 sys.path.insert(0, sys.argv[1])
 import stream, tcpp_asr                                   # noqa: F401
-need = {'silero_vad.onnx': '구간 분할',
-        'SenseVoiceSmall-Q8_0.gguf': '전사 (기본 · 가벼운 CPU 엔진)'}
-missing = [f'{v}: {k}' for k, v in need.items()
-           if not os.path.exists(os.path.join(stream.model_dir(), k))]
+import modelhub
+# 파일 이름을 박아 두지 않습니다. 필수 모델은 지금 설정의 기본 엔진을 따릅니다.
+ov = modelhub.overview()
+missing = [i['label'] for i in ov['items']
+           if i.get('required') and i['state'] not in ('ready', 'system')]
 if missing:
-    print('  없음:\n    ' + '\n    '.join(missing))
+    print('  없음: ' + ', '.join(missing))
     raise SystemExit(1)
 print('  모듈 적재 OK')
 print('  필수 모델 OK')

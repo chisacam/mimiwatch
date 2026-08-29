@@ -96,27 +96,44 @@ entry point로 찾으므로** dist-info를 같이 넣습니다(`copy_metadata`) 
 
 ## 처음 열 때 걸리는 것
 
-**맥**: 서명이 없어 처음 열면 막힙니다. Sequoia(15)부터 「우클릭 → 열기」 우회는
-없어졌고, 남은 길은 셋입니다.
+**맥 — 왜 막히나.** 앱은 ad-hoc 서명이 되어 있고 그 서명은 유효합니다(`codesign
+--verify --deep --strict` 통과). 다만 Apple 의 **공증(notarization)** 이 없어
+ Gatekeeper 가 격리(quarantine) 표시된 파일을 막습니다. 공증은 유료 Developer
+ID($99/년)를 요구하므로 이 배포에는 없습니다. **한 번만 격리를 벗기면 그 뒤로는
+경고 없이 열립니다** — 유효하게 ad-hoc 서명된 앱은 격리만 없으면 Gatekeeper 가
+건드리지 않기 때문입니다.
 
-1. **터미널로 받으면 처음부터 막히지 않습니다.** 브라우저가 붙이는 격리 속성이
-   `curl`에는 붙지 않습니다.
+**매번 뜨는 이유.** Downloads 같은 곳에서 바로 실행하면 macOS 가 앱을 무작위
+읽기 전용 경로로 옮겨 실행합니다(App Translocation). 그래서 「그래도 열기」 승인이
+그 경로에 묶여 다음 실행에 남지 않습니다. **`/Applications`(또는 아무 폴더)로 한 번
+옮기면** translocation 이 멈추고 승인이 남습니다.
+
+권하는 순서:
+
+1. **터미널로 받으면 처음부터 격리가 없어 바로 열립니다.** `curl` 로 받은 파일에는
+   격리 속성이 붙지 않습니다.
    ```sh
    curl -L -o mimiwatch.zip https://github.com/chisacam/mimiwatch/releases/latest/download/mimiwatch-<판>-macos-arm64.zip
-   ditto -x -k mimiwatch.zip .        # Archive Utility 와 같이 심볼릭 링크를 지켜 풉니다
-   open mimiwatch.app
+   ditto -x -k mimiwatch.zip ~/Applications/    # 심볼릭 링크를 지켜 풀고, 옮겨 둡니다
+   open ~/Applications/mimiwatch.app
    ```
-2. 브라우저로 받았으면: 두 번 눌러 차단 창을 닫고 **1시간 안에** 시스템 설정 ›
-   개인정보 보호 및 보안 맨 아래의 「그래도 열기」를 누릅니다.
-3. 그래도 안 되면(Tahoe 26에서는 둘 다 필요한 경우가 있습니다):
+2. 브라우저로 받았으면: **먼저 응용 프로그램 폴더로 옮기고**, 두 번 눌러 차단 창을
+   닫은 뒤 **1시간 안에** 시스템 설정 › 개인정보 보호 및 보안 맨 아래 「그래도
+   열기」. 옮겨 두었으므로 이후에는 다시 묻지 않습니다.
+3. 한 줄로 끝내려면 — 옮긴 뒤 격리를 벗깁니다. 그 뒤로는 경고가 없습니다.
    ```sh
-   xattr -dr com.apple.quarantine mimiwatch.app
+   xattr -dr com.apple.quarantine ~/Applications/mimiwatch.app
    ```
 
 「손상되어 열 수 없습니다」가 뜨면 서명이 깨진 것입니다 — zip을 **Finder(Archive
 Utility)나 `ditto`로** 풀어야 합니다. 다른 압축 도구는 묶음 안의 심볼릭 링크를 실제
 파일로 풀어 서명 해시가 어긋납니다(PyInstaller 6의 .app은 Frameworks와 Resources를
 링크로 잇습니다).
+
+**공증까지 하려면** Apple Developer Program($99/년)에 가입해 Developer ID 인증서를
+받고, 빌드 때 `MIMIWATCH_CODESIGN="Developer ID Application: 이름 (팀ID)"` 로 서명한 뒤
+`xcrun notarytool submit` 으로 공증·스테이플하면 첫 실행 경고까지 사라집니다. 지금
+`packaging/build.sh` 는 그 환경변수가 있으면 ad-hoc 대신 그 인증서로 서명합니다.
 
 **윈도우**: SmartScreen이 「알 수 없는 게시자」로 막습니다. 「추가 정보 › 실행」.
 

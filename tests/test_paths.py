@@ -64,3 +64,16 @@ def test_ytdlp_cmd_prefers_standalone_then_module(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "frozen", lambda: True)
     assert stream.ytdlp_cmd() == [sys.executable, "--ytdlp"]
     stream.reset_tool_cache()
+
+
+def test_ytdlp_args_puts_the_url_behind_a_double_dash(monkeypatch):
+    stream.reset_tool_cache()
+    monkeypatch.setattr(paths, "tool", lambda n: None)
+    monkeypatch.setattr(stream.importlib.util, "find_spec", lambda n: None)
+    monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES", raising=False)
+    monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES_BROWSER", raising=False)
+    cmd = stream.ytdlp_args("-f", "234", "-g", url="--version")
+    assert cmd[-2:] == ["--", "--version"]              # 옵션으로 읽히지 않습니다
+    assert "--no-playlist" in cmd and "--no-warnings" in cmd
+    assert cmd.index("-g") < cmd.index("--")
+    stream.reset_tool_cache()

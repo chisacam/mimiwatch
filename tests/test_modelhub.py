@@ -240,3 +240,52 @@ def test_snapshot_dir_downloads_every_file(model_dir, monkeypatch):
     assert _wait(lambda: modelhub.status(modelhub.find("m2m100"))["state"] == "ready")
     got = sorted(os.listdir(model_dir / "mojicast-m2m100-ct2"))
     assert got == ["model.bin", "sentencepiece.model"]     # README 는 받지 않습니다
+
+
+def test_delete_file_id_cannot_escape_the_model_dir(model_dir, tmp_path):
+    """`file:..` 이 모델 디렉터리의 부모(사용자 영역 전체)를 지우던 결함."""
+    model_dir.mkdir()
+    (tmp_path / "IMPORTANT.txt").write_text("x")
+    (model_dir / "SenseVoiceSmall-Q8_0.gguf").write_bytes(b"m")
+    for bad in ("..", ".", "", "../IMPORTANT.txt", "a/b", "a\\b", ".hidden", "C:x"):
+        assert "error" in modelhub.delete("file:" + bad), bad
+    assert (tmp_path / "IMPORTANT.txt").exists()
+    assert model_dir.exists()
+    # 목록이 관리하는 이름은 file: 로 지울 수 없습니다 -- 정식 id 로만.
+    assert "error" in modelhub.delete("file:SenseVoiceSmall-Q8_0.gguf")
+    assert (model_dir / "SenseVoiceSmall-Q8_0.gguf").exists()
+    # 링크는 링크만 지우고 가리키는 곳은 두어야 합니다.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("k")
+    (model_dir / "link").symlink_to(outside)
+    assert modelhub.delete("file:link")["deleted"]
+    assert (outside / "keep").exists() and not (model_dir / "link").exists()
+
+
+def test_cancel_while_queued_skips_the_download(model_dir, monkeypatch):
+    import threading
+    gate = threading.Event()
+    got = []
+
+    def fake_open(url, headers=None, timeout=60.0):
+        gate.wait(5)
+        got.append(url)
+        return FakeResponse(b"x" * 10, 200, {"Content-Length": "10"})
+
+    monkeypatch.setattr(modelhub, "_open", fake_open)
+    modelhub.download(["silero-vad", "campplus"])       # 첫째가 gate 에서 멈춰 있는 동안
+    assert modelhub.status(modelhub.find("campplus"))["state"] == "queued"
+    assert modelhub.cancel("campplus")["cancelled"] == "campplus"
+    gate.set()
+    assert _wait(lambda: modelhub.status(modelhub.find("silero-vad"))["state"] == "ready")
+    time.sleep(0.1)
+    assert modelhub.status(modelhub.find("campplus"))["state"] == "missing"
+    assert len(got) == 1                                   # 둘째는 받지 않았습니다
+
+
+def test_add_custom_rejects_catalog_names_and_bad_paths(monkeypatch):
+    monkeypatch.setattr(modelhub, "_hf_size", lambda repo, file, headers: 1)
+    assert "error" in modelhub.add_custom("asr", "a/b", "whisper-large-v3-turbo-Q8_0.gguf")
+    assert "error" in modelhub.add_custom("asr", "a/b", "x\\..\\y.gguf")
+    assert "error" in modelhub.add_custom("asr", "a/b", "..gguf/z.gguf")

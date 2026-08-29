@@ -115,6 +115,18 @@ def ytdlp_cmd() -> list[str]:
     return list(_YTDLP)
 
 
+def ytdlp_args(*opts: str, url: str) -> list[str]:
+    """yt-dlp 호출 한 줄. 주소는 언제나 `--` 뒤에 둡니다.
+
+    주소 칸에 `-`로 시작하는 것을 붙여 넣으면 옵션으로 읽힙니다 -- `--version`이면
+    판 번호가 나오고 끝이지만 `--exec`면 명령이 실행됩니다. 붙여 넣는 값은 사용자가
+    통제하지 않는 곳(채팅, 게시글)에서 오기도 하므로 다섯 호출 자리가 전부 여기를
+    지나게 합니다. `--no-playlist`도 여기서 붙입니다: 재생목록이 딸린 주소에서 `-j`가
+    여러 줄을 내면 부르는 쪽의 JSON 해석이 통째로 넘어졌습니다.
+    """
+    return ytdlp_cmd() + ["--no-warnings", "--no-playlist", *opts, "--", url]
+
+
 def ffmpeg_cmd() -> str:
     """ffmpeg 실행 파일. PATH → 흔한 자리(홈브루 등) → 도구 디렉터리 순입니다.
 

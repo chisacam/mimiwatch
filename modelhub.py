@@ -534,7 +534,13 @@ def _loop():
         with _lock:
             if eid in _queued:
                 _queued.remove(eid)
+            # 줄에 서 있는 동안 취소된 항목은 받지 않고 넘어갑니다. 예전에는 여기서
+            # 표시를 무조건 지워 버려, 「중단」을 누른 것이 그대로 받아졌습니다.
+            cancelled = eid in _cancel
             _cancel.discard(eid)
+        if cancelled:
+            _publish(eid)
+            continue
         entry = find(eid)
         if entry is None:
             continue
@@ -620,13 +626,50 @@ def cancel(model_id: str) -> dict:
     return {"cancelled": model_id}
 
 
+def _safe_name(name: str) -> str | None:
+    """모델 디렉터리 **바로 아래**의 이름 하나로 쓸 수 있는 문자열인지. 아니면 None.
+
+    `os.path.basename`만 믿으면 안 됩니다 -- `..`과 `.`을 그대로 돌려줍니다. 그래서
+    `delete("file:..")`이 모델 디렉터리의 **부모**, 곧 사용자 영역 전체(묶음이면 설정과
+    자막 DB까지)를 `rmtree`할 수 있었습니다. 이름은 구분자 없이 한 조각이어야 하고,
+    실제 경로가 모델 디렉터리 안에 있어야 합니다.
+    """
+    if not name or name in (".", "..") or "/" in name or "\\" in name or ":" in name:
+        return None
+    if os.path.basename(name) != name or name.startswith("."):
+        return None
+    # 마지막 조각은 realpath 로 풀지 않습니다 -- 링크라면 가리키는 곳이 밖일 수 있는데,
+    # 우리는 링크 자체(모델 디렉터리 안의 항목)를 다루는 것이고 delete 가 링크는 링크만
+    # 지우도록 따로 처리합니다. 조각이 하나이므로 normpath 로 충분합니다.
+    root = os.path.realpath(paths.model_dir())
+    if not os.path.normpath(os.path.join(root, name)).startswith(root + os.sep):
+        return None
+    return name
+
+
+def _catalog_names() -> set[str]:
+    """목록이 관리하는 파일·디렉터리 이름(+.part). 이것들은 정식 id로만 다룹니다."""
+    out = {CUSTOM_FILE}
+    for e in entries():
+        base = os.path.basename(target_path(e))
+        out.add(base)
+        out.add(base + ".part")
+    return out
+
+
 def delete(model_id: str) -> dict:
     """모델(또는 도구) 파일을 지웁니다. 받다 만 `.part`도 함께."""
     if model_id.startswith("file:"):
-        p = os.path.join(paths.model_dir(), os.path.basename(model_id[5:]))
-        if not os.path.exists(p):
+        name = _safe_name(model_id[5:])
+        if name is None or name in _catalog_names():
+            return {"error": "지울 수 없는 이름입니다"}
+        p = os.path.join(paths.model_dir(), name)
+        if not os.path.lexists(p):
             return {"error": "그런 파일이 없습니다"}
-        _remove(p)
+        if os.path.islink(p):
+            os.remove(p)                    # 링크는 링크만. 가리키는 곳을 비우지 않습니다
+        else:
+            _remove(p)
         return {"deleted": model_id}
     e = find(model_id)
     if e is None:
@@ -679,10 +722,14 @@ def add_custom(kind: str, repo: str, file: str, label: str = "", engine_id: str 
     kind = (kind or "").strip()
     if kind not in ("asr", "tr"):
         return {"error": "종류는 asr(전사) 또는 tr(번역)이어야 합니다"}
-    if repo.count("/") != 1 or not file or "/" in file or file.startswith("."):
+    if repo.count("/") != 1 or _safe_name(file) is None:
         return {"error": "저장소는 `소유자/이름`, 파일은 그 저장소 안의 파일 이름이어야 합니다"}
     if not file.lower().endswith(".gguf"):
         return {"error": "GGUF 파일만 받습니다 (.gguf)"}
+    if file in _catalog_names():
+        # 정식 모델과 같은 이름으로 받으면 그 파일을 덮고, 나중에 이 항목을 지울 때
+        # 정식 모델까지 사라집니다.
+        return {"error": f"'{file}'은 기본 목록의 모델과 이름이 같습니다. 그쪽 항목을 쓰십시오."}
     base = os.path.splitext(file)[0]
     engine_id = (engine_id or "").strip() or ("hf-" + "".join(
         c if c.isalnum() else "-" for c in base.lower()).strip("-"))[:40]

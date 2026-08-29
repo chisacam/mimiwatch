@@ -49,14 +49,17 @@ class VodError(RuntimeError):
 
 def probe(url: str) -> dict:
     try:
-        out = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", url],
+        out = subprocess.run(stream.ytdlp_args("-j", url=url),
                              capture_output=True, text=True,
                              timeout=stream.YTDLP_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         raise VodError(f"yt-dlp가 {stream.YTDLP_TIMEOUT_S:.0f}초 안에 답하지 않았습니다")
     if out.returncode != 0:
         raise VodError(f"yt-dlp failed: {out.stderr.strip()[:300]}")
-    d = json.loads(out.stdout)
+    try:
+        d = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        raise VodError("영상 하나의 주소를 넣어 주십시오 (재생목록·채널 주소가 아니라)")
     return {"id": d.get("id"), "title": d.get("title"),
             "duration": d.get("duration"), "uploader": d.get("uploader"),
             "is_live": bool(d.get("is_live")), "url": url}
@@ -74,7 +77,7 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
         return dest
     tmp = dest + ".src"
     proc = subprocess.Popen(
-        stream.ytdlp_cmd() + ["--no-warnings", "-f", "bestaudio", "-o", tmp, url],
+        stream.ytdlp_args("-f", "bestaudio", "-o", tmp, url=url),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     while True:
         try:

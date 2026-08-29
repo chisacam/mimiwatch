@@ -97,7 +97,7 @@ def resolve_audio(url: str) -> tuple[str, dict]:
     why = []
     for fmt in ("234", "233", "bestaudio"):
         try:
-            out = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-f", fmt, "-g", url],
+            out = subprocess.run(stream.ytdlp_args("-f", fmt, "-g", url=url),
                                  capture_output=True, text=True,
                                  timeout=stream.YTDLP_TIMEOUT_S)
         except TimeoutExpired:
@@ -857,7 +857,7 @@ class LiveSession:
         """
         d = {}
         try:
-            meta = subprocess.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", self.url],
+            meta = subprocess.run(stream.ytdlp_args("-j", url=self.url),
                                   capture_output=True, text=True,
                                   timeout=stream.YTDLP_TIMEOUT_S)
         except TimeoutExpired:
@@ -866,7 +866,10 @@ class LiveSession:
             meta = subprocess.CompletedProcess(args=[], returncode=-1,
                                                stdout="", stderr="시간 초과")
         if meta.returncode == 0:
-            d = json.loads(meta.stdout)
+            try:
+                d = json.loads(meta.stdout)
+            except json.JSONDecodeError:
+                d = {}                    # 재생목록 주소. 아래 resolve_audio가 판단합니다
             self.title = d.get("title", "")
             self.video_id = d.get("id", "") or ""
             if not d.get("is_live"):

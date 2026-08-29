@@ -36,6 +36,9 @@ import translate
 BASE = paths.BASE
 WEB = os.path.join(BASE, "web")
 
+# 화면에 보내는 API 키 자리표시. 진짜 키는 backends.json 밖으로 나가지 않습니다.
+KEY_MASK = "••••••••"
+
 # 미디어 타입. 화면의 파일은 몇 종류뿐입니다.
 CTYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
           ".html": "text/html; charset=utf-8", ".json": "application/json; charset=utf-8",
@@ -91,7 +94,29 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- GET ----------------------------------------------------------------
 
+    def _host_ok(self) -> bool:
+        """`Host`가 우리 자신인가. 모든 요청에 적용합니다.
+
+        서버는 127.0.0.1에만 묶여 있지만 DNS 리바인딩은 그 제약을 우회합니다: 공격자
+        도메인이 잠깐 127.0.0.1을 가리키게 하면 그 페이지의 스크립트가 **같은 출처**로
+        여기에 GET을 보내 답을 읽습니다 -- `/api/backends`에는 API 키가 들어 있습니다.
+        쓰기는 Origin 검사가 막지만 읽기는 열려 있었습니다. 브라우저는 Host를 요청한
+        도메인으로 보내므로 그것이 localhost·127.0.0.1이 아니면 우리 화면이 아닙니다.
+        """
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            return True                   # HTTP/1.0 도구(curl 옛 판 등). 브라우저는 늘 보냅니다
+        name, _, port = host.rpartition(":") if host.count(":") == 1 else (host, "", "")
+        if host.startswith("["):          # [::1]:8900
+            name, _, port = host.partition("]")
+            name += "]"; port = port.lstrip(":")
+        if name not in ("localhost", "127.0.0.1", "[::1]"):
+            return False
+        return not port or port == str(self.server.server_address[1])
+
     def do_GET(self):
+        if not self._host_ok():
+            return self._json({"error": "이 서버는 localhost 로만 부를 수 있습니다"}, 421)
         path = posixpath.normpath(self.path.split("?")[0])
         exact = GET_ROUTES.get(path)
         if exact is not None:
@@ -131,6 +156,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def get_backends(self):
         cfg = config.load()
+        # API 키는 화면에 보낼 이유가 없습니다. 있다는 표시만 남기고 가립니다 -- 편집
+        # 폼이 가린 값을 그대로 돌려보내면 upsert가 기존 키를 지킵니다(post_backends).
+        for key, _ in config.KINDS.values():
+            cfg[key] = [{**b, "api_key": KEY_MASK if b.get("api_key") else ""}
+                        for b in cfg.get(key, [])]
         cfg["live_profiles"] = [{"id": k, **v} for k, v in live.PROFILES.items()]
         # 장르는 프롬프트만 바꾸므로 라이브·녹화본 양쪽에 씁니다. 프롬프트
         # 본문은 보내지 않습니다 -- 화면에 쓸 것은 이름과 한 줄 설명뿐입니다.
@@ -328,6 +358,8 @@ class Handler(BaseHTTPRequestHandler):
             "localhost", "127.0.0.1") and (o.port or 80) == self.server.server_address[1])
 
     def do_POST(self):
+        if not self._host_ok():
+            return self._json({"error": "이 서버는 localhost 로만 부를 수 있습니다"}, 421)
         path = posixpath.normpath(self.path.split("?")[0])
         if not self._same_origin_write():
             return self._json({"error": "다른 출처에서 온 쓰기 요청은 받지 않습니다"}, 403)
@@ -366,7 +398,7 @@ class Handler(BaseHTTPRequestHandler):
         # 방식부터 다르므로 화면이 시작하기 전에 알아야 합니다.
         import subprocess as sp
         try:
-            out = sp.run(stream.ytdlp_cmd() + ["--no-warnings", "-j", body.get("url", "")],
+            out = sp.run(stream.ytdlp_args("-j", url=(body.get("url") or "").strip()),
                          capture_output=True, text=True,
                          timeout=stream.YTDLP_TIMEOUT_S)
         except sp.TimeoutExpired:
@@ -377,7 +409,12 @@ class Handler(BaseHTTPRequestHandler):
         if out.returncode != 0:
             return self._json({"error": out.stderr.strip()[:200]
                                         or "주소를 해석할 수 없습니다"}, 400)
-        d = json.loads(out.stdout)
+        try:
+            d = json.loads(out.stdout)
+        except json.JSONDecodeError:
+            # 재생목록·채널 주소는 영상마다 한 줄씩 냅니다. 영상 하나를 가리키십시오.
+            return self._json({"error": "영상 하나의 주소를 넣어 주십시오 "
+                                        "(재생목록·채널 주소가 아니라)"}, 400)
         self._json({"id": d.get("id"), "title": d.get("title"),
                     "is_live": bool(d.get("is_live")),
                     "duration": d.get("duration"),
@@ -487,13 +524,22 @@ class Handler(BaseHTTPRequestHandler):
             bool(body.get("speakers")),
             body.get("genre")))
 
+    def _keep_masked_key(self, kind: str, entry: dict) -> dict:
+        """화면이 가린 키(KEY_MASK)를 그대로 돌려보냈으면 저장된 키를 지킵니다.
+        빈 문자열은 "키를 지운다"는 뜻으로 그대로 둡니다."""
+        if entry.get("api_key") == KEY_MASK:
+            old = config.find(kind, entry["id"]) or {}
+            entry["api_key"] = old.get("api_key", "")
+        return entry
+
     def post_asr_backends(self, body):
         entry = {k: body.get(k, "") for k in
                  ("id", "label", "backend", "base_url", "model", "api_key")}
         entry["window_s"] = float(body.get("window_s") or 240)
         if not entry["id"]:
             return self._json({"error": "id is required"}, 400)
-        self._json(config.upsert("asr", entry))
+        config.upsert("asr", self._keep_masked_key("asr", entry))
+        self.get_backends()
 
     def post_backends(self, body):
         # 화면에서 고친 엔드포인트를 여기서 남겨 두면 재시작해도 파일을 손으로
@@ -504,7 +550,8 @@ class Handler(BaseHTTPRequestHandler):
         entry["no_reasoning"] = bool(body.get("no_reasoning", True))
         if not entry["id"]:
             return self._json({"error": "id is required"}, 400)
-        self._json(config.upsert("tr", entry))
+        config.upsert("tr", self._keep_masked_key("tr", entry))
+        self.get_backends()
 
     def post_asr_backends_delete(self, body):
         self._json(jobs.delete_asr_backend(body.get("id", "")))

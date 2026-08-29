@@ -16,6 +16,7 @@ import urllib.request
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SERVER_CONFIG = None
 
 
 def _stub_dir(tmp) -> str:
@@ -63,6 +64,10 @@ def server(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("srv")
     port = _free_port()
     stubs = _stub_dir(tmp)
+    # 서버 프로세스의 설정 파일. conftest 가 이 프로세스의 config 를 다른 임시 파일로
+    # 돌려 두므로, 서버가 저장한 것을 보려면 그 파일을 직접 읽어야 합니다.
+    global SERVER_CONFIG
+    SERVER_CONFIG = tmp / "backends.json"
     env = {**os.environ, "MIMIWATCH_DATA_DIR": str(tmp / "data"),
            "MIMIWATCH_CONFIG": str(tmp / "backends.json"),
            "PYTHONPATH": stubs + (os.pathsep + os.environ["PYTHONPATH"]
@@ -100,6 +105,38 @@ def req(base, path, body=None, headers=None, raw=None):
             return resp.status, resp.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
+
+
+def test_host_header_must_be_local(server):
+    """DNS 리바인딩: 다른 이름으로 들어온 요청은 읽기도 거절합니다."""
+    base, port = server
+    assert req(base, "/api/videos")[0] == 200                       # 127.0.0.1:port
+    assert req(base, "/api/videos", headers={"Host": f"localhost:{port}"})[0] == 200
+    assert req(base, "/api/videos", headers={"Host": "evil.example"})[0] == 421
+    assert req(base, "/api/videos", headers={"Host": f"evil.example:{port}"})[0] == 421
+    assert req(base, "/api/videos", headers={"Host": "127.0.0.1:1"})[0] == 421    # 다른 포트
+    s, _ = req(base, "/api/live/stop", body={"id": "x"}, headers={"Host": "evil.example"})
+    assert s == 421
+
+
+def test_api_keys_are_masked_and_kept(server):
+    base, _ = server
+    entry = {"id": "remote-x", "label": "X", "backend": "openai",
+             "base_url": "http://h", "model": "m", "api_key": "sk-secret"}
+    s, b = req(base, "/api/backends", body=entry)
+    assert s == 200
+    got = [x for x in json.loads(b)["backends"] if x["id"] == "remote-x"][0]
+    assert got["api_key"] and "sk-secret" not in json.dumps(json.loads(b))    # 가려서 옵니다
+    # 가린 값을 그대로 돌려보내면 저장된 키가 남고, 빈 값은 지웁니다.
+    req(base, "/api/backends", body={**entry, "label": "X2", "api_key": got["api_key"]})
+
+    def saved():
+        cfg = json.loads(SERVER_CONFIG.read_text(encoding="utf-8"))
+        return [x for x in cfg["backends"] if x["id"] == "remote-x"][0]
+
+    assert saved()["api_key"] == "sk-secret" and saved()["label"] == "X2"
+    req(base, "/api/backends", body={**entry, "api_key": ""})
+    assert saved()["api_key"] == ""
 
 
 def test_static_and_index(server):

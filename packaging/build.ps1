@@ -35,13 +35,15 @@ if (-not $env:MIMIWATCH_VERSION) {
 
 function Say { param($m) Write-Host "`n> $m" -ForegroundColor White }
 function Run {
-  param([string] $File, [string[]] $Args)
+  # 매개변수 이름을 $Args 로 두면 안 됩니다 -- PowerShell 의 자동 변수 $args 와 겹쳐
+  # 빈 배열이 되고, python 이 인자 없이 실행되어 가상환경이 생기지 않았습니다.
+  param([string] $File, [string[]] $ArgList)
   # install.ps1 과 달리 Start-Process 를 쓰지 않습니다. 액션 러너에서 그것이 PATH 의
   # `python` 을 두 번이나 못 찾았습니다("The system cannot find the file specified").
   # 이 스크립트는 pwsh 7 전용이라 5.1 의 stderr-종료 오류 문제가 없으므로 호출
   # 연산자로 그냥 부릅니다. 출력은 그대로 흘러나옵니다.
-  & $File @Args
-  if ($LASTEXITCODE -ne 0) { throw "$File $($Args -join ' ') -> 종료 코드 $LASTEXITCODE" }
+  & $File @ArgList
+  if ($LASTEXITCODE -ne 0) { throw "$File $($ArgList -join ' ') -> 종료 코드 $LASTEXITCODE" }
 }
 
 Say "빌드 가상환경 ($Venv)"

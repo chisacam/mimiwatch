@@ -112,15 +112,6 @@ def test_user_stop_does_not_reconnect(session, fake_ffmpeg):
     assert s.stopped_by == "user" and s.state == "stopped"
 
 
-def test_remote_asr_is_refused_for_live(monkeypatch):
-    import config
-    monkeypatch.setattr(config, "find_asr", lambda bid: {"id": bid, "backend": "openai",
-                                                          "label": "원격"} if bid == "r" else None)
-    got = live.start("https://example.invalid", "ja", "ko", "local-m2m100", asr_backend_id="r")
-    assert "error" in got and "라이브" in got["error"]
-    assert live._sessions == {}
-
-
 def test_delete_refuses_running_session(session):
     live._sessions[session.id] = session
     assert "error" in live.delete(session.id)

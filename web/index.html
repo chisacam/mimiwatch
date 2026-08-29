@@ -274,7 +274,7 @@
         <h4>전사 엔진</h4>
         <button class="seg ghost" data-add="asr">＋ 추가</button>
       </div>
-      <p class="hint">음성을 글자로 옮깁니다. 기본은 로컬 Whisper(transcribe.cpp)이고, 라이브 도중에도 로컬 엔진끼리는 갈아 끼울 수 있습니다. 외부 엔진은 OpenAI 호환 <code>/v1/audio/transcriptions</code> 규약을 쓰며 <b>녹화본 전사에만 쓸 수 있습니다</b> — 라이브는 창 단위 요청이 아니라 스트림이라 로컬 엔진만 받습니다.</p>
+      <p class="hint">음성을 글자로 옮깁니다. 기본은 로컬 Whisper(transcribe.cpp)입니다. 외부 엔진은 OpenAI 호환 <code>/v1/audio/transcriptions</code> 규약을 쓰며 녹화본과 라이브 모두에 쓸 수 있습니다 — 라이브에서는 발화 한 조각(2~12초)마다 요청이 나가므로 왕복 시간만큼 자막이 늦습니다. 라이브 도중에도 갈아 끼울 수 있습니다.</p>
       <div id="asr-list" class="engine-list"></div>
     </section>
 

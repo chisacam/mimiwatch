@@ -70,9 +70,13 @@ def resolve_device(want: str) -> str:
     return "auto"
 
 
+def _model_key(path: str, device: str):
+    return ("tcpp", path, device)
+
+
 def _shared_model(path: str, device: str):
     import transcribe_cpp as tc
-    return models.shared(("tcpp", path, device), lambda: tc.Model(path, backend=device))
+    return models.shared(_model_key(path, device), lambda: tc.Model(path, backend=device))
 
 
 class TranscribeCppASR:
@@ -97,6 +101,7 @@ class TranscribeCppASR:
         # 모델(가중치)은 프로세스에 한 벌입니다(models.py). 해독 세션은 우리
         # 것입니다 -- 상태를 들고 있어 세션마다 따로 두는 것이 맞고, 만드는
         # 비용도 가중치 적재와는 비교가 되지 않습니다.
+        self._key = _model_key(model_path, self.device)
         self._model = _shared_model(model_path, self.device)
         self._session = self._model.session(n_threads=threads)
         self._check_language()
@@ -106,35 +111,6 @@ class TranscribeCppASR:
         # 빠른 패스와 정제 패스가 서로 다른 스레드에서 들어오므로
         # 직렬화합니다.
         self._lock = threading.Lock()
-
-    def swap(self, spec: dict | None):
-        """돌아가는 세션에서 전사 모델을 갈아 끼웁니다.
-
-        **객체를 바꾸지 않고 속만 바꿉니다.** `run_stream` 은 asr 을 지역
-        변수로 받아 들고 있고 `Refiner` 도 따로 참조를 쥐고 있어서, 세션의
-        `_asr` 을 새 객체로 갈아 끼워 봐야 돌고 있는 루프는 옛 것을 계속
-        씁니다. 속을 바꾸면 그 참조들이 저절로 새 모델을 가리킵니다.
-
-        예전에는 이 자리에서 세션을 통째로 다시 시작했습니다. 그러면 세션
-        id가 바뀌고, 자막은 세션 id로 저장되므로 **그때까지의 스크립트가
-        화면에서 사라졌습니다.** 한 영상 안에서 자막은 이어져야 합니다.
-
-        새 모델을 다 세우고 나서 바꿉니다. 언어를 지원하지 않는 등으로
-        실패하면 쓰던 것이 그대로 남습니다 -- 바꾸려다 방송을 잃는 것이
-        가장 나쁩니다.
-        """
-        r = resolve_asr(spec, self.forced_lang)
-        model = _shared_model(r["path"], r["device"])
-        session = model.session(n_threads=r["threads"])
-        self._probe_language(session, r["label"])
-        # 해독 한 번이 끝나기를 기다렸다 바꿉니다. transcribe 도 같은 자물쇠를
-        # 쥐므로, 반쯤 바뀐 상태로 해독이 들어가는 일은 없습니다.
-        with self._lock:
-            self._model, self._session = model, session
-            self.device, self.threads, self.label = r["device"], r["threads"], r["label"]
-        print(f"[asr] 갈아 끼움 -> {self.label} · {self.device} · {self.threads}스레드",
-              file=sys.stderr, flush=True)
-        return {"label": self.label, "device": self.device, "threads": self.threads}
 
     def _check_language(self):
         """이 모델이 이 언어를 아는지 시작할 때 물어봅니다.
@@ -207,6 +183,7 @@ class TranscribeCppASR:
 
         pcm = np.ascontiguousarray(samples, dtype=np.float32)
         t0 = time.perf_counter()
+        models.touch(self._key)          # 유휴 언로드가 켜져 있으면 "쓰는 중"이라고
         try:
             with self._lock:
                 result = self._session.run(pcm, language=self.forced_lang)
@@ -269,8 +246,8 @@ def default_whisper() -> str:
 def resolve_asr(spec: dict | None, lang: str | None) -> dict:
     """설정 한 덩어리에서 실제로 쓸 모델·장치·스레드를 뽑아냅니다.
 
-    새로 만들 때(`build_live_asr`)와 돌아가는 세션에서 갈아 끼울 때
-    (`TranscribeCppASR.swap`)가 같은 규칙을 써야 하므로 떼어 두었습니다.
+    새로 만들 때와 돌아가는 세션에서 갈아 끼울 때(`LiveASR.swap`)가 같은
+    규칙을 써야 하므로 떼어 두었습니다.
     """
     spec = spec or {}
     path = ((spec.get("models") or {}).get(lang or "") or spec.get("model")
@@ -291,13 +268,108 @@ def resolve_asr(spec: dict | None, lang: str | None) -> dict:
             "label": os.path.basename(path).replace(".gguf", "")}
 
 
-def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4):
+def build_engine(spec: dict | None, lang: str | None, threads: int = 4):
+    """설정 한 덩어리를 실제 인식기로.
+
+    `backend: openai`면 원격(발화 조각마다 요청), 아니면 로컬 GGUF입니다. 둘은
+    같은 표면(`transcribe(samples, sr, …)`, `forced_lang`, `label`)을 내놓습니다.
+    """
+    spec = spec or {}
+    if spec.get("backend") == "openai":
+        from asr import OpenAIStreamASR
+        return OpenAIStreamASR(spec, lang)
+    r = resolve_asr(spec, lang)
+    return TranscribeCppASR(r["path"], lang, threads=r["threads"],
+                            label=r["label"], device=r["device"])
+
+
+class LiveASR:
+    """세션이 쥐는 인식기. 속(로컬 GGUF 또는 원격)을 갈아 끼울 수 있습니다.
+
+    **객체를 바꾸지 않고 속만 바꿉니다.** `run_stream`은 asr을 지역 변수로
+    받아 들고 있고 `Refiner`도 따로 참조를 쥐고 있어서, 세션의 `_asr`을 새
+    객체로 갈아 끼워 봐야 돌고 있는 루프는 옛 것을 계속 씁니다. 이 껍데기가
+    그 참조들의 대상이고, 속이 바뀌면 다음 해독부터 새 엔진으로 갑니다.
+
+    예전에는 갈아 끼우려면 세션을 통째로 다시 시작해야 했습니다. 그러면 세션
+    id가 바뀌고, 자막은 세션 id로 저장되므로 그때까지의 자막 내역이 화면에서
+    사라졌습니다. 한 영상 안에서 자막은 이어져야 합니다.
+
+    새 엔진을 다 세우고 나서 바꿉니다. 언어를 지원하지 않거나 모델 파일이
+    없거나 원격 설정이 비어 있으면 예외가 나고 쓰던 것이 그대로 남습니다 --
+    바꾸려다 방송을 잃는 것이 가장 나쁩니다. 진행 중인 해독은 옛 엔진에서
+    끝나고, 그 뒤의 것부터 새 엔진입니다.
+    """
+
+    def __init__(self, spec: dict | None, lang: str | None, threads: int = 4):
+        self.forced_lang = lang or ""
+        self._inner = build_engine(spec, lang, threads)
+
+    def swap(self, spec: dict | None) -> dict:
+        new = build_engine(spec, self.forced_lang)
+        self._inner = new
+        print(f"[asr] 갈아 끼움 -> {new.label} · {new.device} · {new.threads}스레드",
+              file=sys.stderr, flush=True)
+        return {"label": new.label, "device": new.device, "threads": new.threads}
+
+    # 세션·정제기가 보는 표면. 전부 지금의 속으로 넘깁니다.
+    @property
+    def label(self):
+        return self._inner.label
+
+    @property
+    def device(self):
+        return self._inner.device
+
+    @property
+    def threads(self):
+        return self._inner.threads
+
+    @property
+    def hallucinations(self):
+        return self._inner.hallucinations
+
+    @property
+    def min_switch_s(self):
+        return self._inner.min_switch_s
+
+    @property
+    def punct(self):
+        return self._inner.punct
+
+    @property
+    def ko_spacer(self):
+        return self._inner.ko_spacer
+
+    def resident_models(self):
+        return self._inner.resident_models()
+
+    def reset_session(self):
+        return self._inner.reset_session()
+
+    def _identify_lang(self, samples, sample_rate):
+        return self._inner._identify_lang(samples, sample_rate)
+
+    def identify(self, samples, sample_rate):
+        return self._inner.identify(samples, sample_rate)
+
+    def _replace(self, text):
+        return self._inner._replace(text)
+
+    def partial(self, samples, sample_rate, lang_hint=None):
+        return self._inner.partial(samples, sample_rate, lang_hint)
+
+    def transcribe(self, samples, sample_rate, known_lang=None, speech_s=None,
+                   live=True):
+        return self._inner.transcribe(samples, sample_rate, known_lang=known_lang,
+                                      speech_s=speech_s, live=live)
+
+
+def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4) -> LiveASR:
     """세션이 쓸 인식기를 만듭니다.
 
     lang이 비어 있으면 모델이 스스로 판별합니다. 다만 방송 언어를 알고
     있다면 지정하는 편이 낫습니다 -- 판별이 흔들리면 문장 하나가 통째로
     다른 언어로 나옵니다.
     """
-    r = resolve_asr(spec, lang)
-    return TranscribeCppASR(r["path"], lang, threads=r["threads"],
-                            label=r["label"], device=r["device"])
+    return LiveASR(spec, lang, threads)

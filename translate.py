@@ -250,8 +250,8 @@ class LocalM2M(Translator):
 
     def __init__(self, model_dir: str = M2M_DIR, device: str = "cpu",
                  compute_type: str = "int8"):
-        m = models.shared(("m2m100", model_dir, device, compute_type),
-                          lambda: _M2MModel(model_dir, device, compute_type))
+        self._key = ("m2m100", model_dir, device, compute_type)
+        m = models.shared(self._key, lambda: _M2MModel(model_dir, device, compute_type))
         self._sp, self._tr, self._vocab = m.sp, m.tr, m.vocab
 
     def supports(self, lang: str) -> bool:
@@ -268,6 +268,7 @@ class LocalM2M(Translator):
             # 이 언어쌍을 모릅니다. 원문을 돌려주면 부르는 쪽이 번역된 줄로
             # 오해하므로 실패로 알립니다.
             raise TranslationFailed(f"M2M-100이 {src}→{tgt}를 지원하지 않습니다")
+        models.touch(self._key)
         try:
             pieces = self._sp.encode(stripped, out_type=str)
             if not pieces:
@@ -421,8 +422,9 @@ class LocalGemma(Translator):
         # 모델은 프로세스에 한 벌입니다(models.py). 프롬프트(장르)는 이 객체의
         # 것이고 모델은 공유하므로, 장르가 다른 세션과 작업이 같은 Gemma를
         # 씁니다. 첫 번역 때 올립니다 -- 미리 올리면 세션 시작이 그만큼 늦습니다.
+        self._key = ("gemma", self.model_path, self.device, n_ctx, threads, self.n_gpu_layers)
         self._holder = models.shared(
-            ("gemma", self.model_path, self.device, n_ctx, threads, self.n_gpu_layers),
+            self._key,
             lambda: _LlamaHolder(self.model_path, self.device, n_ctx, threads,
                                  self.n_gpu_layers))
         # llama.cpp의 컨텍스트는 동시 호출을 견디지 못합니다. 자막 한 줄마다
@@ -438,6 +440,7 @@ class LocalGemma(Translator):
         if not stripped or src == tgt:
             return text
         llm = self._ensure()
+        models.touch(self._key)
         msg = render_prompt(self.prompt, src, tgt, stripped, context)
         with self._lock:
             out = llm.create_chat_completion(

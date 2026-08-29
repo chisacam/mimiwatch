@@ -5,23 +5,32 @@
 2026-08-27 표본에서 발표는 깨끗이 받아 적혔지만 네 명이 겹쳐 말하는 방송은
 줄을 통째로 잃었습니다.
 
+외부 경로는 OpenAI 의 `/v1/audio/transcriptions` 모양입니다(Whisper 와 그 호환
+서버들). 두 갈래로 씁니다.
+
+  - 녹화본(`OpenAICompatibleASR`): 방송 전체는 어떤 요청 크기 제한도 넘으므로
+    조용한 지점에서 몇 분짜리 창으로 잘라 보내고, 창마다 돌아온 구간 시각에
+    창의 시작을 더합니다.
+  - 라이브(`OpenAIStreamASR`): VAD 가 잘라 낸 발화 한 조각(2~12초)을 그때그때
+    보냅니다. 로컬 엔진과 같은 표면(`transcribe(samples, sr, …)`)을 내놓아
+    `run_stream`/`Refiner`가 어느 쪽인지 모르게 합니다. 지연은 왕복 시간만큼
+    늘고, 그것은 사용자가 고른 거래입니다 -- 무료 로컬 모델보다 나은 인식을
+    비용을 내고 사려는 사람이 있습니다.
+
+Both must return cues carrying media-relative timestamps, because the player
+aligns subtitles by looking them up against getCurrentTime(), not by
+estimating.
+
 이름에 남아 있던 "hayamimi"는 이 프로젝트가 처음 전사 엔진으로 빌려 쓰던
 저장소입니다. 지금은 그 코드에 기대지 않으므로 이름도 함께 걷어냈습니다.
 옛 설정(`local-hayamimi`)은 그대로 기본 엔진으로 읽힙니다.
-
-Both backends must return the same thing: cues carrying media-relative
-timestamps, because the player aligns subtitles by looking them up against
-getCurrentTime(), not by estimating.
-
-The external path is the OpenAI /v1/audio/transcriptions shape (Whisper and
-its many compatible servers). A full broadcast is far past any request size
-limit, so the audio is cut into windows at silent points and each window's
-returned segment times are shifted by that window's offset.
 """
 from __future__ import annotations
 
 import io
 import json
+import time
+import urllib.parse
 import urllib.request
 import uuid
 import wave
@@ -31,6 +40,64 @@ import numpy as np
 import stream
 
 SAMPLE_RATE = 16000
+
+# OpenAI 의 verbose_json 은 언어를 코드가 아니라 이름("japanese")으로 줍니다.
+# 자막에는 코드가 실려야 번역기가 알아봅니다.
+LANG_NAMES = {"japanese": "ja", "korean": "ko", "english": "en", "chinese": "zh",
+              "mandarin": "zh", "spanish": "es", "french": "fr", "german": "de",
+              "russian": "ru", "portuguese": "pt", "italian": "it", "vietnamese": "vi",
+              "indonesian": "id", "thai": "th", "arabic": "ar", "hindi": "hi"}
+
+
+def lang_code(value: str | None) -> str:
+    v = (value or "").strip().lower()
+    if not v:
+        return ""
+    return LANG_NAMES.get(v, v if len(v) <= 3 else "")
+
+
+def wav_bytes(samples: np.ndarray) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes((np.clip(samples, -1, 1) * 32767).astype(np.int16).tobytes())
+    return buf.getvalue()
+
+
+def post_transcription(base_url: str, model: str, api_key: str, audio: bytes,
+                       lang: str | None, timeout: float) -> dict:
+    """`/v1/audio/transcriptions`에 wav 하나를 보내고 verbose_json 을 받습니다.
+
+    multipart 를 손으로 짓습니다 -- 표준 라이브러리만 쓰는 서버라 requests 가
+    없고, 칸이 넷뿐이라 라이브러리를 들일 만한 일이 아닙니다.
+    """
+    boundary = uuid.uuid4().hex
+    parts = []
+
+    def field(name, value):
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; '
+                     f'name="{name}"\r\n\r\n{value}\r\n'.encode())
+
+    field("model", model)
+    field("response_format", "verbose_json")
+    if lang:
+        field("language", lang)
+    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; '
+                 f'name="file"; filename="audio.wav"\r\n'
+                 f'Content-Type: audio/wav\r\n\r\n'.encode())
+    parts.append(audio)
+    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    body = b"".join(parts)
+
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(f"{base_url.rstrip('/')}/v1/audio/transcriptions",
+                                 data=body, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
 
 
 class ASRBackend:
@@ -69,9 +136,8 @@ LocalHayamimi = DefaultLocal       # 옛 이름. 시험과 스크립트가 부�
 class TranscribeCpp(ASRBackend):
     """transcribe.cpp의 GGUF 모델로 구간을 해독합니다.
 
-    구간 분할과 시각 계산은 로컬 경로와 똑같이 hayamimi의 VAD가 맡고,
-    해독만 갈아 끼웁니다. 배치된 모델이 없는 언어면 build_live_asr가
-    RoutedASR을 돌려주므로 이 경로도 자동으로 기본 엔진으로 돌아갑니다.
+    구간 분할과 시각 계산은 로컬 경로와 똑같이 VAD가 맡고, 해독만 갈아
+    끼웁니다.
     """
 
     name = "tcpp"
@@ -90,7 +156,7 @@ class TranscribeCpp(ASRBackend):
 
 
 class OpenAICompatibleASR(ASRBackend):
-    """POST windows of audio to /v1/audio/transcriptions.
+    """POST windows of audio to /v1/audio/transcriptions (녹화본).
 
     `verbose_json` gives per-segment timestamps relative to the window; the
     window offset restores them to media time. Windows are cut on a low-energy
@@ -134,41 +200,9 @@ class OpenAICompatibleASR(ASRBackend):
             start = cut
         return spans
 
-    def _wav_bytes(self, samples: np.ndarray) -> bytes:
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(SAMPLE_RATE)
-            w.writeframes((np.clip(samples, -1, 1) * 32767).astype(np.int16).tobytes())
-        return buf.getvalue()
-
     def _post(self, audio: bytes, lang: str | None) -> dict:
-        boundary = uuid.uuid4().hex
-        parts = []
-
-        def field(name, value):
-            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; '
-                         f'name="{name}"\r\n\r\n{value}\r\n'.encode())
-
-        field("model", self.model)
-        field("response_format", "verbose_json")
-        if lang:
-            field("language", lang)
-        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; '
-                     f'name="file"; filename="audio.wav"\r\n'
-                     f'Content-Type: audio/wav\r\n\r\n'.encode())
-        parts.append(audio)
-        parts.append(f"\r\n--{boundary}--\r\n".encode())
-        body = b"".join(parts)
-
-        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        req = urllib.request.Request(f"{self.base_url}/v1/audio/transcriptions",
-                                     data=body, headers=headers)
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
-            return json.load(r)
+        return post_transcription(self.base_url, self.model, self.api_key, audio, lang,
+                                  self.timeout)
 
     def transcribe(self, samples, lang, on_progress=None, should_stop=None):
         spans = self._cut_points(samples)
@@ -178,27 +212,100 @@ class OpenAICompatibleASR(ASRBackend):
             # 창 하나가 몇십 초 분량이므로 사이에서 확인하면 충분합니다.
             if should_stop and should_stop():
                 raise stream.Cancelled()
-            data = self._post(self._wav_bytes(samples[start:end]), lang)
+            data = self._post(wav_bytes(samples[start:end]), lang)
             offset = start / SAMPLE_RATE
             segments = data.get("segments")
+            got_lang = lang or lang_code(data.get("language"))
             if segments:
                 for sg in segments:
                     text = (sg.get("text") or "").strip()
                     if text:
                         cues.append({"start": round(offset + float(sg["start"]), 3),
                                      "end": round(offset + float(sg["end"]), 3),
-                                     "lang": lang or data.get("language", "") or "",
-                                     "text": text})
+                                     "lang": got_lang, "text": text})
             elif (data.get("text") or "").strip():
                 # A server that only returns plain text costs us the timing
                 # inside the window; anchor the whole thing at its start
                 # rather than dropping it.
                 cues.append({"start": round(offset, 3),
                              "end": round(end / SAMPLE_RATE, 3),
-                             "lang": lang or "", "text": data["text"].strip()})
+                             "lang": got_lang, "text": data["text"].strip()})
             if on_progress:
                 on_progress(end / total)
         return cues
+
+
+class OpenAIStreamASR:
+    """라이브용: VAD 가 잘라 낸 발화 한 조각을 그때그때 원격에 보냅니다.
+
+    `tcpp_asr.TranscribeCppASR`와 같은 표면입니다 -- `run_stream`과 `Refiner`가
+    부르는 것은 `transcribe(samples, sample_rate, speech_s=…, live=…)` 하나와
+    `forced_lang`·`label`뿐이라, 이 둘이 같으면 어느 쪽이 들어가도 세션은
+    모릅니다. 갈아 끼우는 일은 `tcpp_asr.LiveASR`가 맡습니다.
+
+    실패는 예외로 냅니다. `_drain`이 연달아 다섯 번까지는 그 조각만 버리고
+    넘어가고, 그 뒤에는 세션을 놓습니다 -- 로컬 엔진의 규칙과 같습니다.
+    """
+
+    name = "openai-asr"
+
+    def __init__(self, spec: dict, lang: str | None):
+        if not spec.get("base_url") or not spec.get("model"):
+            raise ValueError("OpenAI 호환 전사 엔진에는 base_url 과 model 이 필요합니다")
+        self.base_url = spec["base_url"].rstrip("/")
+        self.model = spec["model"]
+        self.api_key = spec.get("api_key", "")
+        # 조각 하나는 길어야 12초입니다. 30초 안에 답이 없으면 그 조각은 버립니다.
+        self.timeout = float(spec.get("timeout") or 30.0)
+        self.forced_lang = lang or ""
+        self.min_switch_s = 0.0
+        host = urllib.parse.urlsplit(self.base_url).netloc or self.base_url
+        self.label = spec.get("label") or f"{self.model} @ {host}"
+        self.device = "remote"
+        self.threads = 0
+        self.hallucinations = 0
+
+    # --- RoutedASR 표면 -------------------------------------------------------
+    punct = None
+    ko_spacer = None
+
+    def resident_models(self) -> list[str]:
+        return [self.label]
+
+    def reset_session(self):
+        pass
+
+    def _identify_lang(self, samples, sample_rate) -> str:
+        return self.forced_lang
+
+    identify = _identify_lang
+
+    def _replace(self, text: str) -> str:
+        return text
+
+    def partial(self, samples, sample_rate, lang_hint=None) -> str:
+        return ""
+
+    def transcribe(self, samples: np.ndarray, sample_rate: int,
+                   known_lang: str | None = None, speech_s: float | None = None,
+                   live: bool = True) -> dict:
+        if sample_rate != SAMPLE_RATE:
+            raise ValueError(f"16kHz만 지원합니다 (받은 값 {sample_rate})")
+        from tcpp_asr import looks_hallucinated
+        t0 = time.perf_counter()
+        data = post_transcription(self.base_url, self.model, self.api_key,
+                                  wav_bytes(np.asarray(samples, dtype=np.float32)),
+                                  self.forced_lang or None, self.timeout)
+        decode_ms = (time.perf_counter() - t0) * 1000
+        text = (data.get("text") or "").strip()
+        if not text and data.get("segments"):
+            text = " ".join((sg.get("text") or "").strip() for sg in data["segments"]).strip()
+        if looks_hallucinated(text):
+            self.hallucinations += 1
+            print(f"[환각 차단] {self.label}: {text[:50]}", flush=True)
+            text = ""
+        return {"text": text, "lang": self.forced_lang or lang_code(data.get("language")),
+                "tier": self.label, "lid_ms": 0.0, "decode_ms": decode_ms, "probe_ms": 0.0}
 
 
 def build(spec: dict | None) -> ASRBackend:
@@ -210,3 +317,5 @@ def build(spec: dict | None) -> ASRBackend:
                                    spec.get("api_key", ""),
                                    float(spec.get("window_s", 240)))
     return DefaultLocal()
+
+

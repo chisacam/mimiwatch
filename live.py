@@ -902,9 +902,6 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
           source: str = "hls", title: str = "") -> dict:
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
-    refused = _refuse_remote_asr(asr_backend_id)
-    if refused:
-        return refused
     for old_id in list(_sessions):
         old = get(old_id)
         if old is not None:
@@ -919,22 +916,6 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
     s._persist()
     s.start()
     return {"id": s.id, "source": s.source}
-
-
-def _refuse_remote_asr(asr_backend_id: str) -> dict | None:
-    """라이브는 로컬 전사기만 받습니다.
-
-    OpenAI 호환 전사 엔드포인트는 오디오 **파일**을 창 단위로 보내는 것이라
-    녹화본에만 맞습니다. 라이브에 고르면 예전에는 `resolve_asr`가 모델 이름
-    (`whisper-1`)을 파일 경로로 알고 「전사 모델이 없습니다: …/whisper-1」을
-    냈습니다 -- 틀린 진단입니다. 여기서 이유를 제대로 말합니다.
-    """
-    spec = config.find_asr(asr_backend_id) if asr_backend_id else None
-    if spec and spec.get("backend") == "openai":
-        return {"error": f"'{spec.get('label') or asr_backend_id}'는 외부(OpenAI 호환) "
-                         "전사 엔진이라 라이브에는 쓸 수 없습니다. 녹화본 전용입니다. "
-                         "로컬 엔진을 고르십시오."}
-    return None
 
 
 def set_title(session_id: str, title: str) -> dict:
@@ -1220,9 +1201,6 @@ def set_asr(session_id: str, asr_backend_id: str) -> dict:
     spec = config.find_asr(asr_backend_id)
     if spec is None:
         return {"error": f"'{asr_backend_id}' 전사 엔진이 없습니다"}
-    refused = _refuse_remote_asr(asr_backend_id)
-    if refused:
-        return refused
     if not hasattr(s._asr, "swap"):
         return {"error": "이 세션의 전사기는 갈아 끼울 수 없습니다"}
     try:

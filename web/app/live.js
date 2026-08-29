@@ -384,6 +384,7 @@ function detachLive() {
   if (live.es) live.es.close();
   state.live = null;
   hideLiveNotice();
+  syncRenameButton();
   $("live-badge").hidden = true;
   $("offset-wrap").style.display = "";
 }

@@ -116,8 +116,20 @@ function openFromList(value) {
   const sid = row && row.dataset.session;
   markVideoRow(value);
   if (sid) { resumeLive(sid); return; }
-  stopLive();
-  dropLiveOption(value);
+  if (state.live) {
+    // 녹화본을 열어도 라이브 수신은 끊지 않습니다. 사용자가 「중단」을 누른
+    // 것이 아니고, 목록의 녹화본은 이미 전사·번역이 끝난 것이라 방송 쪽에
+    // 부담이 되지 않습니다. 화면만 떼고(detach) 서버는 계속 받습니다 --
+    // 목록의 그 방송 줄을 다시 누르면 이어서 봅니다.
+    //
+    // 탭 소리만 예외입니다. 그 스트림은 이 창에 매여 있어 다른 것을 여는
+    // 순간 어차피 끊기므로, 서버에도 끝났다고 말해 줍니다.
+    if (state.live.source === "tab") stopLive();
+    else detachLive();
+  } else {
+    // 끝난 방송의 임시 줄은 다른 것을 열면 치웁니다.
+    dropLiveOption(value);
+  }
   loadVideo(value);
 }
 

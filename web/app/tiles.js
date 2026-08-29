@@ -160,9 +160,13 @@ function detachTile(tile) {
 
 /* 초점을 옮깁니다. 소리와 자막과 오른쪽 자막 내역이 함께 따라옵니다. */
 function setFocus(tile, opts = {}) {
-  const prev = focusedTile();
-  if (!tile || prev === tile) return;
-  if (prev) {
+  if (!tile) return;
+  // focusedTile() 의 「없으면 첫 타일」 대체를 여기서 쓰면 안 됩니다. 초점 타일을 닫은 직후에는
+  // state.focus 가 사라진 타일을 가리키는데, 대체값이 곧 남은 타일이라 「이미 초점」으로 보여
+  // 아무 일도 하지 않았습니다 -- 마지막 타일을 눌러도 초점이 오지 않던 버그입니다.
+  const prev = state.tiles.find(t => t.id === state.focus) || null;
+  if (prev === tile && tile.el.classList.contains("focused")) return;
+  if (prev && prev !== tile) {
     if (prev.adapter) prev.adapter.setMuted(true);
     prev.overlay.clear();
     prev.el.classList.remove("focused");
@@ -286,7 +290,12 @@ async function removeTile(tile) {
   tile.overlay.destroy();
   tile.el.remove();
   state.tiles.splice(state.tiles.indexOf(tile), 1);
-  if (wasFocus) setFocus(state.tiles[0], { post: false });
+  if (wasFocus) {
+    // 사라진 타일을 가리키던 전역을 비우고 남은 첫 타일에 초점을 줍니다.
+    state.focus = null;
+    state.live = null; state.doc = null; state.player = null; overlay = null;
+    setFocus(state.tiles[0], { post: false });
+  }
   if (state.tiles.length === 1) state.mv = null;
   applyLayout();
 }

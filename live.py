@@ -296,7 +296,10 @@ def manifest_info(m3u8: str) -> dict:
     first segment sits, which is what `-live_start_index` has to skip.
     """
     info = {"seq": None, "target": None, "pdt": None,
-            "segments": 0, "window_s": 0.0, "media_base": 0.0}
+            "segments": 0, "window_s": 0.0, "media_base": 0.0,
+            # #EXT-X-ENDLIST 가 있으면 끝난 재생목록(녹화본)입니다. 라이브인지 모르는(other)
+            # 주소가 이것을 달고 있으면 ffmpeg 이 끝난 뒤 다시 붙을 것이 없습니다.
+            "ended": False}
     try:
         with urllib.request.urlopen(m3u8, timeout=10) as r:
             text = r.read().decode("utf-8", "replace")
@@ -315,6 +318,8 @@ def manifest_info(m3u8: str) -> dict:
                 durations.append(float(line.split(":", 1)[1].rstrip(",").split(",")[0]))
             except ValueError:
                 pass
+        elif line.startswith("#EXT-X-ENDLIST"):
+            info["ended"] = True
     info["segments"] = len(durations)
     info["window_s"] = sum(durations)
     return info
@@ -758,6 +763,9 @@ class LiveSession:
             self._focus.set()
         else:
             self._focus.clear()
+        print(f"[live] 세션 {self.id} 초점 {'켬' if on else '끔'} "
+              f"(링 {self._ring.seconds():.1f}초, 받은 {self._recv_s:.0f}초, 받아 적은 {self.audio_s:.0f}초)",
+              flush=True)
         if self.source == "tab":
             # 탭 소리는 브라우저가 늦출 수 없어 초점일 때는 길게 받아 둡니다. 초점이 아니면
             # 그만큼 들고 있을 이유가 없습니다 -- 돌아왔을 때 30초면 충분합니다.
@@ -1132,6 +1140,11 @@ class LiveSession:
                 return None, None
 
         src, info = resolve_audio(self.url, youtube=self.site != "other" and self.site != "twitch")
+        if reconnect and info.get("ended"):
+            # 재생목록이 끝났다고 스스로 말합니다(녹화본 m3u8). yt-dlp 는 라이브인지 몰라
+            # 「끝남」이라 하지 않으므로, 여기서 알아보지 않으면 ffmpeg 이 끝날 때마다 같은
+            # 꼬리에 다시 붙어 같은 말을 되받아 적습니다 -- 실제로 수십 번 그랬습니다.
+            return None, None
         release_ts = None
         if meta.returncode == 0:
             release_ts = d.get("release_timestamp") or d.get("timestamp")
@@ -1233,6 +1246,7 @@ class LiveSession:
             sink = Sink(self)
             history = AudioHistory(SAMPLE_RATE)
             refiner = Refiner(asr, history, sink) if self.refine else None
+            print(f"[live] 세션 {self.id} 받아 적기 시작 (링 {self._ring.seconds():.1f}초)", flush=True)
             run_stream(self._consume(), vad, asr, sink, history, refiner)
             if refiner is not None:
                 # 마지막 무리의 정제가 끝나기를 기다립니다. 초점이 옮겨 간 뒤나 상태를
@@ -1240,10 +1254,22 @@ class LiveSession:
                 refiner.close()
         finally:
             # 정제 스레드를 꼭 끝냅니다. 살려 두면 그 스레드가 전사 모델을
-            # 쥐고 있어 아래 del 이 소용없습니다.
+            # 쥐고 있어 아래 del 이 소용없습니다. 그리고 **정말 끝난 뒤에** 토큰을
+            # 놓습니다 -- close() 는 10초만 기다리는데, 그 뒤에도 정제 해독이 돌고
+            # 있으면 다음 세션이 같은 모델을 동시에 돌리게 됩니다.
             if refiner is not None:
                 refiner.close()
+                th = getattr(refiner, "_thread", None)
+                waited = 0.0
+                while th is not None and th.is_alive() and waited < 120.0 and not self._stop.is_set():
+                    th.join(1.0)
+                    waited += 1.0
+                if th is not None and th.is_alive():
+                    print(f"[live] 세션 {self.id} 정제 스레드가 {waited:.0f}초 뒤에도 살아 있습니다",
+                          file=sys.stderr, flush=True)
             del vad, history, refiner
+            print(f"[live] 세션 {self.id} 받아 적기 끝 (초점 {'있음' if self._focus.is_set() else '없음'}, "
+                  f"멈춤 {self._stop.is_set()}, 읽기 끝 {self._ended})", flush=True)
             _transcriber.release()
 
 RUNNING_STATES = ("starting", "loading", "running")

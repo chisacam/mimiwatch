@@ -113,7 +113,10 @@ function ytAdapter() {
             // 사라지는 상태 자체가 만들어지지 않습니다.
             const f = host.querySelector("iframe");
             if (f) f.removeAttribute("allowfullscreen");
-            if (opts.muted) a.player.mute();
+            // 초점이 아닌 타일은 소리 없이 자동 재생합니다. playerVars 의 autoplay 만으로는
+            // 시작하지 않는 경우가 있어(사용자 조작 없이 뒤늦게 만들어진 플레이어) 여기서
+            // 한 번 더 시킵니다 -- 음소거 재생은 브라우저가 막지 않습니다.
+            if (opts.muted) { a.player.mute(); a.player.playVideo(); }
             settle();
           },
           onError: (e) => {

@@ -513,3 +513,10 @@ def test_site_of_tells_the_embed_apart():
         "site": "other", "video_id": "master", "channel": ""}
     assert live.looks_like_m3u8("https://cdn.example/a/b.m3u8?tok=1")
     assert not live.looks_like_m3u8("https://www.youtube.com/watch?v=x")
+
+
+def test_manifest_info_sees_the_end_of_a_recording():
+    vod = "data:application/vnd.apple.mpegurl,%23EXTM3U%0A%23EXT-X-TARGETDURATION:10%0A%23EXTINF:9.0,%0Aa.ts%0A%23EXTINF:9.0,%0Ab.ts%0A%23EXT-X-ENDLIST%0A"
+    live_ = "data:application/vnd.apple.mpegurl,%23EXTM3U%0A%23EXT-X-TARGETDURATION:2%0A%23EXTINF:2.0,%0Aa.ts%0A"
+    assert live.manifest_info(vod)["ended"] is True and live.manifest_info(vod)["window_s"] == 18.0
+    assert live.manifest_info(live_)["ended"] is False

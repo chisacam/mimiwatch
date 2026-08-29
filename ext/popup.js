@@ -77,6 +77,42 @@ async function init() {
   await syncHideButton();
   // 유튜브 탭이 아니면 시작할 것도 없습니다.
   $("start-box").classList.toggle("busy", !onYouTube);
+  watchServer();
+}
+
+/* 팝업이 열려 있는 동안 서버의 변화(새 세션·상태·영상)를 받아 고르개를 다시
+ * 채웁니다. 팝업은 열 때마다 목록을 새로 읽으므로 대개는 충분하지만, 열어 둔
+ * 채로 mimiwatch 페이지나 다른 탭에서 방송을 시작하면 그 세션이 보이지
+ * 않았습니다. 확장 페이지는 host_permissions 덕에 CORS 없이 서버에 붙습니다. */
+let serverEs = null;
+let refillTimer = null;
+
+function watchServer() {
+  if (serverEs) { serverEs.close(); serverEs = null; }
+  try {
+    serverEs = new EventSource($("base").value.replace(/\/+$/, "") + "/api/events");
+  } catch (_) {
+    return;
+  }
+  serverEs.onmessage = (ev) => {
+    let m;
+    try { m = JSON.parse(ev.data); } catch (_) { return; }
+    if (m.type !== "session" && m.type !== "video") return;
+    // 자막 한 줄마다 오므로 잠깐 모아서 한 번에 다시 채웁니다.
+    clearTimeout(refillTimer);
+    refillTimer = setTimeout(refillPicker, 500);
+  };
+}
+
+async function refillPicker() {
+  const was = $("pick").value;
+  $("pick").length = 1;
+  await fillPicker();                       // 서버가 아는 것과 이 탭이 보는 것으로 다시
+  if (!$("pick").value && was && [...$("pick").options].some((o) => o.value === was)) {
+    $("pick").value = was;                  // 고르고 있던 것은 그대로
+  }
+  await syncHideButton();
+  refreshState();
 }
 
 /* 장르와 콘텐츠 유형은 서버가 들고 있습니다. 팝업에 붙박이로 적어 두면
@@ -283,6 +319,7 @@ $("base").addEventListener("change", async (e) => {
   await send({ type: "setBase", base: e.target.value.replace(/\/+$/, "") });
   $("pick").length = 1;
   await fillPicker();
+  watchServer();                            // 새 주소의 변화를 듣습니다
 });
 
 init();

@@ -3,6 +3,7 @@
 모델은 올리지 않습니다 -- 두드리는 끝점이 전부 설정·목록·거절 경로입니다.
 저장소와 설정은 MIMIWATCH_DATA_DIR / MIMIWATCH_CONFIG 로 임시 디렉터리에 둡니다.
 """
+import importlib.util
 import json
 import os
 import socket
@@ -17,6 +18,31 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _stub_dir(tmp) -> str:
+    """전사 런타임이 없는 기계(CI)를 위한 가짜 모듈 디렉터리.
+
+    conftest 의 가짜 모듈은 **이 프로세스**에만 끼워지는데, 서버는 별도 프로세스로
+    뜨므로 그쪽에서는 진짜 `import sherpa_onnx` 가 돌아 죽었습니다. 같은 가짜를
+    파일로 써서 PYTHONPATH 로 넘깁니다. 진짜가 깔려 있으면 비워 두어 진짜를 씁니다.
+    """
+    d = tmp / "stubs"
+    d.mkdir(exist_ok=True)
+    if importlib.util.find_spec("sherpa_onnx") is None:
+        (d / "sherpa_onnx.py").write_text("# CI용 가짜 모듈. 서버는 import 만 합니다.\n")
+    if importlib.util.find_spec("transcribe_cpp") is None:
+        pkg = d / "transcribe_cpp"
+        pkg.mkdir(exist_ok=True)
+        (pkg / "__init__.py").write_text(
+            "class Model:\n    def __init__(self, *a, **k):\n"
+            "        raise RuntimeError('시험은 전사 모델을 올리지 않습니다')\n"
+            "def backend_available(name):\n    return False\n"
+            "def backends():\n    return []\n")
+        (pkg / "errors.py").write_text(
+            "class OutputTruncated(Exception):\n    pass\n"
+            "class UnsupportedRequest(Exception):\n    pass\n")
+    return str(d)
+
+
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -27,8 +53,11 @@ def _free_port():
 def server(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("srv")
     port = _free_port()
+    stubs = _stub_dir(tmp)
     env = {**os.environ, "MIMIWATCH_DATA_DIR": str(tmp / "data"),
-           "MIMIWATCH_CONFIG": str(tmp / "backends.json")}
+           "MIMIWATCH_CONFIG": str(tmp / "backends.json"),
+           "PYTHONPATH": stubs + (os.pathsep + os.environ["PYTHONPATH"]
+                                  if os.environ.get("PYTHONPATH") else "")}
     proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py"), "--port", str(port)],
                             cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True)

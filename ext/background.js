@@ -217,8 +217,13 @@ async function startFromTab(msg) {
  * 잡아 그 세션에 올립니다. 그 뒤 이 탭에 얹습니다. */
 async function resumeSession(msg) {
   // 서버의 기본 엔진으로 이어받습니다 -- mimiwatch 페이지의 「관리」 선택이 곧 그 값입니다.
+  // `msg.source` 가 있으면 그 출처로 이어받습니다(주소로 받던 것을 탭 소리로, 또는 반대로).
+  // 탭 소리 세션을 주소로 이어받을 때는 지금 탭의 주소를 줍니다 -- 그 세션에는 주소가 없습니다.
   const cfg = await api("/api/backends");
-  const res = await post("/api/live/resume", { id: msg.sessionId, asr: cfg.asr_active, backend: cfg.active });
+  const res = await post("/api/live/resume", {
+    id: msg.sessionId, asr: cfg.asr_active, backend: cfg.active,
+    source: msg.source || "", url: msg.source === "hls" ? (msg.url || "") : "",
+  });
   if (res.error) return { ok: false, error: res.error };
   const tab = res.source === "tab";
   if (tab) {

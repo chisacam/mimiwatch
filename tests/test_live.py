@@ -224,3 +224,23 @@ def test_resume_uses_the_engines_the_caller_picked(monkeypatch):
     s = live.get("resume-1")
     assert s.asr_backend_id == "tcpp-lite" and s.backend_id == "local-m2m100"
     live._sessions.clear()
+
+
+def test_resume_can_switch_the_audio_source(monkeypatch):
+    """주소로 받던 세션을 탭 소리로, 탭 소리 세션을 주소로 이어받습니다. 자막은 같은 세션입니다."""
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
+    base = {"state": "stopped", "stopped_by": "user", "source_lang": "ja", "viewer_lang": "ko",
+            "backend": "local-m2m100", "asr_backend": "tcpp-lite", "media_base": 0.0,
+            "audio_s": 12.0, "lines": 0}
+    store.save_session({**base, "id": "hls-1", "url": "https://x/live", "source": "hls"}, "")
+    got = live.resume("hls-1", source="tab")
+    s = live.get("hls-1")
+    assert got["source"] == "tab" and s.source == "tab" and s.resume_from == 12.0
+    live._sessions.clear()
+
+    store.save_session({**base, "id": "tab-1", "url": "", "source": "tab"}, "")
+    assert "error" in live.resume("tab-1", source="hls")            # 주소가 없습니다
+    got = live.resume("tab-1", source="hls", url="https://y/live")
+    s = live.get("tab-1")
+    assert got["source"] == "hls" and s.url == "https://y/live"
+    live._sessions.clear()

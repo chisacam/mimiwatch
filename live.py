@@ -1229,7 +1229,8 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     return {"backend": backend_id}
 
 
-def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "") -> dict:
+def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
+           source: str = "", url: str = "") -> dict:
     """끊긴 세션의 수신을 **같은 세션으로** 이어 붙입니다.
 
     지금까지는 서버가 죽으면 그 세션은 거기서 끝이었습니다. 이어받은 척하면
@@ -1251,9 +1252,14 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "") -> d
         # 저장된 상태는 끝났지만 옛 세션의 스레드가 아직 정리 중입니다(정제·번역 마무리,
         # 최대 20초). 그 위에 새 세션을 얹으면 옛 finally 가 새 것을 밀어냅니다.
         return {"error": "앞선 수신을 정리하는 중입니다. 몇 초 뒤 다시 누르십시오."}
-    tab = st.get("source") == "tab"
-    if not tab and not st.get("url"):
-        return {"error": "주소가 남아 있지 않아 이어받을 수 없습니다"}
+    # 소리 출처는 바꿔 이어받을 수 있습니다. 주소로 받던 방송이 도중에 멤버십 전용으로 바뀌면
+    # 탭 소리로, 탭 소리로 받던 것을 브라우저를 닫고 이어 가려면 주소로. 자막은 세션 id 로
+    # 이어지므로 출처가 바뀌어도 한 줄기입니다. 미디어 시각은 두 출처 모두 `resume_from`
+    # 에서 이어 갑니다.
+    tab = (source or st.get("source")) == "tab"
+    live_url = (url or "").strip() or (st.get("url") or "")
+    if not tab and not live_url:
+        return {"error": "주소가 남아 있지 않아 이어받을 수 없습니다. 탭 소리로 이어받으십시오."}
 
     # 한 번에 한 방송만 받습니다. start() 와 같은 규칙입니다 -- 모델을 두 벌
     # 올려 둘 이유가 없습니다.
@@ -1268,7 +1274,8 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "") -> d
     asr_id = (asr_backend_id if config.find("asr", asr_backend_id, cfg)
               else (st.get("asr_backend") or ""))
     tr_id = backend_id if config.find("tr", backend_id, cfg) else (st.get("backend") or "")
-    s = LiveSession(st.get("url") or "", st.get("source_lang") or None,
+    s = LiveSession(live_url if not tab else (st.get("url") or live_url),
+                    st.get("source_lang") or None,
                     st.get("viewer_lang") or "ko", tr_id,
                     profile=st.get("profile") or "broadcast",
                     asr_backend_id=asr_id,

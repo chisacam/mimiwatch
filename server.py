@@ -517,7 +517,8 @@ class Handler(BaseHTTPRequestHandler):
         # 이어받을 때 엔진을 바꿔 줄 수 있습니다. 예전에는 저장된 세션의 엔진을 그대로 써서,
         # 「관리」에서 바꿔 놓고 이어받아도 옛 엔진으로 돌았습니다.
         self._json(live.resume(body.get("id", ""), asr_backend_id=body.get("asr") or "",
-                               backend_id=body.get("backend") or ""))
+                               backend_id=body.get("backend") or "",
+                               source=body.get("source") or "", url=body.get("url") or ""))
 
     def post_active(self, body):
         """기본 전사·번역 엔진을 바꿉니다. 화면의 「관리」 선택기가 부릅니다.

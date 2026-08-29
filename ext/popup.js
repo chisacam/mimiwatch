@@ -189,15 +189,13 @@ async function fillPicker() {
 function syncResumeButton() {
   const v = $("pick").value || "";
   const st = v.startsWith("live:") ? sessionInfo[v.slice(5)] : null;
-  const can = !!st && !RUNNING.includes(st.state) && st.stopped_by !== "ended"
-              && (st.source === "tab" || !!st.url);
+  const can = !!st && !RUNNING.includes(st.state) && st.stopped_by !== "ended";
   $("resume").disabled = !can;
-  // 멈춘 방송을 골라 두었으면 「새로 받아 적기」 단추도 이어받기가 됩니다. 예전에는 그 상태로
-  // 「주소로」를 누르면 같은 방송이 새 세션으로 갈라졌습니다 -- 이어받기 단추가 따로 있었지만
-  // 눈에 띄지 않았습니다.
-  const resumable = can ? st : null;
-  $("start-url").textContent = resumable && st.source !== "tab" ? "▶ 이어받기 (주소로)" : "주소로";
-  $("start-tab").textContent = resumable && st.source === "tab" ? "▶ 이어받기 (이 탭 소리로)" : "이 탭 소리로";
+  // 멈춘 방송을 골라 두었으면 「새로 받아 적기」 단추 **둘 다** 이어받기가 됩니다 -- 출처는 바꿔
+  // 이어받을 수 있습니다(주소로 받던 방송이 멤버십 전용으로 바뀌면 탭 소리로). 예전에는 그
+  // 상태로 「주소로」를 누르면 같은 방송이 새 세션으로 갈라졌습니다.
+  $("start-url").textContent = can ? "▶ 이어받기 (주소로)" : "주소로";
+  $("start-tab").textContent = can ? "▶ 이어받기 (이 탭 소리로)" : "이 탭 소리로";
   $("resume").title = !st ? "고른 방송이 멈춰 있으면 같은 세션에 이어서 받습니다"
     : RUNNING.includes(st.state) ? "받는 중입니다"
     : st.stopped_by === "ended" ? "끝난 방송입니다. 전체 영상 전사는 mimiwatch 페이지에서"
@@ -316,14 +314,18 @@ $("stop").addEventListener("click", async () => {
  * 돌아오는 일이 잦고, 서버가 죽어 끊기기도 합니다. 그때 새 세션을 시작하면
  * 자막이 두 벌로 갈리므로, 확장에서도 이어받을 수 있어야 합니다. 탭 소리로 받던
  * 세션이면 이 탭의 소리를 다시 잡습니다 -- 서버는 그 소리를 되감을 수 없습니다. */
-$("resume").addEventListener("click", async () => {
+/* `source` 가 비어 있으면 저장된 출처 그대로, "tab"/"hls" 면 그 출처로 바꿔 이어받습니다. */
+async function resumePicked(source, tab) {
   const value = $("pick").value;
   const id = value.startsWith("live:") ? value.slice(5) : "";
   if (!id) return;
   $("resume").disabled = true;
+  $("start-box").classList.add("busy");
   $("start-hint").textContent = "이어받는 중…";
   fail("");
-  const r = await send({ type: "resumeSession", sessionId: id, tabId });
+  const r = await send({ type: "resumeSession", sessionId: id, tabId, source: source || "",
+                         url: tab ? tab.url : "" });
+  $("start-box").classList.remove("busy");
   if (!r || !r.ok) {
     fail((r && r.error) || "이어받지 못했습니다");
     $("start-hint").textContent = "";
@@ -339,25 +341,31 @@ $("resume").addEventListener("click", async () => {
   syncResumeButton();
   await syncHideButton();
   setTimeout(refreshState, 800);
+}
+
+$("resume").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  await resumePicked("", tab);
 });
 
 /* ---------- 이 탭에서 새로 시작 ---------- */
 
-/* 고르개의 세션이 멈춘 것이고 시작 방식이 그 세션의 소리 출처와 같으면, 새로 시작하는 대신
- * 그 세션에 이어 붙입니다. */
-function pickedResumable(type) {
+/* 고르개의 세션이 멈춘 것이면 새로 시작하는 대신 그 세션에 이어 붙입니다. 시작 방식이
+ * 곧 이어받는 출처입니다 -- 저장된 출처와 달라도 됩니다. */
+function pickedResumable() {
   const v = $("pick").value || "";
   const st = v.startsWith("live:") ? sessionInfo[v.slice(5)] : null;
   if (!st || RUNNING.includes(st.state) || st.stopped_by === "ended") return null;
-  if (type === "startCapture" && st.source === "tab") return st;
-  if (type === "startUrl" && st.source !== "tab" && st.url) return st;
-  return null;
+  return st;
 }
 
 async function startWith(type) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
-  if (pickedResumable(type)) { $("resume").click(); return; }
+  if (pickedResumable()) {
+    await resumePicked(type === "startCapture" ? "tab" : "hls", tab);
+    return;
+  }
   $("start-box").classList.add("busy");
   fail("");
   $("start-hint").textContent = "시작하는 중…";

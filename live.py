@@ -81,6 +81,88 @@ PROFILES = {
 # 포기하고 「이어받기」에 맡깁니다 -- 그쪽은 사용자가 시키는 일입니다.
 HLS_RECONNECT_TRIES = 5
 
+# 한 조각(CHUNK)의 길이. 링과 시계가 같은 단위를 씁니다.
+FRAME_S = CHUNK / SAMPLE_RATE
+
+# 초점이 없는 세션이 들고 있는 최근 소리(초). 멀티뷰에서 다른 방송을 보는 동안에도
+# 소리는 계속 받아 두고, 초점이 돌아오면 여기부터 받아 적습니다 -- 전환 직전 몇 초가
+# 자막에 남고 첫 줄이 곧 뜹니다. 이보다 오래된 소리는 버립니다.
+RING_S = 30.0
+
+
+class Ring:
+    """읽기 스레드와 받아 적는 스레드 사이의 최근 소리.
+
+    예전에는 ffmpeg 을 읽는 일과 VAD·해독이 **한 스레드의 한 for 루프**였습니다. 그러면
+    받아 적기를 멈추는 순간 파이프를 아무도 읽지 않아 ffmpeg 이 서고, 멀티뷰처럼
+    「소리는 계속 받되 지금은 받아 적지 않는」 세션을 둘 수 없었습니다. 읽기는 여기에
+    넣기만 하고, 받아 적는 쪽은 여기서 꺼내기만 합니다.
+
+    항목은 소리 `("audio", recv_s, ndarray)` 와 표식 `("flush",)` `("rebase", base, note)`
+    `("end",)` 입니다. 소리는 조각마다 읽기 시계의 값(recv_s)을 물고 있어서, 링에서 한참
+    기다렸다 꺼내져도 자막 시각이 그 조각의 진짜 시각이 됩니다. 가득 차면 **소리만**
+    오래된 것부터 버리고 표식은 남깁니다 -- 재접속으로 시간 기준이 바뀐 사실까지 버리면
+    그 뒤 조각의 시각이 전부 틀어집니다.
+    """
+    TIMEOUT = object()
+
+    def __init__(self, max_s: float):
+        self._d: deque = deque()
+        self._cv = threading.Condition()
+        self._audio = 0                  # 소리 항목 수
+        self.dropped_s = 0.0             # 넘쳐서 버린 소리(초)
+        self.max_frames = 1
+        self.set_max(max_s)
+
+    def set_max(self, max_s: float):
+        with self._cv:
+            self.max_frames = max(1, int(round(max_s / FRAME_S)))
+            self._trim()
+            self._cv.notify_all()
+
+    def _trim(self):
+        while self._audio > self.max_frames:
+            for i, it in enumerate(self._d):
+                if it[0] == "audio":
+                    del self._d[i]
+                    self._audio -= 1
+                    self.dropped_s += FRAME_S
+                    break
+            else:
+                break
+
+    def push(self, item):
+        with self._cv:
+            self._d.append(item)
+            if item[0] == "audio":
+                self._audio += 1
+                self._trim()
+            self._cv.notify_all()
+
+    def full(self) -> bool:
+        with self._cv:
+            return self._audio >= self.max_frames
+
+    def wait_room(self, timeout: float) -> bool:
+        """소리 자리가 나기를 기다립니다. 초점 세션의 읽기 스레드가 씁니다 -- 받아 적기가
+        느리면 버리는 대신 여기서 서서, 예전에 ffmpeg 파이프가 차던 것과 같은 역압이 됩니다."""
+        with self._cv:
+            return self._cv.wait_for(lambda: self._audio < self.max_frames, timeout)
+
+    def pop(self, timeout: float):
+        with self._cv:
+            if not self._d and not self._cv.wait_for(lambda: self._d, timeout):
+                return Ring.TIMEOUT
+            it = self._d.popleft()
+            if it[0] == "audio":
+                self._audio -= 1
+            self._cv.notify_all()
+            return it
+
+    def seconds(self) -> float:
+        with self._cv:
+            return self._audio * FRAME_S
+
 # 세션이 들고 있는 최근 이벤트 수(SSE 재접속용). LiveSession.emit 참조.
 EVENT_LOG_MAX = 2000
 # `_text_of`에서 "기록에 없음"을 "흡수됨(None)"과 구분하는 표식.
@@ -328,6 +410,19 @@ class LiveSession:
         self._q: queue.Queue = queue.Queue()
         self._queued = 0            # 큐에 든 바이트
         self.dropped_s = 0.0        # 큐가 넘쳐 버린 오디오(초)
+        # 읽기 스레드(ffmpeg)와 받아 적는 스레드 사이. Ring 참조. 시계는 둘입니다 --
+        # `_recv_*` 는 읽기 스레드가 **받은** 자리, `media_base`/`audio_s` 는 받아 적는
+        # 쪽이 **지금 해독하는 조각**의 자리입니다. 혼자 받는 세션에서는 둘이 같이
+        # 가지만, 링에 소리가 고여 있으면 뒤쪽이 앞쪽보다 늦습니다.
+        self._ring = Ring(RING_S)
+        self._recv_base = 0.0
+        self._recv_s = 0.0
+        self._ended = False         # 읽기가 끝났다(방송 종료·포기). 링의 ("end",) 와 함께
+        self._rx: threading.Thread | None = None
+        # 초점: 이 세션의 소리를 지금 받아 적는가. 혼자 받는 세션은 태어날 때부터 초점이고
+        # 멀티뷰에서만 꺼집니다(set_focus).
+        self._focus = threading.Event()
+        self._focus.set()
         self._asr = None            # released on stop; see _release()
         # 인식기 객체는 세션이 끝나면 놓아주지만 어떤 엔진이었는지는
         # 남아야 합니다. 객체에서 그때그때 읽으면, 놓아준 뒤에 쓰이는
@@ -703,6 +798,9 @@ class LiveSession:
         모델을 공유하는 것으로 뿌리에서 없어졌고, 여기는 참조를 끊는 자리로
         남습니다.
         """
+        # 읽기 스레드가 링에 자리가 나기를 기다리고 있을 수 있습니다. 받아 적는 쪽이
+        # 없어졌으니 그 기다림도 끝내야 합니다 -- 이 깃발이 그 루프의 탈출 조건입니다.
+        self._stop.set()
         self._asr = None
         self._close_translator()
         self._tr = None
@@ -738,9 +836,29 @@ class LiveSession:
              "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
             stdout=subprocess.PIPE)
 
-    def _chunks(self):
-        """ffmpeg이 내놓는 소리를 0.1초 조각으로. **끊기면 같은 세션 안에서
-        다시 붙습니다.**
+    def _start_reader(self, src, start_index):
+        """ffmpeg 을 세우고 그것을 읽는 스레드를 띄웁니다. 탭 세션은 `feed()` 가
+        읽기 역할이라 여기서 할 일이 없습니다."""
+        if self.source == "tab":
+            return
+        self._spawn_ffmpeg(src, start_index)
+        self._rx = threading.Thread(target=self._read_loop, name=f"rx-{self.id}",
+                                    daemon=True)
+        self._rx.start()
+
+    def _push_audio(self, samples):
+        """읽은 조각을 링에 넣습니다. 초점 세션이면 자리가 날 때까지 기다립니다 --
+        받아 적기가 느려도 버리지 않는 것이 예전 파이프의 동작이었습니다. 초점이
+        없으면 링이 오래된 것부터 버립니다."""
+        item = ("audio", self._recv_s, samples)
+        while (self._ring.full() and self._focus.is_set()
+               and not self._stop.is_set()):
+            self._ring.wait_room(0.2)
+        self._ring.push(item)
+
+    def _read_loop(self):
+        """ffmpeg이 내놓는 소리를 0.1초 조각으로 링에 넣습니다. **끊기면 같은 세션
+        안에서 다시 붙습니다.** 읽기 스레드에서 돕니다.
 
         예전에는 ffmpeg이 끝나면 곧 세션이 「종료됨」이었습니다. 방송이 끝난
         것과 재생목록을 잠깐 못 받은 것이 같은 결말이었고, 두 시간 방송이
@@ -749,10 +867,18 @@ class LiveSession:
         자리(DVR 창 안이면 한 조각도 잃지 않고)에서 이어 받습니다. 못 메운
         구간은 자막에 적습니다 -- 이어받기와 같은 규칙입니다.
 
-        조각 사이에 `None`을 한 번 내보내 걸려 있던 발화를 확정시킵니다.
+        조각 사이에 `("flush",)` 표식을 한 번 넣어 걸려 있던 발화를 확정시킵니다.
+        끝나면 `("end",)` 를 넣습니다 -- 받아 적는 쪽은 그것을 보고 물러납니다.
         """
         need = CHUNK * 2
         attempt = 0
+        try:
+            self._read_until_end(need, attempt)
+        finally:
+            self._ended = True
+            self._ring.push(("end",))
+
+    def _read_until_end(self, need: int, attempt: int):
         while not self._stop.is_set():
             assert self._ff and self._ff.stdout
             while not self._stop.is_set():
@@ -760,14 +886,14 @@ class LiveSession:
                 if not raw or len(raw) < need:
                     break
                 samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-                self.audio_s += len(samples) / SAMPLE_RATE
+                self._recv_s += len(samples) / SAMPLE_RATE
                 attempt = 0                  # 소리가 오면 재시도 횟수는 처음부터
-                yield samples
+                self._push_audio(samples)
             if self._stop.is_set():
                 break
             # ffmpeg이 스스로 끝났습니다. 방송이 끝났거나, 재생목록을 잠깐
             # 못 받은 것입니다. 걸려 있는 발화를 먼저 확정합니다.
-            yield None
+            self._ring.push(("flush",))
             reattached = False
             while not self._stop.is_set() and attempt < HLS_RECONNECT_TRIES:
                 attempt += 1
@@ -790,8 +916,48 @@ class LiveSession:
                 self.error = (f"수신이 끊겼고 {HLS_RECONNECT_TRIES}번 다시 붙어 보았지만 "
                               "되지 않았습니다. 「이어받기」로 다시 시도할 수 있습니다.")
             break
-        if self.state != "error":
-            self.state = "stopped"
+
+    def _consume(self):
+        """링에서 조각을 꺼내 `run_stream` 에 넘깁니다. 받아 적는 스레드에서 돕니다.
+
+        소리 조각은 읽기 시계의 값을 물고 오므로 `audio_s` 를 **그 값으로 맞춥니다**
+        (더하지 않고). 링에 고여 있던 30초를 몰아서 해독해도 각 줄의 시각은 그 조각이
+        방송에서 실제로 있던 자리입니다. 표식은 순서대로 처리합니다 -- flush 는 걸린
+        발화를 확정하고(None), rebase 는 재접속 뒤의 새 시간 기준과 빠진 구간 안내이고,
+        end 는 읽기가 끝났다는 뜻입니다. 초점을 잃으면 걸린 발화만 확정하고 물러납니다;
+        세션은 그대로 살아 소리를 계속 받습니다.
+        """
+        idle_flush = self.source == "tab"   # 탭만 무음 2초에 비웁니다 -- 예전 규칙 그대로
+        idle = False
+        while not self._stop.is_set() and self._focus.is_set():
+            item = self._ring.pop(timeout=2.0)
+            if item is Ring.TIMEOUT:
+                # 소리가 오지 않습니다 -- 탭이라면 영상을 멈췄거나 공유가 끊긴 것.
+                # 오지 않을 무음을 기다리는 대신 걸려 있는 발화를 확정합니다.
+                if idle_flush and not idle:
+                    idle = True
+                    yield None
+                continue
+            kind = item[0]
+            if kind == "audio":
+                self.audio_s = item[1]
+                idle = False
+                yield item[2]
+            elif kind == "flush":
+                yield None
+            elif kind == "rebase":
+                self.media_base = item[1]
+                self.audio_s = 0.0
+                if item[2]:
+                    self.publish_line("note", item[2], self.lang or "", "")
+            elif kind == "end":
+                break
+        if self._stop.is_set() or self._ended:
+            if self.state != "error":
+                self.state = "stopped"
+            return
+        # 초점만 잃었습니다. 걸린 발화를 확정하고 조용히 물러납니다.
+        yield None
 
     def _reconnect(self, attempt: int) -> str:
         """끊긴 자리에서 ffmpeg을 다시 세웁니다.
@@ -799,9 +965,9 @@ class LiveSession:
         돌려주는 것은 "ok"(붙었음) / "ended"(방송이 끝났음) / "retry"(지금은
         못 붙었음)입니다. 붙었으면 `self._ff`가 새 프로세스입니다.
         """
-        # 지금까지 받은 자리. 새 재생목록의 시각 기준(media_base)이 여기서
-        # 다시 계산되므로 audio_s는 0부터 다시 셉니다 -- media_t = base + audio_s.
-        self.resume_from = self.media_base + self.audio_s
+        # 지금까지 받은 자리. 새 재생목록의 시각 기준(_recv_base)이 여기서
+        # 다시 계산되므로 _recv_s는 0부터 다시 셉니다 -- media_t = base + s.
+        self.resume_from = self._recv_base + self._recv_s
         try:
             src, start_index = self._resolve_hls(reconnect=True)
         except Exception as exc:
@@ -810,14 +976,15 @@ class LiveSession:
             return "retry"
         if src is None:
             return "ended"
-        self.audio_s = 0.0
-        self._spawn_ffmpeg(src, start_index)
+        self._recv_s = 0.0
         print(f"[live] 세션 {self.id} 다시 붙음 ({attempt}회, 빠진 구간 {self.gap_s:.0f}초)",
               flush=True)
-        if self.gap_s >= 1.0:
-            self.publish_line(
-                "note", f"⋯ 수신이 끊겨 약 {int(self.gap_s)}초를 받지 못했습니다 ⋯",
-                self.lang or "", "")
+        # 새 시간 기준과 빠진 구간 안내는 링을 **거쳐서** 갑니다. 여기서 바로 발행하면
+        # 링에 남아 있는 옛 조각들보다 앞서 도착해, 그 조각들의 시각이 새 기준으로 찍힙니다.
+        note = (f"⋯ 수신이 끊겨 약 {int(self.gap_s)}초를 받지 못했습니다 ⋯"
+                if self.gap_s >= 1.0 else "")
+        self._ring.push(("rebase", self._recv_base, note))
+        self._spawn_ffmpeg(src, start_index)
         self.gap_s = 0.0
         return "ok"
 
@@ -834,6 +1001,7 @@ class LiveSession:
                 src, start_index = self._resolve_hls()
                 if src is None:
                     return      # 오류는 _resolve_hls가 이미 알렸습니다
+                self.media_base = self._recv_base   # 아직 스레드가 없어 그냥 복사합니다
             else:
                 # 탭 오디오에는 풀 재생목록도, 맞출 방송 시각도 없습니다.
                 # 사용자가 듣고 있는 그 순간이 0초입니다 -- 오히려 화면 위
@@ -909,9 +1077,9 @@ class LiveSession:
         start_index, skipped = -2, self.window_s
         if self.resume_from:
             start_index, skipped = self._resume_point(info, release_ts)
-        self.media_base = media_base_from(info.get("pdt"), release_ts, skipped)
+        self._recv_base = media_base_from(info.get("pdt"), release_ts, skipped)
         print(f"[live] playlist: {info.get('segments')} segments / "
-              f"{self.window_s:.0f}s window, media_base={self.media_base:.0f}s"
+              f"{self.window_s:.0f}s window, media_base={self._recv_base:.0f}s"
               + (f", 이어받기 index={start_index} 빠진 구간={self.gap_s:.0f}s"
                  if self.resume_from else ""),
               flush=True)
@@ -947,8 +1115,8 @@ class LiveSession:
             if self.source == "tab":
                 chunks = self._chunks_from_tab()
             else:
-                self._spawn_ffmpeg(src, start_index)
-                chunks = self._chunks()
+                self._start_reader(src, start_index)
+                chunks = self._consume()
 
             self.state = "running"
             self._persist()

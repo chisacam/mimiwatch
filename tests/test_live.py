@@ -1,5 +1,6 @@
 """라이브 세션의 발행 경로와 재접속. 모델은 올리지 않습니다."""
 import numpy as np
+import pytest
 
 import live
 import store
@@ -61,10 +62,13 @@ def test_stop_marks_user_and_status_carries_it(session):
 
 
 def _scenario(session, fake_ffmpeg, outcomes, tries=3):
+    """읽기 스레드(`_read_loop`)를 그 자리에서 끝까지 돌린 뒤, 받아 적는 쪽(`_consume`)이
+    링에서 무엇을 꺼내는지 봅니다. 둘은 실제로는 다른 스레드지만 링이 순서를 지키므로
+    차례로 돌려도 같은 결과입니다."""
     s = session
     live.HLS_RECONNECT_TRIES = tries
     s._ff = fake_ffmpeg(3)
-    s.media_base = 100.0
+    s._recv_base = s.media_base = 100.0
     resolves = []
 
     def fake_resolve(reconnect=False):
@@ -76,12 +80,14 @@ def _scenario(session, fake_ffmpeg, outcomes, tries=3):
         if o == "fail":
             raise RuntimeError("network")
         s.gap_s = 7.0
-        s.media_base = 200.0
+        s._recv_base = 200.0
         return "src", -2
     s._resolve_hls = fake_resolve
     s._spawn_ffmpeg = lambda src, idx: setattr(s, "_ff", fake_ffmpeg(2))
     s._stop.wait = lambda t: False
-    seq = "".join("S" if isinstance(c, np.ndarray) else "N" for c in s._chunks())
+    s._read_loop()
+    assert s._ended
+    seq = "".join("S" if isinstance(c, np.ndarray) else "N" for c in s._consume())
     return seq, resolves
 
 
@@ -93,6 +99,11 @@ def test_hls_reconnects_inside_the_session(session, fake_ffmpeg):
     assert abs(resolves[1] - 200.2) < 1e-6       # 새 base 에서 0.2초 뒤에 끝남
     notes = [c for c in store.cues(session.id) if c["kind"] == "note"]
     assert len(notes) == 1 and "7초" in notes[0]["text"]
+    # 안내는 링을 거쳐 새 시간 기준이 적용된 **뒤에** 발행됩니다. 옛 조각들 사이에
+    # 끼어 200초대 시각을 달면 스크립트에서 자리가 뒤바뀝니다.
+    assert notes[0]["t"] == 200.0
+    # 받아 적는 시계도 새 기준에서 마지막 조각까지 왔습니다.
+    assert session.media_base == 200.0 and abs(session.audio_s - 0.2) < 1e-6
 
 
 def test_hls_gives_up_after_retries(session, fake_ffmpeg):
@@ -105,11 +116,56 @@ def test_hls_gives_up_after_retries(session, fake_ffmpeg):
 def test_user_stop_does_not_reconnect(session, fake_ffmpeg):
     s = session
     s._ff = fake_ffmpeg(2)
-    gen = s._chunks()
-    next(gen)
-    s.stop()
-    assert list(gen) == []
+    read = s._ff.stdout.read
+
+    def read_then_stop(n):          # 첫 조각을 읽은 직후 사용자가 「중단」
+        raw = read(n)
+        s.stop()
+        return raw
+    s._ff.stdout.read = read_then_stop
+    s._resolve_hls = lambda reconnect=False: pytest.fail("중단 뒤에 다시 붙으려 했습니다")
+    s._read_loop()
+    # 받아 적는 쪽은 멈춤 깃발을 보고 남은 조각을 건드리지 않습니다.
+    assert list(s._consume()) == []
     assert s.stopped_by == "user" and s.state == "stopped"
+
+
+def test_ring_drops_oldest_audio_but_keeps_markers():
+    r = live.Ring(1.0)                           # 10조각
+    frame = np.zeros(live.CHUNK, dtype=np.float32)
+    for i in range(1, 8):
+        r.push(("audio", i * 0.1, frame))
+    r.push(("flush",))
+    for i in range(8, 16):
+        r.push(("audio", i * 0.1, frame))
+    assert abs(r.seconds() - 1.0) < 1e-9 and abs(r.dropped_s - 0.5) < 1e-9
+    items = []
+    while True:
+        it = r.pop(timeout=0)
+        if it is live.Ring.TIMEOUT:
+            break
+        items.append(it)
+    kinds = [it[0] for it in items]
+    assert kinds.count("audio") == 10 and kinds.index("flush") == 2   # 0.6·0.7 뒤에 표식
+    assert abs(items[0][1] - 0.6) < 1e-9         # 가장 오래된 것부터 버렸습니다
+
+
+def test_consumer_clock_follows_the_reader_after_a_gap(session):
+    """링이 넘쳐 조각을 버린 뒤에도 자막 시각은 그 조각이 방송에서 있던 자리입니다."""
+    s = session
+    s._ring = live.Ring(1.0)
+    s.media_base = 100.0
+    frame = np.zeros(live.CHUNK, dtype=np.float32)
+    for i in range(1, 31):                       # 3초를 받았지만 1초만 남습니다
+        s._recv_s = i * 0.1
+        s._ring.push(("audio", s._recv_s, frame))
+    s._ended = True
+    s._ring.push(("end",))
+    got = [c for c in s._consume() if isinstance(c, np.ndarray)]
+    assert len(got) == 10
+    assert abs(s.audio_s - 3.0) < 1e-9           # 더한 값(1.0)이 아니라 읽기 시계의 값
+    s.publish_line("final", "こんにちは", "ja", "")
+    assert store.cues(s.id)[-1]["t"] == 103.0
 
 
 def test_delete_refuses_running_session(session):

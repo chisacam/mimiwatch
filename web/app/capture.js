@@ -20,6 +20,7 @@
  * (MimiCapture)가 합니다. 여기서는 스트림을 얻는 일과 화면 알림만 맡습니다. */
 function stopCapture() {
   const c = state.capture;
+  state.captureSession = null;
   if (!c) return;
   state.capture = null;
   MimiCapture.stop(c);
@@ -63,11 +64,11 @@ async function requestTabAudio() {
  *
  * 시작할 때와 이어받을 때 모두 부릅니다 -- 이어받기는 attachLive 를 지나며
  * clearPlayerError() 로 이 안내를 지우고 갑니다. */
-function tabStageNotice(tail) {
+function tabStageNotice(tail, tile = focusedTile()) {
   playerError("이 방송은 여기서 재생하지 않습니다. 소리만 다른 탭에서 "
               + "받아 적고 있습니다 — 유튜브 탭에서 보시고, 자막 내역은 옆 "
               + "창이나 오른쪽 스크립트에서 읽으십시오."
-              + (tail ? " " + tail : ""));
+              + (tail ? " " + tail : ""), null, tile);
 }
 
 /* 이름 고치기.
@@ -181,6 +182,7 @@ async function pipeCapture(media, sessionId) {
       + "가벼운 전사 엔진으로 바꿔 보십시오."),
   });
   state.capture = cap;
+  state.captureSession = sessionId;     // 어느 세션의 소리인지. 그 세션이 끝날 때만 놓습니다
 
   // 소리가 실제로 오는지 확인합니다. AudioContext의 resume()이 막히는 경우가
   // 있고, 그때 조용히 실패하면 사용자는 전사가 느린 것과 구별하지 못합니다.
@@ -224,24 +226,19 @@ async function startTabCapture(title, lang) {
   }
 
   const probe = { id: "", title: name || "탭 오디오", is_live: true };
-  state.doc = { id: probe.id, title: probe.title, source_lang: lang || "",
-                viewer_lang: $("viewer-lang").value, translated: false,
-                backends_done: [state.backend], live: true };
-  state.live = { id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
-                 url: "", lang, probe, asr: state.asr, source: "tab" };
-  state.cues = state.live.store.cues;
-  state.idx = -1;
-  buildScript();
-  renderBackendPicker();
-  applyModeForDoc();
-  syncRenameButton();
+  const t = soloTile();
+  bindLive(t, {
+    id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
+    url: "", lang, probe, asr: state.asr, backend: state.backend, source: "tab",
+  }, {
+    id: probe.id, title: probe.title, source_lang: lang || "",
+    viewer_lang: $("viewer-lang").value, translated: false,
+    backends_done: [state.backend], live: true,
+  });
+  t.src = { site: "none" };          // 붙일 영상이 없습니다
+  showTileInPanels(t);
   addLiveToPicker(probe, res.id);
-  $("job").hidden = true;
-  state.jobId = null;
-  $("live-badge").hidden = false;
-  // 붙일 영상이 없으므로 오프셋 슬라이더는 의미가 없습니다.
-  $("offset-wrap").style.display = "none";
-  await attachLive(res.id, "");
+  await attachLive(t);
   await pipeCapture(media, res.id);
   tabStageNotice(isTabSurface(media) ? "" :
     // 창이나 화면 전체도 소리가 오면 받습니다. 다만 무엇이 섞여 들어올지

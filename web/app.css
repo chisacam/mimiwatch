@@ -140,12 +140,53 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .video-row.live.stopped .vt::before{content:"○ "; color:var(--dim)}
 .video-list .empty{padding:1.2rem .9rem; font-size:.76rem; color:var(--dim); line-height:1.6}
 
+/* hidden 속성은 언제나 숨김입니다. 요소의 display:flex 가 브라우저 기본의 display:none 을
+ * 이겨서, 대화상자의 「이름」 칸이 주소 모드에서도 보이고 배치 단추가 타일 하나일 때도
+ * 보였습니다. */
+[hidden]{display:none !important}
+
 .stage{display:flex; flex-direction:column; min-height:0; padding:1rem 1.2rem 1.1rem; gap:.9rem}
 #player-wrap{
   position:relative; flex:1; min-height:0; background:#000;
   border:1px solid var(--line); border-radius:10px; overflow:hidden;
+  /* 타일(tiles.js)이 앉는 격자. 타일 하나면 칸도 하나라 예전과 같습니다. */
+  display:grid; gap:2px; grid-template-columns:1fr; grid-template-rows:1fr;
 }
-#player,#player iframe{position:absolute; inset:0; width:100%; height:100%}
+.tile{position:relative; min-width:0; min-height:0; background:#000; overflow:hidden}
+.tile-player,.tile-player > *{position:absolute; inset:0; width:100%; height:100%}
+/* 자막은 초점 타일에만 그립니다. .overlay 의 자리 규칙(아래)은 이제 타일 기준입니다. */
+.tile:not(.focused) .overlay{display:none}
+/* 초점이 아닌 타일을 덮는 투명한 막. 누르면 초점이 옮겨 갑니다. 초점 타일에는
+ * 없어서 그 플레이어의 조작(재생·일시정지)이 그대로 닿습니다. */
+.tile-cover{position:absolute; inset:0; z-index:2; cursor:pointer}
+.tile.focused .tile-cover{display:none}
+.tile-bar{
+  position:absolute; inset:0 0 auto 0; z-index:3; display:flex; gap:.45rem; align-items:center;
+  padding:.3rem .55rem; font-size:.72rem; color:var(--dim);
+  background:linear-gradient(rgba(6,8,12,.78), rgba(6,8,12,0)); pointer-events:none;
+}
+.tile-bar .tile-title{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text)}
+.tile-bar .tile-site{color:var(--accent)}
+.tile-bar .tile-sound{color:var(--accent)}
+.tile:not(.focused) .tile-sound{display:none}
+.tile.stopped .tile-state{color:var(--warn)}
+.tile-bar .tile-close{pointer-events:auto; padding:0 .45rem; line-height:1.4}
+.mv-1 .tile-bar{display:none}          /* 타일 하나 = 예전 화면 그대로 */
+/* 전체화면에서는 조절기와 함께 나타났다 사라집니다. */
+#player-wrap:fullscreen .tile-bar{opacity:0; transition:opacity .18s ease}
+#player-wrap:fullscreen.fs-active .tile-bar{opacity:1}
+.tile > .player-error{z-index:1}
+
+/* 배치. 1+2 / 1+3 에서는 초점 타일이 큰 자리(big)를 차지하고 나머지는 빈 칸으로
+ * 흘러듭니다 -- 초점을 옮기면 .focused 만 바뀌고 DOM 은 그대로입니다. */
+.mv-2{grid-template-columns:1fr 1fr}
+.mv-2x2{grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr}
+.mv-1p2{grid-template-columns:2fr 1fr; grid-template-rows:1fr 1fr;
+        grid-template-areas:"big ." "big ."}
+.mv-1p3{grid-template-columns:3fr 1fr; grid-template-rows:1fr 1fr 1fr;
+        grid-template-areas:"big ." "big ." "big ."}
+.mv-1p2 .tile.focused,.mv-1p3 .tile.focused{grid-area:big}
+.video-row.mv .vt::after{content:" ⊞"; color:var(--accent)}
 
 /* 전체화면이 되는 것은 iframe이 아니라 이 상자입니다.
  *

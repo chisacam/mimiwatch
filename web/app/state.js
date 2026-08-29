@@ -34,6 +34,9 @@ const state = {
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   models: null,        // /api/models 의 답. 모델·도구의 목록과 상태(engines.js)
   live: null,          // { id, es, store } while a broadcast is running (store: MimiCues)
+  // 멀티뷰(tiles.js). tiles 는 화면의 칸들, focus 는 소리·자막·자막 내역이 따르는 칸,
+  // mv 는 서버의 묶음 { id, focus, members }, mvLayout 은 고른 배치 이름.
+  tiles: [], focus: null, mv: null, mvLayout: "",
 };
 
 /* A cue can hold one translation per backend, so switching backends is a
@@ -89,16 +92,9 @@ function savePrefs(p) {
  * 그리는 일은 web/overlay.js 가 합니다. 확장이 유튜브 페이지에 얹는 자막과
  * 같은 한 벌입니다 -- 모양·자리·끌기를 두 군데서 고치게 두지 않으려고
  * 뽑아 두었습니다. 여기서는 그 모듈에 값을 넣고 시계를 대 줍니다. */
+/* 초점 타일의 오버레이입니다(tiles.js 의 initTiles/setFocus 가 넣습니다). 타일마다
+ * 오버레이가 하나씩 있지만 그리는 것은 초점 타일의 것뿐입니다. */
 let overlay = null;
-
-function initOverlay() {
-  overlay = MimiOverlay.attach({
-    overlay: $("overlay"),
-    box: () => $("player-wrap"),
-  });
-  // 끌어서 놓을 때마다 저장합니다.
-  overlay.onPos = (p) => { state.cuePos = p; persist(); };
-}
 
 /* 지금 무엇을 그려야 하는지 모듈에 알려 줍니다. 자막 목록·백엔드·라이브
  * 여부가 바뀔 때마다 부릅니다. */
@@ -117,7 +113,7 @@ function cueAt(t) {
 }
 
 function renderCue() {
-  if (!overlay || !state.player || !state.ready) return;
+  if (!overlay || !state.player || !state.player.ready) return;
   syncOverlayData();
   overlay.setView({ mode: state.mode, showPrev: state.showPrev });
   const i = overlay.render(state.player.getCurrentTime() + state.offset);
@@ -165,6 +161,7 @@ function persist() {
     profile: (document.querySelector('#add-form select[name="profile"]') || {}).value,
     genre: (document.querySelector('#add-form select[name="genre"]') || {}).value,
     asr: state.asr, refine: state.refine,
+    mvLayout: state.mvLayout,
   });
 }
 
@@ -181,6 +178,7 @@ function restore() {
                : p.pos != null ? { x: D.x, y: p.pos / 100 }
                : { ...D };
   overlay.setPos(state.cuePos);
+  state.mvLayout = p.mvLayout || "";
   if (p.showPrev != null) $("show-prev").checked = p.showPrev;
   if (p.offset != null) { $("offset").value = p.offset; state.offset = p.offset; }
   state.showPrev = $("show-prev").checked;

@@ -88,13 +88,29 @@
   </aside>
 
   <section class="stage">
-    <div id="player-wrap">
-      <div id="player"></div>
-      <div id="overlay" class="overlay">
-        <div id="cue-prev" class="cue-prev"></div>
-        <div id="cue-main" class="cue-main"></div>
-        <div id="cue-src" class="cue-src"></div>
-      </div>
+    <div id="player-wrap" class="mv-1">
+      <!-- 타일은 tiles.js 가 이 틀에서 찍어 냅니다(멀티뷰는 여러 벌). 타일이 하나일
+           때는 띠(.tile-bar)도 덮개(.tile-cover)도 보이지 않아 예전의 #player +
+           #overlay 와 같은 화면입니다. 덮개는 초점이 아닌 타일에만 남아, 누르면 초점이
+           옮겨 가고 초점 타일의 플레이어 조작은 그대로 됩니다. -->
+      <template id="tile-tpl">
+        <div class="tile">
+          <div class="tile-player"></div>
+          <div class="overlay">
+            <div class="cue-prev"></div>
+            <div class="cue-main"></div>
+            <div class="cue-src"></div>
+          </div>
+          <div class="tile-bar">
+            <span class="tile-site"></span>
+            <span class="tile-title"></span>
+            <span class="tile-state"></span>
+            <span class="tile-sound" title="소리와 자막이 이 타일을 따릅니다">🔊</span>
+            <button class="tile-close seg" title="이 타일을 닫습니다 (자막 수신도 멈춥니다)">✕</button>
+          </div>
+          <div class="tile-cover" title="누르면 이 방송으로 초점을 옮깁니다"></div>
+        </div>
+      </template>
 
       <!-- 전체화면에서는 상자 밖의 조절기가 그려지지 않습니다. 자막 모드만
            상자 안에도 둡니다. 창 모드에서는 아래 조절기가 있으므로 숨깁니다. -->
@@ -114,6 +130,17 @@
                   title="자막을 아래 가운데로 되돌립니다. 자리는 자막을 끌어서 옮깁니다">⤾ 위치 되돌리기</button>
         </div>
         <hr>
+        <!-- 멀티뷰: 배치와 초점. 타일이 둘 이상일 때만 보입니다. -->
+        <div class="fs-row seg-row" id="fs-mv" hidden>
+          <button class="seg" data-layout="2">2분할</button>
+          <button class="seg" data-layout="1p2">1+2</button>
+          <button class="seg" data-layout="1p3">1+3</button>
+          <button class="seg" data-layout="2x2">2×2</button>
+          <button class="seg" data-focus-tile="0">1</button>
+          <button class="seg" data-focus-tile="1">2</button>
+          <button class="seg" data-focus-tile="2">3</button>
+          <button class="seg" data-focus-tile="3">4</button>
+        </div>
         <button id="fs-exit" class="seg">⛶ 창으로</button>
       </div>
 
@@ -142,6 +169,17 @@
       <label class="check"><input id="show-prev" type="checkbox" checked> 직전 문장 남기기</label>
       <label class="slider" id="offset-wrap">오프셋 <input id="offset" type="range" min="-3" max="3" step="0.1" value="0"><b id="offset-val">0.0s</b></label>
       <button id="fullscreen" class="seg" title="전체화면 (F). 플레이어와 자막을 함께 키웁니다">⛶ 전체화면</button>
+      <!-- 멀티뷰. 「＋ 타일」은 초점이 라이브일 때, 배치는 타일이 둘 이상일 때 보입니다.
+           초점은 타일을 누르거나 1~4 키로 옮깁니다. -->
+      <button id="mv-add" class="seg" hidden
+              title="지금 보는 방송 옆에 다른 라이브를 붙입니다 (최대 4). 소리와 자막은 초점 타일만">⊞ 타일 추가</button>
+      <div class="group" id="mv-group" hidden>
+        <span class="glabel">배치</span>
+        <button class="seg" data-layout="2">2분할</button>
+        <button class="seg" data-layout="1p2">1+2</button>
+        <button class="seg" data-layout="1p3">1+3</button>
+        <button class="seg" data-layout="2x2">2×2</button>
+      </div>
     </div>
   </section>
 
@@ -444,6 +482,8 @@
      main.js(bind·init)가 마지막입니다. 나머지는 함수 선언뿐이라 순서에 기대지
      않습니다. -->
 <script src="/static/app/state.js"></script>
+<script src="/static/app/adapters.js"></script>
+<script src="/static/app/tiles.js"></script>
 <script src="/static/app/player.js"></script>
 <script src="/static/app/script-panel.js"></script>
 <script src="/static/app/engines.js"></script>

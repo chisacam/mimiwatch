@@ -25,6 +25,9 @@ function updateLangStatus() {
 /* ---------- loading ---------- */
 async function loadVideo(id) {
   const doc = await (await fetch(`/api/video/${id}`)).json();
+  // 녹화본은 타일 하나로 봅니다. 다른 타일이 보던 방송은 화면에서만 뗍니다.
+  const t = soloTile();
+  t.doc = doc; t.live = null; t.title = doc.title || "";
   state.doc = doc;
   state.cues = doc.cues || [];
   state.idx = -1;
@@ -34,9 +37,12 @@ async function loadVideo(id) {
   syncGenreToDoc();
   setNowTitle(doc.title);
   applyModeForDoc();
-  clearPlayerError();
-  if (state.player && state.ready) state.player.loadVideoById(id);
-  else await createPlayer(id);
+  clearPlayerError(t);
+  const a = t.adapter;
+  if (a && a.kind === "youtube" && a.ready) a.load({ site: "youtube", video_id: id });
+  else await mountTile(t, { site: "youtube", video_id: id });
+  updateTileBar(t);
+  syncMvControls();
 }
 
 /* Someone watching a talk in their own language does not turn subtitles on;
@@ -70,10 +76,8 @@ function applyModeForDoc() {
   renderCue();
 }
 
-/* The IFrame API only builds a working player when the constructor is given a
- * videoId -- without one it leaves an empty container and never fires
- * onReady. So the player is created after the first video is known, not
- * before. */
+/* IFrame API 가 다 읽히기를 기다립니다. 플레이어 자체는 어댑터(adapters.js 의
+ * ytAdapter)가 타일마다 만듭니다. */
 let apiReady = null;
 
 function whenApiReady() {
@@ -89,40 +93,6 @@ function whenApiReady() {
     setTimeout(() => { clearInterval(timer); resolve(); }, 10000);
   });
   return apiReady;
-}
-
-async function createPlayer(videoId) {
-  // 대본 창에는 영상이 없습니다. 유튜브 API를 부르지도, iframe을 얹지도
-  // 않습니다 -- 그 창의 일은 읽는 것뿐입니다.
-  if (state.scriptOnly) return;
-  clearPlayerError();
-  await whenApiReady();
-  if (!(window.YT && window.YT.Player)) {
-    playerError("YouTube IFrame API를 불러오지 못했습니다. 네트워크를 확인해 주세요.");
-    return;
-  }
-  if (state.player) { state.player.loadVideoById(videoId); return; }
-  state.player = new YT.Player("player", {
-    videoId,
-    // fs:0 은 유튜브의 전체화면 단추를 지웁니다. 그 단추는 **iframe**을
-    // 전체화면 요소로 만드는데, 브라우저는 전체화면 요소의 하위 트리만
-    // 그리므로 iframe 밖에 있는 자막 오버레이가 통째로 사라집니다.
-    // iframe 안은 교차 출처라 그 단추를 가로챌 수 없으니, 지우고 우리
-    // 단추를 대신 둡니다.
-    playerVars: { rel: 0, modestbranding: 1, playsinline: 1, fs: 0 },
-    events: {
-      onReady: () => {
-        state.ready = true;
-        // fs:0 은 단추를 지울 뿐입니다. allowfullscreen 을 떼면 iframe은
-        // 어떤 경로로도 전체화면 요소가 될 수 없습니다 -- 그래야 자막이
-        // 사라지는 상태 자체가 만들어지지 않습니다.
-        const f = document.querySelector("#player-wrap iframe");
-        if (f) f.removeAttribute("allowfullscreen");
-        setInterval(renderCue, 100);
-      },
-      onError: (e) => playerError(embedErrorText(e.data), videoId),
-    },
-  });
 }
 
 /* 유튜브가 내주는 코드를 사람이 읽을 말로 옮깁니다.
@@ -144,21 +114,22 @@ function embedErrorText(code) {
   return `영상을 재생할 수 없습니다 (code ${code}).`;
 }
 
-/* 안내 상자는 플레이어 자리를 통째로 덮습니다. 치우지 않으면 다음에 고른
- * 영상이 그 뒤에서 재생되어, 소리는 나는데 화면은 안내문인 상태가 됩니다. */
-function clearPlayerError() {
-  const box = document.getElementById("player-error");
+/* 안내 상자는 타일을 통째로 덮습니다. 치우지 않으면 다음에 고른
+ * 영상이 그 뒤에서 재생되어, 소리는 나는데 화면은 안내문인 상태가 됩니다.
+ * 타일을 주지 않으면 초점 타일입니다. */
+function clearPlayerError(tile = focusedTile()) {
+  if (!tile) return;
+  const box = tile.el.querySelector(":scope > .player-error");
   if (box) box.remove();
 }
 
-function playerError(msg, videoId) {
-  const wrap = document.getElementById("player-wrap");
-  let box = document.getElementById("player-error");
+function playerError(msg, videoId, tile = focusedTile()) {
+  if (!tile) return;
+  let box = tile.el.querySelector(":scope > .player-error");
   if (!box) {
     box = document.createElement("div");
-    box.id = "player-error";
     box.className = "player-error";
-    wrap.appendChild(box);
+    tile.el.appendChild(box);
   }
   box.textContent = msg;
   if (videoId) {
@@ -222,13 +193,15 @@ function applySize(px) {
  * 두고 그 비율만큼 곱합니다. 창 모드에서는 기준이 없으므로 배율이 1이고,
  * 지금까지와 똑같이 동작합니다. */
 function applyCueSize() {
-  if (!overlay) return;
+  const t = focusedTile();
+  if (!overlay || !t) return;
   const px = state.cuePx || +$("size").value;
-  // 배율의 기준은 전체화면에 들어가기 직전의 상자 높이입니다. 무엇을 기준으로
-  // 삼을지는 부르는 쪽이 정합니다 -- 확장은 유튜브의 전체화면을 쓰므로
-  // 기준이 다릅니다.
-  const base = state.fsBaseHeight;
-  const h = $("player-wrap").clientHeight;
+  // 배율의 기준은 전체화면에 들어가기 직전의 **초점 타일** 높이입니다. 무엇을
+  // 기준으로 삼을지는 부르는 쪽이 정합니다 -- 확장은 유튜브의 전체화면을 쓰므로
+  // 기준이 다릅니다. 창 모드에서는 상자 전체를 기준으로 삼아, 타일 하나면 배율이
+  // 1 이고(예전과 같음) 넷으로 나뉘면 그 칸에 맞게 줄어듭니다.
+  const base = state.fsBaseHeight || $("player-wrap").clientHeight;
+  const h = t.el.clientHeight;
   overlay.setSize(px, base && h ? h / base : 1);
 }
 
@@ -252,9 +225,10 @@ function toggleFullscreen() {
   if (fsElement()) {
     (document.exitFullscreen || document.webkitExitFullscreen).call(document);
   } else {
-    // 전체화면에 들어가기 직전의 높이를 기억해 둡니다. 들어간 뒤에 재면
-    // 이미 커진 값이라 배율이 1이 됩니다.
-    state.fsBaseHeight = wrap.clientHeight;
+    // 전체화면에 들어가기 직전의 초점 타일 높이를 기억해 둡니다. 들어간 뒤에
+    // 재면 이미 커진 값이라 배율이 1이 됩니다.
+    const t = focusedTile();
+    state.fsBaseHeight = (t ? t.el : wrap).clientHeight;
     const req = wrap.requestFullscreen || wrap.webkitRequestFullscreen;
     if (!req) { fsFailed("이 브라우저는 전체화면을 지원하지 않습니다."); return; }
     Promise.resolve(req.call(wrap)).catch(err => fsFailed(err.message));
@@ -301,8 +275,8 @@ function onFullscreenChange() {
   const on = !!el;
   // iframe이 전체화면이 되면 자막은 그 하위 트리 밖이라 사라집니다. 여기까지
   // 왔다면 위의 방어가 뚫린 것이므로, 조용히 두지 않고 되돌립니다.
-  if (el && el.tagName === "IFRAME") {
-    console.warn("[fullscreen] iframe이 전체화면이 되었습니다. 자막이 보이지 않습니다.");
+  if (el && (el.tagName === "IFRAME" || el.tagName === "VIDEO")) {
+    console.warn("[fullscreen] 플레이어 요소가 전체화면이 되었습니다. 자막이 보이지 않습니다.");
     (document.exitFullscreen || document.webkitExitFullscreen).call(document);
     fsFailed("유튜브 플레이어가 자체 전체화면을 열었습니다. 아래 「전체화면」 단추를 쓰십시오.");
     return;

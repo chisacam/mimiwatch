@@ -127,7 +127,13 @@ function bind() {
     // 초점이 그 안에 있어 이 처리기까지 오지 않으므로, 겹칠 걱정은
     // 없습니다 -- 대신 그때는 fs:0 이 막아 줍니다.
     if (e.key === "f") toggleFullscreen();
+    // 멀티뷰: 숫자 키로 초점. 타일이 그만큼 없으면 아무 일도 없습니다.
+    if (/^[1-4]$/.test(e.key)) { const t = state.tiles[+e.key - 1]; if (t) setFocus(t); }
   });
+  document.querySelectorAll("[data-layout]").forEach(b =>
+    b.addEventListener("click", () => applyLayout(b.dataset.layout)));
+  document.querySelectorAll("[data-focus-tile]").forEach(b =>
+    b.addEventListener("click", () => { const t = state.tiles[+b.dataset.focusTile]; if (t) setFocus(t); }));
   $("fullscreen").addEventListener("click", toggleFullscreen);
   $("fs-exit").addEventListener("click", toggleFullscreen);
   // 조절기는 마우스가 움직일 때만 뜨고 잠시 뒤 사라집니다. 영상 위에 계속
@@ -182,7 +188,7 @@ function setLibrary(hidden) {
 }
 
 (async function init() {
-  initOverlay();        // restore() 가 자리를 넣으므로 먼저 붙입니다
+  initTiles();          // restore() 가 자막 자리를 넣으므로 먼저 붙입니다
   restore(); bind();
   const key = scriptWindowKey();
   if (key) {

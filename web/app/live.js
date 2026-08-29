@@ -182,119 +182,144 @@ async function startLive(url, lang, probe) {
   // A live session has no cue file: cues arrive over SSE and accumulate in
   // place, and `t` is media seconds -- the same axis the YouTube player
   // reports for a live stream, so the usual lookup still applies.
-  state.doc = { id: probe.id, title: probe.title, source_lang: lang || "",
-                viewer_lang: $("viewer-lang").value, translated: false,
-                backends_done: [state.backend], live: true };
-  state.live = { id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
-                 url, lang, probe, asr: state.asr };
-  state.cues = state.live.store.cues;     // 저장소가 제자리에서 고치는 배열
-  state.idx = -1;
-  buildScript();
-  renderBackendPicker();
-  applyModeForDoc();
-  syncRenameButton();
+  const t = soloTile();
+  bindLive(t, {
+    id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
+    url, lang, probe, asr: state.asr, backend: state.backend, source: res.source || "hls",
+  }, {
+    id: probe.id, title: probe.title, source_lang: lang || "",
+    viewer_lang: $("viewer-lang").value, translated: false,
+    backends_done: [state.backend], live: true,
+  });
+  t.src = srcOf({ site: probe.site, video_id: probe.id, channel: probe.channel, url });
+  showTileInPanels(t);
   addLiveToPicker(probe, res.id);
-  $("job").hidden = true;      // a stale re-translation box is not this session's
-  state.jobId = null;
-  $("live-badge").hidden = false;
-  $("offset-wrap").style.display = "flex";
-  await attachLive(res.id, probe.id);
+  await attachLive(t);
 }
 
 /* 이미 있는 세션을 다시 엽니다 -- 탭을 새로고침했거나, 서버가 재시작되어
  * 수신은 끊겼지만 받아 적은 자막은 남아 있는 경우입니다. 자막은 서버가 SSE
  * 접속 직후에 그대로 되돌려 주므로, 여기서는 라이브를 새로 시작할 때와 같은
- * 그릇만 만들어 두면 나머지는 같은 이벤트 경로를 탑니다. */
+ * 그릇만 만들어 두면 나머지는 같은 이벤트 경로를 탑니다. 타일 하나로 봅니다 --
+ * 멀티뷰의 한 칸으로 여는 것은 openSessionInTile 입니다. */
 async function resumeLive(sessionId) {
   if (state.live && state.live.id === sessionId) return;   // 이미 보고 있음
-  detachLive();
   const st = await (await fetch(`/api/live/status/${sessionId}`)).json();
   if (!st.id) { jobError(st.error || "세션을 찾을 수 없습니다"); return; }
-  const running = LIVE_RUNNING.includes(st.state);
+  const t = soloTile();
+  detachTile(t);
+  await openSessionInTile(t, st);
+  showTileInPanels(t);
+  await attachLive(t);
+  // 탭 세션에는 끼워 넣을 영상이 없습니다. attachLive 가 앞서 본 것의
+  // 안내를 지우고 지나가므로, 그 뒤에 이 흐름의 안내를 다시 씁니다.
+  if (st.source === "tab") {
+    const running = LIVE_RUNNING.includes(st.state);
+    tabStageNotice(running ? "" : "수신은 멈춰 있고, 쌓인 자막 내역만 보고 있습니다.", t);
+  }
+}
 
-  // 그때 쓰던 번역 백엔드로 맞춥니다. 저장된 번역문은 그 백엔드가 만든 것이라,
-  // 지금 고른 백엔드 칸에 넣으면 하지 않은 일을 했다고 표시하게 됩니다.
-  if (st.backend && state.backends.some(b => b.id === st.backend)) {
-    state.backend = st.backend;
+/* 세션 하나를 타일에 매어 둡니다(아직 SSE 는 열지 않습니다 -- attachLive).
+ * `st` 는 /api/live/status 의 답이거나 멀티뷰 멤버의 상태입니다. */
+async function openSessionInTile(tile, st) {
+  const running = LIVE_RUNNING.includes(st.state);
+  bindLive(tile, {
+    id: st.id, store: MimiCues.create(), es: null, speakers: new Set(),
+    url: st.url, lang: st.source_lang || null, state: st.state,
+    probe: { id: st.video_id, title: st.title },
+    source: st.source || "hls",
+    asr: st.asr_backend || "", backend: st.backend || "",
+    lastStatus: running ? null : { ...st, type: "status" },
+  }, {
+    id: st.video_id || "", title: st.title || st.url,
+    source_lang: st.source_lang || "", viewer_lang: st.viewer_lang,
+    translated: false, backends_done: [st.backend], live: true,
+  });
+  tile.src = srcOf(st);
+  tile.title = st.title || st.url || "";
+  updateTileBar(tile);
+}
+
+/* 세션과 문서를 타일에 넣습니다. 초점 타일이면 화면의 전역(state.live 등)도 같이. */
+function bindLive(tile, live, doc) {
+  if (tile.live && tile.live.es && tile.live !== live) tile.live.es.close();
+  tile.live = live;
+  tile.doc = doc;
+  tile.title = doc.title || "";
+  if (tile === focusedTile()) {
+    state.live = live;
+    state.doc = doc;
+    state.cues = live.store.cues;     // 저장소가 제자리에서 고치는 배열
+    state.idx = -1;
   }
-  // 전사 엔진도 마찬가지입니다. 세션이 실제로 쓰는 것과 선택기가 가리키는
-  // 것이 다르면, 다음에 무엇을 바꿔도 화면과 서버가 어긋난 채로 갑니다.
-  if (st.asr_backend && state.asrBackends.some(b => b.id === st.asr_backend)) {
-    setAsr(st.asr_backend);
-  }
-  state.doc = { id: st.video_id || "", title: st.title || st.url,
-                source_lang: st.source_lang || "", viewer_lang: st.viewer_lang,
-                translated: false, backends_done: [st.backend], live: true };
-  state.live = { id: st.id, store: MimiCues.create(), es: null, speakers: new Set(),
-                 url: st.url, lang: st.source_lang || null, state: st.state,
-                 probe: { id: st.video_id, title: st.title },
-                 source: st.source || "hls",
-                 asr: st.asr_backend || "" };
-  state.cues = state.live.store.cues;
+}
+
+/* 초점 타일의 것을 오른쪽 자막 내역·위쪽 막대·조절기에 비춥니다. 시작할 때,
+ * 이어 열 때, 초점이 옮겨 갈 때 -- 셋이 같은 꼬리를 지납니다. */
+function showTileInPanels(tile) {
+  const live = tile.live;
+  state.live = live;
+  state.doc = tile.doc;
+  state.cues = live ? live.store.cues : ((tile.doc && tile.doc.cues) || []);
   state.idx = -1;
+  if (live) {
+    // 그때 쓰던 번역 백엔드로 맞춥니다. 저장된 번역문은 그 백엔드가 만든 것이라,
+    // 지금 고른 백엔드 칸에 넣으면 하지 않은 일을 했다고 표시하게 됩니다.
+    if (live.backend && state.backends.some(b => b.id === live.backend)) {
+      state.backend = live.backend;
+    }
+    // 전사 엔진도 마찬가지입니다. 세션이 실제로 쓰는 것과 선택기가 가리키는
+    // 것이 다르면, 다음에 무엇을 바꿔도 화면과 서버가 어긋난 채로 갑니다.
+    if (live.asr && state.asrBackends.some(b => b.id === live.asr)) setAsr(live.asr);
+  }
   buildScript();
   renderBackendPicker();
   applyModeForDoc();
   syncRenameButton();
   $("job").hidden = true;
   state.jobId = null;
-  $("live-badge").hidden = !running;
+  $("live-badge").hidden = !isLiveReceiving();
   // 탭 소리에는 맞출 영상이 없으므로 오프셋도 의미가 없습니다.
-  $("offset-wrap").style.display = st.source === "tab" ? "none" : "flex";
-  // 멈춘 세션은 이어받을 수 있습니다. 자동으로 하지 않습니다 -- 다시 받기
-  // 시작하는 것은 눌러서 시킬 일입니다.
-  //
-  // 주소로 받는 세션은 `interrupted`(서버가 죽음)일 때만 권합니다.
-  // `stopped` 는 사용자가 「중단」을 누른 것이라 다시 묻는 것이 성가십니다.
-  //
-  // 탭 소리는 다릅니다. 공유를 멈추거나 그 탭을 닫으면 `stopped` 로
-  // 끝나는데, 그것이 정상 종료 경로입니다 -- 서버를 정상으로 내려도
-  // 마찬가지입니다. 그러니 멈춰 있으면 언제나 권합니다. 같은 세션으로
-  // 이어야 스크립트가 한 줄기로 남습니다.
-  // 멈춘 세션은 어떤 이유로 멈췄든 이어받을 수 있습니다 -- 사용자가 「중단」한
-  // 것도요. 방송이 끝난 것만 이어받을 것이 없고, 그때는 전체 영상 전사를
-  // 권합니다. 자동으로 하지는 않습니다. 다시 받기 시작하는 것은 눌러서 시킬
-  // 일입니다.
-  if (!running && (st.source === "tab" || st.url)) offerResume(st.id, stopReason(st), st);
-  await attachLive(st.id, st.video_id);
-  // 탭 세션에는 끼워 넣을 영상이 없습니다. attachLive 가 앞서 본 것의
-  // 안내를 지우고 지나가므로, 그 뒤에 이 흐름의 안내를 다시 씁니다.
-  if (st.source === "tab") {
-    tabStageNotice(running ? "" : "수신은 멈춰 있고, 쌓인 자막 내역만 보고 있습니다.");
-  }
+  $("offset-wrap").style.display = !live ? "" : (live.source === "tab" ? "none" : "flex");
+  setNowTitle(tile.doc ? tile.doc.title : null);
+  hideLiveNotice();
+  if (live) renderLiveStatus(tile);
+  else updateLangStatus();
+  syncMvControls();
+  pinScriptToBottom();
 }
 
-async function attachLive(sessionId, videoId) {
+async function attachLive(tile) {
+  const live = tile.live;
   // 영상 없는 세션(m3u8·탭 소리)은 아래에서 플레이어를 건너뛰므로, 앞서 본
-  // 것이 남긴 안내 상자를 여기서 치웁니다. createPlayer 만 믿으면 그 경로가
-  // 안 지나가서 옛 안내문이 그대로 남습니다.
-  clearPlayerError();
-  // m3u8을 직접 넣은 세션에는 임베드할 영상이 없습니다. 그래도 스크립트 패널은
-  // 읽을 수 있어야 하므로 플레이어만 건너뜁니다.
-  if (videoId) await createPlayer(videoId);
-  const es = new EventSource(`/api/live/events/${sessionId}`);
-  state.live.es = es;
+  // 것이 남긴 안내 상자를 여기서 치웁니다.
+  clearPlayerError(tile);
+  const src = tile.src || { site: "none" };
+  if (src.site !== "none") await mountTile(tile, src, { muted: tile !== focusedTile() });
+  const es = new EventSource(`/api/live/events/${live.id}`);
+  live.es = es;
   es.onmessage = (ev) => {
+    if (tile.live !== live) return;          // 그 사이 타일이 다른 것을 보게 됐습니다
     let m; try { m = JSON.parse(ev.data); } catch { return; }
-    if (m.type === "cue") onLiveCue(m);
-    else if (m.type === "translation") onLiveTranslation(m);
-    else if (m.type === "status") onLiveStatus(m);
+    if (m.type === "cue") onLiveCue(m, tile);
+    else if (m.type === "translation") onLiveTranslation(m, tile);
+    else if (m.type === "status") onLiveStatus(m, tile);
     // 서버가 4.5분마다 스트림을 일부러 닫습니다(확장의 서비스 워커 5분 규칙 때문).
     // 곧 이어질 onerror 는 끊김이 아니므로 「연결 끊김」을 띄우지 않습니다.
-    else if (m.type === "rotate") state.live.rotating = true;
+    else if (m.type === "rotate") live.rotating = true;
     // 다른 창에서 줄을 지웠습니다. 본 창과 대본 창이 같은 세션을 보고
     // 있으므로 한쪽에서 고친 것이 다른 쪽에도 닿아야 합니다.
-    else if (m.type === "drop") dropCue(m.id);
+    else if (m.type === "drop") dropCue(m.id, tile);
   };
   es.onerror = () => {
     // 끝난 세션은 서버가 백로그를 다 보내고 스트림을 닫습니다. 그것은 끊김이
     // 아니라 정상 종료이고, EventSource는 끊기면 알아서 다시 붙으므로 여기서
     // 닫지 않으면 몇 초마다 자막 전체를 다시 받게 됩니다. 진행 중인 세션은
     // 반대로 그 자동 재접속이 필요하니 그대로 둡니다.
-    const st = state.live && state.live.state;
+    const st = live.state;
     if (st && !LIVE_RUNNING.includes(st)) { es.close(); return; }
-    if (state.live && state.live.rotating) { state.live.rotating = false; return; }
-    $("lang-status").innerHTML = "라이브 연결 끊김";
+    if (live.rotating) { live.rotating = false; return; }
+    if (tile === focusedTile()) $("lang-status").innerHTML = "라이브 연결 끊김";
   };
 }
 
@@ -322,8 +347,10 @@ function addLiveToPicker(probe, sessionId) {
 
 /* Removing the entry on stop was the mismatch: the player went on showing a
  * broadcast the list no longer had. Keep the entry, say the subtitles ended. */
-function markLiveStopped() {
-  const row = $("video-list").querySelector(".video-row.live.pending");
+function markLiveStopped(sid) {
+  const box = $("video-list");
+  const row = sid ? box.querySelector(`.video-row[data-session="${CSS.escape(sid)}"]`)
+                  : box.querySelector(".video-row.live.pending");
   if (!row) return;
   row.classList.add("stopped");
   const m = row.querySelector(".vm");
@@ -338,20 +365,23 @@ function dropLiveOption(keepValue) {
   });
 }
 
-function onLiveCue(m) {
-  const live = state.live;
+/* 자막 한 줄. 초점 타일이 아니면 저장소와 띠만 고칩니다 -- 화면의 자막 내역은
+ * 초점 타일의 것이고, 초점이 오면 그 저장소로 다시 그립니다(showTileInPanels). */
+function onLiveCue(m, tile = focusedTile()) {
+  const live = tile && tile.live;
   if (!live) return;
 
   // 목록에 반영하는 규칙(같은 id는 갈아 끼우기, replaces는 빼기)은 확장과
   // 공유하는 cuestore.js 의 것입니다. 여기서는 빠진 줄의 행만 걷어 냅니다.
   const r = live.store.upsert(m);
+  const cue = r.cue;
+  const before = live.speakers.size;
+  if (cue.speaker) live.speakers.add(cue.speaker);
+  if (tile !== focusedTile()) { updateTileBar(tile); return; }
   r.removed.forEach(id => {
     const row = $("script").querySelector(`.line[data-id="${id}"]`);
     if (row) row.remove();
   });
-  const cue = r.cue;
-  const before = live.speakers.size;
-  if (cue.speaker) live.speakers.add(cue.speaker);
   state.idx = -1;
   if (before < 2 && live.speakers.size >= 2) {
     // The chips just became meaningful; the lines already on screen need them.
@@ -360,6 +390,7 @@ function onLiveCue(m) {
     appendScriptLine(cue);
   }
   renderCue();
+  updateTileBar(tile);
 }
 
 function buildLiveScript() {
@@ -367,13 +398,18 @@ function buildLiveScript() {
   state.cues.forEach(c => appendScriptLine(c));
 }
 
-function onLiveTranslation(m) {
-  const cue = state.live && state.live.store.translate(m.id, state.backend, m.text);
+function onLiveTranslation(m, tile = focusedTile()) {
+  const live = tile && tile.live;
+  if (!live) return;
+  // 그 세션의 번역 백엔드 칸에 넣습니다. 초점이 오면 state.backend 도 그것으로 맞춰지므로
+  // (showTileInPanels) 화면은 같은 칸을 읽습니다.
+  const cue = live.store.translate(m.id, live.backend || state.backend, m.text);
   if (!cue) return;
-  if (!state.doc.translated) {
-    state.doc.translated = true;
-    applyModeForDoc();
+  if (tile.doc && !tile.doc.translated) {
+    tile.doc.translated = true;
+    if (tile === focusedTile()) applyModeForDoc();
   }
+  if (tile !== focusedTile()) return;
   const row = $("script").querySelector(`.line[data-id="${cue.id}"]`);
   if (row) refreshScriptRow(row, cue);
   // 번역 한 줄이 붙으면서 이 줄이 높아졌습니다. 바닥을 다시 잡습니다.
@@ -381,19 +417,24 @@ function onLiveTranslation(m) {
   renderCue();
 }
 
-function onLiveStatus(m) {
-  const el = $("lang-status");
-  if (state.live) state.live.state = m.state;
+/* 세션 상태가 왔습니다. 기억할 것(state·제목·엔진)은 어느 타일이든 적고, 부수 효과
+ * (탭 캡처 멈춤·목록 표시)는 그 세션의 것만, 화면 글자는 초점 타일일 때만 고칩니다. */
+function onLiveStatus(m, tile = focusedTile()) {
+  const live = tile && tile.live;
+  if (!live) return;
+  live.state = m.state;
+  live.lastStatus = m;
+  if (m.asr_backend) live.asr = m.asr_backend;
+  if (m.backend) live.backend = m.backend;
   // 이름이 바뀌면 따라갑니다. 「✎ 이름」으로 고치면 서버가 상태를 다시
   // 보내므로, 본 창에서 고친 것이 대본 창에도 같은 경로로 도착합니다.
-  if (m.title && state.doc && m.title !== state.doc.title
+  if (m.title && tile.doc && m.title !== tile.doc.title
       && !document.querySelector(".title-edit")) {
-    state.doc.title = m.title;
-    setNowTitle(m.title);
+    tile.doc.title = m.title;
+    tile.title = m.title;
+    if (tile === focusedTile()) setNowTitle(m.title);
   }
-  if (m.state === "error") {
-    el.className = "status warn";
-    el.textContent = m.error || "라이브 오류";
+  if (m.state === "error" || m.state === "stopped") {
     // 여기서 stopLive() 를 부르고 있었습니다. 그것이 state.live 를 비우는
     // 바람에 두 가지가 무너졌습니다.
     //
@@ -405,11 +446,28 @@ function onLiveStatus(m) {
     //
     // 오류는 세션을 잊을 이유가 아닙니다. 받아 적어 둔 것은 진짜이고,
     // 오류야말로 다시 시도하고 싶은 자리입니다. 그래서 「중단됨」과 같게
-    // 다룹니다 -- 왜 멈췄는지 적고, 받는 일만 멈춥니다.
-    stopCapture();
-    $("live-badge").hidden = true;
-    markLiveStopped();
-    if (state.live) state.live.state = "error";
+    // 다룹니다 -- 왜 멈췼는지 적고, 받는 일만 멈춥니다. 탭 캡처는 **이 세션의
+    // 것일 때만** 놓습니다 -- 멀티뷰의 다른 타일이 탭 소리를 올리는 중일 수 있습니다.
+    if (state.captureSession === live.id) stopCapture();
+    markLiveStopped(live.id);
+  }
+  updateTileBar(tile);
+  if (tile === focusedTile()) renderLiveStatus(tile);
+}
+
+/* 초점 타일의 세션 상태를 위쪽 막대(#lang-status)·배지·안내 띠에 씁니다. 상태
+ * 이벤트가 올 때와 초점이 이 타일로 올 때 -- 둘이 같은 글자를 써야 합니다. */
+function renderLiveStatus(tile) {
+  const live = tile.live;
+  const el = $("lang-status");
+  if (!live) return;
+  $("live-badge").hidden = !isLiveReceiving();
+  const m = live.lastStatus;
+  if (!m) { el.className = "status"; el.textContent = ""; return; }
+  if (m.state === "error") {
+    el.className = "status warn";
+    el.textContent = m.error || "라이브 오류";
+    if (m.source === "tab" || m.url) offerResume(m.id, stopReason(m), m);
     return;
   }
   // 중단된 세션은 오류가 아닙니다. 수신은 끊겼지만 여기 떠 있는 자막은 진짜로
@@ -417,16 +475,13 @@ function onLiveStatus(m) {
   if (m.state === "interrupted") {
     el.className = "status warn";
     el.innerHTML = `${LIVE_STATE.interrupted} · ${m.lines || 0}줄까지 남아 있습니다`;
-    $("live-badge").hidden = true;
     offerResume(m.id, stopReason(m), m);
     return;
   }
   if (m.state === "stopped") {
-    // 다른 창이나 확장에서 「중단」했습니다. 예전에는 이 분기가 없어 배지가 「● LIVE」인
-    // 채로 남았습니다. 수신만 멈춘 것이니 자막은 두고, 이어받을 길을 띠에 둡니다.
-    stopCapture();
-    $("live-badge").hidden = true;
-    markLiveStopped();
+    // 다른 창이나 확장에서 「중단」했습니다. 수신만 멈춘 것이니 자막은 두고,
+    // 이어받을 길을 띠에 둡니다. 멈춘 세션은 어떤 이유로 멈췼든 이어받을 수
+    // 있습니다 -- 방송이 끝난 것만 이어받을 것이 없고 그때는 전체 영상 전사를 권합니다.
     if (m.source === "tab" || m.url) offerResume(m.id, stopReason(m), m);
   }
   el.className = "status";
@@ -434,7 +489,8 @@ function onLiveStatus(m) {
   const eng = (m.asr || "").replace(/-Q8_0$|\.gguf$/g, "");
   el.innerHTML = `${LIVE_STATE[m.state] || m.state} · 원본 <b>${src}</b> → <b>${m.viewer_lang}</b>`
     + (eng ? ` · 전사 <b>${esc(eng)}</b>` : "")
-    + (m.lines ? ` · ${m.lines}줄` : "");
+    + (m.lines ? ` · ${m.lines}줄` : "")
+    + (m.focused === false ? " · <b>대기</b>(소리만 받는 중)" : "");
 }
 
 /* "중단" ends the transcription session, not the viewing. Nothing here
@@ -446,7 +502,9 @@ function onLiveStatus(m) {
 function detachLive() {
   const live = state.live;
   if (!live) return;
-  if (live.es) live.es.close();
+  const t = tileBySession(live.id);
+  if (t) detachTile(t);
+  else if (live.es) live.es.close();
   state.live = null;
   hideLiveNotice();
   syncRenameButton();
@@ -458,8 +516,8 @@ function stopLive() {
   // 탭 공유는 세션보다 오래 살아남을 수 있습니다. 세션을 놓을 때 같이
   // 놓지 않으면 크롬의 "공유 중" 표시가 남고, 아무도 읽지 않는 오디오를
   // 계속 올립니다.
-  stopCapture();
   const live = state.live;
+  if (!live || state.captureSession === live.id) stopCapture();
   if (!live) return;
   if (live.es) live.es.close();
   hideLiveNotice();
@@ -467,11 +525,14 @@ function stopLive() {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: live.id }),
   }).catch(() => {});
+  // 타일은 그대로 둡니다(방송은 계속 재생). 세션만 잊습니다.
+  const t = tileBySession(live.id);
+  if (t) { t.live = null; updateTileBar(t); }
   state.live = null;
   syncRenameButton();
   $("live-badge").hidden = true;
   $("offset-wrap").style.display = "";
-  markLiveStopped();
+  markLiveStopped(live.id);
   const el = $("lang-status");
   el.className = "status";
   el.textContent = "자막 중단됨 · 방송은 계속 재생됩니다";

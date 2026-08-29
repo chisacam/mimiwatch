@@ -55,7 +55,8 @@ def run_failing(monkey):
     """_run 을 실패시키고, 밖으로 새는 예외와 정리 여부를 함께 돌려줍니다."""
     released, retired = [], []
     real_retire, real_sub = live._retire, live.subprocess
-    live._retire = lambda sid: retired.append(sid)
+    # _retire 는 이제 세션 객체를 받습니다(같은 id 의 이어받은 세션을 밀어내지 않으려고).
+    live._retire = lambda s: retired.append(getattr(s, "id", s))
     live.subprocess = monkey
     s = make_session()
     s._release = lambda: released.append(True)

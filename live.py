@@ -83,6 +83,8 @@ HLS_RECONNECT_TRIES = 5
 
 # 세션이 들고 있는 최근 이벤트 수(SSE 재접속용). LiveSession.emit 참조.
 EVENT_LOG_MAX = 2000
+# `_text_of`에서 "기록에 없음"을 "흡수됨(None)"과 구분하는 표식.
+_UNKNOWN = object()
 
 _sessions: dict[str, "LiveSession"] = {}
 _lock = threading.Lock()
@@ -95,7 +97,10 @@ _lock = threading.Lock()
 def resolve_audio(url: str) -> tuple[str, dict]:
     """Audio-only rendition plus what the manifest says about media time."""
     why = []
-    for fmt in ("234", "233", "bestaudio"):
+    # 마지막의 `worst`는 영상이 섞인(muxed) 가장 작은 HLS 입니다. 2026-08에 7주 묵은
+    # yt-dlp 가 오디오 전용 포맷을 하나도 못 받아 라이브가 통째로 죽었습니다 -- ffmpeg 은
+    # 영상 섞인 스트림에서도 소리만 뽑으므로, 파이프가 조금 굵어질 뿐 받아 적기는 됩니다.
+    for fmt in ("234", "233", "bestaudio", "worst"):
         try:
             out = subprocess.run(stream.ytdlp_args("-f", fmt, "-g", url=url),
                                  capture_output=True, text=True,
@@ -118,8 +123,9 @@ def resolve_audio(url: str) -> tuple[str, dict]:
         # 것입니다. 거의 언제나 yt-dlp가 낡아서입니다.
         hint = (f" — 포맷을 하나도 받지 못했습니다. yt-dlp({ver or '판 미상'})가 "
                 f"낡았을 수 있습니다"
-                + (" (석 달 넘음)" if ytdlp_stale(ver) else "")
-                + ". `yt-dlp -U` 로 올린 뒤 다시 해 보십시오.")
+                + (" (45일 넘음)" if ytdlp_stale(ver) else "")
+                + ". 「엔진 관리 › 모델·도구」에서 yt-dlp 독립 실행 파일을 (다시) 받거나 "
+                  "`yt-dlp --update-to nightly` 로 올린 뒤 다시 해 보십시오.")
     raise RuntimeError("yt-dlp가 이 주소에서 오디오를 찾지 못했습니다."
                        + hint + " [" + " / ".join(why) + "]")
 
@@ -134,14 +140,15 @@ def ytdlp_version() -> str:
         return ""
 
 
-def ytdlp_stale(version: str, days: int = 90) -> bool:
+def ytdlp_stale(version: str, days: int = 45) -> bool:
     """이 판이 낡았는가.
 
     yt-dlp의 판은 YYYY.MM.DD입니다. 유튜브가 추출 경로를 자주 바꾸고
     yt-dlp가 그때마다 따라가므로, 몇 달 지난 판은 포맷 목록을 통째로 받지
-    못하는 일이 흔합니다. 그러면 234도 233도 bestaudio도 전부 "Requested
-    format is not available"이 됩니다 -- 포맷이 없는 것이 아니라 아무것도
-    못 읽은 것입니다.
+    못하는 일이 흔합니다. 기준을 90일에서 45일로 낮췼습니다 -- 2026-08 실측에서
+    7주 전 판이 이미 라이브 오디오 포맷을 하나도 받지 못했습니다. 그러면 234도
+    233도 bestaudio도 전부 "Requested format is not available"이 됩니다 -- 포맷이
+    없는 것이 아니라 아무것도 못 읽은 것입니다.
     """
     try:
         y, m, d = (int(x) for x in version.split(".")[:3])
@@ -478,7 +485,7 @@ class LiveSession:
                    "replaces": [c["id"] for c in covered]}
             for c in covered:
                 self._recent.remove(c)
-                self._text_of.pop(c["id"], None)
+                self._text_of[c["id"]] = None      # 흡수됨. 번역 대기열의 그 줄은 버립니다
             self._text_of[cue["id"]] = text
             # 정제본이 흡수한 줄은 화면에서 사라지므로 저장분에서도 지웁니다.
             # 자기 id를 물려받은 한 줄만 남기고 그 자리를 정제본으로 덮습니다.
@@ -504,7 +511,12 @@ class LiveSession:
 
     def _trim_text_of(self, keep: int = 500):
         """`_text_of`가 방송 길이만큼 자라지 않게 합니다. 번역은 발행 직후
-        줄을 서므로 몇백 줄 뒤의 것을 다시 볼 일은 없습니다."""
+        줄을 서므로 몇백 줄 뒤의 것을 다시 볼 일은 없습니다.
+
+        잘려 나간 줄은 `_superseded`가 **모른다**고 답하고, 모르는 줄은 번역합니다.
+        예전에는 "없음"을 "흡수됨"으로 읽어, 번역기가 500줄 넘게 밀린 느린 기계에서
+        그 줄들이 영영 번역되지 않았습니다. 흡수된 줄은 None 으로 남겨 구분합니다.
+        """
         if len(self._text_of) > keep * 2:
             for k in sorted(self._text_of)[:-keep]:
                 del self._text_of[k]
@@ -537,8 +549,10 @@ class LiveSession:
                 print(f"[live] 번역 루프 오류: {exc}", file=sys.stderr, flush=True)
 
     def _superseded(self, cue: dict) -> bool:
-        """이 줄이 그 사이 정제본에 흡수되었거나 글자가 바뀌었는가."""
-        return self._text_of.get(cue["id"]) != cue["text"]
+        """이 줄이 그 사이 정제본에 흡수되었거나 글자가 바뀌었는가. 기록에서 잘려 나가
+        모르는 줄은 아직 살아 있는 것으로 봅니다."""
+        cur = self._text_of.get(cue["id"], _UNKNOWN)
+        return cur is not _UNKNOWN and cur != cue["text"]
 
     def _translate(self, cue: dict, context: list[str] | None = None):
         src = cue.get("lang") or self.lang or ""
@@ -845,7 +859,7 @@ class LiveSession:
             self.emit({"type": "status", **self.status()})
         finally:
             self._release()
-            _retire(self.id)
+            _retire(self)
 
     def _resolve_hls(self, reconnect: bool = False):
         """방송 주소를 ffmpeg이 읽을 수 있는 것으로 풀어냅니다.
@@ -1102,14 +1116,22 @@ def shutdown(timeout: float = 8.0) -> int:
     return len(live_ids)
 
 
-def _retire(session_id: str):
+def _retire(session: "LiveSession"):
     """Move a finished session out of the live registry. Its final status and
     its subtitles stay in SQLite, so a late poll -- or a poll after the next
-    restart -- still gets an answer instead of a 404."""
+    restart -- still gets an answer instead of a 404.
+
+    **자기 자신일 때만** 뺍니다. 세션이 오류로 끝나면 화면은 곧 「이어받기」를 보이는데,
+    옛 세션의 `_run`은 정제기·번역 워커가 닫히기까지 최대 20초 더 살아 있습니다. 그 사이
+    같은 id 로 이어받은 새 세션이 등록부에 들어가면, 옛 것의 finally 가 그 새 세션을 빼고
+    상태를 자기 것(error)으로 덮어썼습니다 -- 새 세션은 「중단」도 듣지 않는 고아가 됐습니다.
+    """
     with _lock:
-        s = _sessions.pop(session_id, None)
-    if s is not None:
-        s._persist()
+        if _sessions.get(session.id) is session:
+            _sessions.pop(session.id, None)
+        else:
+            return                          # 이미 다른(이어받은) 세션이 그 자리에 있습니다
+    session._persist()
 
 
 def get(session_id: str) -> LiveSession | None:
@@ -1134,7 +1156,8 @@ def recent(limit: int = 50) -> list[dict]:
     길도 없었습니다. 이제 지울 수 있으니(`delete`) 한도는 넉넉히 두고,
     화면이 `?limit=`로 더 청할 수 있습니다.
     """
-    live_now = {sid: s.status() for sid, s in _sessions.items()}
+    with _lock:
+        live_now = {sid: s.status() for sid, s in _sessions.items()}
     out = []
     for row in store.sessions(limit):
         out.append({**row, **live_now.get(row["id"], {})})
@@ -1224,6 +1247,10 @@ def resume(session_id: str) -> dict:
         return {"error": "no such session"}
     if st.get("state") in ("starting", "loading", "running"):
         return {"error": "이미 받는 중입니다"}
+    if get(session_id) is not None:
+        # 저장된 상태는 끝났지만 옛 세션의 스레드가 아직 정리 중입니다(정제·번역 마무리,
+        # 최대 20초). 그 위에 새 세션을 얹으면 옛 finally 가 새 것을 밀어냅니다.
+        return {"error": "앞선 수신을 정리하는 중입니다. 몇 초 뒤 다시 누르십시오."}
     tab = st.get("source") == "tab"
     if not tab and not st.get("url"):
         return {"error": "주소가 남아 있지 않아 이어받을 수 없습니다"}

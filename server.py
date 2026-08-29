@@ -38,6 +38,11 @@ WEB = os.path.join(BASE, "web")
 
 # 화면에 보내는 API 키 자리표시. 진짜 키는 backends.json 밖으로 나가지 않습니다.
 KEY_MASK = "••••••••"
+# SSE 한 연결의 수명. MV3 서비스 워커의 "단일 요청 5분" 규칙보다 짧게 잡습니다.
+SSE_ROTATE_S = 270.0
+# JSON 몸통 상한. 자막 한 줄 고치기·엔진 설정이 전부라 1MB 면 넉넉합니다. 오디오(ingest)는
+# 따로 갑니다.
+JSON_MAX = 1 << 20
 
 # 미디어 타입. 화면의 파일은 몇 종류뿐입니다.
 CTYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -234,7 +239,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.wfile.write(b'data: {"type": "hello"}\n\n')
             self.wfile.flush()
+            started = time.time()
             while True:
+                if time.time() - started > SSE_ROTATE_S:
+                    self.wfile.write(b'data: {"type": "rotate"}\n\n')
+                    self.wfile.flush()
+                    return
                 try:
                     data = q.get(timeout=15)
                 except Exception:
@@ -302,7 +312,15 @@ class Handler(BaseHTTPRequestHandler):
                 # 여기서 되돌립니다.
                 self.close_connection = True
                 return
+            started = time.time()
             while True:
+                if time.time() - started > SSE_ROTATE_S:
+                    # 스트림을 일부러 끊습니다. 확장의 서비스 워커는 한 요청이 5분을 넘으면
+                    # 크롬이 내리므로, 그 전에 우리가 닫고 클라이언트가 Last-Event-ID 로
+                    # 곧 다시 붙게 합니다. 화면(EventSource)도 같은 규칙으로 되붙습니다.
+                    self.wfile.write(b'data: {"type": "rotate"}\n\n')
+                    self.wfile.flush()
+                    return
                 try:
                     seq, data = q.get(timeout=15)
                 except Exception:
@@ -377,6 +395,8 @@ class Handler(BaseHTTPRequestHandler):
         handler = POST_ROUTES.get(path)
         if handler is None:
             return self._json({"error": "not found"}, 404)
+        if length > JSON_MAX:
+            return self._json({"error": "요청이 너무 큽니다"}, 413)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except Exception:

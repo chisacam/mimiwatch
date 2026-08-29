@@ -231,7 +231,14 @@
         console.warn("[mimiwatch] " + m.error);
       }
     });
-    port.onDisconnect.addListener(() => { port = null; });
+    port.onDisconnect.addListener(() => {
+      port = null;
+      // 크롬은 확장 포트를 5분쯤마다 끊습니다(서비스 워커 수명 규칙). 받는 중이면 다시
+      // 붙습니다 -- 안 그러면 자막이 조용히 멈추고 「서버 연결 끊김」도 뜨지 않습니다.
+      if (currentValue === value && receiving !== false) {
+        setTimeout(() => { if (!port && currentValue === value) attach(value, videoId); }, 1000);
+      }
+    });
     port.postMessage({ type: "attach", value });
     startTick();
     // 포트가 선 뒤에 한 번 더 부릅니다. mount() 안의 apply() 는 이 줄보다

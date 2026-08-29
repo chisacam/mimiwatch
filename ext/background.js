@@ -184,7 +184,9 @@ async function startFromUrl(msg) {
  * 소리를 실제로 잡는 일은 offscreen 문서가 합니다 -- 서비스 워커에는
  * getUserMedia 도 AudioContext 도 없습니다. */
 async function startFromTab(msg) {
-  const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
+  // offscreen 문서를 **먼저** 띄웁니다. 스트림 id 는 "몇 초 안에 쓰지 않으면 만료"되는데,
+  // 문서를 만드는 데 그만큼 걸릴 수 있습니다. 서버에 세션을 만드는 것도 id 를 받기 전에.
+  await ensureOffscreen();
   const cfg = await api("/api/backends");
   const res = await post("/api/live/capture", {
     title: msg.title || "", lang: msg.lang || null,
@@ -193,7 +195,7 @@ async function startFromTab(msg) {
     genre: msg.genre || "general", profile: msg.profile || "broadcast",
   });
   if (res.error) return { ok: false, error: res.error };
-  await ensureOffscreen();
+  const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
   const started = await chrome.runtime.sendMessage({
     target: "offscreen", type: "capture",
     streamId, sessionId: res.id, base: await base(),
@@ -219,8 +221,8 @@ async function resumeSession(msg) {
   const tab = res.source === "tab";
   if (tab) {
     await stopCapture();                  // 다른 세션의 소리를 잡고 있었으면 놓습니다
+    await ensureOffscreen();              // 스트림 id 는 몇 초면 만료되므로 문서를 먼저
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
-    await ensureOffscreen();
     const started = await chrome.runtime.sendMessage({
       target: "offscreen", type: "capture",
       streamId, sessionId: res.id, base: await base(),
@@ -285,8 +287,13 @@ async function pump(url, onEvent, signal, cursor) {
         // `: keepalive` 는 흘립니다
       }
       if (data === null) continue;
-      try { onEvent(JSON.parse(data)); }
+      let ev;
+      try { ev = JSON.parse(data); }
       catch (_) { continue; /* 형식이 깨진 프레임은 버립니다 */ }
+      // 서버가 4.5분마다 스트림을 일부러 닫습니다(서비스 워커의 "한 요청 5분" 규칙).
+      // 끝난 것이 아니라는 표시를 남기고, 부르는 쪽이 곧 다시 붙습니다.
+      if (ev && ev.type === "rotate") { if (cursor) cursor.rotated = true; continue; }
+      onEvent(ev);
       if (id && cursor) cursor.lastId = id;
     }
   }
@@ -331,7 +338,7 @@ chrome.runtime.onConnect.addListener((port) => {
     // 라이브는 끊길 수 있습니다 -- 서버 재시작, 방송 종료, 잠자기. 조용히
     // 다시 붙습니다. 서버가 빠진 것(또는 기록 밖이면 쌓인 자막 전부)을 접속
     // 직후에 다시 보내 주므로 되붙어도 빠지는 줄이 없습니다.
-    const cursor = { lastId: null };
+    const cursor = { lastId: null, rotated: false };
     while (!closed) {
       abort = new AbortController();
       try {
@@ -339,6 +346,7 @@ chrome.runtime.onConnect.addListener((port) => {
                    (e) => { if (!closed) port.postMessage({ type: "event", data: e }); },
                    abort.signal, cursor);
         if (closed) return;
+        if (cursor.rotated) { cursor.rotated = false; continue; }   // 곧 Last-Event-ID 로 다시
         // 끝난 세션은 서버가 백로그를 다 보내고 닫습니다. 정상 종료입니다.
         port.postMessage({ type: "ended" });
         return;

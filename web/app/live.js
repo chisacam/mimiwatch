@@ -274,6 +274,9 @@ async function attachLive(sessionId, videoId) {
     if (m.type === "cue") onLiveCue(m);
     else if (m.type === "translation") onLiveTranslation(m);
     else if (m.type === "status") onLiveStatus(m);
+    // 서버가 4.5분마다 스트림을 일부러 닫습니다(확장의 서비스 워커 5분 규칙 때문).
+    // 곧 이어질 onerror 는 끊김이 아니므로 「연결 끊김」을 띄우지 않습니다.
+    else if (m.type === "rotate") state.live.rotating = true;
     // 다른 창에서 줄을 지웠습니다. 본 창과 대본 창이 같은 세션을 보고
     // 있으므로 한쪽에서 고친 것이 다른 쪽에도 닿아야 합니다.
     else if (m.type === "drop") dropCue(m.id);
@@ -285,6 +288,7 @@ async function attachLive(sessionId, videoId) {
     // 반대로 그 자동 재접속이 필요하니 그대로 둡니다.
     const st = state.live && state.live.state;
     if (st && !LIVE_RUNNING.includes(st)) { es.close(); return; }
+    if (state.live && state.live.rotating) { state.live.rotating = false; return; }
     $("lang-status").innerHTML = "라이브 연결 끊김";
   };
 }

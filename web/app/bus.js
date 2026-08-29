@@ -13,6 +13,7 @@
 
 let bus = null;
 let busWasDown = false;
+let busRotating = false;
 let listTimer = null;
 let listWaiters = [];
 
@@ -47,6 +48,8 @@ function connectBus() {
     if (m.type === "session") onSessionChanged(m);
     else if (m.type === "video") onVideoChanged(m);
     else if (m.type === "job") onJobChanged(m);
+    // 서버가 주기적으로 닫는 것(rotate)은 끊김이 아닙니다. 다시 붙어도 목록을 새로 읽지 않습니다.
+    else if (m.type === "rotate") busRotating = true;
     // 모델 내려받기의 진행·완료·실패. 대화상자가 열려 있으면 그 줄을 고치고,
     // 필요한 것이 다 갖춰지면 위쪽 안내 띠를 내립니다.
     else if (m.type === "model") onModelEvent(m);
@@ -55,7 +58,10 @@ function connectBus() {
     if (busWasDown) scheduleListRefresh(0);   // 끊긴 사이의 변화를 메웁니다
     busWasDown = false;
   };
-  bus.onerror = () => { busWasDown = true; };
+  bus.onerror = () => {
+    if (busRotating) { busRotating = false; return; }
+    busWasDown = true;
+  };
   // 뒤에 있던 탭은 크롬이 타이머를 1분에 한 번으로 늦추고, 오래 두면 통째로
   // 얼립니다(메모리 절약). 그 사이 알림이 밀리거나 끊길 수 있으므로, 탭이
   // 다시 보이면 목록을 한 번 새로 읽어 그동안의 변화를 메웁니다 -- 유튜브를

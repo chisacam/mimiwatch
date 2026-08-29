@@ -1,6 +1,8 @@
 """라이브 세션의 발행 경로와 재접속. 모델은 올리지 않습니다."""
 import numpy as np
 import pytest
+import threading
+import time
 
 import live
 import store
@@ -315,7 +317,7 @@ def test_tab_feed_slices_into_frames_and_idle_flushes_once():
     assert abs(s.audio_s - 2.0) < 1e-9
     live.Ring.pop, real_pop = (lambda self, timeout: live.Ring.TIMEOUT), live.Ring.pop
     try:
-        assert next(gen) is None                 # 무음 2초: 한 번 비웁니다
+        assert next(gen) is None                 # 무음 2초(0.5초 × 4): 한 번 비웁니다
     finally:
         live.Ring.pop = real_pop
     s.stop()
@@ -328,3 +330,98 @@ def test_tab_ring_drops_oldest_when_the_browser_outruns_asr():
     s._ring.set_max(1.0)                         # 시험용으로 1초만
     r = s.feed(b"\x00" * (live.CHUNK * 2 * 15))
     assert r["queued_s"] == 1.0 and abs(r["dropped_s"] - 0.5) < 1e-9
+
+
+# ---- 초점: 받아 적는 세션은 한 번에 하나 ------------------------------------------
+
+def test_unfocus_flushes_and_ends_the_generator(session):
+    s = session
+    frame = np.zeros(live.CHUNK, dtype=np.float32)
+    for i in range(1, 4):
+        s._ring.push(("audio", i * 0.1, frame))
+    gen = s._consume()
+    assert isinstance(next(gen), np.ndarray)
+    s.set_focus(False)
+    rest = list(gen)
+    assert rest[-1] is None                      # 걸린 발화를 확정하고 물러납니다
+    assert s.state == "starting" and not s._ended and s._ring.seconds() > 0   # 세션은 그대로
+    assert s.status()["focused"] is False
+    assert s.emitted[-1]["type"] == "status" and s.emitted[-1]["focused"] is False
+
+
+def _fake_engines(monkeypatch, log):
+    class FakeRefiner:
+        def __init__(self, asr, history, sink):
+            self.sid = sink.s.id
+        def close(self, timeout=10.0):
+            log.append((self.sid, "refiner.close"))
+    def fake_run_stream(chunks, vad, asr, sink, history, refiner=None):
+        sid = sink.s.id
+        log.append((sid, "start"))
+        n = sum(1 for c in chunks if isinstance(c, np.ndarray))
+        log.append((sid, "end", n))
+    monkeypatch.setattr(live, "build_vad", lambda **kw: object())
+    monkeypatch.setattr(live, "Refiner", FakeRefiner)
+    monkeypatch.setattr(live, "run_stream", fake_run_stream)
+    monkeypatch.setattr(live.LiveSession, "_ensure_engines", lambda self: setattr(self, "_asr", object()))
+    monkeypatch.setattr(live.LiveSession, "_start_reader", lambda self, src, idx: None)
+
+
+def test_only_one_session_transcribes_and_the_old_one_stops_first(monkeypatch):
+    log = []
+    _fake_engines(monkeypatch, log)
+    a = live.LiveSession("https://x/a", "ja", "ko", "local-m2m100"); a._tr = None
+    b = live.LiveSession("https://x/b", "ja", "ko", "local-m2m100"); b._tr = None
+    b.set_focus(False)                           # b 는 소리만 받는 대기 세션
+    frame = np.zeros(live.CHUNK, dtype=np.float32)
+    for i in range(1, 21):
+        b._ring.push(("audio", i * 0.1, frame))
+    ta = threading.Thread(target=a._transcribe, args=("src", -2), daemon=True)
+    tb = threading.Thread(target=b._transcribe, args=("src", -2), daemon=True)
+    ta.start(); tb.start()
+    deadline = time.time() + 5
+    while (a.id, "start") not in log and time.time() < deadline:
+        time.sleep(0.05)
+    assert (a.id, "start") in log and not any(e[0] == b.id for e in log)   # b 는 기다립니다
+    # 초점을 b 로. 옛 것을 먼저 끄고 새 것을 켭니다(multiview_focus 의 순서).
+    a.set_focus(False)
+    b.set_focus(True)
+    deadline = time.time() + 5
+    while (b.id, "start") not in log and time.time() < deadline:
+        time.sleep(0.05)
+    kinds = [(e[0], e[1]) for e in log]
+    assert kinds.index((a.id, "end")) < kinds.index((a.id, "refiner.close")) < kinds.index((b.id, "start"))
+    a.stop(); b.stop()
+    ta.join(5); tb.join(5)
+    assert not ta.is_alive() and not tb.is_alive()
+    ended_b = [e for e in log if e[0] == b.id and e[1] == "end"]
+    assert ended_b and ended_b[0][2] == 20      # 대기 중 링에 고인 스무 조각을 먼저 받아 적었습니다
+    assert a.state == "stopped" and b.state == "stopped"
+    assert not live._transcriber.locked()
+
+
+def test_set_asr_on_a_warm_session_records_the_engine(session):
+    s = session
+    live._sessions[s.id] = s
+    try:
+        assert s._asr is None
+        got = live.set_asr(s.id, "tcpp-lite")
+        assert got["asr"] == "tcpp-lite" and s.asr_backend_id == "tcpp-lite"
+        assert "error" in live.set_asr(s.id, "no-such")
+    finally:
+        live._sessions.clear()
+
+
+def test_resume_prefers_the_received_position(monkeypatch):
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
+    base = {"state": "stopped", "stopped_by": "user", "url": "https://x/live", "source": "hls",
+            "source_lang": "ja", "viewer_lang": "ko", "backend": "local-m2m100",
+            "asr_backend": "tcpp-lite", "media_base": 10.0, "audio_s": 5.0, "lines": 0}
+    store.save_session({**base, "id": "warm-1", "recv_t": 500.0}, "")
+    live.resume("warm-1")
+    assert live.get("warm-1").resume_from == 500.0
+    live._sessions.clear()
+    store.save_session({**base, "id": "old-1"}, "")   # 옛 기록에는 recv_t 가 없습니다
+    live.resume("old-1")
+    assert live.get("old-1").resume_from == 15.0
+    live._sessions.clear()

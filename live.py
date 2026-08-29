@@ -170,6 +170,11 @@ _UNKNOWN = object()
 
 _sessions: dict[str, "LiveSession"] = {}
 _lock = threading.Lock()
+# 프로세스에 **한 세션만** 받아 적습니다. 전사 모델은 한 벌을 나눠 쓰는데(models.py) 같은
+# 모델을 두 세션이 동시에 돌리는 것은 바인딩이 보장하지 않습니다(tcpp_asr.py). 멀티뷰의
+# 초점이 옮겨 갈 때 옛 세션이 이 토큰을 놓은 뒤에야 새 세션이 잡습니다 -- 그 사이의 소리는
+# 새 세션의 링이 들고 있으므로 잃는 것이 없습니다.
+_transcriber = threading.Lock()
 
 # 끝난 세션의 마지막 상태는 SQLite가 들고 있습니다. 예전에는 메모리 딕셔너리에
 # 최근 20개만 남겨 두었는데, 재시작하면 그마저 사라지는 데다 상한을 넘긴 세션은
@@ -422,9 +427,11 @@ class LiveSession:
         self._ended = False         # 읽기가 끝났다(방송 종료·포기). 링의 ("end",) 와 함께
         self._rx: threading.Thread | None = None
         # 초점: 이 세션의 소리를 지금 받아 적는가. 혼자 받는 세션은 태어날 때부터 초점이고
-        # 멀티뷰에서만 꺼집니다(set_focus).
+        # 멀티뷰에서만 꺼집니다(set_focus). 초점이 없는 동안에도 링은 채워집니다.
         self._focus = threading.Event()
         self._focus.set()
+        self.group = ""             # 멀티뷰 묶음 id. 비면 혼자 받는 세션
+        self._warm_persisted_s = 0.0   # 대기 중 마지막으로 상태를 적었을 때의 _recv_s
         self._asr = None            # released on stop; see _release()
         # 인식기 객체는 세션이 끝나면 놓아주지만 어떤 엔진이었는지는
         # 남아야 합니다. 객체에서 그때그때 읽으면, 놓아준 뒤에 쓰이는
@@ -498,6 +505,12 @@ class LiveSession:
                 "genre": self.genre,
                 "window_s": round(self.window_s, 1),
                 "audio_s": round(self.audio_s, 1),
+                # 받아 적은 자리(media_base+audio_s)와 따로, 읽는 쪽이 받은 자리. 초점이
+                # 없는 세션은 앞쪽이 멈춰 있어도 뒤쪽은 계속 나아갑니다. 이어받기는 뒤쪽에서.
+                "recv_s": round(self._recv_s, 1),
+                "recv_t": round(self._recv_base + self._recv_s, 2),
+                "ring_s": round(self._ring.seconds(), 1),
+                "focused": self._focus.is_set(), "group": self.group,
                 "elapsed": round(time.time() - self.started, 1),
                 "lines": self.lines, "translated": self.translated}
 
@@ -693,6 +706,25 @@ class LiveSession:
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
 
+    def set_focus(self, on: bool):
+        """이 세션의 소리를 받아 적을지. 꺼도 세션은 살아서 소리를 계속 받습니다(링).
+
+        켜면 받아 적는 스레드가 토큰(_transcriber)을 잡고 링에 고인 것부터 해독합니다.
+        끄면 지금 도는 run_stream 이 걸린 발화를 확정하고 물러납니다 -- 그 뒤 토큰이 풀립니다.
+        """
+        if on == self._focus.is_set():
+            return
+        if on:
+            self._focus.set()
+        else:
+            self._focus.clear()
+        if self.source == "tab":
+            # 탭 소리는 브라우저가 늦출 수 없어 초점일 때는 길게 받아 둡니다. 초점이 아니면
+            # 그만큼 들고 있을 이유가 없습니다 -- 돌아왔을 때 30초면 충분합니다.
+            self._ring.set_max(INGEST_MAX_S if on else RING_S)
+        self._persist()
+        self.emit({"type": "status", **self.status()})
+
     def stop(self):
         self.stopped_by = self.stopped_by or "user"
         self._stop.set()
@@ -829,6 +861,12 @@ class LiveSession:
                and not self._stop.is_set()):
             self._ring.wait_room(0.2)
         self._ring.push(item)
+        # 대기 세션은 자막이 없어 상태가 저장될 계기가 없습니다. 재시작 뒤 「어디까지
+        # 받았는가」(recv_t)가 몇 시간 전으로 남지 않게 이따금 적어 둡니다.
+        if (not self._focus.is_set()
+                and self._recv_s - self._warm_persisted_s >= RING_S):
+            self._warm_persisted_s = self._recv_s
+            self._persist()
 
     def _read_loop(self):
         """ffmpeg이 내놓는 소리를 0.1초 조각으로 링에 넣습니다. **끊기면 같은 세션
@@ -903,15 +941,20 @@ class LiveSession:
         """
         idle_flush = self.source == "tab"   # 탭만 무음 2초에 비웁니다 -- 예전 규칙 그대로
         idle = False
+        waited = 0.0
         while not self._stop.is_set() and self._focus.is_set():
-            item = self._ring.pop(timeout=2.0)
+            # 짧게 기다립니다. 초점이 옮겨 가면 그만큼 빨리 알아채야 다음 세션이 토큰을
+            # 받습니다. 무음 판정(2초)은 기다린 시간을 더해서 냅니다.
+            item = self._ring.pop(timeout=0.5)
             if item is Ring.TIMEOUT:
+                waited += 0.5
                 # 소리가 오지 않습니다 -- 탭이라면 영상을 멈췄거나 공유가 끊긴 것.
                 # 오지 않을 무음을 기다리는 대신 걸려 있는 발화를 확정합니다.
-                if idle_flush and not idle:
+                if idle_flush and not idle and waited >= 2.0:
                     idle = True
                     yield None
                 continue
+            waited = 0.0
             kind = item[0]
             if kind == "audio":
                 self.audio_s = item[1]
@@ -1062,68 +1105,99 @@ class LiveSession:
     def _transcribe(self, src, start_index):
         """소리를 받아 자막으로 내보냅니다. 소리가 어디서 오는지는 모릅니다.
 
-        ffmpeg 파이프든 브라우저가 올린 큐든 여기부터는 같은 길입니다 --
+        ffmpeg 파이프든 브라우저가 올린 조각이든 여기부터는 같은 길입니다 --
         `run_stream`이 받는 것은 float32 조각을 내놓는 제너레이터뿐입니다.
-        """
-        asr = vad = history = refiner = None
-        try:
-            cfg = config.load()
-            spec = config.find("tr", self.backend_id, cfg)
-            asr_spec = config.find("asr", self.asr_backend_id, cfg)
-            self._tr = mw_translate.build(spec, self.genre)
 
+        받아 적기는 **초점을 쥔 동안**만 합니다(_episode). 혼자 받는 세션은 처음부터
+        초점이라 에피소드가 하나뿐이고, 멀티뷰에서는 초점이 오갈 때마다 하나씩입니다.
+        그 사이 이 스레드는 초점을 기다리고, 읽기 스레드는 링을 채웁니다.
+        """
+        self._start_reader(src, start_index)   # 탭이면 할 일 없음 -- feed() 가 넣습니다
+        self.state = "running"
+        self._persist()
+        self.emit({"type": "status", **self.status()})
+        if self.gap_s >= 1.0:
+            # 조용한 구멍을 남기지 않습니다. 되감아도 메우지 못한
+            # 구간이 있으면 스크립트에 그렇게 적습니다 -- 자막이
+            # 없는 것과 받아 적지 못한 것은 다른 이야기입니다.
+            self.publish_line(
+                "note",
+                f"⋯ 서버가 멈춘 사이 약 {int(self.gap_s)}초를 받지 "
+                f"못했습니다 ⋯", self.lang or "", "")
+        if self.source == "tab" and self.resume_from:
+            # 탭 오디오는 되감을 수 없습니다. 공유가 끊긴 동안의 소리는
+            # 아무 데도 남아 있지 않으므로 몇 초인지도 알 수 없습니다.
+            self.publish_line(
+                "note", "⋯ 여기서부터 탭 소리를 다시 받습니다. 공유가 "
+                "끊긴 사이는 받지 못했습니다 ⋯", self.lang or "", "")
+        while not self._stop.is_set() and not self._ended:
+            if not self._focus.wait(0.5):
+                continue                 # 대기 세션: 링만 채워지고 있습니다
+            self._episode()
+        if self.state != "error":        # 수신 루프가 포기했으면 그 말을 남깁니다
+            self.state = "stopped"
+        self._persist()
+        self.emit({"type": "status", **self.status()})
+
+    def _ensure_engines(self):
+        """전사기·번역기를 처음 초점을 받을 때 한 번 만듭니다. 가중치는 프로세스가 나눠
+        쓰므로(models.py) 세션이 드는 것은 해독 세션과 껍데기뿐이고, 초점을 잃어도 놓지
+        않습니다 -- 다음 초점에서 바로 씁니다. 대기 중 「관리」에서 엔진을 바꾼 것은
+        asr_backend_id/backend_id 에 적혀 있다가 여기서 반영됩니다."""
+        fresh = self._asr is None
+        cfg = config.load()
+        if self._tr is None:
+            spec = config.find("tr", self.backend_id, cfg)
+            self._tr = mw_translate.build(spec, self.genre)
+        if self._asr is None:
+            asr_spec = config.find("asr", self.asr_backend_id, cfg)
             # Speaker tags are a recorded-video feature. CAM++ needs enough
             # voice in one segment to place it, and live splits at 3-4s to
             # keep up with a talker who rarely finishes a long sentence: in
             # 70 seconds that produced six speaker ids on a stream that did
             # not have six people talking. A label that invents speakers is
             # worse than no label.
-            asr = self._asr = build_live_asr(asr_spec, self.lang, threads=4)
-            self.asr_label = asr.label
+            self._asr = build_live_asr(asr_spec, self.lang, threads=4)
+            self.asr_label = self._asr.label
+        if fresh:
+            # 엔진 이름이 상태에 실려야 화면이 「전사 <엔진>」을 적습니다.
+            self._persist()
+            self.emit({"type": "status", **self.status()})
+
+    def _episode(self):
+        """초점을 쥔 동안의 run_stream 한 번. 프로세스의 전사 토큰 안에서 돕니다.
+
+        VAD·오디오 이력·정제기는 매번 새로 만듭니다 -- 셋 다 run_stream 시작을 0으로
+        놓은 표본 위치를 기준으로 하므로, 초점이 없던 공백을 넘겨 이어 쓰면 선행 구간과
+        정제 원본이 엉뚱한 소리를 가리킵니다. 정제기의 close() 까지 토큰 안에서 끝내야
+        다른 세션이 같은 모델을 돌리기 시작할 때 이쪽의 마지막 해독이 끝나 있습니다.
+        """
+        while not _transcriber.acquire(timeout=0.5):
+            if not self._focus.is_set() or self._stop.is_set():
+                return               # 기다리는 사이 초점이 다른 데로 갔습니다
+        vad = history = refiner = None
+        try:
+            if not self._focus.is_set() or self._stop.is_set() or self._ended:
+                return
+            self._ensure_engines()
+            asr = self._asr
             vad = build_vad(min_silence=self.min_silence,
                             max_speech=self.max_speech)
             sink = Sink(self)
             history = AudioHistory(SAMPLE_RATE)
             refiner = Refiner(asr, history, sink) if self.refine else None
-
-            self._start_reader(src, start_index)   # 탭이면 할 일 없음 -- feed() 가 넣습니다
-            chunks = self._consume()
-
-            self.state = "running"
-            self._persist()
-            self.emit({"type": "status", **self.status()})
-            if self.gap_s >= 1.0:
-                # 조용한 구멍을 남기지 않습니다. 되감아도 메우지 못한
-                # 구간이 있으면 스크립트에 그렇게 적습니다 -- 자막이
-                # 없는 것과 받아 적지 못한 것은 다른 이야기입니다.
-                self.publish_line(
-                    "note",
-                    f"⋯ 서버가 멈춘 사이 약 {int(self.gap_s)}초를 받지 "
-                    f"못했습니다 ⋯", self.lang or "", "")
-            if self.source == "tab" and self.resume_from:
-                # 탭 오디오는 되감을 수 없습니다. 공유가 끊긴 동안의 소리는
-                # 아무 데도 남아 있지 않으므로 몇 초인지도 알 수 없습니다.
-                self.publish_line(
-                    "note", "⋯ 여기서부터 탭 소리를 다시 받습니다. 공유가 "
-                    "끊긴 사이는 받지 못했습니다 ⋯", self.lang or "", "")
-            run_stream(chunks, vad, asr, sink, history, refiner)
+            run_stream(self._consume(), vad, asr, sink, history, refiner)
             if refiner is not None:
-                # 마지막 무리의 정제가 끝나기를 기다립니다. 상태를 「종료됨」으로
-                # 적은 뒤에 정제본이 도착하면 끝난 세션에 줄이 늘어납니다.
+                # 마지막 무리의 정제가 끝나기를 기다립니다. 초점이 옮겨 간 뒤나 상태를
+                # 「종료됨」으로 적은 뒤에 정제본이 도착하면 안 됩니다.
                 refiner.close()
-            if self.state != "error":     # 수신 루프가 포기했으면 그 말을 남깁니다
-                self.state = "stopped"
-            self._persist()
-            self.emit({"type": "status", **self.status()})
         finally:
             # 정제 스레드를 꼭 끝냅니다. 살려 두면 그 스레드가 전사 모델을
             # 쥐고 있어 아래 del 이 소용없습니다.
             if refiner is not None:
                 refiner.close()
-            # 이름을 지워야 모델이 놓입니다. try가 이름을 만들기 전에
-            # 실패할 수 있으므로 위에서 미리 None으로 묶어 두었습니다.
-            del asr, vad, history, refiner
-
+            del vad, history, refiner
+            _transcriber.release()
 
 def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
           profile: str = "broadcast", asr_backend_id: str = "",
@@ -1429,7 +1503,11 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     prior = store.cues(session_id)
     s._seq = max((int(c["id"]) for c in prior), default=0)
     s.lines = len(prior)
-    s.resume_from = float(st.get("media_base") or 0.0) + float(st.get("audio_s") or 0.0)
+    # 「받은 자리」(recv_t)에서 잇습니다. 멀티뷰의 대기 세션은 받아 적은 자리(media_base+
+    # audio_s)가 몇 시간 전에 멈춰 있을 수 있는데, 거기서 되감으면 DVR 창 안이라도 이미
+    # 본 구간을 다시 받아 적게 됩니다. 옛 기록에는 recv_t 가 없으므로 그때는 예전 식으로.
+    s.resume_from = float(st.get("recv_t")
+                          or (float(st.get("media_base") or 0.0) + float(st.get("audio_s") or 0.0)))
 
     with _lock:
         _sessions[s.id] = s
@@ -1458,6 +1536,12 @@ def set_asr(session_id: str, asr_backend_id: str) -> dict:
     spec = config.find_asr(asr_backend_id)
     if spec is None:
         return {"error": f"'{asr_backend_id}' 전사 엔진이 없습니다"}
+    if s._asr is None:
+        # 아직 한 번도 초점을 받지 않아 엔진을 만들지 않았습니다(멀티뷰의 대기 세션).
+        # 첫 초점에서 이 id 로 만듭니다.
+        s.asr_backend_id = asr_backend_id
+        s._persist()
+        return {"asr": asr_backend_id, "label": "", "device": "", "threads": 0}
     if not hasattr(s._asr, "swap"):
         return {"error": "이 세션의 전사기는 갈아 끼울 수 없습니다"}
     try:

@@ -36,6 +36,13 @@ if (-not $env:MIMIWATCH_VERSION) {
 function Say { param($m) Write-Host "`n> $m" -ForegroundColor White }
 function Run {
   param([string] $File, [string[]] $Args)
+  # Start-Process 는 PATH 의 이름을 스스로 풀지 못하는 경우가 있습니다(액션 러너의
+  # `python` 이 그랬습니다 -- "The system cannot find the file specified"). 전체
+  # 경로로 바꿔 넘깁니다. 이미 경로면 그대로입니다.
+  if (-not (Test-Path -LiteralPath $File)) {
+    $cmd = Get-Command $File -EA SilentlyContinue
+    if ($cmd -and $cmd.Source) { $File = $cmd.Source }
+  }
   $p = Start-Process -FilePath $File -ArgumentList $Args -NoNewWindow -Wait -PassThru
   if ($p.ExitCode -ne 0) { throw "$File $($Args -join ' ') -> 종료 코드 $($p.ExitCode)" }
 }

@@ -33,6 +33,7 @@ import uuid
 
 import numpy as np
 
+import bus
 import config
 import store
 import stream
@@ -381,7 +382,11 @@ class LiveSession:
                 "lines": self.lines, "translated": self.translated}
 
     def _persist(self):
-        store.save_session(self.status(), self.video_id)
+        st = self.status()
+        store.save_session(st, self.video_id)
+        # 목록을 보고 있는 모든 화면에 알립니다 -- 새 세션, 줄 수, 상태 변화.
+        # 자막 한 줄마다 오지만 화면은 그 줄만 제자리에서 고치므로 가볍습니다.
+        bus.publish({"type": "session", **st})
 
     # ---- publishing -------------------------------------------------------
     def publish_line(self, kind: str, text: str, lang: str, speaker: str):
@@ -946,6 +951,7 @@ def set_title(session_id: str, title: str) -> dict:
     video_id = st.pop("video_id", "") or ""
     st["title"] = title
     store.save_session(st, video_id)
+    bus.publish({"type": "session", **st, "video_id": video_id})
     return {"ok": True, "title": title}
 
 
@@ -1071,6 +1077,7 @@ def delete(session_id: str) -> dict:
         return {"error": "받는 중인 세션은 지울 수 없습니다. 먼저 「중단」하십시오."}
     if not store.delete_session(session_id):
         return {"error": "no such session"}
+    bus.publish({"type": "session", "id": session_id, "deleted": True})
     return {"deleted": session_id}
 
 

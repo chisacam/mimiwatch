@@ -22,6 +22,7 @@ import threading
 import time
 import uuid
 
+import bus
 import config
 import translate as mw_translate
 import transcribe_vod as vod
@@ -58,6 +59,9 @@ def _note(job_id: str, **kw):
         j.update(kw)
         snapshot = dict(j)
     store.save_job(snapshot)
+    # 다른 창도 이 작업의 진행을 봅니다. 시작한 창은 폴링으로도 보지만, 확장이나
+    # 다른 탭에서 시작한 작업은 이것이 유일한 길입니다.
+    bus.publish({"type": "job", **snapshot})
 
 
 def _new_job(**fields) -> str:
@@ -74,6 +78,7 @@ def _new_job(**fields) -> str:
         _jobs[job_id] = job
         snapshot = dict(job)
     store.save_job(snapshot)
+    bus.publish({"type": "job", **snapshot})
     return job_id
 
 
@@ -134,6 +139,7 @@ def save_video(vid: str, doc: dict):
                                    for b in c.get("translations", {})})
     store.save_doc(vid, doc)
     store.replace_cues(vid, cues)
+    bus.publish({"type": "video", "id": vid, "reason": "saved"})
 
 
 def delete_video(vid: str, keep_audio: bool = False) -> dict:
@@ -150,6 +156,7 @@ def delete_video(vid: str, keep_audio: bool = False) -> dict:
     if not keep_audio and os.path.exists(wav):
         freed = os.path.getsize(wav)
         os.remove(wav)
+    bus.publish({"type": "video", "id": vid, "reason": "deleted"})
     return {"deleted": vid, "freed_mb": round(freed / 1e6, 1)}
 
 
@@ -266,6 +273,8 @@ def _mark_translated(owner: str):
     if d is not None:
         d["translated"] = True
         store.save_doc(owner, d)
+        # 번역이 붙었습니다. 이 영상을 열어 둔 다른 창은 자막을 다시 읽습니다.
+        bus.publish({"type": "video", "id": owner, "reason": "translated"})
 
 
 def start_retranslate(value: str, backend_id: str, cue_ids=None,

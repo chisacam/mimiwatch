@@ -111,6 +111,38 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   return row;
 }
 
+/* 목록의 세션 줄 하나를 서버가 보낸 상태로 고칩니다. 줄 수, 상태, 이름.
+ * 목록을 통째로 다시 그리지 않으므로 마우스를 올려 둔 줄이 흔들리지 않습니다. */
+function updateSessionRow(row, s) {
+  const running = LIVE_RUNNING.includes(s.state);
+  const m = row.querySelector(".vm");
+  if (m) {
+    const n = s.lines != null ? s.lines : (s.cues || 0);
+    m.textContent = `${n}줄` + (running ? "" : `  ·  ${LIVE_STATE[s.state] || s.state}`);
+  }
+  row.classList.toggle("stopped", !running);
+  row.classList.remove("pending");
+  const title = s.title || s.url || "";
+  if (title && title !== row.dataset.title) {
+    row.dataset.title = title;
+    const t = row.querySelector(".vt");
+    if (t) t.textContent = title;
+    if (row.classList.contains("on") && !document.querySelector(".title-edit")) setNowTitle(title);
+  }
+  // 끝난 방송만 지울 수 있습니다. 받는 중이던 줄이 끝나면 🗑 이 생겨야 합니다.
+  const hasDel = !!row.querySelector(".vdel");
+  if (!running && !hasDel) {
+    const del = document.createElement("button");
+    del.className = "vdel";
+    del.title = "이 방송의 자막 내역을 삭제합니다";
+    del.textContent = "🗑";
+    del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(s.id, row.dataset.title); });
+    row.lastElementChild.replaceWith(del);
+  } else if (running && hasDel) {
+    row.querySelector(".vdel").replaceWith(document.createElement("span"));
+  }
+}
+
 function openFromList(value) {
   const row = $("video-list").querySelector(`.video-row[data-value="${CSS.escape(value)}"]`);
   const sid = row && row.dataset.session;
@@ -164,7 +196,9 @@ async function refreshVideoList(selectId, pre) {
   // 라이브 세션에는 큐 파일이 없어서, 예전에는 탭을 닫으면 그 방송의 자막이
   // 통째로 사라졌습니다. 이제 서버가 들고 있으므로 목록에 올려 다시 엽니다.
   // 한 줄도 못 받은 세션은 열어 봐야 볼 것이 없으니 뺍니다.
-  sessions.filter(s => s.cues).forEach(s => {
+  // 한 줄도 못 받은 세션은 열어 봐야 볼 것이 없으니 뺍니다 -- 받는 중인 것은
+  // 예외입니다. 다른 창에서 막 시작한 방송이 첫 자막 전에도 보여야 합니다.
+  sessions.filter(s => s.cues || LIVE_RUNNING.includes(s.state)).forEach(s => {
     const running = LIVE_RUNNING.includes(s.state);
     box.appendChild(videoRow({
       value: "live:" + s.id, session: s.id,

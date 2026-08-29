@@ -205,7 +205,10 @@ function setLibrary(hidden) {
       '<div class="empty">이 자막 내역은 더 이상 없습니다. 본 창에서 다시 여십시오.</div>';
     return;
   }
-  if (!list.length && !sessions.some(s => s.cues)) {
+  // 여기부터는 목록이 있는 화면입니다. 서버가 밀어 주는 변화(새 세션·상태·
+  // 작업)를 받아 새로고침 없이 갱신합니다.
+  connectBus();
+  if (!list.length && !sessions.some(s => s.cues || LIVE_RUNNING.includes(s.state))) {
     await refreshVideoList(undefined, [list, sessions]);   // 빈 목록 안내
     setLibrary(false);              // 처음 온 사람에게는 목록을 펼쳐 둡니다
     return;

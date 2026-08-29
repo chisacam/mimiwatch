@@ -434,7 +434,7 @@ async function watchRetranslate(jobId, kept) {
   box.hidden = false;
   box.classList.remove("error");
   $("job-cancel").disabled = false;
-  state.jobId = jobId;
+  trackJob(jobId);
   while (true) {
     await new Promise(r => setTimeout(r, 500));
     const st = await (await fetch(`/api/job/${jobId}`)).json();

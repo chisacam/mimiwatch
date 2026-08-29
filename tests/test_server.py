@@ -108,6 +108,15 @@ def test_bad_bodies(server):
     assert s == 200 and json.loads(b)["error"] == "no such session"
 
 
+def test_event_bus_stream_says_hello(server):
+    base, _ = server
+    r = urllib.request.Request(base + "/api/events")
+    with urllib.request.urlopen(r, timeout=10) as resp:
+        assert resp.headers.get("Content-Type", "").startswith("text/event-stream")
+        first = resp.readline()
+        assert first.strip() == b'data: {"type": "hello"}'
+
+
 def test_engine_config_roundtrip(server):
     base, _ = server
     assert "error" in json.loads(req(base, "/api/asr-backends/delete", {"id": "tcpp-best"})[1])

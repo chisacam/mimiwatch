@@ -20,6 +20,7 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import bus
 import config
 import export
 import jobs
@@ -75,6 +76,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         pass  # 우리 진행 로그가 볼 것이고, 요청 한 줄씩은 소음입니다
+
+    def handle(self):
+        # 크롬은 미리 이어 둔 소켓을 요청 없이 끊기도 합니다. 그때 나는
+        # ConnectionResetError 는 정상이라 스택을 로그에 남길 일이 아닙니다.
+        try:
+            super().handle()
+        except ConnectionError:
+            pass
 
     # ---- GET ----------------------------------------------------------------
 
@@ -170,6 +179,32 @@ class Handler(BaseHTTPRequestHandler):
         self._send(body, ctype, headers={
             "Content-Disposition": f"attachment; filename=\"{plain}.{fmt}\"; "
                                    f"filename*=UTF-8''{quoted}"})
+
+    def get_bus(self):
+        """전역 변화 알림(bus.py)을 SSE로. 화면이 하나 붙여 두고 목록·작업
+        상자를 그때그때 고칩니다. 첫 프레임은 붙었다는 표시입니다."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        q = bus.subscribe()
+        try:
+            self.wfile.write(b'data: {"type": "hello"}\n\n')
+            self.wfile.flush()
+            while True:
+                try:
+                    data = q.get(timeout=15)
+                except Exception:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    continue
+                self.wfile.write(f"data: {data}\n\n".encode())
+                self.wfile.flush()
+        except ConnectionError:
+            pass
+        finally:
+            bus.unsubscribe(q)
 
     def get_events(self, sid: str):
         sid = os.path.basename(sid)
@@ -475,6 +510,7 @@ GET_ROUTES = {
     "/api/backends": Handler.get_backends,
     "/api/live/sessions": Handler.get_sessions,
     "/api/export": Handler.get_export,
+    "/api/events": Handler.get_bus,
 }
 # 뒤가 붙는 경로. 긴 접두가 먼저여야 `/api/video/`가 `/api/videos`를 삼키지
 # 않습니다 -- 정확한 경로는 위 사전에서 먼저 찾으므로 여기서는 순서만 지킵니다.

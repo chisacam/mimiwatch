@@ -17,7 +17,7 @@ async function runTranslateJob(video, backend) {
     body: JSON.stringify({ video, backend, genre: currentGenre() }),
   })).json();
   if (res.error) { jobError(res.error); return; }
-  state.jobId = res.id;
+  trackJob(res.id);
 
   while (true) {
     await new Promise(r => setTimeout(r, 700));
@@ -53,6 +53,43 @@ async function runTranslateJob(video, backend) {
       return;
     }
   }
+}
+
+/* 이 창이 시작해 폴링으로 보고 있는 작업. bus.js 가 같은 작업의 알림을 받아도
+ * 두 번 그리지 않게 표시해 둡니다. */
+function trackJob(id) {
+  state.jobId = id;
+  state.jobLocal = true;
+}
+
+/* 다른 창(또는 확장)에서 시작한 작업을 같은 상자에 그립니다. 값은 서버가
+ * 밀어 주는 스냅샷입니다. 이 창이 제 작업을 보는 중이면 그쪽이 우선입니다. */
+function renderForeignJob(st) {
+  if (state.jobId && state.jobId !== st.id && state.jobLocal) return;
+  const box = $("job");
+  if (st.state === "running") {
+    state.jobId = st.id;
+    state.jobLocal = false;           // 「중단」은 이 id 로 나가되, 폴링은 하지 않습니다
+    box.hidden = false;
+    box.classList.toggle("error", !!st.degraded);
+    $("job-cancel").hidden = false;
+    $("job-cancel").disabled = false;
+    const label = st.kind === "transcribe"
+      ? (PHASE_LABEL[st.phase] || st.phase || "") + (st.title ? ` · ${st.title.slice(0, 28)}` : "")
+      : "다시 번역하는 중…";
+    box.querySelector(".job-label").textContent = label + " (다른 창)";
+    const pct = st.total ? Math.round(st.done / st.total * 100) : null;
+    $("job-fill").style.width = pct === null ? "12%" : pct + "%";
+    $("job-count").textContent = st.total ? `${st.done}/${st.total}` : "…";
+    $("job-source").textContent = st.degraded ? `원격 응답 없음 · 로컬 대체 ${st.by_local}건` : "";
+    return;
+  }
+  if (state.jobId !== st.id) return;
+  state.jobId = null;
+  $("job-count").textContent = st.state === "done" ? `완료 · ${st.elapsed || 0}초`
+    : st.state === "cancelled" ? "중단됨" : (st.error || st.state);
+  box.classList.toggle("error", st.state === "error");
+  setTimeout(() => { box.hidden = true; }, 3000);
 }
 
 const PHASE_LABEL = {
@@ -116,7 +153,7 @@ function setAddSource(v) {
 
 async function watchTranscribe(jobId) {
   const box = $("job");
-  state.jobId = jobId;
+  trackJob(jobId);
   box.hidden = false; box.classList.remove("error");
   $("job-cancel").disabled = false;
   $("job-source").textContent = "";

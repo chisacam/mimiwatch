@@ -265,6 +265,31 @@ def test_event_bus_rotate_really_closes_the_socket(server):
     assert time.time() - t0 < 6
 
 
+def test_multiview_routes(server):
+    base, _ = server
+    assert req(base, "/api/multiview", {})[0] == 400
+    assert req(base, "/api/multiview", {"sources": "x"})[0] == 400
+    assert req(base, "/api/multiview", {"sources": [{"url": ""}]})[0] == 400
+    assert req(base, "/api/multiview", {"sources": [{"url": f"https://x/{i}"} for i in range(5)]})[0] == 400
+    assert req(base, "/api/multiview/nope")[0] == 404
+    assert "error" in json.loads(req(base, "/api/multiview/focus", {"group": "nope", "id": "x"})[1])
+    assert "error" in json.loads(req(base, "/api/multiview/add", {"group": "nope", "url": "https://x/a"})[1])
+    assert "error" in json.loads(req(base, "/api/multiview/remove", {"group": "nope", "id": "x"})[1])
+    assert "error" in json.loads(req(base, "/api/multiview/stop", {"group": "nope"})[1])
+    # 탭 소스 둘로 묶음을 만듭니다 -- yt-dlp 도 ffmpeg 도 부르지 않습니다. 시험 서버에는
+    # 전사 엔진이 없어 초점을 받은 세션이 곧 오류로 끝나고 초점이 다음으로 넘어가다 묶음이
+    # 저절로 없어지므로, 만들어진 모양만 봅니다.
+    s, b = req(base, "/api/multiview", {"sources": [{"source": "tab", "title": "a"},
+                                                    {"source": "tab", "title": "b"}],
+                                        "viewer_lang": "ko", "asr": "no-such-engine"})
+    g = json.loads(b)
+    assert s == 200 and len(g["members"]) == 2 and g["focus"] == g["members"][0]["id"]
+    assert g["members"][0]["focused"] is True and g["members"][1]["focused"] is False
+    assert all(m["group"] == g["id"] and m["source"] == "tab" for m in g["members"])
+    res = json.loads(req(base, "/api/multiview/stop", {"group": g["id"]})[1])
+    assert "stopped" in res or "error" in res
+
+
 def test_engine_config_roundtrip(server):
     base, _ = server
     assert "error" in json.loads(req(base, "/api/asr-backends/delete", {"id": "tcpp-best"})[1])

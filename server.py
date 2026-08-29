@@ -534,6 +534,54 @@ class Handler(BaseHTTPRequestHandler):
             source="tab",
             title=(body.get("title") or "").strip() or "탭 오디오"))
 
+    # ---- 멀티뷰 ----------------------------------------------------------
+    # 여러 방송을 한 화면에. 묶음·초점의 규칙은 live.py 멀티뷰 절에 있고, 여기는
+    # JSON 을 풀어 넘길 뿐입니다. 라이브 시작 인자는 /api/live/start 와 같습니다.
+
+    def _live_args(self, body) -> dict:
+        return dict(lang=body.get("lang") or None,
+                    viewer_lang=body.get("viewer_lang") or "ko",
+                    backend_id=body.get("backend") or config.active("tr"),
+                    profile=body.get("profile") or "broadcast",
+                    asr_backend_id=body.get("asr") or config.active("asr"),
+                    refine=bool(body.get("refine", True)),
+                    genre=body.get("genre"))
+
+    def post_multiview(self, body):
+        """묶음 만들기. `sessions` 는 지금 받는 중인 세션 id(편입), `sources` 는 새 소스
+        (`{url}` 또는 `{source:"tab", title}`). 합쳐서 1~MULTIVIEW_MAX 개."""
+        sources = [{"session": sid} for sid in (body.get("sessions") or []) if sid]
+        extra = body.get("sources") or []
+        if not isinstance(extra, list) or not all(isinstance(s, dict) for s in extra):
+            return self._json({"error": "sources 는 객체의 목록이어야 합니다"}, 400)
+        sources += extra
+        if not sources:
+            return self._json({"error": "소스가 없습니다"}, 400)
+        if len(sources) > live.MULTIVIEW_MAX:
+            return self._json({"error": f"멀티뷰는 최대 {live.MULTIVIEW_MAX}개까지입니다"}, 400)
+        res = live.multiview_start(sources, focus=body.get("focus") or None,
+                                   **self._live_args(body))
+        self._json(res, 400 if "error" in res else 200)
+
+    def post_multiview_focus(self, body):
+        self._json(live.multiview_focus(body.get("group") or "", body.get("id") or ""))
+
+    def post_multiview_add(self, body):
+        src = {k: body[k] for k in ("url", "source", "title", "session") if body.get(k)}
+        self._json(live.multiview_add(body.get("group") or "", src, **self._live_args(body)))
+
+    def post_multiview_remove(self, body):
+        self._json(live.multiview_remove(body.get("group") or "", body.get("id") or ""))
+
+    def post_multiview_stop(self, body):
+        self._json(live.multiview_stop(body.get("group") or ""))
+
+    def get_multiview(self, gid: str):
+        st = live.multiview_status(os.path.basename(gid))
+        if st is None:
+            return self._json({"error": "no such group"}, 404)
+        self._json(st)
+
     def post_retranslate(self, body):
         # 고른 자막만 다시 번역합니다. cues 를 빼면 전부입니다.
         cues = body.get("cues")
@@ -714,6 +762,7 @@ GET_ROUTES = {
 GET_PREFIX = [
     ("/api/video/", Handler.get_video),
     ("/api/live/events/", Handler.get_events),
+    ("/api/multiview/", Handler.get_multiview),
     ("/api/live/status/", Handler.get_live_status),
     ("/api/job/", Handler.get_job),
     ("/static/", Handler.get_static),
@@ -732,6 +781,11 @@ POST_ROUTES = {
     "/api/live/resume": Handler.post_live_resume,
     "/api/active": Handler.post_active,
     "/api/live/delete": Handler.post_live_delete,
+    "/api/multiview": Handler.post_multiview,
+    "/api/multiview/focus": Handler.post_multiview_focus,
+    "/api/multiview/add": Handler.post_multiview_add,
+    "/api/multiview/remove": Handler.post_multiview_remove,
+    "/api/multiview/stop": Handler.post_multiview_stop,
     "/api/cue": Handler.post_cue,
     "/api/cue/delete": Handler.post_cue_delete,
     "/api/video/delete": Handler.post_video_delete,

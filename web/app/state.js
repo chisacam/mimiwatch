@@ -32,6 +32,7 @@ const state = {
   cuePos: null,        // { x, y } 비율. restore()가 채웁니다 -- DEFAULT_CUE_POS 참고
   backend: "local-gemma", asr: "tcpp-best", refine: true,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
+  models: null,        // /api/models 의 답. 모델·도구의 목록과 상태(engines.js)
   live: null,          // { id, es, store } while a broadcast is running (store: MimiCues)
 };
 
@@ -128,7 +129,16 @@ function renderCue() {
 
 const cueStart = (c) => (c.start != null ? c.start : c.t) || 0;
 
-const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+/* 자막 내역의 시각. 확장이 유튜브 페이지에 세우는 자막 내역(ext/panel.js)과 같은
+ * 모양입니다 -- 한 시간을 넘으면 `1:02:03`, 아니면 `02:03`. 예전에는 여기가
+ * 분:초만 적어서 두 시간짜리 방송의 `95:12`가 유튜브 진행 막대의 `1:35:12`와
+ * 맞대어지지 않았습니다. 두 화면이 같은 발화를 같은 글자로 가리켜야 합니다. */
+const fmt = (s) => {
+  const t = Math.max(0, Math.floor(s || 0));
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
+  const two = (n) => String(n).padStart(2, "0");
+  return h ? `${h}:${two(m)}:${two(x)}` : `${two(m)}:${two(x)}`;
+};
 
 /* 설정을 서버에서 받아 맞추기 전에는 저장하지 않습니다. 부팅 순서가
  * restore() → loadBackends()라서, 그 사이에 한 번이라도 저장하면 state에

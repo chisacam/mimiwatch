@@ -300,3 +300,31 @@ def test_resume_can_switch_the_audio_source(monkeypatch):
     s = live.get("tab-1")
     assert got["source"] == "hls" and s.url == "https://y/live"
     live._sessions.clear()
+
+
+def test_tab_feed_slices_into_frames_and_idle_flushes_once():
+    """탭 세션의 읽기는 feed() 입니다. 2초 덩어리가 0.1초 조각 스무 개가 되어 링에 들고,
+    소리가 끊기면 걸린 발화를 한 번만 확정(None)하고, 「중단」이면 물러납니다."""
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="tab", title="t")
+    s._tr = None
+    r = s.feed(b"\x00" * (live.CHUNK * 2 * 20))
+    assert r["ok"] and r["queued_s"] == 2.0 and r["dropped_s"] == 0
+    gen = s._consume()
+    got = [next(gen) for _ in range(20)]
+    assert all(isinstance(c, np.ndarray) and len(c) == live.CHUNK for c in got)
+    assert abs(s.audio_s - 2.0) < 1e-9
+    live.Ring.pop, real_pop = (lambda self, timeout: live.Ring.TIMEOUT), live.Ring.pop
+    try:
+        assert next(gen) is None                 # 무음 2초: 한 번 비웁니다
+    finally:
+        live.Ring.pop = real_pop
+    s.stop()
+    assert list(gen) == []
+    assert s.state == "stopped" and s.feed(b"\x00" * 3200)["error"]
+
+
+def test_tab_ring_drops_oldest_when_the_browser_outruns_asr():
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="tab", title="t")
+    s._ring.set_max(1.0)                         # 시험용으로 1초만
+    r = s.feed(b"\x00" * (live.CHUNK * 2 * 15))
+    assert r["queued_s"] == 1.0 and abs(r["dropped_s"] - 0.5) < 1e-9

@@ -406,17 +406,19 @@ class LiveSession:
         # 쪽의 `del [:-40]`과 엉켜 ValueError가 나거나 엉뚱한 줄을 흡수합니다.
         self._pub_lock = threading.RLock()
         self._ff: subprocess.Popen | None = None
-        # 탭 오디오가 들어오는 자리. hls 세션에서는 쓰이지 않습니다.
-        self._q: queue.Queue = queue.Queue()
-        self._queued = 0            # 큐에 든 바이트
-        self.dropped_s = 0.0        # 큐가 넘쳐 버린 오디오(초)
-        # 읽기 스레드(ffmpeg)와 받아 적는 스레드 사이. Ring 참조. 시계는 둘입니다 --
-        # `_recv_*` 는 읽기 스레드가 **받은** 자리, `media_base`/`audio_s` 는 받아 적는
-        # 쪽이 **지금 해독하는 조각**의 자리입니다. 혼자 받는 세션에서는 둘이 같이
-        # 가지만, 링에 소리가 고여 있으면 뒤쪽이 앞쪽보다 늦습니다.
-        self._ring = Ring(RING_S)
+        # 읽는 쪽(ffmpeg 스레드, 탭이면 feed())과 받아 적는 스레드 사이. Ring 참조.
+        # 시계는 둘입니다 -- `_recv_*` 는 읽는 쪽이 **받은** 자리, `media_base`/`audio_s`
+        # 는 받아 적는 쪽이 **지금 해독하는 조각**의 자리입니다. 혼자 받는 세션에서는
+        # 둘이 같이 가지만, 링에 소리가 고여 있으면 뒤쪽이 앞쪽보다 늦습니다.
+        #
+        # 탭 소리는 브라우저가 재생을 늦출 수 없으므로(사용자가 듣고 있는 소리입니다)
+        # 받아 적기가 밀리면 링을 길게(INGEST_MAX_S) 잡고, 넘치면 가장 오래된 것부터
+        # 버리며 몇 초를 버렸는지 적습니다. 조용히 밀리다 20분 뒤 자막이 나오는
+        # 것보다 낫습니다. 주소 세션은 파이프가 역압을 주므로 링이 넘칠 일이 없습니다.
+        self._ring = Ring(INGEST_MAX_S if self.source == "tab" else RING_S)
         self._recv_base = 0.0
         self._recv_s = 0.0
+        self.dropped_s = 0.0        # 링이 넘쳐 버린 소리(초). 탭 세션이 feed() 로 되돌려 줍니다
         self._ended = False         # 읽기가 끝났다(방송 종료·포기). 링의 ("end",) 와 함께
         self._rx: threading.Thread | None = None
         # 초점: 이 세션의 소리를 지금 받아 적는가. 혼자 받는 세션은 태어날 때부터 초점이고
@@ -696,64 +698,36 @@ class LiveSession:
         self._stop.set()
         if self._ff:
             self._ff.terminate()
-        # 탭 세션의 수신 루프는 큐에서 기다립니다. 깃발만 세우면 timeout이
-        # 돌아올 때까지 서 있으므로 직접 깨웁니다.
+        # 탭 세션에는 읽기 스레드가 없어 아무도 ("end",) 를 넣어 주지 않습니다. 받아
+        # 적는 쪽이 링에서 기다리고 있으므로 여기서 직접 깨웁니다.
         if self.source == "tab":
-            self._q.put(None)
+            self._ended = True
+            self._ring.push(("end",))
 
     # ---- 탭 오디오 수신 ---------------------------------------------------
     def feed(self, raw: bytes) -> dict:
-        """브라우저가 올린 16kHz 모노 int16 PCM 한 덩어리."""
+        """브라우저가 올린 16kHz 모노 int16 PCM 한 덩어리. 탭 세션의 「읽기」는 이것입니다.
+
+        VAD가 받는 0.1초 조각으로 잘라 링에 넣습니다 -- ffmpeg 경로와 같은 크기입니다.
+        run_stream은 조각 하나마다 VAD를 먹이고 정제 시점을 재므로, 2초를 통째로
+        넘기면 그 두 가지가 같이 거칠어집니다. 링이 넘치면 오래된 것부터 버리고
+        (기다리지 않습니다 -- 이 요청은 브라우저가 기다리고 있습니다) 몇 초를 버렸는지
+        되돌려 줍니다.
+        """
         if self.source != "tab":
             return {"error": "이 세션은 탭 오디오를 받지 않습니다"}
         if self._stop.is_set() or self.state in ("stopped", "error"):
             return {"error": "세션이 끝났습니다", "state": self.state}
-        limit = int(INGEST_MAX_S * SAMPLE_RATE * 2)
-        # qsize()는 근사값이라 바이트로 셉니다. 조각 크기는 브라우저가 정합니다.
-        while self._queued + len(raw) > limit:
-            try:
-                old = self._q.get_nowait()
-            except queue.Empty:
-                break
-            if old is None:
-                break
-            self._queued -= len(old)
-            self.dropped_s += len(old) / 2 / SAMPLE_RATE
-        self._q.put(raw)
-        self._queued += len(raw)
-        return {"ok": True, "state": self.state,
-                "queued_s": round(self._queued / 2 / SAMPLE_RATE, 1),
-                "dropped_s": round(self.dropped_s, 1)}
-
-    def _chunks_from_tab(self):
-        """브라우저가 올린 덩어리를 VAD가 받는 0.1초 조각으로 잘라 냅니다.
-
-        ffmpeg 경로와 같은 크기로 내보냅니다. run_stream은 조각 하나마다
-        VAD를 먹이고 정제 시점을 재므로, 2초를 통째로 넘기면 그 두 가지가
-        같이 거칠어집니다.
-        """
         need = CHUNK * 2
-        idle = False
-        while not self._stop.is_set():
-            try:
-                raw = self._q.get(timeout=2.0)
-            except queue.Empty:
-                # 탭이 조용합니다 -- 영상을 멈췄거나 공유가 끊겼습니다.
-                # 오지 않을 무음을 기다리는 대신 걸려 있는 발화를 확정합니다.
-                if not idle:
-                    idle = True
-                    yield None
-                continue
-            if raw is None:
-                break
-            self._queued = max(0, self._queued - len(raw))
-            idle = False
-            for off in range(0, len(raw) - need + 1, need):
-                block = np.frombuffer(raw, dtype=np.int16, count=CHUNK,
-                                      offset=off).astype(np.float32) / 32768.0
-                self.audio_s += CHUNK / SAMPLE_RATE
-                yield block
-        self.state = "stopped"
+        for off in range(0, len(raw) - need + 1, need):
+            block = np.frombuffer(raw, dtype=np.int16, count=CHUNK,
+                                  offset=off).astype(np.float32) / 32768.0
+            self._recv_s += FRAME_S
+            self._ring.push(("audio", self._recv_s, block))
+        self.dropped_s = self._ring.dropped_s
+        return {"ok": True, "state": self.state,
+                "queued_s": round(self._ring.seconds(), 1),
+                "dropped_s": round(self.dropped_s, 1)}
 
     def _resume_point(self, info: dict, release_ts: float | None):
         """끊긴 자리에서 다시 받으려면 재생목록의 어디부터 읽어야 하는가.
@@ -1011,7 +985,7 @@ class LiveSession:
                 # 이어받기면 멈춘 자리에서 시간축을 이어 갑니다. 0으로
                 # 되돌리면 새 자막이 옛 자막 사이에 끼어 들어가 스크립트
                 # 순서가 뒤엉킵니다. 새 세션에서는 resume_from이 0입니다.
-                self.media_base = self.resume_from
+                self.media_base = self._recv_base = self.resume_from
             self.state = "loading"
             self._persist()
             self.emit({"type": "status", **self.status()})
@@ -1112,11 +1086,8 @@ class LiveSession:
             history = AudioHistory(SAMPLE_RATE)
             refiner = Refiner(asr, history, sink) if self.refine else None
 
-            if self.source == "tab":
-                chunks = self._chunks_from_tab()
-            else:
-                self._start_reader(src, start_index)
-                chunks = self._consume()
+            self._start_reader(src, start_index)   # 탭이면 할 일 없음 -- feed() 가 넣습니다
+            chunks = self._consume()
 
             self.state = "running"
             self._persist()

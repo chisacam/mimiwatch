@@ -41,9 +41,12 @@ def make_session():
             translated=0, profile="broadcast", max_speech=4.0, min_silence=0.3,
             asr_label="", _ff=None, _asr=None, _tr=None, _recent=[], _subs=[],
             _seq=0, source="hls", resume_from=0.0, gap_s=0.0,
-            _queued=0, dropped_s=0.0, stopped_by="").items():
+            dropped_s=0.0, stopped_by="", _recv_base=0.0, _recv_s=0.0,
+            _ended=False, _rx=None).items():
         setattr(s, k, v)
-    s._q = __import__("queue").Queue()
+    s._ring = live.Ring(live.RING_S)
+    s._focus = __import__("threading").Event()
+    s._focus.set()
     s._pub_lock = __import__("threading").RLock()
     s._persist = lambda: None
     s.emit = lambda e: None

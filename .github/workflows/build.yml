@@ -15,6 +15,33 @@ permissions:
   contents: write
 
 jobs:
+  # 브라우저 확장. 빌드할 것은 없고 ext/ 를 그대로 zip 으로 묶어 릴리스에 붙입니다 --
+  # 저장소를 통째로 받지 않은 사람도 「압축 해제된 확장 프로그램을 로드」로 얹을 수
+  # 있게요. 리눅스 러너 1분이면 됩니다.
+  ext:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: 확장 폴더 압축
+        run: |
+          VERSION=$(git describe --tags --always)
+          python3 bench/ext_check.py
+          cp LICENSE ext/LICENSE
+          zip -qr "mimiwatch-ext-$VERSION.zip" ext -x 'ext/.DS_Store'
+          ls -l mimiwatch-ext-*.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mimiwatch-ext
+          path: mimiwatch-ext-*.zip
+          if-no-files-found: error
+      - name: 릴리스에 붙이기
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: mimiwatch-ext-*.zip
+
   build:
     strategy:
       fail-fast: false

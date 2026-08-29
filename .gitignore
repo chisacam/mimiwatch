@@ -20,8 +20,14 @@ __pycache__/
 # 서브에이전트 작업용 워크트리
 .claude/
 
-# 자체 가상환경
+# 자체 가상환경 (.venv-build 는 packaging/build.sh 가 만듭니다)
 .venv/
+.venv-build/
 
 # 번역 모델 비교 표본과 원자료. 방송 발화가 그대로 들어 있습니다.
 bench/*.json
+
+# PyInstaller 산출물 (packaging/build.sh · build.ps1)
+build/
+dist/
+*.spec.bak

@@ -1,0 +1,52 @@
+# 맥(Apple Silicon)과 윈도우(x64) 묶음을 만듭니다. 태그를 밀면 릴리스에 붙입니다.
+#
+# 모델은 넣지 않습니다 -- 묶음은 300~400MB, 모델은 첫 실행 때 화면에서 받습니다.
+# 맥에서는 llama-cpp-python 을 소스에서 빌드하므로(Metal) 몇 분이 걸립니다.
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # Apple Silicon 러너. Metal 로 빌드됩니다.
+            name: macos-arm64
+          - os: windows-latest
+            name: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # git describe 로 판 이름을 얻습니다
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 묶음 만들기 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake >/dev/null 2>&1 || true
+          PYTHON=python packaging/build.sh
+      - name: 묶음 만들기 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\packaging\build.ps1 -Backend vulkan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mimiwatch-${{ matrix.name }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+      - name: 릴리스에 붙이기
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.tar.gz

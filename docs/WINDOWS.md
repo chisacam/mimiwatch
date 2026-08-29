@@ -1,10 +1,16 @@
 # 윈도우
 
+**가장 쉬운 길은 묶음입니다.** 릴리스에서 `mimiwatch-*-windows-x64.zip`을 받아
+풀고 `mimiwatch.exe`를 두 번 누르면 콘솔 창이 하나 뜨고 브라우저에 화면이
+열립니다. 파이썬도 이 스크립트도 필요 없고, 모델은 첫 실행 때 화면에서
+받습니다. SmartScreen이 「알 수 없는 게시자」로 막으면 「추가 정보 › 실행」.
+자세한 것은 [PACKAGING.md](PACKAGING.md). 아래는 저장소에서 돌리는 길입니다.
+
 ```powershell
 git clone https://github.com/chisacam/mimiwatch.git
 cd mimiwatch
 winget install --id Python.Python.3.12
-winget install --id Gyan.FFmpeg
+winget install --id Gyan.FFmpeg     # 선택. 없으면 화면의 「모델·도구」에서 받을 수 있습니다
 # 위 둘을 새로 깔았다면 터미널을 새로 여십시오 (PATH가 갱신됩니다)
 # yt-dlp는 install.ps1 이 가상환경 안에 최신으로 넣습니다
 .\install.ps1
@@ -22,16 +28,16 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ## 맥/리눅스와 다른 점
 
-**빌드 도구가 필요 없습니다.** `install.sh`는 transcribe.cpp를 받아
-CMake로 빌드하지만, 윈도우에는 미리 만들어진 휠이 있습니다. 컴파일러도,
-CMake도, Vulkan SDK도, git 클론도 없습니다.
+**어느 쪽도 빌드하지 않습니다.** 전사 런타임(transcribe.cpp)은 맥·리눅스·윈도우
+전부 미리 만들어진 휠입니다. 다른 것은 번역 런타임(llama.cpp)의 출처와 모델
+위치뿐입니다.
 
 | | macOS / Linux | Windows |
 |---|---|---|
-| 전사 런타임 | 소스를 받아 CMake 빌드 | `pip install transcribe-cpp` (win_amd64 휠) |
-| GPU 가속 | Metal (자동) / CUDA / ROCm | **Vulkan** (휠에 포함) |
-| 번역 런타임 | PyPI의 llama-cpp-python | 만든 쪽 인덱스의 win_amd64 휠 |
-| 준비물 | git, cmake, ffmpeg | ffmpeg |
+| 전사 런타임 | `pip install transcribe-cpp` (휠, Metal / Vulkan 포함) | 같음 (win_amd64 휠, Vulkan 포함) |
+| GPU 가속 | Metal (자동) / Vulkan | **Vulkan** (휠에 포함) |
+| 번역 런타임 | PyPI의 llama-cpp-python (맥은 소스 빌드) | 만든 쪽 인덱스의 win_amd64 휠 |
+| 준비물 | python3 (ffmpeg 권장) | python (ffmpeg 권장) |
 | 모델 위치 | `~/.local/share/mimiwatch/models` | `%LOCALAPPDATA%\mimiwatch\models` |
 
 ## GPU 가속: Vulkan을 씁니다
@@ -150,7 +156,7 @@ $env:MIMIWATCH_YTDLP_COOKIES = "C:\Users\USERNAME\cookies.txt"
 | `ffmpeg` 를 못 찾음 | 열려 있던 터미널의 PATH가 낡음 | 터미널을 새로 여십시오 |
 | llama-cpp-python 설치 실패 | 파이썬 판에 맞는 휠이 없음 | `-Backend cpu` 로 다시, 그래도 안 되면 파이썬 3.12를 쓰십시오 |
 | 백엔드에 `vulkan`이 없음 | 드라이버가 낡음 | 그래픽 드라이버 갱신. 없어도 CPU로 돕니다 |
-| 내려받다 끊김 | — | 그냥 다시 실행하십시오. 받다 만 것은 `.part`로 남고 완성본만 인정합니다 |
+| 내려받다 끊김 | — | 그냥 다시 실행하십시오. 받다 만 것은 `.part`로 남고 이어 받습니다. 화면의 「모델·도구」에서도 됩니다 |
 | `NativeCommandError`로 중간에 멈춤 | 0.1의 결함 (이슈 #1) | 최신 판을 받으십시오. Windows PowerShell 5.1이 명령의 stderr 한 줄을 종료 오류로 바꾸던 문제입니다 |
 | 전사가 시작되자마자 실패 | GPU에 모델을 못 올렸을 수 있습니다 | `bench/doctor.py`로 확인하고, `device=auto`만 실패하면 `backends.json`에 `"device": "cpu"`를 적으십시오 |
 | 라이브에서 "오디오를 찾지 못했습니다" | **yt-dlp가 낡았습니다** | `.\install.ps1` 을 다시 돌리십시오. 가상환경 안의 yt-dlp가 최신으로 올라갑니다 |

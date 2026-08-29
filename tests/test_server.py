@@ -193,6 +193,8 @@ def test_static_and_index(server):
     assert req(base, "/")[0] == 200
     s, b = req(base, "/static/app/state.js")
     assert s == 200 and b"const state" in b
+    s, b = req(base, "/static/vendor/hls.min.js")          # m3u8 재생용 hls.js 가 묶여 있다
+    assert s == 200 and len(b) > 100_000 and b"Hls" in b
     assert req(base, "/static/../server.py")[0] == 404
     assert req(base, "/static/no-such.js")[0] == 404
 

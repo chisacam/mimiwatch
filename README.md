@@ -1042,6 +1042,10 @@ GitHub Actions(`.github/workflows/check.yml`)도 같은 것을 돕니다 — 전
 가져왔습니다. 지금은 저장소 의존 없이 필요한 부분만 `stream.py`와
 `speaker_id.py`에 옮겨 두었습니다.
 
+m3u8 스트림의 화면 재생은 [hls.js](https://github.com/video-dev/hls.js)(Apache-2.0,
+video-dev)를 씁니다. `web/vendor/hls.min.js`에 그대로 묶여 있고 라이선스는 그 옆
+`hls.LICENSE.txt`입니다.
+
 ## 라이선스
 
 코드와 프로그램은 [PolyForm Noncommercial 1.0.0](LICENSE)입니다. **상업적 목적이

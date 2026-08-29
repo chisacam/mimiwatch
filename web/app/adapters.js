@@ -142,3 +142,63 @@ function ytAdapter() {
   };
   return a;
 }
+
+/* 생 m3u8. 서버는 예전부터 받아 적었지만 화면은 검은 상자였습니다 -- 유튜브
+ * 플레이어에 넣을 영상 id 가 없으니까요. 이제 <video> 에 hls.js 를 붙여 틉니다.
+ * hls.js 는 /static/vendor/ 에 묶여 있고(Apache-2.0) 첫 타일이 필요로 할 때 읽습니다.
+ * 사파리는 HLS 를 스스로 틀므로 그때는 그냥 src 로 줍니다.
+ *
+ * CORS 는 우리가 어쩔 수 없습니다. 방송 서버가 다른 출처의 fetch 를 막으면
+ * hls.js 는 열지 못합니다 -- 그때도 자막은 서버가 ffmpeg 으로 받아 적으므로
+ * 오른쪽 자막 내역은 그대로 쌓입니다. 그렇게 안내합니다. */
+function hlsAdapter() {
+  const a = { kind: "hls", ready: false, video: null, hls: null };
+  a.mount = async (host, src, opts = {}) => {
+    const v = document.createElement("video");
+    v.playsInline = true;
+    v.controls = true;
+    v.setAttribute("controlslist", "nofullscreen");   // 전체화면은 우리 단추로 -- 자막이 함께 커져야 합니다
+    v.muted = !!opts.muted;
+    v.autoplay = true;
+    host.appendChild(v);
+    a.video = v;
+    const fail = (why) => {
+      if (opts.onError) {
+        opts.onError("브라우저가 이 스트림을 직접 열지 못했습니다"
+                     + (why ? ` (${why})` : "") + " — 자막은 서버가 받아 적으므로 계속 쌓입니다.");
+      }
+    };
+    if (v.canPlayType("application/vnd.apple.mpegurl")) {
+      v.src = src.url;
+      v.addEventListener("error", () => fail("네이티브 HLS"), { once: true });
+    } else {
+      try {
+        await loadScriptOnce("/static/vendor/hls.min.js", () => !!window.Hls);
+      } catch (err) {
+        fail(err.message);
+        return;
+      }
+      if (!(window.Hls && Hls.isSupported())) { fail("MSE 없음"); return; }
+      a.hls = new Hls({ lowLatencyMode: true, enableWorker: true });
+      a.hls.on(Hls.Events.ERROR, (_e, data) => {
+        if (data && data.fatal) fail(data.details || data.type);
+      });
+      a.hls.loadSource(src.url);
+      a.hls.attachMedia(v);
+    }
+    a.ready = true;
+    v.play().catch(() => { /* 자동 재생이 막혔으면 사용자가 누릅니다 */ });
+  };
+  a.getCurrentTime = () => (a.video ? a.video.currentTime : 0);
+  a.seekTo = (t) => { if (a.video) a.video.currentTime = t; };
+  a.playVideo = () => { if (a.video) a.video.play().catch(() => {}); };
+  a.setMuted = (m) => { if (a.video) a.video.muted = !!m; };
+  a.destroy = () => {
+    try { if (a.hls) a.hls.destroy(); } catch (_) { /* 이미 닫힘 */ }
+    a.hls = null;
+    if (a.video) { a.video.pause(); a.video.removeAttribute("src"); a.video.remove(); }
+    a.video = null;
+    a.ready = false;
+  };
+  return a;
+}

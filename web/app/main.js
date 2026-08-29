@@ -101,16 +101,24 @@ function bind() {
                                        setBackendPickers(state.backend); persist();
                                        syncActive("tr", state.backend); });
   $("job-cancel").addEventListener("click", cancelJob);
-  $("add-video").addEventListener("click", () => {
+  const openAddDialog = (mode) => {
     // 열 때마다 지금 값으로 맞춥니다. 엔진을 지웠거나 「관리」에서 바꾼
     // 것이 대화상자에 반영되어 있어야 합니다.
-    $("add-dialog").querySelector("h3").textContent = "영상 추가";   // 다시 전사 뒤에 되돌립니다
+    const f = $("add-form");
+    f.dataset.mode = mode || "";
+    $("add-dialog").querySelector("h3").textContent =
+      mode === "tile" ? "타일 추가 · 멀티뷰" : "영상 추가";   // 다시 전사 뒤에 되돌립니다
     renderAsrPicker();
-    fillEngineSelect(document.querySelector('#add-form select[name="backend"]'),
-                     state.backends, state.backend, LOCKED.tr);
-    setAddSource(document.querySelector('#add-form select[name="source"]').value);
+    fillEngineSelect(f.querySelector('select[name="backend"]'), state.backends, state.backend, LOCKED.tr);
+    // 타일은 주소로 받는 라이브만 붙입니다. 소리 출처 고르기는 숨깁니다.
+    if (mode === "tile") f.source.value = "url";
+    f.source.closest("label").hidden = mode === "tile";
+    $("tile-hint").hidden = mode !== "tile";
+    setAddSource(f.source.value);
     $("add-dialog").showModal();
-  });
+  };
+  $("add-video").addEventListener("click", () => openAddDialog(""));
+  $("mv-add").addEventListener("click", () => openAddDialog("tile"));
   document.querySelector('#add-form input[name="refine"]')
     .addEventListener("change", e => { state.refine = e.target.checked; persist(); });
   $("add-form").addEventListener("submit", submitAdd);
@@ -251,6 +259,9 @@ function setLibrary(hidden) {
   const running = sessions.find(s => LIVE_RUNNING.includes(s.state));
   await refreshVideoList(running ? null : (list[0] || {}).id, [list, sessions]);
   if (running) {
+    // 멀티뷰 묶음의 멤버면 묶음을 통째로 되살립니다. 묶음이 없어졌으면(서버 재시작)
+    // 그 세션 하나만 엽니다.
+    if (running.group && await openMultiview(running.group)) return;
     markVideoRow("live:" + running.id);
     await resumeLive(running.id);
   }

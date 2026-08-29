@@ -100,6 +100,10 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   row.dataset.value = value;
   if (session) row.dataset.session = session;
   row.dataset.title = title;
+  // 멀티뷰 묶음의 멤버는 ⊞ 표시를 달고, 누르면 묶음을 통째로 엽니다(openFromList).
+  const group = (st && st.group) || "";
+  row.dataset.group = group;
+  if (group) row.classList.add("mv");
 
   // 제목만 있는 목록에서는 어느 방송인지 한눈에 오지 않습니다. 유튜브가
   // 주는 썸네일을 그대로 씁니다 -- 플레이어를 이미 임베드하고 있으므로
@@ -156,7 +160,9 @@ function updateSessionRow(row, s) {
     row.dataset.title = title;
     const t = row.querySelector(".vt");
     if (t) t.textContent = title;
-    if (row.classList.contains("on") && !document.querySelector(".title-edit")) setNowTitle(title);
+    // 멀티뷰에서는 묶음의 줄이 전부 켜져 있으므로 「켜진 줄」이 아니라 「초점 세션」일 때만
+    // 위쪽 제목을 바꿉니다.
+    if (state.live && state.live.id === s.id && !document.querySelector(".title-edit")) setNowTitle(title);
   }
   // 단추 묶음은 상태에 따라 다릅니다. 받는 중이던 줄이 끝나면 ▶·⟳·🗑 이 생겨야
   // 하고, 이어받아 다시 받는 중이면 사라져야 합니다.
@@ -170,7 +176,21 @@ function openFromList(value) {
   const row = $("video-list").querySelector(`.video-row[data-value="${CSS.escape(value)}"]`);
   const sid = row && row.dataset.session;
   markVideoRow(value);
-  if (sid) { resumeLive(sid); return; }
+  if (sid) {
+    // 화면에 이미 타일로 있으면 초점만 옮깁니다. 묶음의 멤버면 묶음을 통째로 엽니다.
+    const t = tileBySession(sid);
+    if (t) { setFocus(t); return; }
+    if (row.dataset.group && state.mv && state.mv.id !== row.dataset.group) {
+      openMultiview(row.dataset.group).then(ok => { if (!ok) resumeLive(sid); });
+      return;
+    }
+    if (row.dataset.group && !state.mv) {
+      openMultiview(row.dataset.group).then(ok => { if (!ok) resumeLive(sid); });
+      return;
+    }
+    resumeLive(sid);
+    return;
+  }
   if (state.live) {
     // 녹화본을 열어도 라이브 수신은 끊지 않습니다. 사용자가 「중단」을 누른
     // 것이 아니고, 목록의 녹화본은 이미 전사·번역이 끝난 것이라 방송 쪽에
@@ -189,8 +209,10 @@ function openFromList(value) {
 }
 
 function markVideoRow(value) {
+  // 멀티뷰면 묶음의 멤버 줄이 전부 켜집니다 -- 화면에 다 떠 있으니까요.
+  const gid = state.mv && state.mv.id;
   $("video-list").querySelectorAll(".video-row").forEach(r =>
-    r.classList.toggle("on", r.dataset.value === value));
+    r.classList.toggle("on", r.dataset.value === value || (!!gid && r.dataset.group === gid)));
   const row = value && $("video-list").querySelector(
     `.video-row[data-value="${CSS.escape(value)}"]`);
   setNowTitle(row ? row.dataset.title : null);
@@ -212,8 +234,10 @@ async function refreshVideoList(selectId, pre) {
     fetch("/api/live/sessions").then(r => r.json()),
   ]);
   const box = $("video-list");
+  // 멀티뷰에서는 묶음의 줄이 전부 켜져 있어 「첫 켜진 줄」이 초점이 아닐 수 있습니다.
+  // 지금 보는 것(초점 세션)을 기준으로 잡습니다.
   const current = box.querySelector(".video-row.on");
-  const keep = current && current.dataset.value;
+  const keep = state.live ? "live:" + state.live.id : (current && current.dataset.value);
   box.textContent = "";
 
   // 라이브 세션에는 큐 파일이 없어서, 예전에는 탭을 닫으면 그 방송의 자막이

@@ -111,12 +111,15 @@ function setFocus(tile, opts = {}) {
     prev.el.classList.remove("focused");
   }
   tile.el.classList.add("focused");
-  if (tile.adapter) tile.adapter.setMuted(false);
+  // 소리를 켜고 재생도 시킵니다. 초점을 옮긴 것은 사용자 조작(클릭·키)이라 재생이
+  // 막히지 않고, 트위치는 소리를 켜는 순간 멈춰 서는 일이 있습니다.
+  if (tile.adapter) { tile.adapter.setMuted(false); tile.adapter.playVideo(); }
   state.focus = tile.id;
   overlay = tile.overlay;
   state.player = tile.adapter;
   if (state.cuePos) overlay.setPos(state.cuePos);
   showTileInPanels(tile);
+  if (tile.live) markVideoRow("live:" + tile.live.id);
   syncMvControls();
   requestAnimationFrame(applyCueSize);
   if (opts.post !== false && state.mv && tile.live) mvFocus(state.mv.id, tile.live.id);
@@ -254,4 +257,78 @@ function mvCreate(body) {
 
 function mvAdd(gid, body) {
   return mvPost("/api/multiview/add", { group: gid, ...body });
+}
+
+/* ---------- 멀티뷰 만들기·복원 ----------
+ *
+ * 「＋ 타일」은 지금 보는 방송 **옆에** 하나를 붙입니다. 첫 번째 붙이기가 묶음을
+ * 만들고(보던 세션을 편입, 새 소스는 대기 세션으로), 그 뒤는 묶음에 더합니다.
+ * 소리와 자막은 초점(지금 보던 것)에 그대로 남습니다. */
+function liveStartArgs(lang) {
+  return {
+    lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
+    asr: state.asr, refine: state.refine, genre: currentGenre(),
+    profile: document.querySelector('#add-form select[name="profile"]').value,
+  };
+}
+
+async function addTile(url, lang, probe) {
+  const cur = focusedTile();
+  if (!cur || !cur.live) { jobError("먼저 라이브 방송을 여십시오. 타일은 그 옆에 붙습니다."); return; }
+  if (state.tiles.length >= 4) { jobError("타일은 넷까지입니다."); return; }
+  const args = liveStartArgs(lang);
+  let res, members;
+  if (!state.mv) {
+    res = await mvCreate({ sessions: [cur.live.id], sources: [{ url }], focus: cur.live.id, ...args });
+    if (res.error) { jobError(res.error); return; }
+    state.mv = { id: res.id, focus: res.focus, members: res.members.map(m => m.id) };
+    members = res.members;
+  } else {
+    res = await mvAdd(state.mv.id, { url, ...args });
+    if (res.error) { jobError(res.error); return; }
+    state.mv.members.push(res.id);
+    members = [res];
+  }
+  for (const m of members) {
+    if (tileBySession(m.id)) continue;
+    const t = makeTile();
+    // 새 세션은 yt-dlp 가 답하기 전이라 site·video_id 가 비어 있습니다. probe 가 방금
+    // 알아낸 것으로 메워 플레이어를 바로 앉힙니다.
+    await openSessionInTile(t, {
+      ...m, url: m.url || url, site: m.site || probe.site,
+      video_id: m.video_id || probe.id, channel: m.channel || probe.channel,
+      title: m.title || probe.title || url,
+    });
+    await attachLive(t);
+  }
+  applyLayout();
+}
+
+/* 서버가 들고 있는 묶음을 화면에 그대로. 새로고침이나 목록에서 멤버를 눌렀을 때. */
+async function openMultiview(gid) {
+  const g = await (await fetch(`/api/multiview/${encodeURIComponent(gid)}`)).json();
+  if (!g || g.error) return false;
+  const first = soloTile();
+  detachTile(first);
+  state.mv = { id: g.id, focus: g.focus, members: g.members.map(m => m.id) };
+  let i = 0;
+  for (const m of g.members) {
+    const t = i === 0 ? first : makeTile();
+    i++;
+    await openSessionInTile(t, m);
+  }
+  const focus = tileBySession(g.focus) || state.tiles[0];
+  // 먹이기 전에 초점을 정해야 각 타일이 제 소리 상태(음소거)로 앉습니다.
+  if (focus !== focusedTile()) {
+    focusedTile().el.classList.remove("focused");
+    focus.el.classList.add("focused");
+    state.focus = focus.id;
+    overlay = focus.overlay;
+    if (state.cuePos) overlay.setPos(state.cuePos);
+  }
+  for (const t of state.tiles) await attachLive(t);
+  showTileInPanels(focus);
+  if (focus.live) markVideoRow("live:" + focus.live.id);
+  applyLayout();
+  return true;
 }

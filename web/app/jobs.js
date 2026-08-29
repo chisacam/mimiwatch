@@ -120,6 +120,13 @@ async function submitAdd(e) {
   if (probe.error) { jobError(probe.error); return; }
   f.url.value = "";
 
+  if (f.dataset.mode === "tile") {
+    // 「＋ 타일」: 지금 보는 방송 옆에 붙입니다. 라이브만 됩니다 -- 녹화본은 전사가
+    // 끝나야 볼 것이 생기므로 옆에 두고 볼 것이 아닙니다.
+    if (!probe.is_live) { jobError("라이브 방송만 타일로 붙일 수 있습니다."); return; }
+    await addTile(url, f.lang.value || null, probe);
+    return;
+  }
   if (probe.is_live) {
     await startLive(url, f.lang.value || null, probe);
     return;

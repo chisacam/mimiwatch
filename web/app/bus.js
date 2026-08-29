@@ -53,6 +53,8 @@ function connectBus() {
     // 모델 내려받기의 진행·완료·실패. 대화상자가 열려 있으면 그 줄을 고치고,
     // 필요한 것이 다 갖춰지면 위쪽 안내 띠를 내립니다.
     else if (m.type === "model") onModelEvent(m);
+    // 멀티뷰 묶음이 생기거나 초점·멤버가 바뀌었습니다(다른 창이나 서버가 옮긴 것).
+    else if (m.type === "multiview") onMultiviewChanged(m);
   };
   bus.onopen = () => {
     if (busWasDown) scheduleListRefresh(0);   // 끊긴 사이의 변화를 메웁니다
@@ -78,6 +80,15 @@ function connectBus() {
 function onSessionChanged(m) {
   const box = $("video-list");
   const row = box.querySelector(`.video-row[data-session="${CSS.escape(m.id)}"]`);
+  // 화면의 타일이 보는 세션이면 그 띠도 고칩니다(줄 수·상태·제목).
+  const tile = tileBySession(m.id);
+  if (tile && !m.deleted) {
+    if (m.title) tile.title = m.title;
+    if (!tile.live.lastStatus || tile.live.lastStatus.lines !== m.lines) {
+      tile.live.lastStatus = { ...(tile.live.lastStatus || {}), ...m };
+    }
+    updateTileBar(tile);
+  }
   if (m.deleted) {
     if (row) row.remove();
     if (state.live && state.live.id === m.id) {
@@ -91,6 +102,7 @@ function onSessionChanged(m) {
   }
   if (row) {
     updateSessionRow(row, m);
+    if (row.dataset.group !== (m.group || "")) scheduleListRefresh();   // 묶음 표시가 바뀜
     return;
   }
   scheduleListRefresh().then(() => {
@@ -118,6 +130,27 @@ function onVideoChanged(m) {
   if (state.scriptMode !== "read") return;
   if (state.jobId && state.jobLocal) return;
   reloadCues().catch(() => {});
+}
+
+/* 멀티뷰 묶음이 바뀌었습니다. 이 화면이 보는 묶음이 아니면 목록만 다시 읽습니다.
+ * 이 묶음이면 초점·멤버를 서버에 맞춥니다 -- 다른 창에서 초점을 옮겼거나, 멤버가
+ * 끝나 서버가 초점을 옮겼거나, 묶음이 없어졌거나. 서버로 되돌려 보내지 않습니다
+ * (post:false) -- 그러면 두 창이 서로 초점을 되던지며 끝나지 않습니다. */
+async function onMultiviewChanged(m) {
+  scheduleListRefresh();
+  if (!state.mv || state.mv.id !== m.id) return;
+  if (m.deleted) {
+    // 묶음이 없어졌습니다(멤버가 전부 끝남). 남은 타일은 그대로 두고 묶음만 잊습니다 --
+    // 각 타일은 자기 세션의 종료 상태를 이미 받았거나 곧 받습니다.
+    state.mv = null;
+    syncMvControls();
+    return;
+  }
+  state.mv.focus = m.focus;
+  state.mv.members = m.members;
+  // 서버에서 빠진 멤버(끝난 세션)의 타일은 그대로 둡니다 -- 자막 내역은 남아야 합니다.
+  const t = tileBySession(m.focus);
+  if (t && t !== focusedTile()) setFocus(t, { post: false });
 }
 
 /* 다른 창(또는 확장)에서 시작한 작업의 진행. 이 창의 것은 폴링 루프가 그리므로

@@ -69,10 +69,15 @@
 ## 3. 검토했지만 바꾸지 않은 것
 
 **Whisper에 직전 문장을 프롬프트로 주기(조건화).** 고유명사 일관성을
-높이는 흔한 기법이지만, 두 가지로 접었습니다. transcribe.cpp 바인딩의
-`WhisperRunOptions`에 프롬프트 칸이 없고(0.2.2, 빈 데이터클래스), 라이브에서
-이 기법은 반복 환각을 키우는 것으로 알려져 있습니다(13절의 다양도 검사가
-막는 바로 그 현상). 바인딩이 칸을 열면 재 볼 만합니다.
+높이는 흔한 기법입니다. (처음 적을 때 "바인딩에 칸이 없다"고 했는데 틀렸습니다 --
+0.2.2의 `WhisperRunOptions(initial_prompt, condition_on_prev_tokens, no_speech_thold,
+logprob_thold, compression_ratio_thold, …)`를 `Session.run(family=…)`로 넘길 수
+있습니다.) 그래도 빠른 패스에는 넣지 않습니다: 라이브에서 이 기법은 반복 환각을
+키우는 것으로 알려져 있고(whisper.cpp #3744·#2286, 13절의 다양도 검사가 막는 바로 그
+현상), ≤30초 조각에서 꼬리가 잘리는 결함도 보고됐습니다(transcribe.cpp #89).
+**정제 패스에만** 직전 정제본 한두 문장을 넘기는 실험은 할 만합니다 -- 환각 카운터를
+지표로. 조각별 `no_speech_prob`/`avg_logprob`(chunk trace)는 C API에만 있어 파이썬에서는
+임계값(`no_speech_thold`·`logprob_thold`)을 조정하는 길만 있습니다.
 
 **추측 해독(`spec_k_drafts`).** 바인딩이 노출하지만 whisper-large-v3-turbo에서
 -1·0·4 모두 해독 시간이 같았습니다(5초 무음, 256~264ms). 이 모델은

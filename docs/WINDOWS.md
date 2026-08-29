@@ -98,22 +98,17 @@ iGPU를 다투는 일을 피할 수 있습니다.
 `asr_backends`에 넣으면 화면의 「전사」 선택기에 나타납니다. 자세한 것은
 README의 「CPU로 돌리기」를 보십시오.
 
-## NVIDIA: CUDA 전용 판이 따로 있습니다
+## NVIDIA: CUDA 판은 릴리스에서 뺐습니다
 
-릴리스에는 윈도우 묶음이 둘입니다.
+NVIDIA 도 릴리스 묶음(`windows-x64`, Vulkan)을 쓰십시오. CUDA 판(`build.ps1 -Backend
+cuda`)을 만들어 봤지만 릴리스에서는 빼기로 했습니다. llama-cpp-python 의 cu124 휠은
+**RTX 50(Blackwell, sm_120) 커널을 담지 않아** 최신 카드에서는 열리지 않거나 PTX JIT 에
+기대야 하고, 전사(transcribe.cpp)는 어차피 CUDA 휠이 없어 Vulkan 이라 얻는 것이 번역
+속도뿐인데 묶음이 726MB 로 7배 커집니다. 그 거래는 맞지 않습니다.
 
-| 묶음 | GPU 경로 | 크기 | 누가 |
-|---|---|---|---|
-| `mimiwatch-*-windows-x64.zip` | Vulkan (전사·번역 모두) | 약 100MB | AMD · Intel · NVIDIA 누구나 |
-| `mimiwatch-*-windows-x64-cuda.zip` | **번역은 CUDA**, 전사는 Vulkan | 약 600MB | 아래 표의 NVIDIA GPU |
-
-NVIDIA 에서는 llama.cpp 가 CUDA 로 돌 때가 Vulkan 보다 빠르고 안정적입니다. 그래서
-전용 판을 따로 만듭니다. 전사(transcribe.cpp)는 아직 CUDA 휠이 배포되지 않아 두 판
-모두 Vulkan 입니다 -- 그쪽 휠이 나오면 바꿉니다. 저장소에서 설치할 때는
-`.\install.ps1`이 NVIDIA 를 알아보고 같은 조합(`-Backend cuda`)을 고릅니다.
-
-**지원하는 GPU.** CUDA 판의 커널이 어떤 세대를 위해 컴파일되었는지 휠을 열어
-확인했습니다(llama-cpp-python 0.3.35 cu124, `ggml-cuda.dll`의 fatbin 헤더).
+직접 만들 수는 있습니다(`.\packaging\build.ps1 -Backend cuda`, 또는 `.\install.ps1
+-Backend cuda`). 그때 지원되는 GPU 는 아래 표대로이고, 이것은 휠의 `ggml-cuda.dll`
+fatbin 헤더를 열어 확인한 것입니다(llama-cpp-python 0.3.35 cu124).
 
 | 세대 | 대표 제품 | 컴파일된 대상 | 지원 |
 |---|---|---|---|

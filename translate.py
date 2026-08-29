@@ -376,7 +376,7 @@ class _LlamaHolder:
             if not os.path.exists(self.model_path):
                 raise FileNotFoundError(
                     f"Gemma 모델이 없습니다: {self.model_path}\n"
-                    "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+                    "「엔진 관리 › 모델·도구」에서 받거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
             from llama_cpp import Llama
             print(f"[translate] Gemma · {self.device} · {self.threads}스레드",
                   file=sys.stderr, flush=True)

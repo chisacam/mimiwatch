@@ -259,7 +259,7 @@ def resolve_asr(spec: dict | None, lang: str | None) -> dict:
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"전사 모델이 없습니다: {path}\n"
-            "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+            "「엔진 관리 › 모델·도구」에서 받거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
     device = resolve_device(spec.get("device", "auto"))
     # 설정에 스레드 수가 적혀 있으면 그것이 우선입니다. 없으면 어디서
     # 도는지에 맞춰 정합니다.

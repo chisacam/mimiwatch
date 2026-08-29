@@ -52,11 +52,9 @@ jobs:
           - os: windows-latest
             name: windows-x64
             backend: vulkan
-          # NVIDIA 전용. 번역이 CUDA 로 돕니다(전사는 Vulkan 그대로). 런타임 DLL 까지
-          # 넣어 600MB 남짓입니다. 지원 GPU 는 docs/WINDOWS.md.
-          - os: windows-latest
-            name: windows-x64-cuda
-            backend: cuda
+          # NVIDIA 전용 CUDA 판(-Backend cuda)은 릴리스에서 뺐습니다. cu124 휠의 커널이
+          # RTX 50(Blackwell, sm_120)을 담지 않아 최신 카드에서는 뜻이 없고, 726MB 를 더
+          # 배포할 만한 이득이 아닙니다. 필요하면 build.ps1 -Backend cuda 로 직접 만듭니다.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

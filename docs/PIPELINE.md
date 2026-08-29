@@ -107,6 +107,11 @@ logprob_thold, compression_ratio_thold, …)`를 `Session.run(family=…)`로 �
 VTuber 방송에서 말의 90%를 버려 v4 유지**, **Whisper 임계값 강화(0.84/-1.3)는 4초 조각에서
 차이 없음**. 손잡이(`whisper: {...}`, `refine_prompt`, `MIMIWATCH_VAD_MODEL`)만 남겼습니다.
 
+같은 날 밤, 정답 자막이 있는 표본(뮤직비디오 넷, `bench/gold.py`)으로 손잡이 열두 개와 대안 모델
+넷을 잤습니다(43~45절): **Whisper 임계값·프롬프트·폴백은 전부 오차 안**, 짧게 끊을수록 나쁨,
+**VAD 문턱 0.5 → 0.3만 이득(64.4 → 59.0%)** 이고 대화 표본에서는 중립이라 기본값으로 올렸습니다.
+Fun-ASR·Qwen3-ASR·Cohere Transcribe는 일본어 노래에서 whisper-turbo에 6~14p 뒤졌습니다.
+
 남은 것:
 
 - 정제가 켜진 방송에서 번역 호출이 얼마나 줄었는가(2.2절).

@@ -222,11 +222,18 @@ def default_threads(device: str) -> int:
 # 어느 Silero 파일을 쓸지. 기본은 k2 재수출(v4 계열, 643KB). `silero_vad_v5.onnx`(2.3MB)도
 # 같은 자리에서 받을 수 있고 bench/vad_ab.py 가 둘을 맞대어 잽니다.
 VAD_FILE = os.environ.get("MIMIWATCH_VAD_MODEL") or "silero_vad.onnx"
+# 말이라고 볼 확률의 문턱. Silero 기본은 0.5인데 **0.3으로 낮춥니다.** 정답 자막이 있는
+# 노래 표본 넷에서 0.5 → 0.3이 전체 오류율 64.4% → 59.0%로 유일하게 오차를 넘는 이득이었고
+# (반주 위의 노랫소리를 0.5는 무음으로 봄: 277초 곡에서 말 57초 → 177초), 대화 표본
+# 셋에서는 말 판정 초·빈 구간·환각 차단이 그대로였습니다(RESULTS.md 44절). 0.2는 다시
+# 나빠졌습니다(61.2%). `MIMIWATCH_VAD_THRESHOLD`로 되돌릴 수 있습니다.
+VAD_THRESHOLD = float(os.environ.get("MIMIWATCH_VAD_THRESHOLD") or 0.3)
 
 
 def build_vad(min_silence: float = 0.35,
               max_speech: float = 12.0,
-              model_file: str | None = None) -> sherpa_onnx.VoiceActivityDetector:
+              model_file: str | None = None,
+              threshold: float | None = None) -> sherpa_onnx.VoiceActivityDetector:
     """발화를 잘라 주는 Silero VAD.
 
     min_silence는 얼마나 조용해야 발화가 끝났다고 볼지, max_speech는 쉬지
@@ -241,6 +248,7 @@ def build_vad(min_silence: float = 0.35,
     cfg = sherpa_onnx.VadModelConfig(
         silero_vad=sherpa_onnx.SileroVadModelConfig(
             model=vad_model,
+            threshold=VAD_THRESHOLD if threshold is None else threshold,
             min_silence_duration=min_silence,
             min_speech_duration=0.25,
             window_size=WINDOW_SIZE,

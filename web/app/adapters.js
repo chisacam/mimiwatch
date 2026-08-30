@@ -129,6 +129,26 @@ function ytAdapter() {
       // 기다리는 쪽이 영영 서 있지 않게 합니다.
       setTimeout(settle, 15000);
     });
+    // 버퍼링 감시. 멀티뷰에서 타일을 닫거나 자리를 바꾼 뒤 남은 라이브 플레이어가 버퍼링에
+    // 갇혀 영영 도는 일이 있었습니다(같은 방송의 임베드 둘 중 하나를 지웠을 때 재현됨;
+    // 새로고침하면 풀림). 15초 넘게 버퍼링이면 같은 iframe 안에서 방송을 다시 붙입니다 --
+    // 새로고침이 하던 일을 그 타일만 합니다. 1분에 한 번만, 라이브에만.
+    if (opts.live) {
+      let buffering = 0, healed = 0;
+      a._watch = setInterval(() => {
+        if (!a.player || !a.ready) return;
+        let st;
+        try { st = a.player.getPlayerState(); } catch (_) { return; }
+        if (st !== 3) { buffering = 0; return; }
+        buffering += 3;
+        if (buffering >= 15 && Date.now() - healed > 60000) {
+          console.warn(`[yt] ${src.video_id} 가 ${buffering}초 넘게 버퍼링 -- 라이브 끝으로 다시 붙습니다`);
+          healed = Date.now();
+          buffering = 0;
+          try { a.player.loadVideoById(src.video_id); } catch (_) { /* 다음 틱에 다시 */ }
+        }
+      }, 3000);
+    }
   };
   a.load = (src) => { if (a.player && a.ready) a.player.loadVideoById(src.video_id); };
   a.getCurrentTime = () => (a.player && a.ready ? a.player.getCurrentTime() : 0);
@@ -139,6 +159,7 @@ function ytAdapter() {
     if (m) a.player.mute(); else a.player.unMute();
   };
   a.destroy = () => {
+    if (a._watch) { clearInterval(a._watch); a._watch = null; }
     try { if (a.player) a.player.destroy(); } catch (_) { /* 이미 사라진 iframe */ }
     a.player = null;
     a.ready = false;

@@ -200,6 +200,7 @@ async function mountTile(tile, src, opts = {}) {
   try {
     await tile.adapter.mount(tile.playerEl, src, {
       muted: !!opts.muted,
+      live: !!(tile.live || (tile.doc && tile.doc.live)),
       onError: (msg, vid) => playerError(msg, vid, tile),
     });
   } catch (err) {
@@ -353,7 +354,8 @@ async function addTile(url, lang, probe) {
   } else {
     res = await mvAdd(state.mv.id, { url, ...args });
     if (res.error) { jobError(res.error); return; }
-    state.mv.members.push(res.id);
+    // 서버의 multiview 알림이 먼저 도착해 이미 들어 있을 수 있습니다.
+    if (!state.mv.members.includes(res.id)) state.mv.members.push(res.id);
     members = [res];
   }
   // 새 세션은 yt-dlp 가 답하기 전이라 site·video_id 가 비어 있습니다. probe 가 방금
@@ -398,7 +400,7 @@ async function dropRow(value) {
   } else {
     res = await mvAdd(state.mv.id, { session: sid, ...args });
     if (res.error) { jobError(res.error); return; }
-    state.mv.members.push(res.id);
+    if (!state.mv.members.includes(res.id)) state.mv.members.push(res.id);
     members = [res];
   }
   await mountMembers(members, { title: row.dataset.title });

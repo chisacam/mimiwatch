@@ -134,22 +134,50 @@ function ytAdapter() {
     // 새로고침하면 풀림). 15초 넘게 버퍼링이면 같은 iframe 안에서 방송을 다시 붙입니다 --
     // 새로고침이 하던 일을 그 타일만 합니다. 1분에 한 번만, 라이브에만.
     if (opts.live) {
-      let buffering = 0, healed = 0;
+      let buffering = 0, healed = 0, stage = 0;
+      const diag = () => {
+        const p = a.player, f = host.querySelector("iframe");
+        const g = (fn) => { try { return fn(); } catch (e) { return "err"; } };
+        return {
+          state: g(() => p.getPlayerState()), t: g(() => Math.round(p.getCurrentTime())),
+          dur: g(() => Math.round(p.getDuration())), loaded: g(() => p.getVideoLoadedFraction()),
+          muted: g(() => p.isMuted()), vol: g(() => p.getVolume()), q: g(() => p.getPlaybackQuality()),
+          iframe: f ? { w: f.clientWidth, h: f.clientHeight, allow: f.getAttribute("allow"), connected: f.isConnected,
+                        sameWin: g(() => p.getIframe() === f) } : null,
+          page: { visible: document.visibilityState, focus: document.hasFocus(),
+                  activation: navigator.userActivation ? [navigator.userActivation.hasBeenActive, navigator.userActivation.isActive] : null },
+        };
+      };
       a._watch = setInterval(() => {
         if (!a.player || !a.ready) return;
         let st;
         try { st = a.player.getPlayerState(); } catch (_) { return; }
-        if (st !== 3) { buffering = 0; return; }
+        if (st !== 3) { buffering = 0; if (st === 1) stage = 0; return; }
         buffering += 3;
-        if (buffering >= 15 && Date.now() - healed > 60000) {
-          console.warn(`[yt] ${src.video_id} 가 ${buffering}초 넘게 버퍼링 -- 라이브 끝으로 다시 붙습니다`);
-          healed = Date.now();
-          buffering = 0;
-          try { a.player.loadVideoById(src.video_id); } catch (_) { /* 다음 틱에 다시 */ }
+        if (buffering < 9 || Date.now() - healed < 12000) return;
+        healed = Date.now();
+        buffering = 0;
+        stage++;
+        const d = diag();
+        console.warn(`[yt] ${src.video_id} 9초 넘게 버퍼링 (${stage}번째)`, JSON.stringify(d));
+        // 멎는 것은 거의 언제나 **소리를 켠** 플레이어였습니다(초점을 옮기면 스피너도 따라감).
+        // 그것은 스트림이 아니라 소리 있는 자동 재생이 막힌 모양이라, 같은 플레이어에 다시
+        // 붙여도(loadVideoById = 또 한 번의 소리 있는 자동 재생) 풀리지 않습니다. 그 경우는 바로
+        // 플레이어를 다시 만들어 재생 단추 상태로 둡니다 -- 새로고침이 하던 일이고, 단추는
+        // iframe 안의 사용자 조작이라 소리가 납니다. 음소거 플레이어의 정지만 다시 붙여 봅니다.
+        if (stage === 1 && d.muted === true) {
+          console.warn(`[yt] ${src.video_id} loadVideoById 로 다시 붙습니다`);
+          try { a.player.loadVideoById(src.video_id); } catch (_) { /* 다음 단계로 */ }
+          return;
         }
+        console.warn(`[yt] ${src.video_id} 플레이어를 다시 만듭니다 -- 타일의 ▶ 를 눌러 주십시오`);
+        if (a._remount) a._remount(d.muted === true);
+        stage = 0;
       }, 3000);
     }
   };
+  /* 감시 2단계가 부릅니다: 부르는 쪽(tiles.js 의 mountTile)이 이 타일을 다시 앉힐 수 있게 걸어 둡니다. */
+  a._remount = null;
   a.load = (src) => { if (a.player && a.ready) a.player.loadVideoById(src.video_id); };
   a.getCurrentTime = () => (a.player && a.ready ? a.player.getCurrentTime() : 0);
   a.seekTo = (t) => { if (a.player && a.ready) a.player.seekTo(t, true); };

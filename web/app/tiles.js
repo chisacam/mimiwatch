@@ -198,6 +198,13 @@ async function mountTile(tile, src, opts = {}) {
   if (tile === focusedTile()) state.player = tile.adapter;
   updateTileBar(tile);
   try {
+    // 버퍼링 감시의 마지막 단계: 이 타일의 플레이어를 통째로 다시 만듭니다(새로고침과 같음).
+    tile.adapter._remount = (wasMuted) => {
+      if (tile.adapter && tile.adapter.kind === "youtube") {
+        // 초점 타일은 소리를 켠 채 재생 단추 상태로(사용자가 누름), 다른 타일은 음소거 자동 재생.
+        mountTile(tile, src, { muted: tile !== focusedTile() || wasMuted });
+      }
+    };
     await tile.adapter.mount(tile.playerEl, src, {
       muted: !!opts.muted,
       live: !!(tile.live || (tile.doc && tile.doc.live)),

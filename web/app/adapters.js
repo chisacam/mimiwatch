@@ -135,7 +135,7 @@ function ytAdapter() {
     // 새로고침하면 풀림). 15초 넘게 버퍼링이면 같은 iframe 안에서 방송을 다시 붙입니다 --
     // 새로고침이 하던 일을 그 타일만 합니다. 1분에 한 번만, 라이브에만.
     if (opts.live) {
-      let buffering = 0, healed = 0, stage = 0;
+      let buffering = 0, healed = 0, stage = 0, ended = 0;
       const diag = () => {
         const p = a.player, f = host.querySelector("iframe");
         const g = (fn) => { try { return fn(); } catch (e) { return "err"; } };
@@ -153,7 +153,34 @@ function ytAdapter() {
         if (!a.player || !a.ready) return;
         let st;
         try { st = a.player.getPlayerState(); } catch (_) { return; }
-        if (st !== 3) { buffering = 0; if (st === 1) stage = 0; return; }
+        if (st === 1) { buffering = 0; stage = 0; ended = 0; return; }
+        // 상태 0 은 「끝났다」입니다 -- 화면에 다시 재생(↻) 단추만 남고 가만히 있습니다.
+        // 라이브에는 그렇게 앉아 있을 이유가 없습니다. 방송이 정말 끝났다면 받아 적는
+        // 쪽도 함께 끝나는데, 0.3.1 에서 **자막은 계속 갱신되는 채로** 화면만 이 상태로
+        // 남는 것이 보고되었습니다. 버퍼링 감시는 상태 3 만 보고 있어 이 자리를 통째로
+        // 놓쳤습니다 -- 스피너가 도는 정지만 잡고, 멈춰 선 정지는 못 잡았습니다.
+        //
+        // 세 번까지만 손을 씁니다(1차 다시 붙이기, 2·3차 다시 만들기). 정말 끝난 방송에
+        // 9초마다 새 플레이어를 앉히지 않기 위해서입니다. 다시 재생되면(상태 1) 0 으로
+        // 돌아가 다음 번을 위해 세 번이 다시 찹니다.
+        if (st === 0) {
+          buffering = 0;
+          if (ended >= 3 || Date.now() - healed < 9000) return;
+          healed = Date.now();
+          ended++;
+          console.warn(`[yt] ${src.video_id} 라이브인데 「끝났다」고 앉았습니다 (${ended}번째)`,
+                       JSON.stringify(diag()));
+          if (ended === 1) {
+            // 라이브에서 loadVideoById 는 끝점으로 갑니다. iframe 을 그대로 두므로 가장 쌉니다.
+            console.warn(`[yt] ${src.video_id} loadVideoById 로 다시 붙습니다`);
+            try { a.player.loadVideoById(src.video_id); return; } catch (_) { /* 다음 단계로 */ }
+          }
+          const back = !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
+          console.warn(`[yt] ${src.video_id} 플레이어를 다시 만듭니다 (${back ? "소리 켠 자동 재생" : "▶ 를 눌러 주십시오"})`);
+          if (a._remount) a._remount(false, back);
+          return;
+        }
+        if (st !== 3) { buffering = 0; return; }
         buffering += 3;
         // 타일을 닫거나 배치를 바꾼 직후의 정지는 거의 확실히 그 재배치가 부른 것이므로(다른
         // 타일을 닫았을 때 소리 켠 플레이어가 데이터를 들고도 멎는 것이 재현됨) 3초만 봅니다.

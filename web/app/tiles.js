@@ -256,14 +256,28 @@ function applyLayout(name) {
   const wrap = $("player-wrap");
   syncTileOrder();
   // className 을 통째로 갈지 않습니다 -- 전체화면의 fs-active 가 같은 요소에 붙습니다.
+  const prevUse = ([...wrap.classList].find(c => c.startsWith("mv-")) || "").slice(3);
   [...wrap.classList].filter(c => c.startsWith("mv-")).forEach(c => wrap.classList.remove(c));
   wrap.classList.add("mv-" + use);
+  if (prevUse && prevUse !== use) preemptRelayoutStall();
   document.querySelectorAll("[data-layout]").forEach(b => {
     b.classList.toggle("on", b.dataset.layout === use);
     b.disabled = !layoutFits(b.dataset.layout, n);
   });
   syncMvControls();
   requestAnimationFrame(applyCueSize);
+}
+
+/* 배치가 바뀌어 초점 타일의 크기가 달라질 때, 소리 켠 유튜브 플레이어가 데이터를 들고도
+ * 버퍼링에 갇히는 브라우저가 있습니다(임베드 안의 일이라 밖에서 막을 수 없음). 그런 정지를
+ * 한 번 겪은 브라우저(prefs.ytRelayoutStall)에서는 3초 스피너를 기다리는 대신 초점 플레이어를
+ * 바로 새로 만듭니다 -- 1~2초 검은 화면이 3초 스피너보다 낫습니다. 겪지 않은 브라우저는 그대로. */
+function preemptRelayoutStall() {
+  if (!loadPrefs().ytRelayoutStall) return;
+  const t = focusedTile();
+  if (!t || !t.live || !t.adapter || t.adapter.kind !== "youtube" || !t.adapter.ready || !t.adapter._remount) return;
+  console.warn("[yt] 재배치 -- 초점 플레이어를 미리 새로 만듭니다 (이 브라우저에서 재배치 뒤 정지를 겪은 적이 있음)");
+  requestAnimationFrame(() => t.adapter._remount(false, true));
 }
 
 /* 멀티뷰 조절기의 보임/숨김. 「＋ 타일」은 초점이 라이브일 때, 배치 단추는 타일이

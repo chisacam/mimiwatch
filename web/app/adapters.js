@@ -164,6 +164,11 @@ function ytAdapter() {
         stage++;
         const d = diag();
         console.warn(`[yt] ${src.video_id} ${recent ? "재배치 뒤 3" : "6"}초 넘게 버퍼링 (${stage}번째)`, JSON.stringify(d));
+        // 재배치 직후의 정지를 한 번 겪은 브라우저는 그 뒤로 재배치 때 초점 플레이어를 미리 새로
+        // 만듭니다(tiles.js applyLayout). 멎지 않는 환경은 이 표시가 없어 깜빡이지 않습니다.
+        if (recent && d.muted === false) {
+          try { savePrefs({ ...loadPrefs(), ytRelayoutStall: true }); } catch (_) { /* 저장 못 해도 회복은 함 */ }
+        }
         // 멎는 것은 거의 언제나 **소리를 켠** 플레이어였습니다(초점을 옮기면 스피너도 따라감).
         // 진단값은 미디어를 받고 있었고(loaded>0) 사용자 조작도 있었다고 하므로 자동 재생 차단은
         // 아닙니다. 유튜브 임베드가 「음소거 재생 → 소리 켜기」 전환에서 스트림을 다시 맞추다

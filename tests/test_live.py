@@ -2,6 +2,7 @@
 import json
 import numpy as np
 import pytest
+import subprocess
 import threading
 import time
 
@@ -573,3 +574,20 @@ def test_multiview_add_resumes_a_stopped_session_as_a_warm_member(monkeypatch):
     finally:
         live._sessions.clear()
         live._groups.clear()
+
+
+def test_ffmpeg_is_spawned_without_inheriting_std_handles(session, monkeypatch):
+    """0.3.1 의 윈도우 사용자가 `_spawn_ffmpeg` 에서 WinError 6 으로 죽었습니다.
+
+    stdin·stderr 를 주지 않으면 `Popen` 이 부모 것을 물려주려고 복제하는데,
+    표준 핸들이 성치 않은 채로 뜬 프로세스에서는 그 복제가 실패합니다.
+    """
+    seen = {}
+    monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
+    monkeypatch.setattr(live.subprocess, "Popen",
+                        lambda cmd, **kw: seen.update(cmd=cmd, kw=kw) or object())
+    session._spawn_ffmpeg("https://example.invalid/live.m3u8", -2)
+    assert "-nostdin" in seen["cmd"]
+    assert seen["kw"]["stdout"] is subprocess.PIPE
+    assert seen["kw"]["stdin"] == subprocess.DEVNULL   # 물려받은 핸들에 기대지 않습니다
+    assert "stderr" in seen["kw"]

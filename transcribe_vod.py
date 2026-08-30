@@ -51,7 +51,8 @@ def probe(url: str) -> dict:
     try:
         out = subprocess.run(stream.ytdlp_args("-j", url=url),
                              capture_output=True, text=True,
-                             timeout=stream.YTDLP_TIMEOUT_S)
+                             timeout=stream.YTDLP_TIMEOUT_S,
+                             **stream.child_io(stderr=False))
     except subprocess.TimeoutExpired:
         raise VodError(f"yt-dlp가 {stream.YTDLP_TIMEOUT_S:.0f}초 안에 답하지 않았습니다")
     if out.returncode != 0:
@@ -78,7 +79,8 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
     tmp = dest + ".src"
     proc = subprocess.Popen(
         stream.ytdlp_args("-f", "bestaudio", "-o", tmp, url=url),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        **stream.child_io(stderr=False))
     while True:
         try:
             _, err = proc.communicate(timeout=0.5)
@@ -97,8 +99,9 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
     if proc.returncode != 0:
         raise VodError(f"yt-dlp download failed: {(err or '').strip()[:300]}")
     try:
-        subprocess.run([stream.ffmpeg_cmd(), "-loglevel", "error", "-y", "-i", tmp,
-                        "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), dest], check=True)
+        subprocess.run([stream.ffmpeg_cmd(), "-loglevel", "error", "-nostdin", "-y",
+                        "-i", tmp, "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), dest],
+                       check=True, stdout=subprocess.DEVNULL, **stream.child_io())
     except subprocess.CalledProcessError as exc:
         raise VodError(f"ffmpeg failed: {exc}") from exc
     except FileNotFoundError as exc:

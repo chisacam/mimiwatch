@@ -228,7 +228,8 @@ def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
         try:
             out = subprocess.run(stream.ytdlp_args("-f", fmt, "-g", url=url),
                                  capture_output=True, text=True,
-                                 timeout=stream.YTDLP_TIMEOUT_S)
+                                 timeout=stream.YTDLP_TIMEOUT_S,
+                                 **stream.child_io(stderr=False))
         except TimeoutExpired:
             why.append(f"{fmt}: {stream.YTDLP_TIMEOUT_S:.0f}초 안에 답하지 않음")
             continue
@@ -258,7 +259,8 @@ def ytdlp_version() -> str:
     """설치된 yt-dlp의 판. 못 물으면 빈 문자열."""
     try:
         out = subprocess.run(stream.ytdlp_cmd() + ["--version"], capture_output=True,
-                             text=True, timeout=20)
+                             text=True, timeout=20,
+                             **stream.child_io(stderr=False))
         return (out.stdout or "").strip().splitlines()[0] if out.returncode == 0 else ""
     except Exception:
         return ""
@@ -890,11 +892,15 @@ class LiveSession:
         # playlist. Without it ffmpeg reads a full-DVR playlist from the top
         # and transcribes the broadcast's opening greetings while the viewer
         # watches its live edge.
+        # `-nostdin`: 소리는 우리가 stdout 파이프로 받아 갑니다. ffmpeg 이
+        # 표준 입력을 들여다볼 일이 없고, 터미널에서 돌 때 키 입력을 가져가는
+        # 것도 막습니다. 표준 입출력은 stream.child_io 를 보십시오 -- 부모의
+        # 핸들을 물려주다 윈도우에서 넘어지던 자리입니다.
         self._ff = subprocess.Popen(
-            [stream.ffmpeg_cmd(), "-loglevel", "error",
+            [stream.ffmpeg_cmd(), "-loglevel", "error", "-nostdin",
              "-live_start_index", str(start_index), "-i", src,
              "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
-            stdout=subprocess.PIPE)
+            stdout=subprocess.PIPE, **stream.child_io())
 
     def _start_reader(self, src, start_index):
         """ffmpeg 을 세우고 그것을 읽는 스레드를 띄웁니다. 탭 세션은 `feed()` 가
@@ -1113,7 +1119,8 @@ class LiveSession:
         try:
             meta = subprocess.run(stream.ytdlp_args("-j", url=self.url),
                                   capture_output=True, text=True,
-                                  timeout=stream.YTDLP_TIMEOUT_S)
+                                  timeout=stream.YTDLP_TIMEOUT_S,
+                                  **stream.child_io(stderr=False))
         except TimeoutExpired:
             # 정보를 못 받아도 아래 resolve_audio가 한 번 더 시도합니다.
             # 거기서도 안 되면 그쪽이 이유를 실어 예외를 냅니다.

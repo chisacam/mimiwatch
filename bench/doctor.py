@@ -41,7 +41,7 @@ def main():
     if path:
         try:
             r = subprocess.run([path, "-version"], capture_output=True,
-                               text=True, timeout=20)
+                               text=True, timeout=20, stdin=subprocess.DEVNULL)
             ver = (r.stdout or r.stderr).strip().splitlines()[0][:40]
         except Exception as e:                              # noqa: BLE001
             ver = f"(판을 묻지 못했습니다: {e})"
@@ -129,7 +129,8 @@ def main():
         import live
         try:
             r = subprocess.run(["yt-dlp", "--no-warnings", "-j", url],
-                               capture_output=True, text=True, timeout=90)
+                               capture_output=True, text=True, timeout=90,
+                               stdin=subprocess.DEVNULL)
             import json
             d = json.loads(r.stdout) if r.returncode == 0 else {}
             line(r.returncode == 0, "yt-dlp -j",

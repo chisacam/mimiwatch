@@ -189,6 +189,7 @@ $env:MIMIWATCH_YTDLP_COOKIES = "C:\Users\USERNAME\cookies.txt"
 | 내려받다 끊김 | — | 그냥 다시 실행하십시오. 받다 만 것은 `.part`로 남고 이어 받습니다. 화면의 「모델·도구」에서도 됩니다 |
 | `NativeCommandError`로 중간에 멈춤 | 0.1의 결함 (이슈 #1) | 최신 판을 받으십시오. Windows PowerShell 5.1이 명령의 stderr 한 줄을 종료 오류로 바꾸던 문제입니다 |
 | 전사가 시작되자마자 실패 | GPU에 모델을 못 올렸을 수 있습니다 | `bench/doctor.py`로 확인하고, `device=auto`만 실패하면 `backends.json`에 `"device": "cpu"`를 적으십시오 |
+| 라이브 세션이 `OSError: [WinError 6] 핸들이 잘못되었습니다`로 실패 | 0.3.1의 결함 | 최신 판을 받으십시오. 표준 오류 핸들이 성치 않은 채로 뜬 프로세스(콘솔 없이 띄운 묶음, 작업 스케줄러·서비스)에서 ffmpeg을 세우지 못하던 문제입니다. 0.3.1을 그대로 쓰려면 콘솔 창에서 직접 띄우십시오 |
 | 라이브에서 "오디오를 찾지 못했습니다" | **yt-dlp가 낡았습니다** | `.\install.ps1` 을 다시 돌리십시오. 가상환경 안의 yt-dlp가 최신으로 올라갑니다 |
 
 ## 무엇을 확인했고 무엇을 확인하지 못했는가

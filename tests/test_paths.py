@@ -1,6 +1,7 @@
 """저장소에서 돌 때와 묶음(PyInstaller)으로 돌 때의 파일 자리, 그리고 도구 찾기."""
 import os
 import stat
+import subprocess
 import sys
 
 import paths
@@ -94,3 +95,28 @@ def test_ytdlp_cmd_passes_the_js_runtime_when_deno_is_found(monkeypatch, tmp_pat
     assert cmd[cmd.index("--js-runtimes") + 1] == "deno:/x/deno"
     assert "ejs:github" in cmd
     stream.reset_tool_cache()
+
+
+def test_child_io_never_hands_a_child_a_broken_stderr(monkeypatch):
+    """자식에게 물려줄 표준 입출력.
+
+    윈도우에서 부모의 표준 핸들이 성치 않으면 `Popen`이 그것을 복제하다
+    `OSError: [WinError 6]`으로 넘어졌습니다 -- 0.3.1의 라이브 세션이
+    ffmpeg을 세우지 못하고 죽은 자리입니다.
+    """
+    class Broken:
+        def fileno(self):
+            raise OSError(9, "bad file descriptor")
+
+    monkeypatch.setattr(sys, "stderr", Broken())
+    assert stream.child_io() == {"stdin": subprocess.DEVNULL,
+                                 "stderr": subprocess.DEVNULL}
+    monkeypatch.setattr(sys, "stderr", None)            # 창 없이 뜬 프로세스
+    assert stream.child_io()["stderr"] == subprocess.DEVNULL
+    # 성한 것은 그대로 물려줍니다 -- ffmpeg 의 오류 한 줄이 콘솔이나
+    # mimiwatch.log 에 남아야 다음 보고가 진단 가능해집니다.
+    with open(os.devnull, "w") as f:
+        monkeypatch.setattr(sys, "stderr", f)
+        assert stream.child_io()["stderr"] == f.fileno()
+    # 부르는 쪽이 stderr 를 직접 잡는 자리에서는 두 번 주지 않습니다.
+    assert stream.child_io(stderr=False) == {"stdin": subprocess.DEVNULL}

@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -146,6 +147,49 @@ def ytdlp_args(*opts: str, url: str) -> list[str]:
     여러 줄을 내면 부르는 쪽의 JSON 해석이 통째로 넘어졌습니다.
     """
     return ytdlp_cmd() + ["--no-warnings", "--no-playlist", *opts, "--", url]
+
+
+def _usable_stderr():
+    """자식에게 물려줄 수 있는 표준 오류. 성치 않으면 `DEVNULL`.
+
+    `fileno()`가 번호를 답해도 그 뒤의 핸들이 닫혀 있을 수 있어 `fstat`으로
+    한 번 두드려 봅니다. 창 없이 뜬 파이썬은 `sys.stderr`가 아예 None입니다.
+    """
+    try:
+        fd = sys.stderr.fileno()
+        os.fstat(fd)
+        return fd
+    except Exception:
+        return subprocess.DEVNULL
+
+
+def child_io(*, stderr: bool = True) -> dict:
+    """자식 프로세스(ffmpeg·yt-dlp)에 넘길 표준 입출력.
+
+    **물려받은 핸들에 기대지 않습니다.** `Popen`은 stdin/stderr를 따로 주지
+    않으면 부모 것을 물려주려고 복제(DuplicateHandle)하는데, 부모의 그 핸들이
+    유효하지 않으면 자식을 낳기도 전에
+
+        OSError: [WinError 6] 핸들이 잘못되었습니다
+
+    로 넘어집니다. 0.3.1의 윈도우 사용자가 라이브 세션의 `_spawn_ffmpeg`에서
+    정확히 이렇게 죽었습니다 -- 표준 오류가 성치 않은 채로 뜬 프로세스(콘솔
+    없이 띄운 묶음, 작업 스케줄러·서비스로 띄운 것, 출력을 이상하게 돌려놓고
+    부른 셸)입니다. 앞선 yt-dlp 호출은 `capture_output=True`로 stdout·stderr를
+    파이프로 잡고 있어 살아남았고, 파이프를 stdout에만 건 ffmpeg이 걸렸습니다.
+
+    stdin은 언제나 NUL입니다. ffmpeg에도 yt-dlp에도 넣어 줄 것이 없고,
+    터미널에서 돌 때 자식이 키 입력을 가져가는 일도 함께 막습니다.
+
+    stderr는 성한 것이 있으면 그대로 물려줍니다 -- ffmpeg의 오류 한 줄이
+    콘솔이나 mimiwatch.log에 남아야 다음 보고가 진단 가능해집니다. 성치
+    않으면 버립니다. 부르는 쪽이 stderr를 직접 잡는 자리(`capture_output`,
+    `stderr=PIPE`)에서는 `stderr=False`로 부릅니다 -- 두 번 줄 수 없습니다.
+    """
+    kw = {"stdin": subprocess.DEVNULL}
+    if stderr:
+        kw["stderr"] = _usable_stderr()
+    return kw
 
 
 def ffmpeg_cmd() -> str:

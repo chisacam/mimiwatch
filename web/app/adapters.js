@@ -100,6 +100,7 @@ function ytAdapter() {
     // 단추를 대신 둡니다.
     const vars = { rel: 0, modestbranding: 1, playsinline: 1, fs: 0 };
     if (opts.muted) { vars.mute = 1; vars.autoplay = 1; }
+    else if (opts.autoplay) vars.autoplay = 1;      // 소리 켠 자동 재생 -- 사용자 조작 직후에만 통합니다
     await new Promise((resolve) => {
       let done = false;
       const settle = () => { if (!done) { done = true; resolve(); } };
@@ -154,25 +155,28 @@ function ytAdapter() {
         try { st = a.player.getPlayerState(); } catch (_) { return; }
         if (st !== 3) { buffering = 0; if (st === 1) stage = 0; return; }
         buffering += 3;
-        if (buffering < 9 || Date.now() - healed < 12000) return;
+        if (buffering < 6 || Date.now() - healed < 9000) return;
         healed = Date.now();
         buffering = 0;
         stage++;
         const d = diag();
-        console.warn(`[yt] ${src.video_id} 9초 넘게 버퍼링 (${stage}번째)`, JSON.stringify(d));
+        console.warn(`[yt] ${src.video_id} 6초 넘게 버퍼링 (${stage}번째)`, JSON.stringify(d));
         // 멎는 것은 거의 언제나 **소리를 켠** 플레이어였습니다(초점을 옮기면 스피너도 따라감).
-        // 그것은 스트림이 아니라 소리 있는 자동 재생이 막힌 모양이라, 같은 플레이어에 다시
-        // 붙여도(loadVideoById = 또 한 번의 소리 있는 자동 재생) 풀리지 않습니다. 그 경우는 바로
-        // 플레이어를 다시 만들어 재생 단추 상태로 둡니다 -- 새로고침이 하던 일이고, 단추는
-        // iframe 안의 사용자 조작이라 소리가 납니다. 음소거 플레이어의 정지만 다시 붙여 봅니다.
-        if (stage === 1 && d.muted === true) {
+        // 진단값은 미디어를 받고 있었고(loaded>0) 사용자 조작도 있었다고 하므로 자동 재생 차단은
+        // 아닙니다. 유튜브 임베드가 「음소거 재생 → 소리 켜기」 전환에서 스트림을 다시 맞추다
+        // 라이브 끝을 앞질러(t > dur) 갇히는 모양입니다. 같은 플레이어에 다시 붙여도 안 풀리므로
+        // 플레이어를 새로 만듭니다 -- 1차: 소리 켠 채 자동 재생(직전 조작 덕에 허용됨),
+        // 2차: 재생 단추 상태(사용자가 iframe 안에서 누름 = 새로고침이 하던 일).
+        // 음소거 플레이어의 정지는 같은 플레이어에 다시 붙이는 것으로 충분했습니다.
+        if (d.muted === true) {
           console.warn(`[yt] ${src.video_id} loadVideoById 로 다시 붙습니다`);
           try { a.player.loadVideoById(src.video_id); } catch (_) { /* 다음 단계로 */ }
           return;
         }
-        console.warn(`[yt] ${src.video_id} 플레이어를 다시 만듭니다 -- 타일의 ▶ 를 눌러 주십시오`);
-        if (a._remount) a._remount(d.muted === true);
-        stage = 0;
+        const autoplay = stage === 1 && !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
+        console.warn(`[yt] ${src.video_id} 플레이어를 다시 만듭니다 (${autoplay ? "소리 켠 자동 재생" : "▶ 를 눌러 주십시오"})`);
+        if (a._remount) a._remount(false, autoplay);
+        if (!autoplay) stage = 0;
       }, 3000);
     }
   };

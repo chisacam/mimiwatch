@@ -478,7 +478,7 @@ class LiveSession:
         self._focus = threading.Event()
         self._focus.set()
         self.group = ""             # 멀티뷰 묶음 id. 비면 혼자 받는 세션
-        self.site = ""              # "youtube" | "twitch" | "other" (site_of). 화면이 임베드를 고릅니다
+        self.site = ""              # "youtube" | "twitch" | "other" (site_of). 화면이 임베드를 고름
         self.channel = ""           # 트위치 로그인명
         self._warm_persisted_s = 0.0   # 대기 중 마지막으로 상태를 적었을 때의 _recv_s
         self._asr = None            # released on stop; see _release()
@@ -769,7 +769,8 @@ class LiveSession:
         else:
             self._focus.clear()
         print(f"[live] 세션 {self.id} 초점 {'켬' if on else '끔'} "
-              f"(링 {self._ring.seconds():.1f}초, 받은 {self._recv_s:.0f}초, 받아 적은 {self.audio_s:.0f}초)",
+              f"(링 {self._ring.seconds():.1f}초, 받은 {self._recv_s:.0f}초, "
+              f"받아 적은 {self.audio_s:.0f}초)",
               flush=True)
         if self.source == "tab":
             # 탭 소리는 브라우저가 늦출 수 없어 초점일 때는 길게 받아 둡니다. 초점이 아니면
@@ -1255,7 +1256,8 @@ class LiveSession:
             sink = Sink(self)
             history = AudioHistory(SAMPLE_RATE)
             refiner = Refiner(asr, history, sink) if self.refine else None
-            print(f"[live] 세션 {self.id} 받아 적기 시작 (링 {self._ring.seconds():.1f}초)", flush=True)
+            print(f"[live] 세션 {self.id} 받아 적기 시작 (링 {self._ring.seconds():.1f}초)",
+                  flush=True)
             run_stream(self._consume(), vad, asr, sink, history, refiner)
             if refiner is not None:
                 # 마지막 무리의 정제가 끝나기를 기다립니다. 초점이 옮겨 간 뒤나 상태를
@@ -1270,14 +1272,16 @@ class LiveSession:
                 refiner.close()
                 th = getattr(refiner, "_thread", None)
                 waited = 0.0
-                while th is not None and th.is_alive() and waited < 120.0 and not self._stop.is_set():
+                while (th is not None and th.is_alive() and waited < 120.0
+                       and not self._stop.is_set()):
                     th.join(1.0)
                     waited += 1.0
                 if th is not None and th.is_alive():
-                    print(f"[live] 세션 {self.id} 정제 스레드가 {waited:.0f}초 뒤에도 살아 있습니다",
+                    print(f"[live] 세션 {self.id} 정제 스레드가 {waited:.0f}초 뒤에도 살아 있음",
                           file=sys.stderr, flush=True)
             del vad, history, refiner
-            print(f"[live] 세션 {self.id} 받아 적기 끝 (초점 {'있음' if self._focus.is_set() else '없음'}, "
+            focus = "있음" if self._focus.is_set() else "없음"
+            print(f"[live] 세션 {self.id} 받아 적기 끝 (초점 {focus}, "
                   f"멈춤 {self._stop.is_set()}, 읽기 끝 {self._ended})", flush=True)
             _transcriber.release()
 

@@ -525,7 +525,8 @@ def test_manifest_info_sees_the_end_of_a_recording():
 
 def _fake_playlist(monkeypatch, session, pdt="2026-01-01T00:20:00Z", release_ts=None, window_s=600.0):
     """yt-dlp -j 와 재생목록 읽기를 흉내 냅니다. 첫 조각은 방송 시작 1200초 뒤, 창은 600초."""
-    import datetime, subprocess as sp
+    import datetime
+    import subprocess as sp
     rel = release_ts if release_ts is not None else datetime.datetime.fromisoformat("2026-01-01T00:00:00+00:00").timestamp()
     meta = json.dumps({"is_live": True, "id": "vid", "title": "t", "extractor_key": "Youtube",
                        "release_timestamp": rel})

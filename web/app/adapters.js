@@ -60,6 +60,30 @@ function srcOf(x) {
   return { site: "none" };
 }
 
+/* 라이브에서 끝점 너머로 찍지 않게 잘라 줍니다.
+ *
+ * 라이브 임베드를 끝점 뒤로 보내면 「끝났다」로 앉아 버립니다 -- 유튜브는 화면에
+ * 다시 재생(↻) 단추만 남기고 멎고, 자막만 계속 갱신되는 상태가 됩니다(0.3.1 보고).
+ * 되돌릴 길이 플레이어를 다시 만드는 것뿐이라(adapters 의 상태 0 감시) 애초에
+ * 그 자리로 보내지 않는 것이 낫습니다.
+ *
+ * 찍는 자리는 자막 줄 클릭(script-panel.js)이지만 거기만 고치지 않고 어댑터에서
+ * 자릅니다 -- 타일을 옮기거나 더하는 길에서 눌린 클릭까지 전부 이 문을 지납니다.
+ *
+ * 되감기는 그대로 둡니다. 막는 것은 **끝점을 앞지르는 것**뿐입니다. 끝점을 모르면
+ * (아직 메타데이터 전, getDuration()이 0) 자를 근거가 없으므로 그대로 보냅니다.
+ */
+const LIVE_EDGE_MARGIN_S = 5;
+
+function liveSafeSeek(a, t, edgeOf) {
+  const x = Number.isFinite(t) ? Math.max(0, t) : 0;
+  if (!a.live) return x;
+  let edge;
+  try { edge = edgeOf(); } catch (_) { return x; }
+  if (!Number.isFinite(edge) || edge <= 0) return x;
+  return Math.min(x, Math.max(0, edge - LIVE_EDGE_MARGIN_S));
+}
+
 function adapterFor(src) {
   if (src.site === "youtube") return ytAdapter();
   if (src.site === "twitch" && typeof twitchAdapter === "function") return twitchAdapter();
@@ -72,7 +96,7 @@ function adapterFor(src) {
  * 같습니다). 안내문은 부르는 쪽이 playerError() 로 얹습니다. */
 function noneAdapter() {
   return {
-    kind: "none", ready: false,
+    kind: "none", ready: false, live: false,
     mount: async () => {},
     getCurrentTime: () => 0, seekTo: () => {}, playVideo: () => {},
     setMuted: () => {}, destroy: () => {},
@@ -84,8 +108,9 @@ function noneAdapter() {
  * 자동 재생합니다 -- 브라우저는 소리 없는 자동 재생만 허용합니다. 초점 타일은
  * 예전과 같이 아무 인자 없이 만들어 사용자가 재생을 누릅니다. */
 function ytAdapter() {
-  const a = { kind: "youtube", ready: false, player: null };
+  const a = { kind: "youtube", ready: false, live: false, player: null };
   a.mount = async (host, src, opts = {}) => {
+    a.live = !!opts.live;
     await whenApiReady();
     if (!(window.YT && window.YT.Player)) {
       throw new Error("YouTube IFrame API를 불러오지 못했습니다. 네트워크를 확인해 주세요.");
@@ -219,7 +244,11 @@ function ytAdapter() {
   a._remount = null;
   a.load = (src) => { if (a.player && a.ready) a.player.loadVideoById(src.video_id); };
   a.getCurrentTime = () => (a.player && a.ready ? a.player.getCurrentTime() : 0);
-  a.seekTo = (t) => { if (a.player && a.ready) a.player.seekTo(t, true); };
+  // 라이브의 끝점은 getDuration() 입니다 -- 유튜브는 방송이 시작한 뒤 흐른 시간을 답합니다.
+  a.seekTo = (t) => {
+    if (!a.player || !a.ready) return;
+    a.player.seekTo(liveSafeSeek(a, t, () => a.player.getDuration()), true);
+  };
   a.playVideo = () => { if (a.player && a.ready) a.player.playVideo(); };
   a.setMuted = (m) => {
     if (!a.player || !a.ready) return;
@@ -243,8 +272,9 @@ function ytAdapter() {
  * hls.js 는 열지 못합니다 -- 그때도 자막은 서버가 ffmpeg 으로 받아 적으므로
  * 오른쪽 자막 내역은 그대로 쌓입니다. 그렇게 안내합니다. */
 function hlsAdapter() {
-  const a = { kind: "hls", ready: false, video: null, hls: null };
+  const a = { kind: "hls", ready: false, live: false, video: null, hls: null };
   a.mount = async (host, src, opts = {}) => {
+    a.live = !!opts.live;
     const v = document.createElement("video");
     v.playsInline = true;
     v.controls = true;
@@ -281,7 +311,14 @@ function hlsAdapter() {
     v.play().catch(() => { /* 자동 재생이 막혔으면 사용자가 누릅니다 */ });
   };
   a.getCurrentTime = () => (a.video ? a.video.currentTime : 0);
-  a.seekTo = (t) => { if (a.video) a.video.currentTime = t; };
+  // 라이브 <video> 는 duration 이 Infinity 입니다. 끝점은 seekable 의 마지막 구간 끝입니다.
+  a.seekTo = (t) => {
+    if (!a.video) return;
+    a.video.currentTime = liveSafeSeek(a, t, () => {
+      const r = a.video.seekable;
+      return r && r.length ? r.end(r.length - 1) : a.video.duration;
+    });
+  };
   a.playVideo = () => { if (a.video) a.video.play().catch(() => {}); };
   a.setMuted = (m) => { if (a.video) a.video.muted = !!m; };
   a.destroy = () => {
@@ -303,8 +340,9 @@ function hlsAdapter() {
  * 전체화면 단추가 iframe 만 키우지 않게 합니다 -- 그러면 자막이 사라집니다. 못
  * 떼어도 onFullscreenChange 의 가드가 되돌립니다. */
 function twitchAdapter() {
-  const a = { kind: "twitch", ready: false, player: null, obs: null };
+  const a = { kind: "twitch", ready: false, live: false, player: null, obs: null };
   a.mount = async (host, src, opts = {}) => {
+    a.live = !!opts.live;
     await loadScriptOnce("https://player.twitch.tv/js/embed/v1.js",
                          () => !!(window.Twitch && window.Twitch.Player));
     if (!(window.Twitch && window.Twitch.Player)) {
@@ -340,7 +378,10 @@ function twitchAdapter() {
     });
   };
   a.getCurrentTime = () => (a.player && a.ready ? (a.player.getCurrentTime() || 0) : 0);
-  a.seekTo = (t) => { if (a.player && a.ready) a.player.seek(t); };
+  a.seekTo = (t) => {
+    if (!a.player || !a.ready) return;
+    a.player.seek(liveSafeSeek(a, t, () => a.player.getDuration()));
+  };
   a.playVideo = () => { if (a.player && a.ready) a.player.play(); };
   a.setMuted = (m) => { if (a.player && a.ready) a.player.setMuted(!!m); };
   a.destroy = () => {

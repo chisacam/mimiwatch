@@ -247,6 +247,7 @@ function layoutFits(name, n) {
 }
 
 function applyLayout(name) {
+  window.__tilesChangedAt = Date.now();     // 유튜브 어댑터의 버퍼링 감시가 「재배치 직후」를 짧게 봅니다
   const n = state.tiles.length;
   if (name && layoutFits(name, n)) {
     state.mvLayout = name;

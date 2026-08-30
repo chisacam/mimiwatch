@@ -155,12 +155,15 @@ function ytAdapter() {
         try { st = a.player.getPlayerState(); } catch (_) { return; }
         if (st !== 3) { buffering = 0; if (st === 1) stage = 0; return; }
         buffering += 3;
-        if (buffering < 6 || Date.now() - healed < 9000) return;
+        // 타일을 닫거나 배치를 바꾼 직후의 정지는 거의 확실히 그 재배치가 부른 것이므로(다른
+        // 타일을 닫았을 때 소리 켠 플레이어가 데이터를 들고도 멎는 것이 재현됨) 3초만 봅니다.
+        const recent = Date.now() - (window.__tilesChangedAt || 0) < 20000;
+        if (buffering < (recent ? 3 : 6) || Date.now() - healed < 9000) return;
         healed = Date.now();
         buffering = 0;
         stage++;
         const d = diag();
-        console.warn(`[yt] ${src.video_id} 6초 넘게 버퍼링 (${stage}번째)`, JSON.stringify(d));
+        console.warn(`[yt] ${src.video_id} ${recent ? "재배치 뒤 3" : "6"}초 넘게 버퍼링 (${stage}번째)`, JSON.stringify(d));
         // 멎는 것은 거의 언제나 **소리를 켠** 플레이어였습니다(초점을 옮기면 스피너도 따라감).
         // 진단값은 미디어를 받고 있었고(loaded>0) 사용자 조작도 있었다고 하므로 자동 재생 차단은
         // 아닙니다. 유튜브 임베드가 「음소거 재생 → 소리 켜기」 전환에서 스트림을 다시 맞추다

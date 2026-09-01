@@ -261,9 +261,11 @@ async function refreshVideoList(selectId, pre) {
     }));
   });
   list.forEach(v => {
-    const mins = v.duration ? `${Math.round(v.duration / 60)}분` : "";
+    // 로컬 파일은 probe 때 길이를 모릅니다(ffprobe 는 준비물이 아님). 전사가 잰 것을 씁니다.
+    const secs = v.duration || v.audio_seconds;
+    const mins = secs ? `${Math.round(secs / 60)}분` : "";
     box.appendChild(videoRow({
-      value: v.id, title: v.title, videoId: v.id,
+      value: v.id, title: v.title, videoId: v.source === "file" ? "" : v.id,
       meta: [v.source_lang + (v.translated ? `→${v.viewer_lang}` : ""), mins]
         .filter(Boolean).join("  ·  "),
       deletable: true, st: v,

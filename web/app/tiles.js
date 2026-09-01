@@ -216,7 +216,7 @@ async function mountTile(tile, src, opts = {}) {
 }
 
 /* 타일 띠: 사이트·제목·상태. 타일이 하나면 CSS 가 띠를 숨깁니다. */
-const SITE_MARK = { youtube: "▶", twitch: "◉", hls: "≋", none: "" };
+const SITE_MARK = { youtube: "▶", twitch: "◉", hls: "≋", media: "▤", none: "" };
 
 function updateTileBar(tile) {
   const live = tile.live;

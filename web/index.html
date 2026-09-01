@@ -235,16 +235,21 @@
 <dialog id="add-dialog">
   <form method="dialog" id="add-form">
     <h3>영상 추가</h3>
-    <p class="hint">YouTube 주소나 m3u8 주소를 넣으면 오디오를 받아 전사하고, 원본 언어가 내 언어와 다르면 번역까지 진행합니다.</p>
+    <p class="hint">YouTube 주소나 m3u8 주소를 넣으면 오디오를 받아 전사하고, 원본 언어가 내 언어와 다르면 번역까지 진행합니다. 이 기계의 영상·음성 파일도 됩니다 — 아래 「소리 출처」에서 고르십시오.</p>
     <p class="hint" id="tile-hint" hidden>지금 보는 방송 옆에 붙습니다(YouTube·Twitch·m3u8 라이브). 소리와 자막은 초점 타일만 -- 타일을 누르거나 1~4 키로 옮깁니다. 초점이 아닌 방송은 소리만 받아 두다가 초점이 오면 직전 몇 초부터 받아 적습니다.</p>
     <label>소리 출처
       <select name="source">
         <option value="url">주소에서 받기 (기본)</option>
         <option value="tab">이 브라우저의 다른 탭 소리 <!-- 멤버십 전용 --></option>
+        <option value="file">이 기계의 영상·음성 파일</option>
       </select>
       <small id="source-hint">서버가 yt-dlp로 오디오를 직접 받습니다.</small>
     </label>
     <label id="url-field">주소 <input name="url" placeholder="https://youtu.be/... 또는 https://.../index.m3u8"></label>
+    <label id="file-field" hidden>파일
+      <input type="file" name="media" accept="video/*,audio/*,.mkv,.ts,.m4a,.opus,.aac,.flac">
+      <small>mp3·wav·mp4·mkv 등 ffmpeg가 여는 것이면 됩니다. 전사가 끝나면 이 화면에서 자막과 함께 재생됩니다.</small>
+    </label>
     <label id="tab-title-field" hidden>이름
       <input name="tab_title" placeholder="무엇을 듣는지 (목록에 이 이름으로 남습니다)">
       <small>크롬은 공유한 탭의 제목을 알려 주지 않습니다 — 직접 적으십시오.

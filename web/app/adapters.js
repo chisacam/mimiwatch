@@ -88,6 +88,7 @@ function adapterFor(src) {
   if (src.site === "youtube") return ytAdapter();
   if (src.site === "twitch" && typeof twitchAdapter === "function") return twitchAdapter();
   if (src.site === "hls" && typeof hlsAdapter === "function") return hlsAdapter();
+  if (src.site === "media" && typeof mediaAdapter === "function") return mediaAdapter();
   return noneAdapter();
 }
 
@@ -389,6 +390,48 @@ function twitchAdapter() {
     a.obs = null;
     try { if (a.player && a.player.destroy) a.player.destroy(); } catch (_) { /* 이미 사라짐 */ }
     a.player = null;
+    a.ready = false;
+  };
+  return a;
+}
+
+
+/* 로컬 파일. 서버의 /api/media/<id> 가 원본을 Range 로 내주므로 <video> 에
+ * 그대로 뭅니다 -- hls 어댑터에서 hls.js 를 뺀 모양입니다. 음성 파일(mp3 등)도
+ * <video> 로 틉니다: 화면은 검고 조절기만 보이지만, 자막 오버레이가 그 위에
+ * 얹히므로 오히려 그 검은 상자가 자막의 자리입니다. */
+function mediaAdapter() {
+  const a = { kind: "media", ready: false, live: false, video: null };
+  a.mount = async (host, src, opts = {}) => {
+    const v = document.createElement("video");
+    v.playsInline = true;
+    v.controls = true;
+    v.setAttribute("controlslist", "nofullscreen");   // 전체화면은 우리 단추로 -- 자막이 함께 커져야 합니다
+    v.muted = !!opts.muted;
+    v.preload = "metadata";
+    v.src = src.url;
+    v.addEventListener("error", () => {
+      if (opts.onError) {
+        opts.onError("브라우저가 이 파일을 재생하지 못했습니다 (형식을 열 수 없음). "
+                     + "자막 내역은 오른쪽에서 그대로 읽을 수 있습니다.");
+      }
+    });
+    host.appendChild(v);
+    a.video = v;
+    a.ready = true;
+  };
+  a.load = (src) => {
+    if (!a.video) return;
+    a.video.src = src.url;
+    a.video.load();
+  };
+  a.getCurrentTime = () => (a.video ? a.video.currentTime : 0);
+  a.seekTo = (t) => { if (a.video) a.video.currentTime = Math.max(0, t || 0); };
+  a.playVideo = () => { if (a.video) a.video.play().catch(() => {}); };
+  a.setMuted = (m) => { if (a.video) a.video.muted = !!m; };
+  a.destroy = () => {
+    if (a.video) { a.video.pause(); a.video.removeAttribute("src"); a.video.remove(); }
+    a.video = null;
     a.ready = false;
   };
   return a;

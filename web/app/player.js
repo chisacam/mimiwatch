@@ -38,9 +38,13 @@ async function loadVideo(id) {
   setNowTitle(doc.title);
   applyModeForDoc();
   clearPlayerError(t);
+  // 로컬 파일 전사는 유튜브에 없는 영상입니다. 서버가 원본을 내주는 끝점을 틉니다.
+  const src = doc.source === "file"
+    ? { site: "media", url: `/api/media/${encodeURIComponent(id)}` }
+    : { site: "youtube", video_id: id };
   const a = t.adapter;
-  if (a && a.kind === "youtube" && a.ready) a.load({ site: "youtube", video_id: id });
-  else await mountTile(t, { site: "youtube", video_id: id });
+  if (a && a.kind === (src.site === "media" ? "media" : "youtube") && a.ready && a.load) a.load(src);
+  else await mountTile(t, src);
   updateTileBar(t);
   syncMvControls();
 }

@@ -13,8 +13,10 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import posixpath
+import re
 import sys
 import threading
 import time
@@ -149,7 +151,7 @@ class Handler(BaseHTTPRequestHandler):
             items.append({k: d.get(k) for k in
                           ("id", "title", "duration", "uploader", "source_lang",
                            "viewer_lang", "translated", "audio_seconds",
-                           "backends_done", "url")} |
+                           "backends_done", "url", "source")} |
                          {"cues": store.cue_count(vid)})
         self._json(items)
 
@@ -223,6 +225,87 @@ class Handler(BaseHTTPRequestHandler):
     def get_models(self):
         # 모델·도구의 목록과 상태. 첫 실행 화면이 이것으로 무엇이 없는지 압니다.
         self._json(modelhub.overview())
+
+    # ---- 로컬 파일 ---------------------------------------------------------
+    # 로컬 영상·음성도 전사 대상입니다. 원본은 옮기지 않고 그 자리에서 읽으며,
+    # 재생은 이 끝점이 원본을 그대로 내주어 <video> 가 틉니다. Range 를 받는
+    # 이유: 브라우저는 Range 없는 미디어에서 탐색(seek)을 포기합니다 -- 자막
+    # 줄을 눌러 그 지점으로 가는 것이 이 화면의 기본 동작인데요.
+
+    def get_media(self, vid: str):
+        d = store.doc(os.path.basename(vid))
+        path = (d or {}).get("media_path") or ""
+        if not path or not os.path.isfile(path):
+            return self._send(b"not found", "text/plain", 404)
+        size = os.path.getsize(path)
+        start, end = parse_range(self.headers.get("Range"), size)
+        if start is None and self.headers.get("Range"):
+            return self._send(b"bad range", "text/plain", 416,
+                              {"Content-Range": f"bytes */{size}"})
+        ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        partial = start is not None
+        lo, hi = (start, end) if partial else (0, size - 1)
+        length = hi - lo + 1
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        if partial:
+            self.send_header("Content-Range", f"bytes {lo}-{hi}/{size}")
+        self.end_headers()
+        try:
+            with open(path, "rb") as f:
+                f.seek(lo)
+                left = length
+                while left > 0:
+                    buf = f.read(min(1 << 16, left))
+                    if not buf:
+                        break
+                    self.wfile.write(buf)
+                    left -= len(buf)
+        except ConnectionError:
+            pass                    # 탐색할 때마다 브라우저가 이전 요청을 끊습니다. 정상입니다.
+
+    def post_upload(self, length: int):
+        """파일 선택기로 고른 원본을 받습니다. 몸통은 파일 그대로입니다 --
+        multipart 도 base64 도 아닙니다. 이름은 쿼리로 옵니다.
+
+        경로를 아는 파일은 이 길을 탈 필요가 없습니다(주소 칸에 경로를 그대로).
+        선택기는 브라우저가 경로를 알려 주지 않으므로 사본이 불가피합니다.
+        받은 것은 data/uploads/ 에 남습니다 -- 전사를 지워도 원본은 지우지
+        않는 규칙 그대로입니다.
+        """
+        if length <= 0:
+            return self._json({"error": "빈 파일입니다"}, 400)
+        name = os.path.basename(self._query().get("name") or "upload")
+        # 확장자는 ffmpeg 의 힌트라 남기고, 나머지는 파일시스템에 안전한 글자만.
+        stem, ext = os.path.splitext(name)
+        stem = re.sub(r"[^\w.\-\u00a0-\uffff]+", "_", stem).strip("._") or "upload"
+        ext = re.sub(r"[^A-Za-z0-9.]", "", ext)[:8]
+        updir = os.path.join(store.DATA, "uploads")
+        os.makedirs(updir, exist_ok=True)
+        dest = os.path.join(updir, stem + ext)
+        n = 1
+        while os.path.exists(dest):
+            n += 1
+            dest = os.path.join(updir, f"{stem}-{n}{ext}")
+        try:
+            with open(dest + ".part", "wb") as f:
+                left = length
+                while left > 0:
+                    buf = self.rfile.read(min(1 << 20, left))
+                    if not buf:
+                        raise ConnectionError("업로드가 중간에 끊겼습니다")
+                    f.write(buf)
+                    left -= len(buf)
+            os.replace(dest + ".part", dest)
+        except (ConnectionError, OSError) as exc:
+            try:
+                os.remove(dest + ".part")
+            except OSError:
+                pass
+            return self._json({"error": str(exc)[:200]}, 400)
+        self._json({"path": dest, "name": os.path.basename(dest)})
 
     # ---- 유튜브 쿠키 -------------------------------------------------------
     # 확장이 브라우저의 로그인 쿠키를 읽어 넘겨 줍니다(사용자가 그때그때 누를 때만). 멤버십
@@ -452,6 +535,10 @@ class Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(length) if length else b""
             return self._json(live.feed(posixpath.basename(path), raw))
 
+        # 업로드도 JSON 이 아닙니다. 몸통이 미디어 파일 그대로라 상한도 다릅니다.
+        if path == "/api/upload":
+            return self.post_upload(length)
+
         handler = POST_ROUTES.get(path)
         if handler is None:
             return self._json({"error": "not found"}, 404)
@@ -477,7 +564,17 @@ class Handler(BaseHTTPRequestHandler):
         # 주소가 라이브인지 녹화본인지는 서버가 정합니다. 두 흐름은 기다리는
         # 방식부터 다르므로 화면이 시작하기 전에 알아야 합니다.
         import subprocess as sp
+
+        import transcribe_vod as vod
         url = (body.get("url") or "").strip()
+        # 로컬 파일 경로는 yt-dlp 를 거치지 않습니다. 붙여 넣은 경로가 없거나
+        # 읽을 수 없으면 여기서 바로 말합니다.
+        if vod.is_local_source(url):
+            try:
+                meta = vod.probe_local(url)
+            except vod.VodError as exc:
+                return self._json({"error": str(exc)}, 400)
+            return self._json({**meta, "site": "file", "channel": ""})
         try:
             out = sp.run(stream.ytdlp_args("-j", url=url),
                          capture_output=True, text=True,
@@ -765,6 +862,7 @@ GET_PREFIX = [
     ("/api/multiview/", Handler.get_multiview),
     ("/api/live/status/", Handler.get_live_status),
     ("/api/job/", Handler.get_job),
+    ("/api/media/", Handler.get_media),
     ("/static/", Handler.get_static),
 ]
 POST_ROUTES = {
@@ -803,6 +901,31 @@ POST_ROUTES = {
     "/api/cookies/youtube": Handler.post_cookies_youtube,
     "/api/cookies/delete": Handler.post_cookies_delete,
 }
+
+
+def parse_range(header: str | None, size: int) -> tuple[int | None, int | None]:
+    """`Range: bytes=a-b` 를 (시작, 끝)으로. 없으면 (None, None), 못 읽으면 (None, -1).
+
+    브라우저가 미디어에 보내는 꼴만 받습니다 -- 한 구간, bytes 단위.
+    `bytes=a-`(끝까지)와 `bytes=-n`(마지막 n바이트)도 그 일부입니다.
+    """
+    if not header:
+        return None, None
+    m = re.fullmatch(r"bytes=(\d*)-(\d*)", header.strip())
+    if not m or size <= 0 or (not m.group(1) and not m.group(2)):
+        return None, -1
+    if not m.group(1):                       # bytes=-n
+        n = int(m.group(2))
+        if n <= 0:
+            return None, -1
+        return max(0, size - n), size - 1
+    start = int(m.group(1))
+    if start >= size:
+        return None, -1
+    end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+    if end < start:
+        return None, -1
+    return start, end
 
 
 def _is_cookie_line(ln: str) -> bool:

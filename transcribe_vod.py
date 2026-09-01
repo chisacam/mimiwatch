@@ -21,6 +21,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -47,7 +48,96 @@ class VodError(RuntimeError):
     """yt-dlp나 ffmpeg가 실패했습니다."""
 
 
+# ---- 로컬 파일 ---------------------------------------------------------------
+#
+# 전사 대상이 꼭 주소일 이유가 없습니다. 녹화해 둔 mp4, 뽑아 둔 mp3 도 같은
+# 파이프라인을 지납니다 -- 내려받기 대신 ffmpeg 변환이 한 단계 들어갈 뿐입니다.
+# 서버와 브라우저가 같은 기계라 경로를 그대로 받아도 되고, 파일 선택기로 올린
+# 것은 서버가 data/uploads/ 에 두고 그 경로를 여기로 넘깁니다.
+
+def is_local_source(url: str) -> bool:
+    """주소 칸에 들어온 것이 이 기계의 파일 경로인가.
+
+    file:// 와 절대 경로(맥·리눅스의 /, 윈도우의 드라이브 문자 꼴), ~ 만 봅니다.
+    상대 경로는 받지 않습니다 -- 서버의 작업 디렉터리는 사용자가 아는 곳이
+    아니라서, 붙는다 해도 어느 파일인지 말할 수 없습니다.
+    """
+    u = (url or "").strip()
+    return bool(u) and (u.startswith("file://") or u.startswith("/")
+                        or u.startswith("~") or bool(re.match(r"^[A-Za-z]:[\\/]", u)))
+
+
+def local_path(url: str) -> str:
+    u = (url or "").strip()
+    if u.startswith("file://"):
+        from urllib.request import url2pathname
+        from urllib.parse import urlparse, unquote
+        u = url2pathname(unquote(urlparse(u).path))
+    return os.path.abspath(os.path.expanduser(u))
+
+
+def probe_local(url: str) -> dict:
+    """로컬 파일의 메타. yt-dlp 를 거치지 않습니다.
+
+    id 는 경로의 해시입니다. 같은 파일을 다시 넣으면 같은 id 가 되어, 다른
+    엔진으로 만든 번역과 손편집을 물려받는 재전사 규칙이 그대로 성립합니다.
+    길이는 여기서 재지 않습니다 -- ffprobe 는 준비물이 아니고(정적 ffmpeg 한
+    파일에는 없습니다), 어차피 변환이 끝나면 wav 에서 정확히 압니다.
+    """
+    import hashlib
+    path = local_path(url)
+    if not os.path.isfile(path):
+        raise VodError(f"파일이 없습니다: {path}")
+    if not os.access(path, os.R_OK):
+        raise VodError(f"파일을 읽을 수 없습니다: {path}")
+    vid = "file-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:12]
+    return {"id": vid, "title": os.path.splitext(os.path.basename(path))[0],
+            "duration": None, "uploader": "", "is_live": False,
+            "url": path, "source": "file", "media_path": path}
+
+
+def convert_local(src: str, dest: str, should_stop=None) -> str:
+    """로컬 미디어를 16kHz 모노 wav 로. 내려받기 단계의 자리에 들어갑니다.
+
+    캐시 규칙이 주소와 다릅니다: 원본이 wav 보다 새로우면 다시 변환합니다.
+    같은 경로에 다른 내용이 놓이는 일이 로컬 파일에서는 흔합니다.
+    """
+    if os.path.exists(dest) and os.path.getmtime(dest) >= os.path.getmtime(src):
+        print(f"[vod] reusing cached audio {dest}", file=sys.stderr)
+        return dest
+    try:
+        cmd = stream.ffmpeg_cmd()
+    except FileNotFoundError as exc:
+        raise VodError(str(exc)) from exc
+    tmp = dest + ".part"
+    proc = subprocess.Popen(
+        [cmd, "-loglevel", "error", "-nostdin", "-y", "-i", src,
+         "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "wav", tmp],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        **stream.child_io(stderr=False))
+    while True:
+        try:
+            _, err = proc.communicate(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            if should_stop and should_stop():
+                proc.kill()
+                proc.wait()
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise stream.Cancelled()
+    if proc.returncode != 0:
+        raise VodError("ffmpeg가 이 파일을 열지 못했습니다: "
+                       f"{(err or '').strip()[:300] or os.path.basename(src)}")
+    os.replace(tmp, dest)
+    return dest
+
+
 def probe(url: str) -> dict:
+    if is_local_source(url):
+        return probe_local(url)
     try:
         out = subprocess.run(stream.ytdlp_args("-j", url=url),
                              capture_output=True, text=True,
@@ -73,6 +163,8 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
     냅니다. 두 시간짜리 방송은 내려받기만 몇 분인데, 예전에는 그 사이에
     「중단」을 눌러도 다 받은 뒤에야 멈췄습니다.
     """
+    if is_local_source(url):
+        return convert_local(local_path(url), dest, should_stop)
     if os.path.exists(dest):
         print(f"[vod] reusing cached audio {dest}", file=sys.stderr)
         return dest
@@ -176,6 +268,7 @@ def transcribe(samples: np.ndarray, lang: str | None, on_progress=None,
 # ---- 명령줄 ------------------------------------------------------------------
 
 PHASE_LABEL = {"probe": "영상 정보 확인", "download": "오디오 내려받는 중",
+               "convert": "오디오 변환 중",
                "transcribe": "전사 중", "translate": "번역 중", "done": "완료"}
 
 

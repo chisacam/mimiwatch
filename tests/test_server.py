@@ -302,3 +302,45 @@ def test_engine_config_roundtrip(server):
     s, b = req(base, "/api/backends/delete", {"id": "t-x"})
     assert not any(e["id"] == "t-x" for e in json.loads(b)["backends"])
     assert req(base, "/api/backends", {"label": "no id"})[0] == 400
+
+
+def test_upload_and_probe_local(server):
+    """로컬 파일: 업로드는 uploads/ 아래에만, probe 는 yt-dlp 없이 바로 답합니다."""
+    base, port = server
+    import urllib.parse
+    q = urllib.parse.quote("나의 클립!.mp3")
+    code, body = req(base, f"/api/upload?name={q}", raw=b"abc123")
+    assert code == 200
+    path = json.loads(body)["path"]
+    assert os.path.basename(os.path.dirname(path)) == "uploads"
+    with open(path, "rb") as f:
+        assert f.read() == b"abc123"
+    # 같은 이름을 또 올리면 덮지 않고 딴 이름을 짓습니다.
+    code, body2 = req(base, f"/api/upload?name={q}", raw=b"xy")
+    assert code == 200 and json.loads(body2)["path"] != path
+
+    code, body = req(base, "/api/probe", body={"url": path})
+    d = json.loads(body)
+    assert code == 200 and d["id"].startswith("file-") and d["site"] == "file"
+    assert d["is_live"] is False and d["media_path"] == path
+
+    # 없는 경로는 무엇이 없는지 바로 말합니다 -- yt-dlp 를 기다리지 않습니다.
+    code, body = req(base, "/api/probe", body={"url": "/no/such/파일.mp4"})
+    assert code == 400 and "파일이 없습니다" in json.loads(body)["error"]
+
+    # 전사 전에는 내줄 미디어가 없습니다.
+    assert req(base, "/api/media/file-doesnotexist")[0] == 404
+
+
+def test_parse_range():
+    """브라우저가 미디어에 보내는 Range 꼴만 받습니다."""
+    import server as srv
+    assert srv.parse_range(None, 100) == (None, None)
+    assert srv.parse_range("bytes=0-", 100) == (0, 99)
+    assert srv.parse_range("bytes=10-19", 100) == (10, 19)
+    assert srv.parse_range("bytes=90-1000", 100) == (90, 99)   # 끝은 파일 크기로 자릅니다
+    assert srv.parse_range("bytes=-10", 100) == (90, 99)       # 마지막 n바이트
+    assert srv.parse_range("bytes=100-", 100) == (None, -1)    # 시작이 파일 밖
+    assert srv.parse_range("bytes=5-2", 100) == (None, -1)
+    assert srv.parse_range("bytes=-0", 100) == (None, -1)
+    assert srv.parse_range("units=0-1", 100) == (None, -1)

@@ -376,7 +376,8 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
                  error="진행 중인 라이브입니다. 녹화본 흐름은 종료된 영상만 다룹니다.")
             return
 
-        note(phase="download")
+        # 로컬 파일은 내려받는 것이 아니라 변환하는 것입니다. 이름을 정직하게 답니다.
+        note(phase="convert" if meta.get("source") == "file" else "download")
         os.makedirs(DATA, exist_ok=True)
         try:
             wav = vod.fetch_audio(url, os.path.join(DATA, f"{meta['id']}.wav"),

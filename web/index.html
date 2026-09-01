@@ -43,6 +43,14 @@
     <button id="setup-download" class="seg">지금 설정대로 받기</button>
     <button id="setup-open" class="seg">모델·도구</button>
   </div>
+  <!-- 판올림. 하루 한 번 깃허브 릴리스를 확인해 새 판이 있으면 여기 알립니다.
+       받기·적용은 묶음으로 돌 때만 -- 저장소에서 돌 때는 git pull 안내만 합니다. -->
+  <div id="update-notice" class="live-notice" hidden>
+    <span id="update-text"></span>
+    <button id="update-download" class="seg primary-seg" hidden>받기</button>
+    <button id="update-apply" class="seg primary-seg" hidden>다시 시작하며 적용</button>
+    <button id="update-dismiss" class="seg" hidden>나중에</button>
+  </div>
   <div id="lang-status" class="status"></div>
   <div class="spacer"></div>
 
@@ -405,6 +413,14 @@
       <p class="hint" id="cookies-hint">없음. 멤버십 전용 방송을 주소로 받으려면 확장 팝업의 「🔑 로그인 쿠키 넘기고 주소로」를 누르십시오 — 그때만 이 브라우저의 쿠키가 서버로 옵니다.</p>
     </section>
 
+    <section class="engine-group" id="update-group">
+      <div class="group-head">
+        <h4>판올림</h4>
+        <button id="update-check" class="seg ghost">새 판 확인</button>
+      </div>
+      <p class="hint" id="update-hint">—</p>
+    </section>
+
     <section class="engine-group" id="shutdown-group">
       <div class="group-head">
         <h4>서버</h4>
@@ -503,6 +519,7 @@
 <script src="/static/app/export.js"></script>
 <script src="/static/app/library.js"></script>
 <script src="/static/app/bus.js"></script>
+<script src="/static/app/update.js"></script>
 <script src="/static/app/main.js"></script>
 </body>
 </html>

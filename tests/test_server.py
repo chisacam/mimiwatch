@@ -73,6 +73,8 @@ def server(tmp_path_factory):
     env = {**os.environ, "MIMIWATCH_DATA_DIR": str(tmp / "data"),
            "MIMIWATCH_CONFIG": str(tmp / "backends.json"),
            "MIMIWATCH_HOME": str(tmp / "home"),
+           # 시험이 깃허브에 나가면 안 됩니다. 자동 판 확인을 끕니다.
+           "MIMIWATCH_NO_UPDATE_CHECK": "1",
            # SSE 회전을 2초로. 회전 뒤 소켓이 정말 닫히는지 몇 초 안에 봅니다.
            "MIMIWATCH_SSE_ROTATE_S": "2",
            "PYTHONPATH": stubs + (os.pathsep + os.environ["PYTHONPATH"]
@@ -330,6 +332,15 @@ def test_upload_and_probe_local(server):
 
     # 전사 전에는 내줄 미디어가 없습니다.
     assert req(base, "/api/media/file-doesnotexist")[0] == 404
+
+
+def test_update_status_endpoint(server):
+    """상태 조회는 네트워크에 나가지 않고 지금 판을 답합니다."""
+    base, port = server
+    code, body = req(base, "/api/update")
+    d = json.loads(body)
+    assert code == 200 and d["state"] == "idle" and d["current"]
+    assert d["available"] is False
 
 
 def test_parse_range():

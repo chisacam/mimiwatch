@@ -17,13 +17,30 @@ entry point** 로 찾으므로 dist-info 도 함께 넣어야 합니다(copy_met
 이것이 빠지면 "no native provider" 로 시작조차 못 합니다.
 """
 import os
+import subprocess
 import sys
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 
+# 판 번호를 묶음에 굽습니다. 실행 중인 프로그램이 자기 판을 알아야 깃허브
+# 릴리스와 비교할 수 있습니다(update.py). 빌드 스크립트가 MIMIWATCH_VERSION 을
+# 넣어 주고, 없으면(스펙을 직접 돌린 경우) git describe 로 만듭니다.
+_v = os.environ.get("MIMIWATCH_VERSION", "").strip()
+if not _v:
+    try:
+        _v = subprocess.run(["git", "-C", ROOT, "describe", "--tags", "--always"],
+                            capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        _v = ""
+_vfile = os.path.join(ROOT, "build", "_version.txt")
+os.makedirs(os.path.dirname(_vfile), exist_ok=True)
+with open(_vfile, "w", encoding="utf-8") as f:
+    f.write((_v or "0.0.0") + "\n")
+
 datas = [
+    (_vfile, "."),
     (os.path.join(ROOT, "web"), "web"),
     (os.path.join(ROOT, "backends.example.json"), "."),
     # 묶음에도 라이선스가 따라갑니다 -- 비상업 조건과 제3자 고지가 거기 있습니다.
@@ -35,7 +52,7 @@ binaries = []
 hiddenimports = [
     # 서버가 늦게(함수 안에서) 가져오는 우리 모듈들. 정적 분석이 놓칠 수 있습니다.
     "asr", "bus", "config", "export", "jobs", "live", "modelhub", "models", "paths",
-    "speaker_id", "store", "stream", "tcpp_asr", "transcribe_vod", "translate",
+    "speaker_id", "store", "stream", "tcpp_asr", "transcribe_vod", "translate", "update",
     "sentencepiece", "transcribe_cpp", "certifi",
 ]
 for pkg in ("transcribe_cpp_native", "llama_cpp", "sherpa_onnx", "ctranslate2"):

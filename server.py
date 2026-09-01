@@ -33,6 +33,7 @@ import paths
 import store
 import stream
 import translate
+import update as mw_update
 
 # 화면 파일은 프로그램과 함께 다닙니다 -- 저장소 안, 또는 PyInstaller 묶음 안.
 BASE = paths.BASE
@@ -842,6 +843,30 @@ class Handler(BaseHTTPRequestHandler):
             label=body.get("label", ""), engine_id=body.get("id", ""),
             device=body.get("device") or "auto", token=body.get("token") or None))
 
+    # ---- 판올림 -------------------------------------------------------------
+    # 깃허브 릴리스에서 새 판을 확인하고, 묶음이면 받아서 갈아 끼웁니다.
+    # 확인·내려받기·적용의 규칙은 전부 update.py 에 있습니다.
+
+    def get_update(self):
+        # 상태만 답합니다. 네트워크에 나가지 않으므로 화면이 부담 없이 부릅니다.
+        self._json(mw_update.status())
+
+    def post_update_check(self, body):
+        self._json(mw_update.check(force=True))
+
+    def post_update_download(self, body):
+        self._json(mw_update.download())
+
+    def post_update_apply(self, body):
+        res = mw_update.apply()
+        if "error" in res:
+            return self._json(res, 400)
+        # 종료 단추와 같은 규칙입니다: 받는 중인 방송을 제대로 닫고, 응답을
+        # 흘려보낸 뒤에 멈춥니다. 교체 스크립트가 이 프로세스의 끝을 기다립니다.
+        live.shutdown()
+        self._json(res)
+        threading.Thread(target=_stop_server, daemon=True).start()
+
 
 GET_ROUTES = {
     "/": Handler.get_index,
@@ -853,6 +878,7 @@ GET_ROUTES = {
     "/api/models": Handler.get_models,
     "/api/setup": Handler.get_setup,
     "/api/cookies": Handler.get_cookies,
+    "/api/update": Handler.get_update,
 }
 # 뒤가 붙는 경로. 긴 접두가 먼저여야 `/api/video/`가 `/api/videos`를 삼키지
 # 않습니다 -- 정확한 경로는 위 사전에서 먼저 찾으므로 여기서는 순서만 지킵니다.
@@ -900,6 +926,9 @@ POST_ROUTES = {
     "/api/setup": Handler.post_setup,
     "/api/cookies/youtube": Handler.post_cookies_youtube,
     "/api/cookies/delete": Handler.post_cookies_delete,
+    "/api/update/check": Handler.post_update_check,
+    "/api/update/download": Handler.post_update_download,
+    "/api/update/apply": Handler.post_update_apply,
 }
 
 
@@ -1000,6 +1029,9 @@ def main(argv: list[str] | None = None):
     if args.open:
         import webbrowser
         threading.Timer(0.5, lambda: webbrowser.open(f"http://localhost:{args.port}/")).start()
+    # 새 판 확인은 하루 한 번, 배경에서. backends.json 의 "update_check": false 나
+    # 환경변수로 끌 수 있습니다 -- 밖으로 나가는 요청은 릴리스 목록 조회 하나입니다.
+    mw_update.start_auto_check()
     try:
         _srv.serve_forever()
     except KeyboardInterrupt:

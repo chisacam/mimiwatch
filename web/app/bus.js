@@ -53,6 +53,8 @@ function connectBus() {
     // 모델 내려받기의 진행·완료·실패. 대화상자가 열려 있으면 그 줄을 고치고,
     // 필요한 것이 다 갖춰지면 위쪽 안내 띠를 내립니다.
     else if (m.type === "model") onModelEvent(m);
+    // 판올림: 새 판 발견과 내려받기 진행. update.js 가 띠와 구역을 고칩니다.
+    else if (m.type === "update") onUpdateEvent(m);
     // 멀티뷰 묶음이 생기거나 초점·멤버가 바뀌었습니다(다른 창이나 서버가 옮긴 것).
     else if (m.type === "multiview") onMultiviewChanged(m);
   };

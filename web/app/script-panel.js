@@ -232,14 +232,17 @@ function applyCueEdit(got) {
   renderCue();
 }
 
-/* 시각을 고친 줄이 이웃을 넘어갔으면 배열과 화면의 자리를 함께 옮깁니다.
+/* 시각이 이웃과 어긋난 줄을 배열과 화면의 자리로 함께 옮깁니다. 시각을
+ * 고쳤을 때, 새 줄을 써 넣었을 때, 라이브에 순서 밖의 줄이 도착했을 때.
  *
  * 자막 찾기(overlay.js 의 cueAt)는 목록이 시각순이라고 보고 걸어갑니다.
  * 한 줄만 어긋나 있어도 그 지점에서 걸음이 멈춰, 그 뒤의 모든 조회 --
  * 화면 위 자막과 따라가기 -- 가 함께 틀립니다. 배열은 제자리에서
- * 고칩니다(오버레이와 라이브 저장소가 같은 배열을 쥐고 있습니다). */
-function resortCue(c) {
-  const arr = state.cues;
+ * 고칩니다(오버레이와 라이브 저장소가 같은 배열을 쥐고 있습니다).
+ * 초점이 아닌 타일의 배열(`arr`)도 받습니다 -- 그때 화면에는 그 줄이
+ * 없으므로 옮기는 것은 배열뿐입니다. */
+function resortCue(c, arr = state.cues) {
+  if (!arr) return;
   const i = arr.indexOf(c);
   if (i < 0) return;
   const misplaced = (i > 0 && cueStart(arr[i - 1]) > cueStart(c))
@@ -250,11 +253,111 @@ function resortCue(c) {
   if (j < 0) j = arr.length;
   arr.splice(j, 0, c);
   // 줄도 새 자리로. 배열만 옮기면 자막 내역의 순서가 시각과 어긋난 채 남습니다.
-  const row = c.id != null ? rowOf(c.id) : null;
+  const row = arr === state.cues && c.id != null ? rowOf(c.id) : null;
   if (row) {
     const next = arr[j + 1];
     $("script").insertBefore(row, next && next.id != null ? rowOf(next.id) : null);
   }
+}
+
+/* ---------- 줄 새로 쓰기 ----------
+ *
+ * 지우는 줄은 대개 잘못 인식된 것입니다 -- 효과음을 대사로 듣거나, 그 통에
+ * 옆 대사를 통째로 놓친 자리들. 그 빈 시간대를 직접 채울 수 있어야 편집이
+ * 완결됩니다. 시각은 지금 재생 위치로 미리 채우고, 번호는 서버가 짓습니다. */
+function openNewCueEditor() {
+  const owner = editOwner();
+  if (!owner) { alert("먼저 영상이나 방송을 여십시오."); return; }
+  const box = $("script");
+  const already = box.querySelector(".line.adding textarea");
+  if (already) { already.focus(); return; }            // 한 번에 하나
+  const t0 = state.player && state.player.ready ? state.player.getCurrentTime() : 0;
+
+  const row = document.createElement("div");
+  row.className = "line editing adding";
+  const tEl = document.createElement("div");
+  tEl.className = "t";
+  tEl.textContent = fmt(t0);
+  const body = document.createElement("div");
+  row.append(tEl, body);
+
+  const ed = document.createElement("div");
+  ed.className = "cue-edit";
+  const src = document.createElement("textarea");
+  src.className = "ce-src";
+  src.rows = 2;
+  src.placeholder = "원문";
+  const tr = document.createElement("textarea");
+  tr.className = "ce-tr";
+  tr.rows = 2;
+  tr.placeholder = "번역 (선택 — 쓰면 손편집으로 남아 재번역이 덮지 않습니다)";
+  const bar = document.createElement("div");
+  bar.className = "ce-bar";
+  const at = document.createElement("input");
+  at.type = "number";
+  at.step = "0.1";
+  at.className = "ce-at";
+  at.value = (Math.round(t0 * 10) / 10).toFixed(1);
+  at.title = "이 줄이 뜨는 시각(초)";
+  at.addEventListener("input", () => { tEl.textContent = fmt(+at.value || 0); });
+  const save = mkbtn("저장", "primary-seg");
+  const cancel = mkbtn("취소", "");
+  bar.append(at, document.createElement("span"), save, cancel);
+  bar.children[1].className = "grow";
+  ed.append(src, tr, bar);
+  body.appendChild(ed);
+
+  // 시각 자리에 끼워 넣습니다. 바닥에 붙이면 긴 영상에서 찾아 올라와야 합니다.
+  const next = state.cues.find(c => cueStart(c) > t0);
+  box.insertBefore(row, next && next.id != null ? rowOf(next.id) : null);
+  row.scrollIntoView({ block: "center" });
+  src.focus();
+
+  const close = () => row.remove();
+  cancel.addEventListener("click", (e) => { e.stopPropagation(); close(); });
+  ed.addEventListener("click", (e) => e.stopPropagation());
+  ed.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); close(); }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save.click(); }
+  });
+
+  save.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const text = src.value.trim();
+    if (!text) { src.focus(); return; }
+    save.disabled = true;
+    const res = await (await fetch("/api/cue/add", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: owner, start: +at.value || 0, text,
+                             tr: tr.value.trim(), backend: state.backend }),
+    })).json();
+    if (res.error) { jobError(res.error); save.disabled = false; return; }
+    close();
+    adoptNewCue(res.cue);
+  });
+}
+
+/* 서버가 번호를 지어 돌려준 새 줄을 화면의 기억에 앉힙니다. 받는 중인
+ * 라이브는 SSE 로도 오지만(cuestore 가 id 로 걸러 중복을 막습니다) 끝난
+ * 세션과 녹화본에는 그 통로가 없으므로 여기서 직접 넣습니다. */
+function adoptNewCue(got) {
+  let c;
+  if (state.live) {
+    c = state.live.store.upsert({ id: got.id, kind: got.kind, t: got.t, end: got.end,
+                                  text: got.text, lang: got.lang,
+                                  edited: got.edited }).cue;
+    c.translations = got.translations || {};
+  } else {
+    c = { id: got.id, start: got.t, end: got.end, text: got.text, lang: got.lang,
+          edited: got.edited, translations: got.translations || {} };
+    state.cues.push(c);
+  }
+  appendScriptLine(c);
+  resortCue(c);
+  const row = rowOf(c.id);
+  if (row) row.scrollIntoView({ block: "center" });
+  state.idx = -1;
+  renderCue();
 }
 
 function dropCue(id, tile = focusedTile()) {
@@ -371,6 +474,7 @@ function setScriptMode(m) {
   box.classList.toggle("mode-edit", m === "edit");
   box.classList.toggle("mode-tr", m === "tr");
   $("tr-bar").hidden = m !== "tr";
+  $("edit-bar").hidden = m !== "edit";
   if (m !== "tr") clearPicks();
   else markKeptRows();
   document.querySelectorAll("[data-smode]").forEach(b =>

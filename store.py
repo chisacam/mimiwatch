@@ -275,8 +275,13 @@ def save_translation(session_id: str, cue_id: int, backend: str, text: str):
 
 
 def cues(owner: str) -> list[dict]:
-    """쌓인 자막을 도착 순서대로. 정제본은 자기가 흡수한 첫 확정 줄의 id를
-    물려받으므로, id 순서가 곧 읽는 순서입니다.
+    """쌓인 자막을 **시각순으로**. 번호는 신원이지 순서가 아닙니다.
+
+    전사가 만든 줄은 번호와 시각의 순서가 같지만(정제본도 흡수한 첫 줄의
+    id·시각을 물려받습니다), 사람이 써 넣은 줄(insert_cue)은 번호가 늘
+    마지막이면서 시각은 빈 자리 어딘가입니다. 번호로 정렬하면 그 줄이
+    끝에 붙어 내보내기 순서, 번역 문맥(앞 몇 줄), 화면의 시각 조회가 전부
+    어긋납니다. 번호는 같은 시각 안의 결정적 순서로만 씁니다.
 
     시작 시각은 `t`로 냅니다. 열 이름은 `start`이지만 이 딕셔너리는 그대로
     SSE 로 나가고 브라우저가 `t`로 읽습니다 -- 저장 이름을 바꿨다고 통신
@@ -288,7 +293,7 @@ def cues(owner: str) -> list[dict]:
              "edited": r["edited"],
              "translations": json.loads(r["tr"] or "{}")}
             for r in _rows("SELECT * FROM cues WHERE owner = ? "
-                           "ORDER BY cue_id", (owner,))]
+                           "ORDER BY start, cue_id", (owner,))]
 
 
 def cue_count(owner: str) -> int:
@@ -415,6 +420,34 @@ def _row_to_cue(r) -> dict:
     return {"id": r["cue_id"], "kind": r["kind"], "t": r["start"], "end": r["end"],
             "text": r["text"], "lang": r["lang"], "speaker": r["speaker"],
             "edited": r["edited"], "translations": json.loads(r["tr"] or "{}")}
+
+
+def insert_cue(owner: str, start: float, text: str, *, lang: str = "",
+               tr: str = "", backend: str = "", end: float = 0.0) -> dict:
+    """사람이 자막 한 줄을 새로 써 넣습니다.
+
+    지우는 줄은 대개 잘못 인식된 것이고(효과음을 대사로 듣는 등), 그 통에
+    놓친 대사가 빈 시간대로 남습니다. 그 자리를 채우는 길입니다.
+
+    번호는 이 소유자의 마지막 번호 다음입니다 -- 번호는 신원일 뿐이고 읽는
+    순서는 cues()가 시각으로 정렬합니다. 번역을 함께 쓰면 손편집("tr")으로
+    표시해 뭉텅이 재번역이 덮지 않게 합니다. 원문만 쓰면 표시 없이 둡니다 --
+    기계 번역이 붙을 수 있어야 하고, 붙은 번역은 이 원문의 것이라 「원문과
+    다름」 표시가 설 이유도 없습니다.
+    """
+    with _lock:
+        db = _connect()
+        cue_id = int(db.execute("SELECT COALESCE(MAX(cue_id), 0) + 1 AS n "
+                                "FROM cues WHERE owner = ?", (owner,)).fetchone()["n"])
+        trs = {backend or "manual": tr} if tr else {}
+        db.execute("INSERT INTO cues (owner, cue_id, kind, start, end, text, lang, "
+                   "speaker, tr, edited) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (owner, cue_id, "final", float(start), float(end or 0), text,
+                    lang, "", json.dumps(trs, ensure_ascii=False), "tr" if tr else ""))
+        db.commit()
+        got = db.execute("SELECT * FROM cues WHERE owner = ? AND cue_id = ?",
+                         (owner, cue_id)).fetchone()
+        return _row_to_cue(got)
 
 
 def delete_cue(owner: str, cue_id: int) -> bool:

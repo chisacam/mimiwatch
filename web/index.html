@@ -223,6 +223,13 @@
       <button id="tr-go" class="seg primary-seg">⟳ 재번역</button>
     </div>
 
+    <!-- 편집 모드에서만 보입니다. 잘못 인식돼 지운 자리(누락된 대사)를 직접 채웁니다. -->
+    <div id="edit-bar" class="tr-bar" hidden>
+      <b>줄을 눌러 고치고, 빈 곳은 새로 씁니다</b>
+      <span class="grow"></span>
+      <button id="cue-add" class="seg primary-seg" title="지금 재생 위치의 시각으로 새 자막 줄을 씁니다">＋ 줄 쓰기</button>
+    </div>
+
     <!-- 따로 띄운 창에서만 보이는 조절기. 영상이 없으므로 화면 위 자막 대신
          자막 내역 자체를 읽기 좋게 만드는 것들만 둡니다. -->
     <div id="script-tools" class="script-tools">

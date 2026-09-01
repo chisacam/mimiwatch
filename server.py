@@ -704,6 +704,30 @@ class Handler(BaseHTTPRequestHandler):
         live.notify_edit(owner, got, body.get("backend") or "")
         self._json({"ok": True, "cue": got})
 
+    def post_cue_add(self, body):
+        # 사람이 자막 한 줄을 새로 써 넣습니다. 시각과 원문은 필수, 번역은
+        # 선택입니다. 번호는 저장소가 짓습니다(insert_cue).
+        owner = store.owner_of((body.get("id") or "").strip())
+        text = (body.get("text") or "").strip()
+        try:
+            start = max(0.0, float(body.get("start")))
+        except (TypeError, ValueError):
+            return self._json({"error": "start(초)가 필요합니다"}, 400)
+        if not owner or not text:
+            return self._json({"error": "id 와 text 가 필요합니다"}, 400)
+        meta = store.doc(owner) or store.session(owner)
+        if not meta:
+            return self._json({"error": "no such video or session"}, 404)
+        lang = ((body.get("lang") or meta.get("source_lang")
+                 or meta.get("lang") or "")).strip()
+        got = store.insert_cue(owner, start, text, lang=lang,
+                               tr=(body.get("tr") or "").strip(),
+                               backend=body.get("backend") or "")
+        # 받는 중인 세션이면 대본 창과 다른 창에도 닿습니다. 고칠 때와 같은
+        # 통로입니다 -- 브라우저는 id 로 줄을 찾으므로 새 id 는 새 줄이 됩니다.
+        live.notify_edit(owner, got, body.get("backend") or "")
+        self._json({"ok": True, "cue": got})
+
     def post_cue_delete(self, body):
         owner = store.owner_of((body.get("id") or "").strip())
         cue_id = body.get("cue")
@@ -911,6 +935,7 @@ POST_ROUTES = {
     "/api/multiview/remove": Handler.post_multiview_remove,
     "/api/multiview/stop": Handler.post_multiview_stop,
     "/api/cue": Handler.post_cue,
+    "/api/cue/add": Handler.post_cue_add,
     "/api/cue/delete": Handler.post_cue_delete,
     "/api/video/delete": Handler.post_video_delete,
     "/api/backends": Handler.post_backends,

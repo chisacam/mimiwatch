@@ -355,3 +355,12 @@ def test_parse_range():
     assert srv.parse_range("bytes=5-2", 100) == (None, -1)
     assert srv.parse_range("bytes=-0", 100) == (None, -1)
     assert srv.parse_range("units=0-1", 100) == (None, -1)
+
+
+def test_cue_add_validates(server):
+    """새 줄 쓰기: 없는 영상은 404, 시각 없는 요청은 400."""
+    base, port = server
+    code, _ = req(base, "/api/cue/add", body={"id": "nope", "start": 1.0, "text": "x"})
+    assert code == 404
+    code, _ = req(base, "/api/cue/add", body={"id": "nope", "text": "x"})
+    assert code == 400

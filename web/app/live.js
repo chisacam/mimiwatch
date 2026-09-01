@@ -377,7 +377,12 @@ function onLiveCue(m, tile = focusedTile()) {
   const cue = r.cue;
   const before = live.speakers.size;
   if (cue.speaker) live.speakers.add(cue.speaker);
-  if (tile !== focusedTile()) { updateTileBar(tile); return; }
+  if (tile !== focusedTile()) {
+    // 다른 창에서 써 넣은 줄은 시각이 마지막이 아닐 수 있습니다. 배열만 제자리로.
+    if (r.isNew) resortCue(cue, live.store.cues);
+    updateTileBar(tile);
+    return;
+  }
   r.removed.forEach(id => {
     const row = $("script").querySelector(`.line[data-id="${id}"]`);
     if (row) row.remove();
@@ -388,6 +393,8 @@ function onLiveCue(m, tile = focusedTile()) {
     buildLiveScript();
   } else {
     appendScriptLine(cue);
+    // 다른 창에서 써 넣은 줄(cue/add)은 도착 순서와 시각 순서가 다릅니다.
+    if (r.isNew) resortCue(cue, live.store.cues);
   }
   renderCue();
   updateTileBar(tile);

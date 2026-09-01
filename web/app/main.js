@@ -49,6 +49,7 @@ function bind() {
   $("tr-all").addEventListener("click", pickAll);
   $("tr-none").addEventListener("click", clearPicks);
   $("tr-go").addEventListener("click", runRetranslate);
+  $("cue-add").addEventListener("click", openNewCueEditor);
   $("script-size").addEventListener("input", e => {
     $("script").style.setProperty("--script-size", e.target.value + "px");
     savePrefs({ ...loadPrefs(), scriptSize: +e.target.value });

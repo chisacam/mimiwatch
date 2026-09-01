@@ -48,3 +48,26 @@ def test_save_translation_clears_stale_mark_but_keeps_hand_mark():
     store.edit_cue("v", 1, tr="hand", backend="g")
     store.save_translation("v", 1, "g", "machine")
     assert "tr" in store.cues("v")[0]["edited"]
+
+
+def test_insert_cue_gets_next_id_but_reads_in_time_order():
+    # 사람이 써 넣은 줄: 번호는 마지막 다음(신원), 읽는 순서는 시각.
+    store.replace_cues("v", [
+        {"start": 0, "end": 2, "text": "a"},
+        {"start": 10, "end": 12, "text": "c"},
+    ])
+    got = store.insert_cue("v", 5.0, "b", lang="ja")
+    assert got["id"] == 3 and got["kind"] == "final" and got["lang"] == "ja"
+    rows = store.cues("v")
+    assert [r["text"] for r in rows] == ["a", "b", "c"]
+    assert [r["id"] for r in rows] == [1, 3, 2]
+
+
+def test_insert_cue_translation_is_hand_edited():
+    store.replace_cues("v", [{"start": 0, "end": 1, "text": "a"}])
+    # 번역을 함께 쓰면 손편집 -- 뭉텅이 재번역이 덮지 않습니다.
+    got = store.insert_cue("v", 2.0, "b", tr="비", backend="g")
+    assert got["translations"] == {"g": "비"} and "tr" in got["edited"]
+    # 원문만 쓰면 표시 없음 -- 기계 번역이 붙을 수 있어야 합니다.
+    got2 = store.insert_cue("v", 3.0, "c")
+    assert got2["translations"] == {} and got2["edited"] == ""

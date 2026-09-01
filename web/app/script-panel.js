@@ -227,7 +227,34 @@ function applyCueEdit(got) {
   if ("t" in c) c.t = got.t;
   const row = $("script").querySelector(`.line[data-id="${CSS.escape(String(got.id))}"]`);
   if (row) refreshScriptRow(row, c);
+  resortCue(c);
+  state.idx = -1;
   renderCue();
+}
+
+/* 시각을 고친 줄이 이웃을 넘어갔으면 배열과 화면의 자리를 함께 옮깁니다.
+ *
+ * 자막 찾기(overlay.js 의 cueAt)는 목록이 시각순이라고 보고 걸어갑니다.
+ * 한 줄만 어긋나 있어도 그 지점에서 걸음이 멈춰, 그 뒤의 모든 조회 --
+ * 화면 위 자막과 따라가기 -- 가 함께 틀립니다. 배열은 제자리에서
+ * 고칩니다(오버레이와 라이브 저장소가 같은 배열을 쥐고 있습니다). */
+function resortCue(c) {
+  const arr = state.cues;
+  const i = arr.indexOf(c);
+  if (i < 0) return;
+  const misplaced = (i > 0 && cueStart(arr[i - 1]) > cueStart(c))
+                 || (i < arr.length - 1 && cueStart(arr[i + 1]) < cueStart(c));
+  if (!misplaced) return;
+  arr.splice(i, 1);
+  let j = arr.findIndex(x => cueStart(x) > cueStart(c));
+  if (j < 0) j = arr.length;
+  arr.splice(j, 0, c);
+  // 줄도 새 자리로. 배열만 옮기면 자막 내역의 순서가 시각과 어긋난 채 남습니다.
+  const row = c.id != null ? rowOf(c.id) : null;
+  if (row) {
+    const next = arr[j + 1];
+    $("script").insertBefore(row, next && next.id != null ? rowOf(next.id) : null);
+  }
 }
 
 function dropCue(id, tile = focusedTile()) {
@@ -271,11 +298,12 @@ function markScript(i) {
   const box = $("script");
   box.querySelectorAll(".line.on").forEach(el => el.classList.remove("on"));
   if (i < 0) return;
-  // 녹화본은 위치(data-i)로, 끝난 라이브는 자막 id(data-id)로 그려져
-  // 있습니다. 두 목록의 그리는 방식이 다르므로 찾는 방식도 다릅니다.
-  const el = isLiveDoc()
-    ? box.querySelector(`.line[data-id="${CSS.escape(String((state.cues[i] || {}).id))}"]`)
-    : box.querySelector(`.line[data-i="${i}"]`);
+  // 줄은 위치(data-i)가 아니라 자막 id 로 찾습니다. 위치는 줄을 하나
+  // 지우는 순간 그 뒤가 전부 한 칸씩 어긋납니다 -- 편집으로 줄을 지운 뒤
+  // 따라가기가 계속 옆 줄을 짚던 버그가 그것입니다. id 가 없는 줄(옛 모양)
+  // 만 위치로 물러납니다.
+  const c = state.cues[i] || {};
+  const el = c.id != null ? rowOf(c.id) : box.querySelector(`.line[data-i="${i}"]`);
   if (!el) return;
   el.classList.add("on");
   if (state.follow) el.scrollIntoView({ block: "center", behavior: "smooth" });

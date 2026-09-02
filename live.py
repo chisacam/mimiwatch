@@ -784,8 +784,11 @@ class LiveSession:
     def stop(self):
         self.stopped_by = self.stopped_by or "user"
         self._stop.set()
-        if self._ff:
-            self._ff.terminate()
+        # 한 번 읽어 둡니다. 읽기 스레드의 `_reap_ff` 가 그 사이 `_ff` 를 None 으로
+        # 바꿀 수 있어, 두 번 읽으면 여기서 AttributeError 가 났습니다.
+        ff = self._ff
+        if ff:
+            ff.terminate()
         # 탭 세션에는 읽기 스레드가 없어 아무도 ("end",) 를 넣어 주지 않습니다. 받아
         # 적는 쪽이 링에서 기다리고 있으므로 여기서 직접 깨웁니다.
         if self.source == "tab":
@@ -872,7 +875,24 @@ class LiveSession:
                 self._ff.kill()
             except Exception:
                 pass
-            self._ff = None
+            self._reap_ff()
+
+    def _reap_ff(self, timeout: float = 2.0):
+        """끝난(또는 방금 죽인) ffmpeg 을 거둡니다.
+
+        예전에는 terminate/kill 만 하고 wait 를 하지 않아, 끝난 ffmpeg 이 다음
+        Popen 이 뜰 때까지 `<defunct>` 로 남았습니다. 재접속마다 하나씩 쌓여 ps 에
+        고아처럼 보였습니다. 좀비는 메모리를 먹지 않지만 사용자가 「프로세스가
+        남는다」고 볼 근거가 됩니다. 2초 안에 안 끝나면(파이프 닫힘을 못 본 경우)
+        그대로 둡니다 -- 부모가 끝나면 어차피 거둬집니다.
+        """
+        ff, self._ff = self._ff, None
+        if ff is None:
+            return
+        try:
+            ff.wait(timeout=timeout)
+        except Exception:
+            pass
 
     def _close_translator(self, timeout: float = 10.0):
         """번역 작업 스레드를 끝냅니다. 줄 서 있는 것은 마저 번역하고 나옵니다.
@@ -964,7 +984,9 @@ class LiveSession:
             if self._stop.is_set():
                 break
             # ffmpeg이 스스로 끝났습니다. 방송이 끝났거나, 재생목록을 잠깐
-            # 못 받은 것입니다. 걸려 있는 발화를 먼저 확정합니다.
+            # 못 받은 것입니다. 먼저 거두고(좀비로 남지 않게), 걸려 있는 발화를
+            # 확정합니다.
+            self._reap_ff()
             self._ring.push(("flush",))
             reattached = False
             while not self._stop.is_set() and attempt < HLS_RECONNECT_TRIES:

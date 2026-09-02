@@ -779,7 +779,7 @@ class Handler(BaseHTTPRequestHandler):
         # 라이브 세션을 먼저 제대로 닫습니다. 그래야 기록에 "종료됨"으로
         # 남습니다 -- 그냥 죽이면 `running`인 채 남아, 다음 기동의 복구
         # 스윕이 서버가 죽은 것과 똑같이 "중단됨"으로 적습니다.
-        stopped = live.shutdown()
+        stopped = _wind_down()
         self._json({"ok": True, "sessions_stopped": stopped})
         # 응답을 다 흘려보낸 뒤에 멈춥니다. 핸들러 안에서 곧바로
         # shutdown()을 부르면 브라우저는 답 대신 끊어진 연결을 봅니다.
@@ -887,7 +887,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(res, 400)
         # 종료 단추와 같은 규칙입니다: 받는 중인 방송을 제대로 닫고, 응답을
         # 흘려보낸 뒤에 멈춥니다. 교체 스크립트가 이 프로세스의 끝을 기다립니다.
-        live.shutdown()
+        _wind_down()
         self._json(res)
         threading.Thread(target=_stop_server, daemon=True).start()
 
@@ -1012,6 +1012,50 @@ def _stop_server():
         _srv.shutdown()
 
 
+def _wind_down(timeout: float = 8.0):
+    """종료 전에 배경 일을 멈춥니다: 라이브 세션을 닫고 작업을 취소하고 기다립니다.
+
+    종료 단추와 Ctrl-C 와 판올림 적용이 같은 자리를 지나야 기록이 같게 남습니다.
+    작업을 취소하지 않던 동안, 전사가 도는 채로 끄면 그 스레드가 모델을 붙들고
+    있어 인터프리터 종료가 모델을 놓지 못했고, ggml-metal 의 종료 소멸자가
+    abort 했습니다(`jobs.cancel_all` 참고). 기다림에는 상한이 있습니다 -- 멎지
+    않는 스레드 때문에 종료가 영영 안 되는 것이 더 나쁩니다.
+    """
+    deadline = time.time() + timeout
+    # 취소 표시를 먼저 해 두어야 세션을 기다리는 동안 작업도 함께 멎습니다. 순서대로
+    # 기다리면 최악에 두 배가 걸립니다.
+    cancelled = jobs.cancel_all()
+    if cancelled:
+        print(f"mimiwatch: 작업 {len(cancelled)}건을 취소합니다", flush=True)
+    stopped = live.shutdown(timeout)
+    jobs.wait_idle(max(0.0, deadline - time.time()))
+    # 라이브 세션은 DB 상태가 `stopped` 가 된 것까지만 기다립니다. 그 뒤 `_run` 의
+    # finally(번역기·정제기 닫기, 최대 20초)가 아직 모델을 쓰고 있을 수 있는데, 그것이
+    # 무해한 것은 `hard_exit` 가 소멸자를 건너뛰기 때문입니다. 보통 종료(SystemExit)로
+    # 되돌리면 라이브 쪽에서 같은 abort 가 돌아옵니다.
+    return stopped
+
+
+def hard_exit(code: int = 0):
+    """출력을 비우고 `os._exit` 로 끝냅니다. C 소멸자도, 파이널라이즈도 건너뜁니다.
+
+    이 프로세스에는 ggml 이 두 벌(transcribe.cpp 와 llama_cpp) 올라와 있고 둘
+    다 exit 시 소멸자에서 Metal 장치를 해제합니다. 그때 아직 GPU 버퍼를 쥔 모델이
+    있으면 `GGML_ASSERT([rsets->data count] == 0)` 로 abort 하고, 스레드가 그
+    모델로 계산 중이면 해제된 장치 밑에서 멎을 수도 있습니다 -- 「서버는 죽었는데
+    메모리와 GPU 가 남는다」가 그 모양입니다. 위에서 할 일을 다 멈춘 뒤라면 남은
+    정리는 운영체제에 맡기는 편이 안전합니다. SQLite 는 쓰기마다 commit 하므로
+    잃는 것이 없습니다. `main()` 은 돌려주는 값으로 남겨 시험이 부를 수 있게 하고,
+    프로세스로 뜬 진입점(`__main__`, app.py)만 이것을 부릅니다.
+    """
+    for f in (sys.stdout, sys.stderr):
+        try:
+            f.flush()
+        except Exception:
+            pass
+    os._exit(code)
+
+
 def main(argv: list[str] | None = None):
     """서버를 띄웁니다. `argv`는 시험과 묶음의 진입점(app.py)이 넘겨 줍니다.
 
@@ -1063,11 +1107,11 @@ def main(argv: list[str] | None = None):
         # Ctrl-C도 화면의 종료 단추와 같은 자리로 모읍니다. 어느 쪽으로 끄든
         # 세션은 "종료됨"으로 남아야 합니다.
         print("\nmimiwatch: 종료합니다", flush=True)
-        live.shutdown()
+        _wind_down()
     _srv.server_close()
     print("mimiwatch: 종료되었습니다", flush=True)
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    hard_exit(main())

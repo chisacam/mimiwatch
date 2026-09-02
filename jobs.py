@@ -43,6 +43,8 @@ PROTECTED = config.PROTECTED
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
+# 작업 id → 그 작업을 도는 스레드. 종료가 스레드 끝을 기다리는 데 씁니다(wait_idle).
+_threads: dict[str, threading.Thread] = {}
 
 
 def _note(job_id: str, **kw):
@@ -182,6 +184,65 @@ def cancel(job_id: str) -> dict:
 def _cancelled(job_id: str) -> bool:
     with _lock:
         return bool(_jobs[job_id]["cancel"])
+
+
+def cancel_all() -> list[str]:
+    """도는 작업을 전부 취소로 표시합니다. 서버 종료가 부릅니다.
+
+    예전에는 종료 단추가 라이브 세션만 닫고 작업은 그대로 두었습니다. 전사·번역
+    스레드가 모델을 붙든 채 남으면 인터프리터 종료가 그 모델을 놓지 못하고,
+    ggml-metal 의 종료 소멸자가 `GGML_ASSERT([rsets->data count] == 0)` 로
+    abort 했습니다 -- 이 맥의 크래시 리포트 8건이 전부 그 스택이었습니다. 표시만
+    하고 기다리지는 않습니다. 기다림은 `wait_idle` 이 맡습니다.
+    """
+    with _lock:
+        ids = [jid for jid, j in _jobs.items() if j["state"] == "running"]
+        for jid in ids:
+            _jobs[jid]["cancel"] = True
+    return ids
+
+
+def running() -> list[str]:
+    with _lock:
+        return [jid for jid, j in _jobs.items() if j["state"] == "running"]
+
+
+def _spawn(job_id: str, target, args: tuple = ()):
+    """작업 스레드를 띄우고 기억해 둡니다 -- `wait_idle` 이 상태가 아니라 스레드를
+    기다리기 위해서입니다."""
+    t = threading.Thread(target=target, args=args, daemon=True, name=f"job-{job_id}")
+    with _lock:
+        _threads[job_id] = t
+    t.start()
+
+
+def wait_idle(timeout: float) -> bool:
+    """작업 스레드가 전부 끝날 때까지 기다립니다. 다 끝났으면 True.
+
+    상태가 `cancelled` 로 바뀐 것을 보고 돌아오면 이릅니다 -- `_note` 는 메모리를
+    먼저 고치고 그 다음에 SQLite 에 적으므로, 그 사이에 `os._exit` 가 오면 다음
+    기동이 그 작업을 「서버가 재시작되어 중단」으로 잘못 적습니다. 스레드의 마지막
+    일이 그 저장이라 스레드가 끝난 것을 기다리면 저장도 끝나 있습니다.
+
+    기다리는 동안 새로 들어온 작업도 함께 취소합니다. 서버는 `_stop_server` 가 돌기
+    전까지 요청을 받으므로 `cancel_all` 직후 시작된 작업이 있을 수 있습니다.
+    취소 깃발은 조각 경계마다 읽으므로 몇 초 안에 멎는 것이 보통이고, 원격 엔진이
+    답을 안 주는 것처럼 멎지 않는 경우를 위해 상한을 둡니다 -- 그 뒤는 부르는
+    쪽이 프로세스를 그냥 끝냅니다.
+    """
+    deadline = time.time() + timeout
+    while True:
+        cancel_all()
+        with _lock:
+            for jid in [j for j, t in _threads.items() if not t.is_alive()]:
+                _threads.pop(jid)
+            alive = list(_threads.values())
+        if not alive:
+            return True
+        left = deadline - time.time()
+        if left <= 0:
+            return False
+        alive[0].join(min(left, 0.1))
 
 
 def delete_backend(backend_id: str) -> dict:
@@ -329,7 +390,7 @@ def start_retranslate(value: str, backend_id: str, cue_ids=None,
             # 죽고 작업은 `running`으로 영원히 남습니다.
             _note(job_id, state="error", error=str(exc)[:300])
 
-    threading.Thread(target=run, daemon=True).start()
+    _spawn(job_id, run)
     return {"id": job_id, "total": len(todo), "kept": len(kept)}
 
 
@@ -351,10 +412,8 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
     job_id = _new_job(kind="transcribe", url=url, phase="probe", title="",
                       video=None, asr=asr_id,
                       genre=genre or mw_translate.DEFAULT_GENRE)
-    threading.Thread(target=_run_transcribe,
-                     args=(job_id, url, lang, viewer_lang, backend_id, asr_id,
-                           speakers, genre),
-                     daemon=True).start()
+    _spawn(job_id, _run_transcribe,
+           (job_id, url, lang, viewer_lang, backend_id, asr_id, speakers, genre))
     return {"id": job_id}
 
 

@@ -84,6 +84,32 @@ def test_cancel_stops_translation(monkeypatch):
     assert sum(1 for c in store.cues(VID) if c["translations"]) < 50
 
 
+def test_cancel_all_and_wait_idle_stop_running_jobs(monkeypatch):
+    """서버 종료가 부르는 길: 도는 작업을 전부 취소 표시하고 멎기를 기다립니다.
+    작업이 모델을 붙든 채 남으면 종료 시 ggml 소멸자가 abort 하던 문제의 방어선입니다."""
+    import time
+
+    import translate
+    from conftest import FakeTranslator
+    store.save_doc(VID, {"id": VID, "source_lang": "ja", "viewer_lang": "ko"})
+    store.replace_cues(VID, [{"start": i, "end": i + 1, "text": f"t{i}", "lang": "ja",
+                              "translations": {}} for i in range(200)])
+
+    def slow(text, s, g, c):
+        time.sleep(0.01)
+        return "T:" + text
+    monkeypatch.setattr(translate, "build", lambda spec, genre=None: FakeTranslator(slow))
+    r = jobs.start_retranslate(VID, "local-m2m100", None, None)
+    assert r["id"] in jobs.running()
+    assert jobs.cancel_all() == [r["id"]]
+    assert jobs.wait_idle(5.0) is True
+    assert jobs.running() == []
+    assert jobs.job_status(r["id"])["state"] == "cancelled"
+    # 도는 것이 없으면 곧바로 참입니다. 두 번 불러도 빈 목록입니다.
+    assert jobs.cancel_all() == []
+    assert jobs.wait_idle(0.0) is True
+
+
 class FakeEngine(mw_asr.ASRBackend):
     name = mw_asr.DEFAULT_NAME
 

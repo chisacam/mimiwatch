@@ -84,7 +84,10 @@ def main() -> int:
     if want_browser and "--open" not in argv:
         argv.append("--open")
     import server
-    return server.main(argv) or 0
+    # 서버가 끝나면 파이널라이즈를 거치지 않고 끝냅니다 -- server.hard_exit 참고.
+    # 다른 갈래는 보통 종료로 충분합니다: --ytdlp 는 모델이 없고, --doctor 는 모델을
+    # 올려 보되 주 스레드에서 곧 놓으므로 소멸자가 돌 때 GPU 버퍼가 남지 않습니다.
+    server.hard_exit(server.main(argv) or 0)
 
 
 if __name__ == "__main__":

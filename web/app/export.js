@@ -22,11 +22,12 @@ function nowTitleText() {
 }
 
 function openExport() {
-  const t = exportTarget();
-  if (!t) { alert("먼저 영상이나 방송을 여십시오."); return; }
+  const tgt = exportTarget();
+  if (!tgt) { alert(t("panel.needTarget")); return; }
   const n = state.cues.length;
-  $("export-what").textContent =
-    `${t.title} — ${n}줄` + (state.live ? " (라이브)" : "");
+  $("export-what").textContent = state.live
+    ? t("export.what.live", { title: tgt.title, n })
+    : t("export.what", { title: tgt.title, n });
   syncExportHint();
   $("export-dialog").showModal();
 }
@@ -36,25 +37,23 @@ function openExport() {
 function syncExportHint() {
   const f = document.querySelector('#export-form select[name="fmt"]').value;
   const live = !!state.live;
-  const tail = live
-    ? " 라이브 자막에는 끝 시각이 없어 다음 자막까지로 잡고, 최대 6초에서 끊습니다."
-    : "";
-  $("export-hint").textContent = {
-    srt: "자막 트랙입니다. 못 받은 구간 안내는 빠집니다." + tail,
-    vtt: "자막 트랙입니다. 못 받은 구간 안내는 빠집니다." + tail,
-    txt: "읽는 기록입니다. 못 받은 구간 안내도 그대로 남습니다.",
-    json: "시각·원문·번역을 그대로 담습니다. 못 받은 구간 안내도 남습니다.",
-  }[f] || "";
+  const key = {
+    srt: live ? "export.hint.srt.live" : "export.hint.srt",
+    vtt: live ? "export.hint.vtt.live" : "export.hint.vtt",
+    txt: "export.hint.txt",
+    json: "export.hint.json",
+  }[f];
+  $("export-hint").textContent = key ? t(key) : "";
 }
 
 function submitExport(e) {
   if (e.submitter && e.submitter.value === "cancel") return;
-  const t = exportTarget();
-  if (!t) return;
+  const tgt = exportTarget();
+  if (!tgt) return;
   const f = e.target;
   // 지금 보고 있는 번역 엔진의 것을 담습니다. 넘기지 않으면 서버가 있는 것
   // 중에서 고르는데, 그것이 화면과 다른 엔진일 수 있습니다.
-  const url = `/api/export?id=${encodeURIComponent(t.value)}`
+  const url = `/api/export?id=${encodeURIComponent(tgt.value)}`
             + `&fmt=${encodeURIComponent(f.fmt.value)}`
             + `&view=${encodeURIComponent(f.view.value)}`
             + `&backend=${encodeURIComponent(state.backend || "")}`;

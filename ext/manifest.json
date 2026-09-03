@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "mimiwatch 오버레이",
+  "default_locale": "en",
+  "name": "__MSG_extName__",
   "version": "0.1.0",
-  "description": "로컬 mimiwatch 서버가 받아 적은 자막을 유튜브 페이지 위에 얹습니다.",
+  "description": "__MSG_extDesc__",
   "permissions": [
     "storage",
     "tabCapture",
@@ -28,6 +29,8 @@
         "https://www.youtube.com/*"
       ],
       "js": [
+        "i18n.js",
+        "strings-ext.js",
         "overlay.js",
         "ytid.js",
         "cuestore.js",

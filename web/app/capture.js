@@ -43,13 +43,12 @@ async function requestTabAudio() {
     });
   } catch (err) {
     if (err && err.name === "NotAllowedError") return null;   // 사용자가 취소
-    jobError("탭 소리를 받지 못했습니다: " + (err && err.message || err));
+    jobError(t("capture.error.getAudio", { error: (err && err.message) || err }));
     return null;
   }
   if (!media.getAudioTracks().length) {
     media.getTracks().forEach(t => t.stop());
-    jobError("소리가 함께 오지 않았습니다. 공유 창에서 탭을 고르고 "
-             + "「탭 오디오도 공유」를 켜 주십시오.");
+    jobError(t("capture.error.noAudio"));
     return null;
   }
   return media;
@@ -65,10 +64,7 @@ async function requestTabAudio() {
  * 시작할 때와 이어받을 때 모두 부릅니다 -- 이어받기는 attachLive 를 지나며
  * clearPlayerError() 로 이 안내를 지우고 갑니다. */
 function tabStageNotice(tail, tile = focusedTile()) {
-  playerError("이 방송은 여기서 재생하지 않습니다. 소리만 다른 탭에서 "
-              + "받아 적고 있습니다 — 유튜브 탭에서 보시고, 자막 내역은 옆 "
-              + "창이나 오른쪽 스크립트에서 읽으십시오."
-              + (tail ? " " + tail : ""), null, tile);
+  playerError(t("capture.stage.notice") + (tail ? " " + tail : ""), null, tile);
 }
 
 /* 이름 고치기.
@@ -87,8 +83,8 @@ function renameLive() {
   const cur = box.textContent.trim();
   const input = document.createElement("input");
   input.className = "title-edit";
-  input.value = cur === "탭 오디오" ? "" : cur;
-  input.placeholder = "무엇을 듣고 있는지";
+  input.value = cur === t("capture.tabAudio") ? "" : cur;
+  input.placeholder = t("capture.rename.placeholder");
   box.replaceWith(input);
   input.focus();
   input.select();
@@ -170,16 +166,15 @@ async function pipeCapture(media, sessionId) {
     // stopLive가 알림 칸을 비우므로 그 뒤에 씁니다.
     onEnded: () => {
       stopLive();
-      showLiveNotice("탭 공유가 끝났습니다. 자막 수신을 멈췄습니다.");
+      showLiveNotice(t("capture.notice.sharingEnded"));
     },
     // 세션이 없어졌습니다(서버 재시작 등). 공유는 모듈이 이미 놓았습니다.
     onError: (msg) => {
       state.capture = null;
-      showLiveNotice("자막 세션이 끝났습니다: " + msg);
+      showLiveNotice(t("capture.notice.sessionEnded", { error: msg }));
     },
     onDropped: (s) => showLiveNotice(
-      `전사가 실시간을 따라가지 못해 ${Math.round(s)}초를 버렸습니다. `
-      + "가벼운 전사 엔진으로 바꿔 보십시오."),
+      t("capture.notice.dropped", { n: Math.round(s) })),
   });
   state.capture = cap;
   state.captureSession = sessionId;     // 어느 세션의 소리인지. 그 세션이 끝날 때만 놓습니다
@@ -188,8 +183,7 @@ async function pipeCapture(media, sessionId) {
   // 있고, 그때 조용히 실패하면 사용자는 전사가 느린 것과 구별하지 못합니다.
   setTimeout(() => {
     if (state.capture === cap && !cap.n && !cap.sent) {
-      showLiveNotice("탭에서 소리가 오지 않습니다. 그 탭이 재생 중인지, "
-                     + "공유할 때 「탭 오디오도 공유」를 켰는지 확인하십시오.");
+      showLiveNotice(t("capture.notice.silent"));
     }
   }, 4000);
 }
@@ -225,7 +219,7 @@ async function startTabCapture(title, lang) {
     return;
   }
 
-  const probe = { id: "", title: name || "탭 오디오", is_live: true };
+  const probe = { id: "", title: name || MW_I18N.t("capture.tabAudio"), is_live: true };
   const t = soloTile();
   bindLive(t, {
     id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
@@ -243,8 +237,10 @@ async function startTabCapture(title, lang) {
   tabStageNotice(isTabSurface(media) ? "" :
     // 창이나 화면 전체도 소리가 오면 받습니다. 다만 무엇이 섞여 들어올지
     // 알 수 없으므로, 그렇게 골랐다는 것만 짚어 둡니다.
-    "지금은 탭이 아니라 창·화면을 공유하고 있습니다 — 다른 소리가 섞이면 "
-    + "탭으로 다시 고르십시오.");
+    //
+    // `const t` below shadows the lookup for this whole function body, so the
+    // long name is the one that works here.
+    MW_I18N.t("capture.stage.windowShare"));
   aimScriptWindow(pending, res.id);
 }
 
@@ -257,6 +253,5 @@ function aimScriptWindow(pending, sessionId) {
     hideLiveNotice();
     return;
   }
-  showLiveNotice("팝업이 막혀 자막 내역 창을 띄우지 못했습니다 — "
-                 + "오른쪽 「⧉ 따로 띄우기」로 여십시오.");
+  showLiveNotice(t("capture.notice.popupBlocked"));
 }

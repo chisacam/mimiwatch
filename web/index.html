@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mimiwatch</title>
@@ -11,26 +11,27 @@
      「관리」 아래로 모았습니다. -->
 <header class="bar">
   <div class="brand">mimi<em>watch</em></div>
-  <button id="toggle-library" class="seg" title="영상 목록 접기·펼치기 (V)">◧ 영상</button>
+  <button id="toggle-library" class="seg" data-i18n="header.videos"
+          data-i18n-attr="title:header.videos.title"></button>
 
   <div class="now">
-    <b id="now-title">영상을 고르거나 추가하십시오</b>
+    <b id="now-title" data-i18n="header.now.empty"></b>
     <!-- 탭 소리에는 가져올 제목이 없습니다. 크롬이 트랙 label 에 탭 제목이
          아니라 불투명한 식별자를 주기 때문입니다(실측). 그래서 이름은
          나중에 고칠 수 있어야 합니다. -->
-    <button id="rename-live" class="seg" hidden
-            title="이 세션의 이름을 바꿉니다">✎ 이름</button>
-    <div id="live-badge" class="live-badge" hidden>● LIVE <button id="live-stop">중단</button></div>
+    <button id="rename-live" class="seg" hidden data-i18n="header.rename"
+            data-i18n-attr="title:header.rename.title"></button>
+    <div id="live-badge" class="live-badge" hidden>● LIVE <button id="live-stop" data-i18n="header.live.stop"></button></div>
   </div>
 
   <!-- 처리 상태는 위쪽에 둡니다. 예전에는 우하단에 떠 있어서, 전사가
        도는지도 중단 단추가 어디 있는지도 눈에 잘 띄지 않았습니다. -->
   <div id="job" class="job" hidden>
-    <span class="job-label">재번역 중…</span>
+    <span class="job-label" data-i18n="job.retranslating"></span>
     <span class="job-bar"><i id="job-fill"></i></span>
     <span id="job-count" class="job-count"></span>
     <span id="job-source" class="job-count"></span>
-    <button id="job-cancel" class="seg">중단</button>
+    <button id="job-cancel" class="seg" data-i18n="job.cancel"></button>
   </div>
 
   <div id="live-notice" class="live-notice" hidden></div>
@@ -38,59 +39,70 @@
        FileNotFoundError 로 알았습니다. 묶음으로 받은 사람에게는 설치 스크립트가
        없으므로 여기서 받게 합니다. -->
   <div id="setup-notice" class="live-notice setup-notice" hidden>
-    <span id="setup-text">전사에 필요한 모델이 아직 없습니다.</span>
-    <button id="setup-start" class="seg primary-seg">초기 설정</button>
-    <button id="setup-download" class="seg">지금 설정대로 받기</button>
-    <button id="setup-open" class="seg">모델·도구</button>
+    <span id="setup-text" data-i18n="setup.notice.noModels"></span>
+    <button id="setup-start" class="seg primary-seg" data-i18n="setup.notice.start"></button>
+    <button id="setup-download" class="seg" data-i18n="setup.notice.download"></button>
+    <button id="setup-open" class="seg" data-i18n="setup.notice.models"></button>
   </div>
   <!-- 판올림. 하루 한 번 깃허브 릴리스를 확인해 새 판이 있으면 여기 알립니다.
        받기·적용은 묶음으로 돌 때만 -- 저장소에서 돌 때는 git pull 안내만 합니다. -->
   <div id="update-notice" class="live-notice" hidden>
     <span id="update-text"></span>
-    <button id="update-download" class="seg primary-seg" hidden>받기</button>
-    <button id="update-apply" class="seg primary-seg" hidden>다시 시작하며 적용</button>
-    <button id="update-dismiss" class="seg" hidden>나중에</button>
+    <button id="update-download" class="seg primary-seg" hidden data-i18n="update.download"></button>
+    <button id="update-apply" class="seg primary-seg" hidden data-i18n="update.apply"></button>
+    <button id="update-dismiss" class="seg" hidden data-i18n="update.later"></button>
   </div>
   <div id="lang-status" class="status"></div>
   <div class="spacer"></div>
 
   <div class="menu-wrap">
-    <button id="open-manage" class="seg" aria-haspopup="true" aria-expanded="false">관리 ▾</button>
+    <button id="open-manage" class="seg" aria-haspopup="true" aria-expanded="false"
+            data-i18n="header.manage"></button>
     <div id="manage-menu" class="menu" hidden>
       <label class="field col">
-        <span>내 언어</span>
+        <span data-i18n="manage.myLanguage"></span>
         <select id="viewer-lang">
-          <option value="ko">한국어</option>
-          <option value="en">English</option>
-          <option value="ja">日本語</option>
-          <option value="zh">中文</option>
+          <option value="ko" data-i18n="lang.ko"></option>
+          <option value="en" data-i18n="lang.en"></option>
+          <option value="ja" data-i18n="lang.ja"></option>
+          <option value="zh" data-i18n="lang.zh"></option>
+        </select>
+      </label>
+      <label class="field col">
+        <span data-i18n="manage.uiLanguage"></span>
+        <select id="ui-lang">
+          <option value="en" data-i18n="lang.en"></option>
+          <option value="ko" data-i18n="lang.ko"></option>
         </select>
       </label>
       <label class="field col" id="asr-field">
-        <span>전사</span>
+        <span data-i18n="manage.asr"></span>
         <select id="asr-picker"></select>
       </label>
       <label class="field col" id="backend-field">
-        <span>번역</span>
+        <span data-i18n="manage.translation"></span>
         <select id="backend-picker"></select>
       </label>
       <hr>
-      <button id="open-settings" class="seg wide">⚙ 엔진 관리</button>
+      <button id="open-settings" class="seg wide" data-i18n="manage.engines"></button>
     </div>
   </div>
 
-  <button id="toggle-panel" class="seg" title="자막 내역 접기·펼치기 (S)">자막 내역 ▸</button>
+  <button id="toggle-panel" class="seg" data-i18n="header.panel"
+          data-i18n-attr="title:header.panel.title"></button>
   <!-- 묶음으로 쓰면 터미널이 없어 Ctrl-C 로 끌 수 없습니다. 눈에 띄는 자리에 둡니다.
        받는 중인 방송을 먼저 제대로 닫고 서버를 멈춘 뒤, 이 창(과 대본 창)도 닫습니다. -->
-  <button id="quit" class="seg quit" title="받는 중인 방송을 닫고 서버를 멈춘 뒤 이 창을 닫습니다">⏻ 종료</button>
+  <button id="quit" class="seg quit" data-i18n="header.quit"
+          data-i18n-attr="title:header.quit.title"></button>
 </header>
 
 <main id="layout">
   <!-- 영상 관리. 자막 내역과 같은 방식으로 접고 펼칩니다. -->
   <aside class="library" id="library">
     <div class="panel-head">
-      <h2>영상</h2>
-      <button id="add-video" class="seg primary-seg" title="YouTube 주소로 새 영상 추가">＋ 추가</button>
+      <h2 data-i18n="library.title"></h2>
+      <button id="add-video" class="seg primary-seg" data-i18n="library.add"
+              data-i18n-attr="title:library.add.title"></button>
     </div>
     <div id="video-list" class="video-list"></div>
   </aside>
@@ -113,10 +125,10 @@
             <span class="tile-site"></span>
             <span class="tile-title"></span>
             <span class="tile-state"></span>
-            <span class="tile-sound" title="소리와 자막이 이 타일을 따릅니다">🔊</span>
-            <button class="tile-close seg" title="이 타일을 닫습니다 (자막 수신도 멈춥니다)">✕</button>
+            <span class="tile-sound" data-i18n-attr="title:tile.sound.title">🔊</span>
+            <button class="tile-close seg" data-i18n-attr="title:tile.close.title">✕</button>
           </div>
-          <div class="tile-cover" title="누르면 이 방송으로 초점을 옮깁니다. 끌어서 다른 타일과 자리를 바꿉니다"></div>
+          <div class="tile-cover" data-i18n-attr="title:tile.cover.title"></div>
           <!-- 끌어다 놓는 동안만 나타나는 막. iframe 위로는 drop 이 오지 않으므로 이것이 받습니다. -->
           <div class="tile-drop"></div>
         </div>
@@ -125,25 +137,25 @@
       <!-- 전체화면에서는 상자 밖의 조절기가 그려지지 않습니다. 자막 모드만
            상자 안에도 둡니다. 창 모드에서는 아래 조절기가 있으므로 숨깁니다. -->
       <div id="fs-controls" class="fs-controls">
-        <span class="glabel">자막</span>
+        <span class="glabel" data-i18n="controls.subtitle"></span>
         <div class="fs-row seg-row">
-          <button class="seg" data-mode="off">끄기</button>
-          <button class="seg" data-mode="both" data-needs-translation>둘 다</button>
-          <button class="seg" data-mode="translation" data-needs-translation>번역만</button>
-          <button class="seg" data-mode="source">원문만</button>
+          <button class="seg" data-mode="off" data-i18n="controls.mode.off"></button>
+          <button class="seg" data-mode="both" data-needs-translation data-i18n="controls.mode.both"></button>
+          <button class="seg" data-mode="translation" data-needs-translation data-i18n="controls.mode.translation"></button>
+          <button class="seg" data-mode="source" data-i18n="controls.mode.source"></button>
         </div>
         <hr>
         <div class="fs-row">
-          <label class="slider">글자 크기 <input type="range" min="16" max="56" data-ctl="size"></label>
-          <label class="slider">배경 <input type="range" min="0" max="100" data-ctl="dim"></label>
-          <button class="seg" data-cue-reset
-                  title="자막을 아래 가운데로 되돌립니다. 자리는 자막을 끌어서 옮깁니다">⤾ 위치 되돌리기</button>
+          <label class="slider"><span data-i18n="controls.fontSize"></span> <input type="range" min="16" max="56" data-ctl="size"></label>
+          <label class="slider"><span data-i18n="controls.background"></span> <input type="range" min="0" max="100" data-ctl="dim"></label>
+          <button class="seg" data-cue-reset data-i18n="controls.cueReset"
+                  data-i18n-attr="title:fs.cueReset.title"></button>
         </div>
         <hr>
         <!-- 멀티뷰: 배치와 초점. 타일이 둘 이상일 때만 보입니다. -->
         <div class="fs-row seg-row" id="fs-mv" hidden>
-          <button class="seg" data-layout="2">상하</button>
-          <button class="seg" data-layout="2h">좌우</button>
+          <button class="seg" data-layout="2" data-i18n="controls.layout.vertical"></button>
+          <button class="seg" data-layout="2h" data-i18n="controls.layout.horizontal"></button>
           <button class="seg" data-layout="1p2">1+2</button>
           <button class="seg" data-layout="1p3">1+3</button>
           <button class="seg" data-layout="2x2">2×2</button>
@@ -152,7 +164,7 @@
           <button class="seg" data-focus-tile="2">3</button>
           <button class="seg" data-focus-tile="3">4</button>
         </div>
-        <button id="fs-exit" class="seg">⛶ 창으로</button>
+        <button id="fs-exit" class="seg" data-i18n="fs.exit"></button>
       </div>
 
       <!-- 조절기를 다시 부르는 자리.
@@ -165,29 +177,30 @@
 
     <div class="controls">
       <div class="group">
-        <span class="glabel">자막</span>
-        <button class="seg" data-mode="off">끄기</button>
-        <button class="seg" data-mode="both" data-needs-translation>둘 다</button>
-        <button class="seg" data-mode="translation" data-needs-translation>번역만</button>
-        <button class="seg" data-mode="source">원문만</button>
+        <span class="glabel" data-i18n="controls.subtitle"></span>
+        <button class="seg" data-mode="off" data-i18n="controls.mode.off"></button>
+        <button class="seg" data-mode="both" data-needs-translation data-i18n="controls.mode.both"></button>
+        <button class="seg" data-mode="translation" data-needs-translation data-i18n="controls.mode.translation"></button>
+        <button class="seg" data-mode="source" data-i18n="controls.mode.source"></button>
       </div>
-      <label class="slider">글자 크기 <input id="size" type="range" min="16" max="56" value="30"></label>
-      <label class="slider">배경 <input id="dim" type="range" min="0" max="100" value="55"></label>
+      <label class="slider"><span data-i18n="controls.fontSize"></span> <input id="size" type="range" min="16" max="56" value="30"></label>
+      <label class="slider"><span data-i18n="controls.background"></span> <input id="dim" type="range" min="0" max="100" value="55"></label>
       <!-- 자리 조절은 슬라이더가 아니라 자막을 직접 끄는 것으로 합니다.
            단추는 되돌리는 쪽만 남깁니다. -->
-      <button id="cue-reset" class="seg" data-cue-reset
-              title="자막은 영상 위에서 끌어 옮길 수 있습니다. 이 단추는 아래 가운데로 되돌립니다">⤾ 위치 되돌리기</button>
-      <label class="check"><input id="show-prev" type="checkbox" checked> 직전 문장 남기기</label>
-      <label class="slider" id="offset-wrap">오프셋 <input id="offset" type="range" min="-3" max="3" step="0.1" value="0"><b id="offset-val">0.0s</b></label>
-      <button id="fullscreen" class="seg" title="전체화면 (F). 플레이어와 자막을 함께 키웁니다">⛶ 전체화면</button>
+      <button id="cue-reset" class="seg" data-cue-reset data-i18n="controls.cueReset"
+              data-i18n-attr="title:controls.cueReset.title"></button>
+      <label class="check"><input id="show-prev" type="checkbox" checked> <span data-i18n="controls.showPrev"></span></label>
+      <label class="slider" id="offset-wrap"><span data-i18n="controls.offset"></span> <input id="offset" type="range" min="-3" max="3" step="0.1" value="0"><b id="offset-val">0.0s</b></label>
+      <button id="fullscreen" class="seg" data-i18n="controls.fullscreen"
+              data-i18n-attr="title:controls.fullscreen.title"></button>
       <!-- 멀티뷰. 「＋ 타일」은 초점이 라이브일 때, 배치는 타일이 둘 이상일 때 보입니다.
            초점은 타일을 누르거나 1~4 키로 옮깁니다. -->
-      <button id="mv-add" class="seg" hidden
-              title="지금 보는 방송 옆에 다른 라이브를 붙입니다 (최대 4). 소리와 자막은 초점 타일만">⊞ 타일 추가</button>
+      <button id="mv-add" class="seg" hidden data-i18n="controls.addTile"
+              data-i18n-attr="title:controls.addTile.title"></button>
       <div class="group" id="mv-group" hidden>
-        <span class="glabel">배치</span>
-        <button class="seg" data-layout="2">상하</button>
-          <button class="seg" data-layout="2h">좌우</button>
+        <span class="glabel" data-i18n="controls.layout"></span>
+        <button class="seg" data-layout="2" data-i18n="controls.layout.vertical"></button>
+          <button class="seg" data-layout="2h" data-i18n="controls.layout.horizontal"></button>
         <button class="seg" data-layout="1p2">1+2</button>
         <button class="seg" data-layout="1p3">1+3</button>
         <button class="seg" data-layout="2x2">2×2</button>
@@ -197,48 +210,53 @@
 
   <aside class="panel">
     <div class="panel-head">
-      <h2>자막 내역</h2>
-      <button id="open-script-window" class="seg"
-              title="자막 내역만 따로 띄웁니다. 임베드가 막힌 방송을 유튜브에서 보며 읽을 때 씁니다">⧉ 따로 띄우기</button>
-      <button id="open-export" class="seg" title="쌓인 자막을 파일로 내보냅니다">⤓ 내보내기</button>
-      <label class="check"><input id="follow" type="checkbox" checked> 따라가기</label>
+      <h2 data-i18n="panel.title"></h2>
+      <button id="open-script-window" class="seg" data-i18n="panel.popout"
+              data-i18n-attr="title:panel.popout.title"></button>
+      <button id="open-export" class="seg" data-i18n="panel.export"
+              data-i18n-attr="title:panel.export.title"></button>
+      <label class="check"><input id="follow" type="checkbox" checked> <span data-i18n="panel.follow"></span></label>
     </div>
 
     <!-- 자막 내역에서 줄을 누르면 무슨 일이 일어나는가.
          기본은 예전 그대로 「그 지점으로 이동」입니다. 고치거나 고를 일은
          모드를 켠 동안에만 하도록 가릅니다 -- 읽다가 잘못 눌러서 편집기가
          열리거나 재생 위치가 튀는 일이 없어야 합니다. -->
-    <div class="script-modes" role="group" aria-label="자막 내역 모드">
-      <button class="seg" data-smode="read" title="줄을 누르면 그 지점으로 이동합니다">읽기</button>
-      <button class="seg" data-smode="edit" title="줄을 누르면 원문·번역·시각을 고칩니다">✎ 편집</button>
-      <button class="seg" data-smode="tr" title="줄을 골라 다시 번역합니다. shift로 구간을 잡습니다">⟳ 번역</button>
+    <div class="script-modes" role="group" data-i18n-attr="aria-label:panel.modes.aria">
+      <button class="seg" data-smode="read" data-i18n="panel.mode.read"
+              data-i18n-attr="title:panel.mode.read.title"></button>
+      <button class="seg" data-smode="edit" data-i18n="panel.mode.edit"
+              data-i18n-attr="title:panel.mode.edit.title"></button>
+      <button class="seg" data-smode="tr" data-i18n="panel.mode.tr"
+              data-i18n-attr="title:panel.mode.tr.title"></button>
     </div>
 
     <!-- 번역 모드에서만 보입니다. 고른 줄 수와 할 일. -->
     <div id="tr-bar" class="tr-bar" hidden>
-      <b id="tr-count">0줄 선택</b>
+      <b id="tr-count" data-i18n="panel.tr.count.zero"></b>
       <span class="grow"></span>
-      <button id="tr-all" class="seg">전체</button>
-      <button id="tr-none" class="seg">해제</button>
-      <button id="tr-go" class="seg primary-seg">⟳ 재번역</button>
+      <button id="tr-all" class="seg" data-i18n="panel.tr.all"></button>
+      <button id="tr-none" class="seg" data-i18n="panel.tr.none"></button>
+      <button id="tr-go" class="seg primary-seg" data-i18n="panel.tr.go"></button>
     </div>
 
     <!-- 편집 모드에서만 보입니다. 잘못 인식돼 지운 자리(누락된 대사)를 직접 채웁니다. -->
     <div id="edit-bar" class="tr-bar" hidden>
-      <b>줄을 눌러 고치고, 빈 곳은 새로 씁니다</b>
+      <b data-i18n="panel.edit.hint"></b>
       <span class="grow"></span>
-      <button id="cue-add" class="seg primary-seg" title="지금 재생 위치의 시각으로 새 자막 줄을 씁니다">＋ 줄 쓰기</button>
+      <button id="cue-add" class="seg primary-seg" data-i18n="panel.edit.add"
+              data-i18n-attr="title:panel.edit.add.title"></button>
     </div>
 
     <!-- 따로 띄운 창에서만 보이는 조절기. 영상이 없으므로 화면 위 자막 대신
          자막 내역 자체를 읽기 좋게 만드는 것들만 둡니다. -->
     <div id="script-tools" class="script-tools">
       <div class="fs-row seg-row">
-        <button class="seg" data-sview="both">둘 다</button>
-        <button class="seg" data-sview="tr">번역만</button>
-        <button class="seg" data-sview="src">원문만</button>
+        <button class="seg" data-sview="both" data-i18n="controls.mode.both"></button>
+        <button class="seg" data-sview="tr" data-i18n="controls.mode.translation"></button>
+        <button class="seg" data-sview="src" data-i18n="controls.mode.source"></button>
       </div>
-      <label class="slider">글자 크기
+      <label class="slider"><span data-i18n="controls.fontSize"></span>
         <input id="script-size" type="range" min="11" max="24" value="13">
       </label>
     </div>
@@ -249,90 +267,91 @@
 
 <dialog id="add-dialog">
   <form method="dialog" id="add-form">
-    <h3>영상 추가</h3>
-    <p class="hint">YouTube 주소나 m3u8 주소를 넣으면 오디오를 받아 전사하고, 원본 언어가 내 언어와 다르면 번역까지 진행합니다. 이 기계의 영상·음성 파일도 됩니다 — 아래 「소리 출처」에서 고르십시오.</p>
-    <p class="hint" id="tile-hint" hidden>지금 보는 방송 옆에 붙습니다(YouTube·Twitch·m3u8 라이브). 소리와 자막은 초점 타일만 -- 타일을 누르거나 1~4 키로 옮깁니다. 초점이 아닌 방송은 소리만 받아 두다가 초점이 오면 직전 몇 초부터 받아 적습니다.</p>
-    <label>소리 출처
+    <h3 data-i18n="add.title"></h3>
+    <p class="hint" data-i18n="add.hint"></p>
+    <p class="hint" id="tile-hint" hidden data-i18n="add.tileHint"></p>
+    <label><span data-i18n="add.source"></span>
       <select name="source">
-        <option value="url">주소에서 받기 (기본)</option>
-        <option value="tab">이 브라우저의 다른 탭 소리 <!-- 멤버십 전용 --></option>
-        <option value="file">이 기계의 영상·음성 파일</option>
+        <option value="url" data-i18n="add.source.url"></option>
+        <option value="tab" data-i18n="add.source.tab"><!-- 멤버십 전용 --></option>
+        <option value="file" data-i18n="add.source.file"></option>
       </select>
-      <small id="source-hint">서버가 yt-dlp로 오디오를 직접 받습니다.</small>
+      <small id="source-hint" data-i18n="add.source.hint.url"></small>
     </label>
-    <label id="url-field">주소 <input name="url" placeholder="https://youtu.be/... 또는 https://.../index.m3u8"></label>
-    <label id="file-field" hidden>파일
+    <label id="url-field"><span data-i18n="add.url"></span> <input name="url" data-i18n-attr="placeholder:add.url.placeholder"></label>
+    <label id="file-field" hidden><span data-i18n="add.file"></span>
       <input type="file" name="media" accept="video/*,audio/*,.mkv,.ts,.m4a,.opus,.aac,.flac">
-      <small>mp3·wav·mp4·mkv 등 ffmpeg가 여는 것이면 됩니다. 전사가 끝나면 이 화면에서 자막과 함께 재생됩니다.</small>
+      <small data-i18n="add.file.hint"></small>
     </label>
-    <label id="tab-title-field" hidden>이름
-      <input name="tab_title" placeholder="무엇을 듣는지 (목록에 이 이름으로 남습니다)">
-      <small>크롬은 공유한 탭의 제목을 알려 주지 않습니다 — 직접 적으십시오.
-             비우면 「탭 오디오」가 되고, 나중에 위쪽 「✎ 이름」으로 고칠 수 있습니다.</small>
+    <label id="tab-title-field" hidden><span data-i18n="add.name"></span>
+      <input name="tab_title" data-i18n-attr="placeholder:add.name.placeholder">
+      <small data-i18n="add.name.hint"></small>
     </label>
-    <label>장르
+    <label><span data-i18n="add.genre"></span>
       <select name="genre"></select>
-      <small id="genre-hint">번역 프롬프트를 발화의 성격에 맞춥니다. 기술 발표와 게임 방송은 쓰는 말이 다릅니다.</small>
+      <small id="genre-hint" data-i18n="add.genre.hint"></small>
     </label>
     <!-- 딱지를 글자와 한 덩어리로 묶습니다. 이 label 은 세로 flex 라
          (다른 「…전용」 딱지가 붙은 둘은 label.inline 이라 가로입니다)
          그냥 두면 딱지가 혼자 한 줄을 차지하며 늘어납니다. -->
-    <label><span>콘텐츠 유형 <small class="tag">라이브 전용</small></span>
+    <label><span><span data-i18n="add.profile"></span> <small class="tag" data-i18n="add.tag.liveOnly"></small></span>
       <select name="profile"></select>
-      <small>발화를 얼마나 자주 끊을지 정합니다. 여러 사람이 겹쳐 말하면 짧게 끊어야 누락이 줄어듭니다.</small>
+      <small data-i18n="add.profile.hint"></small>
     </label>
-    <label class="inline"><input type="checkbox" name="refine" checked> 정제본으로 다듬기 <small class="tag">전사가 30~50% 깁니다</small></label>
-    <small class="hint">켜면 발화 한 무리가 끝나기를 기다렸다 합쳐서 다시 받아 적습니다. 문맥이 길어져 정확해지지만 자막이 늦게 자리를 잡고 이미 뜬 줄이 바뀝니다. 끄면 짧게 끊어 바로 내보냅니다.</small>
-    <label class="inline"><input type="checkbox" name="speakers"> 화자 태그 붙이기 <small class="tag">녹화본 전용</small></label>
-    <label>전사 엔진
+    <label class="inline"><input type="checkbox" name="refine" checked> <span data-i18n="add.refine"></span>
+           <small class="tag" data-i18n="add.refine.tag"></small></label>
+    <small class="hint" data-i18n="add.refine.hint"></small>
+    <label class="inline"><input type="checkbox" name="speakers"> <span data-i18n="add.speakers"></span>
+           <small class="tag" data-i18n="add.tag.vodOnly"></small></label>
+    <label><span data-i18n="add.asr"></span>
       <select name="asr"></select>
-      <small>넣는 순간 이 엔진으로 시작합니다. 낮은 사양이라면 가벼운 쪽을 고르십시오.</small>
+      <small data-i18n="add.asr.hint"></small>
     </label>
-    <label>번역 엔진
+    <label><span data-i18n="add.backend"></span>
       <select name="backend"></select>
     </label>
-    <label>원본 언어
+    <label><span data-i18n="add.lang"></span>
       <select name="lang">
-        <option value="">자동 판별</option>
-        <option value="ko">한국어</option>
-        <option value="en">English</option>
-        <option value="ja">日本語</option>
-        <option value="zh">中文</option>
+        <option value="" data-i18n="lang.auto"></option>
+        <option value="ko" data-i18n="lang.ko"></option>
+        <option value="en" data-i18n="lang.en"></option>
+        <option value="ja" data-i18n="lang.ja"></option>
+        <option value="zh" data-i18n="lang.zh"></option>
       </select>
-      <small>단일 언어 영상이라면 지정하는 편이 안전합니다. 자동 판별은 잡음 구간에서 다른 언어로 고착될 수 있습니다.</small>
+      <small data-i18n="add.lang.hint"></small>
     </label>
     <div class="row">
       <span class="grow"></span>
-      <button value="cancel" formnovalidate>취소</button>
-      <button value="save" class="primary">시작</button>
+      <button value="cancel" formnovalidate data-i18n="dialog.cancel"></button>
+      <button value="save" class="primary" data-i18n="add.start"></button>
     </div>
   </form>
 </dialog>
 
 <dialog id="export-dialog">
   <form method="dialog" id="export-form">
-    <h3>자막 내보내기</h3>
+    <h3 data-i18n="export.title"></h3>
     <p class="hint" id="export-what">—</p>
-    <label>형식
+    <label><span data-i18n="export.fmt"></span>
       <select name="fmt">
-        <option value="srt">SRT — 영상 편집기·플레이어</option>
-        <option value="vtt">WebVTT — 웹 플레이어</option>
-        <option value="txt">텍스트 — 타임스탬프를 붙여 읽기</option>
-        <option value="json">JSON — 다시 불러오기·재번역</option>
+        <option value="srt" data-i18n="export.fmt.srt"></option>
+        <option value="vtt" data-i18n="export.fmt.vtt"></option>
+        <option value="txt" data-i18n="export.fmt.txt"></option>
+        <option value="json" data-i18n="export.fmt.json"></option>
       </select>
-      <small id="export-hint">끝 시각은 다음 자막까지, 최대 6초입니다.</small>
+      <small id="export-hint" data-i18n="export.hint"></small>
     </label>
-    <label>담을 것
+    <label><span data-i18n="export.view"></span>
       <select name="view">
-        <option value="both">둘 다 (원문 다음 줄에 번역)</option>
-        <option value="tr">번역만</option>
-        <option value="src">원문만</option>
+        <option value="both" data-i18n="export.view.both"></option>
+        <option value="tr" data-i18n="controls.mode.translation"></option>
+        <option value="src" data-i18n="controls.mode.source"></option>
       </select>
     </label>
     <div class="row">
       <span class="grow"></span>
-      <button value="cancel" formnovalidate>취소</button>
-      <button value="save" class="primary">내려받기</button>
+      <button value="cancel" formnovalidate data-i18n="dialog.cancel"></button>
+      <button value="save" class="primary" data-i18n="export.download"></button>
     </div>
   </form>
 </dialog>
@@ -343,29 +362,36 @@
      언제든 다시 엽니다. -->
 <dialog id="setup-dialog">
   <form method="dialog" id="setup-form">
-    <h3>초기 설정</h3>
-    <p class="hint">이 기계에서 돌릴 엔진을 고릅니다. <b>기본은 가벼운 CPU 엔진</b>이라 어디서든 돌지만 품질은 무거운 쪽이 낫습니다 — GPU(Metal·Vulkan)가 있고 메모리가 넉넉하면 올리십시오. 고른 조합에 필요한 모델만 받습니다. 나중에 「관리」에서 언제든 바꿀 수 있습니다.</p>
+    <h3 data-i18n="setup.title"></h3>
+    <label class="field col">
+      <span data-i18n="setup.uiLanguage"></span>
+      <select id="setup-ui-lang">
+        <option value="en" data-i18n="lang.en"></option>
+        <option value="ko" data-i18n="lang.ko"></option>
+      </select>
+    </label>
+    <p class="hint"><span data-i18n="setup.hint.intro"></span> <b data-i18n="setup.hint.default"></b><span data-i18n="setup.hint.rest"></span></p>
     <fieldset class="setup-group">
-      <legend>전사 (음성 → 글자)</legend>
+      <legend data-i18n="setup.group.asr"></legend>
       <div id="setup-asr" class="setup-choices"></div>
     </fieldset>
     <fieldset class="setup-group">
-      <legend>번역 (원문 → 내 언어)</legend>
+      <legend data-i18n="setup.group.tr"></legend>
       <div id="setup-tr" class="setup-choices"></div>
     </fieldset>
-    <label>내 언어
+    <label><span data-i18n="manage.myLanguage"></span>
       <select name="viewer_lang">
-        <option value="ko">한국어</option>
-        <option value="en">English</option>
-        <option value="ja">日本語</option>
-        <option value="zh">中文</option>
+        <option value="ko" data-i18n="lang.ko"></option>
+        <option value="en" data-i18n="lang.en"></option>
+        <option value="ja" data-i18n="lang.ja"></option>
+        <option value="zh" data-i18n="lang.zh"></option>
       </select>
     </label>
     <p class="hint" id="setup-total">—</p>
     <div class="row">
       <span class="grow"></span>
-      <button value="cancel" formnovalidate>나중에</button>
-      <button value="save" class="primary" id="setup-go">이대로 시작</button>
+      <button value="cancel" formnovalidate data-i18n="setup.later"></button>
+      <button value="save" class="primary" id="setup-go" data-i18n="setup.go"></button>
     </div>
   </form>
 </dialog>
@@ -373,67 +399,71 @@
 <dialog id="settings-dialog">
   <div id="settings-body">
     <div class="dlg-head">
-      <h3>엔진 관리</h3>
-      <button id="settings-close" class="seg">닫기</button>
+      <h3 data-i18n="settings.title"></h3>
+      <button id="settings-close" class="seg" data-i18n="settings.close"></button>
     </div>
 
     <section class="engine-group" id="models-group">
       <div class="group-head">
-        <h4>모델 · 도구</h4>
-        <button class="seg ghost" data-add-model>＋ 허깅페이스에서 추가</button>
+        <h4 data-i18n="settings.models.title"></h4>
+        <button class="seg ghost" data-add-model data-i18n="settings.models.add"></button>
       </div>
-      <p class="hint">모델은 프로그램 밖 <code id="model-dir">…</code> 에 둡니다. 저장소를 지우거나 새 판으로 바꿔도 다시 받지 않습니다. 받다 끊긴 것은 다시 받으면 이어 받습니다. <b>ffmpeg</b>는 시스템에 있으면 받을 필요가 없습니다.</p>
+      <p class="hint"><span data-i18n="settings.models.hint.1"></span> <code id="model-dir">…</code>
+         <span data-i18n="settings.models.hint.2"></span> <b>ffmpeg</b><span data-i18n="settings.models.hint.3"></span></p>
       <div id="model-list" class="engine-list"></div>
     </section>
 
     <section class="engine-group">
       <div class="group-head">
-        <h4>전사 엔진</h4>
-        <button class="seg ghost" data-add="asr">＋ 추가</button>
+        <h4 data-i18n="settings.asr.title"></h4>
+        <button class="seg ghost" data-add="asr" data-i18n="settings.add"></button>
       </div>
-      <p class="hint">음성을 글자로 옮깁니다. 기본은 로컬 Whisper(transcribe.cpp)입니다. 외부 엔진은 OpenAI 호환 <code>/v1/audio/transcriptions</code> 규약을 쓰며 녹화본과 라이브 모두에 쓸 수 있습니다 — 라이브에서는 발화 한 조각(2~12초)마다 요청이 나가므로 왕복 시간만큼 자막이 늦습니다. 라이브 도중에도 갈아 끼울 수 있습니다.</p>
+      <p class="hint"><span data-i18n="settings.asr.hint.1"></span> <code>/v1/audio/transcriptions</code>
+         <span data-i18n="settings.asr.hint.2"></span></p>
       <div id="asr-list" class="engine-list"></div>
     </section>
 
     <section class="engine-group">
       <div class="group-head">
-        <h4>번역 백엔드</h4>
-        <button class="seg ghost" data-add="tr">＋ 추가</button>
+        <h4 data-i18n="settings.tr.title"></h4>
+        <button class="seg ghost" data-add="tr" data-i18n="settings.add"></button>
       </div>
-      <p class="hint">인식한 문장을 시청자 언어로 옮깁니다. OpenAI 호환 <code>/v1/chat/completions</code> 규약을 씁니다.</p>
+      <p class="hint"><span data-i18n="settings.tr.hint.1"></span> <code>/v1/chat/completions</code>
+         <span data-i18n="settings.tr.hint.2"></span></p>
       <div id="tr-list" class="engine-list"></div>
     </section>
 
     <section class="engine-group">
       <div class="group-head">
-        <h4>초기 설정</h4>
-        <button id="setup-again" class="seg ghost">초기 설정 다시</button>
+        <h4 data-i18n="setup.title"></h4>
+        <button id="setup-again" class="seg ghost" data-i18n="settings.setupAgain"></button>
       </div>
-      <p class="hint">기본 전사·번역 엔진을 다시 고릅니다. 고른 조합에 필요한 모델을 받기 시작합니다.</p>
+      <p class="hint" data-i18n="settings.setup.hint"></p>
     </section>
 
     <section class="engine-group" id="cookies-group">
       <div class="group-head">
-        <h4>유튜브 로그인 쿠키</h4>
-        <button id="cookies-delete" class="seg danger" hidden>지우기</button>
+        <h4 data-i18n="settings.cookies.title"></h4>
+        <button id="cookies-delete" class="seg danger" hidden data-i18n="settings.cookies.delete"></button>
       </div>
-      <p class="hint" id="cookies-hint">없음. 멤버십 전용 방송을 주소로 받으려면 확장 팝업의 「🔑 로그인 쿠키 넘기고 주소로」를 누르십시오 — 그때만 이 브라우저의 쿠키가 서버로 옵니다.</p>
+      <p class="hint" id="cookies-hint" data-i18n="settings.cookies.hint"></p>
     </section>
 
     <section class="engine-group" id="update-group">
       <div class="group-head">
-        <h4>판올림</h4>
-        <button id="update-check" class="seg ghost">새 판 확인</button>
+        <h4 data-i18n="settings.update.title"></h4>
+        <button id="update-check" class="seg ghost" data-i18n="settings.update.check"></button>
       </div>
       <p class="hint" id="update-hint">—</p>
     </section>
 
     <section class="engine-group" id="shutdown-group">
       <div class="group-head">
-        <h4>서버</h4>
-        <button id="shutdown" class="seg danger">종료</button>
+        <h4 data-i18n="settings.server.title"></h4>
+        <button id="shutdown" class="seg danger" data-i18n="settings.shutdown"></button>
       </div>
-      <p class="hint">받는 중인 방송을 <b>먼저 제대로 닫고</b> 서버를 멈춥니다. 창을 그냥 닫거나 프로세스를 죽이면 그 세션은 「중단됨」으로 남습니다. 다시 켜려면 터미널에서 <code>./run.sh</code>.</p>
+      <p class="hint"><span data-i18n="settings.server.hint.1"></span> <b data-i18n="settings.server.hint.strong"></b>
+         <span data-i18n="settings.server.hint.2"></span> <code>./run.sh</code>.</p>
     </section>
   </div>
 
@@ -442,58 +472,58 @@
        처음 쓸 때 드러납니다. -->
   <form id="model-form" hidden>
     <div class="dlg-head">
-      <h3>허깅페이스에서 모델 추가</h3>
-      <button type="button" id="model-form-back" class="seg">뒤로</button>
+      <h3 data-i18n="model.title"></h3>
+      <button type="button" id="model-form-back" class="seg" data-i18n="model.back"></button>
     </div>
-    <label>종류
+    <label><span data-i18n="model.kind"></span>
       <select name="kind">
-        <option value="asr">전사 (transcribe.cpp GGUF — whisper·sensevoice·moonshine 계열)</option>
-        <option value="tr">번역 (llama.cpp 채팅 GGUF — gemma 등)</option>
+        <option value="asr" data-i18n="model.kind.asr"></option>
+        <option value="tr" data-i18n="model.kind.tr"></option>
       </select>
     </label>
-    <label>저장소 <input name="repo" placeholder="소유자/이름  예: handy-computer/whisper-large-v3-turbo-gguf" required></label>
-    <label>파일 <input name="file" placeholder="예: whisper-large-v3-turbo-Q8_0.gguf" required>
-      <small>저장소의 「Files」 탭에 보이는 .gguf 파일 이름입니다.</small>
+    <label><span data-i18n="model.repo"></span> <input name="repo" data-i18n-attr="placeholder:model.repo.placeholder" required></label>
+    <label><span data-i18n="model.file"></span> <input name="file" data-i18n-attr="placeholder:model.file.placeholder" required>
+      <small data-i18n="model.file.hint"></small>
     </label>
-    <label>표시 이름 <input name="label" placeholder="(비우면 파일 이름)"></label>
-    <label>엔진 ID <input name="id" placeholder="(비우면 파일 이름에서 만듭니다)" pattern="[a-z0-9-]*"></label>
-    <label>장치
+    <label><span data-i18n="model.label"></span> <input name="label" data-i18n-attr="placeholder:model.label.placeholder"></label>
+    <label><span data-i18n="model.id"></span> <input name="id" data-i18n-attr="placeholder:model.id.placeholder" pattern="[a-z0-9-]*"></label>
+    <label><span data-i18n="model.device"></span>
       <select name="device">
-        <option value="auto">자동 (GPU가 있으면 GPU)</option>
+        <option value="auto" data-i18n="model.device.auto"></option>
         <option value="cpu">CPU</option>
       </select>
     </label>
-    <label>허깅페이스 토큰 <input name="token" placeholder="(선택) 라이선스 동의가 필요한 저장소만">
-      <small>저장하지 않습니다. 이번 내려받기에만 씁니다. 환경변수 <code>HF_TOKEN</code>이 있으면 그것을 씁니다.</small>
+    <label><span data-i18n="model.token"></span> <input name="token" data-i18n-attr="placeholder:model.token.placeholder">
+      <small><span data-i18n="model.token.hint.1"></span> <code>HF_TOKEN</code><span data-i18n="model.token.hint.2"></span></small>
     </label>
     <p class="hint" id="model-form-error" hidden></p>
     <div class="row">
       <span class="grow"></span>
-      <button type="submit" class="primary">받기 시작</button>
+      <button type="submit" class="primary" data-i18n="model.submit"></button>
     </div>
   </form>
 
   <form id="engine-form" hidden>
     <div class="dlg-head">
-      <h3 id="form-title">엔진 추가</h3>
-      <button type="button" id="form-back" class="seg">뒤로</button>
+      <h3 id="form-title" data-i18n="engine.title"></h3>
+      <button type="button" id="form-back" class="seg" data-i18n="engine.back"></button>
     </div>
-    <label>표시 이름 <input name="label" required></label>
-    <label>엔진 ID <input name="id" required pattern="[a-z0-9-]+"></label>
-    <label>주소 <input name="base_url" placeholder="http://localhost:1234" required></label>
-    <label>모델 <input name="model" required></label>
-    <label>API 키 <input name="api_key" placeholder="(선택)"></label>
-    <label id="field-window">창 길이(초)
+    <label><span data-i18n="engine.label"></span> <input name="label" required></label>
+    <label><span data-i18n="engine.id"></span> <input name="id" required pattern="[a-z0-9-]+"></label>
+    <label><span data-i18n="engine.baseUrl"></span> <input name="base_url" placeholder="http://localhost:1234" required></label>
+    <label><span data-i18n="engine.model"></span> <input name="model" required></label>
+    <label><span data-i18n="engine.apiKey"></span> <input name="api_key" data-i18n-attr="placeholder:engine.apiKey.placeholder"></label>
+    <label id="field-window"><span data-i18n="engine.window"></span>
       <input name="window_s" type="number" min="30" max="900" value="240">
-      <small>한 번에 보낼 오디오 길이입니다. 서버의 요청 크기 제한에 맞추십시오.</small>
+      <small data-i18n="engine.window.hint"></small>
     </label>
-    <label id="field-minchars">짧은 발화 건너뛰기
+    <label id="field-minchars"><span data-i18n="engine.minChars"></span>
       <input name="min_chars" type="number" min="0" max="20" value="0">
-      <small>0이면 모두 번역합니다. 호출당 요금이 붙는 유료 API에서만 올리십시오.</small>
+      <small data-i18n="engine.minChars.hint"></small>
     </label>
     <div class="row">
       <span class="grow"></span>
-      <button type="submit" class="primary">저장</button>
+      <button type="submit" class="primary" data-i18n="engine.submit"></button>
     </div>
   </form>
 </dialog>
@@ -507,6 +537,14 @@
 <script async src="https://www.youtube.com/iframe_api"></script>
 <!-- 확장과 공유하는 한 벌들. 자막 그리기(overlay), 라이브 자막 저장소(cuestore),
      탭 소리 올리기(capture). 확장 폴더의 사본을 bench/ext_check.py 가 맞댑니다. -->
+<!-- The string table comes first: overlay.js and every app module call t()
+     while they build their first frame, and a missing table renders keys. -->
+<script src="/static/i18n.js"></script>
+<script src="/static/strings-ext.js"></script>
+<script src="/static/app/strings/core.js"></script>
+<script src="/static/app/strings/player.js"></script>
+<script src="/static/app/strings/panel.js"></script>
+<script src="/static/app/strings/engines.js"></script>
 <script src="/static/overlay.js"></script>
 <script src="/static/cuestore.js"></script>
 <script src="/static/capture.js"></script>

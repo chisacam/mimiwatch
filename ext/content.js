@@ -281,6 +281,15 @@
     if (ov) apply();
   });
 
+  /* 화면 언어. 서버가 들고 있는 값이지만 여기서 물어보지는 않습니다 -- 이
+   * 스크립트는 유튜브 페이지의 출처로 나가므로 서버에 직접 닿지 않고, 서버에
+   * 닿는 것은 배경 워커의 일입니다. 팝업이 서버에서 받아 적어 둔 값을 읽고,
+   * 그 값이 바뀌면 따라갑니다. 아직 아무도 물어본 적이 없으면(팝업을 한 번도
+   * 열지 않은 브라우저) 브라우저의 짐작으로 갑니다. */
+  const LANG_KEY = "uiLang";
+  chrome.storage.local.get(LANG_KEY)
+    .then((got) => MW_I18N.setLang(got[LANG_KEY] || ""));
+
   /* 스스로 물어봅니다.
    *
    * 배경 워커가 `attach` 를 보내지만 그 순간 우리가 없을 수 있습니다 --
@@ -314,7 +323,7 @@
       log(`다른 영상입니다(${expectVideo} → ${now}). 내립니다.`);
       unmount();
       chrome.runtime.sendMessage({ type: "dropWatch" });
-      note(`다른 영상이라 자막을 내렸습니다. 팝업에서 다시 고를 수 있습니다.`);
+      note(t("content.noteTakenDown"));
       return;
     }
     if (!expectVideo && now) {
@@ -368,10 +377,10 @@
   }
 
   function ask() {
-    const bar = putAsk("다른 영상으로 옮긴 것 같습니다. 이 자막을 계속 얹을까요?");
+    const bar = putAsk(t("content.askMoved"));
     if (!bar) return;
     const keep = document.createElement("button");
-    keep.textContent = "계속";
+    keep.textContent = t("content.askKeep");
     keep.addEventListener("click", () => {
       // 여기가 그 영상이라고 사용자가 답했습니다. 다시 묻지 않도록
       // 지금 영상을 이 자막의 것으로 적어 둡니다.
@@ -384,7 +393,7 @@
       if (mount()) { startTick(); apply(); }
     });
     const drop = document.createElement("button");
-    drop.textContent = "내리기";
+    drop.textContent = t("content.askTakeDown");
     drop.addEventListener("click", () => {
       dismissAsk();
       unmount();
@@ -410,6 +419,9 @@
    * 우리 탭이 아니면 배경이 빈 답을 줍니다. */
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
+    // 팝업이 서버에서 새 언어를 받아 적었습니다. 세워 둔 자막 내역의 머리는
+    // panel.js 가 스스로 다시 적습니다.
+    if (changes[LANG_KEY]) MW_I18N.setLang(changes[LANG_KEY].newValue || "");
     if (!port && Object.keys(changes).some((k) => k.startsWith("tab:"))) resume();
   });
 

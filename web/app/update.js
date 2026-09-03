@@ -30,14 +30,14 @@ function renderUpdate(st) {
   // 엔진 관리의 구역은 언제나 지금 상태를 말합니다. 띠와 달리 닫히지 않습니다.
   const hint = $("update-hint");
   if (hint) {
-    let s = `지금 ${st.current || "?"}`;
-    if (tag) s += ` · 최신 ${tag}`;
-    if (st.error) s += ` · ${st.error}`;
-    else if (tag && !st.available) s += " · 최신입니다";
+    const bits = [t("update.hint.current", { version: st.current || "?" })];
+    if (tag) bits.push(t("update.hint.latest", { tag }));
+    if (st.error) bits.push(st.error);
+    else if (tag && !st.available) bits.push(t("update.hint.uptodate"));
     else if (st.available) {
-      s += st.frozen ? " · 새 판이 있습니다" : " · 새 판이 있습니다 (저장소에서는 git pull)";
+      bits.push(st.frozen ? t("update.hint.available") : t("update.hint.available.repo"));
     }
-    hint.textContent = s;
+    hint.textContent = bits.join(" · ");
   }
 
   const text = $("update-text");
@@ -50,24 +50,25 @@ function renderUpdate(st) {
 
   if (st.state === "downloading") {
     const p = st.progress || {};
-    const pct = p.total ? ` ${Math.round(p.done / p.total * 100)}%` : "";
-    text.textContent = `새 판 ${tag} 받는 중…${pct}`;
+    const pct = p.total ? Math.round(p.done / p.total * 100) : null;
+    text.textContent = pct === null ? t("update.downloading", { tag })
+                                    : t("update.downloading.pct", { tag, pct });
   } else if (st.state === "ready") {
-    text.textContent = `새 판 ${tag}을 받아 두었습니다. 다시 시작하면 적용됩니다.`;
+    text.textContent = t("update.ready", { tag });
     ap.hidden = false;
   } else if (st.state === "applying") {
-    text.textContent = "새 판으로 다시 시작하는 중입니다… 켜지면 이 화면이 다시 열립니다.";
+    text.textContent = t("update.applying");
   } else if (st.state === "error" && st.error) {
-    text.textContent = `새 판 받기 실패: ${st.error}`;
+    text.textContent = t("update.failed", { error: st.error });
     dl.hidden = !(st.frozen && st.latest && st.latest.asset);   // 다시 누르면 이어 받습니다
     later.hidden = false;
   } else if (st.frozen && st.latest && st.latest.asset) {
-    text.textContent = `새 판 ${tag}이 나왔습니다.`;
+    text.textContent = t("update.available", { tag });
     dl.hidden = false;
     later.hidden = false;
   } else {
     // 저장소에서 돌고 있거나(묶음이 아님) 이 플랫폼의 자산이 없는 릴리스입니다.
-    text.textContent = `새 판 ${tag}이 나왔습니다 — 저장소에서는 git pull 로 받으십시오.`;
+    text.textContent = t("update.available.repo", { tag });
     later.hidden = false;
   }
   box.hidden = false;
@@ -83,7 +84,7 @@ async function updatePost(path) {
 }
 
 async function applyUpdate() {
-  if (!confirm("새 판으로 갈아 끼우고 다시 시작할까요?\n받는 중인 방송은 먼저 제대로 닫힙니다.")) return;
+  if (!confirm(t("update.apply.confirm"))) return;
   const res = await (await fetch("/api/update/apply", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
   })).json();
@@ -114,8 +115,12 @@ async function applyUpdate() {
   });
   on("update-check", async () => {
     const hint = $("update-hint");
-    if (hint) hint.textContent = "확인하는 중…";
+    if (hint) hint.textContent = t("update.checking");
     await updatePost("/api/update/check");
   });
+  // The strip and the Update section are drawn from one answer and then sit
+  // there, sometimes for days, so a language change redraws them from the
+  // answer that is already in hand.
+  MW_I18N.onChange(() => { if (updateInfo) renderUpdate(updateInfo); });
   loadUpdateStatus();
 })();

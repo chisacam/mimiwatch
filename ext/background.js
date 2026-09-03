@@ -17,7 +17,13 @@
  * KEEPALIVE_MS 마다 한 번 찔러 둡니다.
  */
 
+/* 문구는 표에서 꺼내 씁니다. 서비스 워커에는 window 도 DOM 도 없지만 i18n 은
+ * 전역을 globalThis 에 얹고 DOM 을 건드리는 자리마다 지키고 있으므로 여기서도
+ * `t()` 가 그대로 됩니다. */
+importScripts("i18n.js", "strings-ext.js");
+
 const BASE_KEY = "serverBase";
+const LANG_KEY = "uiLang";
 const DEFAULT_BASE = "http://localhost:8900";
 const KEEPALIVE_MS = 20000;
 // 끊겼을 때 다시 붙기까지. 서버를 재시작하는 동안 몇 번 실패하는 것이
@@ -29,10 +35,37 @@ async function base() {
   return got[BASE_KEY] || DEFAULT_BASE;
 }
 
+/* 여기서 지은 오류 문구는 팝업의 오류줄에 그대로 뜹니다. 그러니 팝업과 같은
+ * 언어여야 하는데, 워커에는 물어볼 화면이 없습니다 -- 서버에서 언어를 받아 온
+ * 팝업이 적어 둔 값을 읽습니다. 아직 아무도 물어본 적이 없으면 브라우저의
+ * 짐작으로 갑니다. 워커는 30초쯤 쉬면 내려가고 깰 때마다 이 파일이 다시 도므로,
+ * 답하기 전에 한 번은 기다립니다. */
+async function loadLang() {
+  const got = await chrome.storage.local.get(LANG_KEY);
+  MW_I18N.setLang(got[LANG_KEY] || "");
+}
+const langReady = loadLang();
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes[LANG_KEY]) return;
+  MW_I18N.setLang(changes[LANG_KEY].newValue || "");
+});
+
 async function api(path, init) {
   const res = await fetch((await base()) + path, init);
   if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
-  return res.json();
+  const data = await res.json();
+  // The popup is what normally writes the stored language down, but someone who
+  // switches it in the web UI and then watches YouTube without ever opening the
+  // popup would keep the old language on the overlay. Every path that needs the
+  // config comes through here, so this is the one place that catches that.
+  if (path === "/api/backends" && data && data.ui_lang) {
+    const got = await chrome.storage.local.get(LANG_KEY);
+    if (got[LANG_KEY] !== data.ui_lang) {
+      await chrome.storage.local.set({ [LANG_KEY]: data.ui_lang });
+    }
+  }
+  return data;
 }
 
 const post = (path, body) => api(path, {
@@ -49,6 +82,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg && msg.target === "offscreen") return;
   (async () => {
     try {
+      await langReady;                      // 답하기 전에 어느 언어인지 알아 둡니다
       if (msg.type === "sessions") reply({ ok: true, data: await api("/api/live/sessions") });
       else if (msg.type === "videos") reply({ ok: true, data: await api("/api/videos") });
       else if (msg.type === "backends") reply({ ok: true, data: await api("/api/backends") });
@@ -93,7 +127,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await stopCapture();
         if (msg.sessionId) await post("/api/live/stop", { id: msg.sessionId });
         reply({ ok: true });
-      } else reply({ ok: false, error: "모르는 요청: " + msg.type });
+      } else reply({ ok: false, error: t("popup.errUnknownRequest", { type: msg.type }) });
     } catch (e) {
       reply({ ok: false, error: String((e && e.message) || e) });
     }
@@ -174,7 +208,7 @@ async function pushCookies() {
     all.push(...await chrome.cookies.getAll({ domain }));
   }
   if (!all.some((c) => c.name === "SAPISID" || c.name === "__Secure-3PAPISID")) {
-    return { ok: false, error: "유튜브에 로그인되어 있지 않은 것 같습니다 (로그인 쿠키가 없음)." };
+    return { ok: false, error: t("popup.errNoLoginCookies") };
   }
   // Netscape 형식: domain  includeSubdomains  path  secure  expiry  name  value.
   // HttpOnly 는 curl·yt-dlp 가 쓰는 `#HttpOnly_` 접두로 표시합니다.
@@ -196,7 +230,7 @@ async function startFromUrl(msg) {
   const probe = await post("/api/probe", { url: msg.url });
   if (probe.error) return { ok: false, error: probe.error };
   if (!probe.is_live) {
-    return { ok: false, error: "라이브가 아닙니다. 녹화본은 mimiwatch 페이지에서 추가하십시오." };
+    return { ok: false, error: t("popup.errNotLive") };
   }
   const cfg = await api("/api/backends");
   const res = await post("/api/live/start", {
@@ -233,7 +267,7 @@ async function startFromTab(msg) {
   });
   if (!started || !started.ok) {
     await post("/api/live/stop", { id: res.id });
-    return { ok: false, error: (started && started.error) || "소리를 잡지 못했습니다" };
+    return { ok: false, error: (started && started.error) || t("popup.errNoAudio") };
   }
   // 탭 소리 세션에는 서버가 알 영상 id 가 없습니다(받아 올 주소가 없으니까요).
   // 시작한 탭의 주소로 우리가 적어 둡니다.
@@ -269,7 +303,7 @@ async function resumeSession(msg) {
       // 세션은 살아났지만 소리가 가지 않습니다. 끝내지는 않습니다 -- 다시 누르면
       // 서버는 「이미 받는 중」이라 하므로, 그때는 중단한 뒤 다시 이어받아야 합니다.
       return { ok: false, error: (started && started.error)
-        || "소리를 잡지 못했습니다. 「중단」한 뒤 다시 「이어받기」를 누르십시오." };
+        || t("popup.errNoAudioResume") };
     }
   }
   const w = await setWatch(msg.tabId, "live:" + res.id, { noReload: tab });

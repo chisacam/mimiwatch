@@ -856,6 +856,13 @@ class Handler(BaseHTTPRequestHandler):
     def post_models_delete(self, body):
         self._json(modelhub.delete(str(body.get("id") or "")))
 
+    def post_uilang(self, body):
+        # Which language the UI draws itself in. It lives in backends.json rather
+        # than in the browser because the extension reads it from the server too,
+        # and because a machine's language is a property of the machine, not of
+        # whichever browser profile opened the page first.
+        self._json(config.set_ui_lang(str(body.get("lang") or "")))
+
     def post_setup(self, body):
         # 기본 엔진 둘을 정하고 그 조합에 필요한 것을 받기 시작합니다. 사양이 다양한
         # 기계에 기본값 하나가 맞을 수 없어, 첫 실행에서 고르게 합니다.
@@ -929,6 +936,7 @@ POST_ROUTES = {
     "/api/live/stop": Handler.post_live_stop,
     "/api/live/resume": Handler.post_live_resume,
     "/api/active": Handler.post_active,
+    "/api/uilang": Handler.post_uilang,
     "/api/live/delete": Handler.post_live_delete,
     "/api/multiview": Handler.post_multiview,
     "/api/multiview/focus": Handler.post_multiview_focus,

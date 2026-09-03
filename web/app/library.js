@@ -8,8 +8,8 @@
 /* 목록의 행에서 부릅니다. 예전에는 헤더의 단추가 "지금 열려 있는 것"만
  * 지울 수 있었는데, 그러면 목록에서 보는 것과 지워지는 것이 어긋납니다. */
 async function deleteVideo(id, title) {
-  if (!confirm(`'${(title || "").slice(0, 50)}' 전사를 삭제할까요?\n`
-               + "내려받은 오디오도 함께 지웁니다.")) return;
+  if (!confirm(t("library.video.delete.confirm",
+                 { title: (title || "").slice(0, 50) }))) return;
   const res = await (await fetch("/api/video/delete", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id }),
@@ -28,8 +28,8 @@ async function deleteVideo(id, title) {
  * 예전에는 세션을 지울 길이 없어 목록이 자라기만 했습니다. 시험용 세션과
  * 실패한 세션이 쌓여 진짜 방송이 한도 밖으로 밀려났습니다. */
 async function deleteSession(sid, title) {
-  if (!confirm(`'${(title || "").slice(0, 50)}' 방송의 자막 내역을 삭제할까요?\n`
-               + "받아 적은 자막이 함께 지워집니다.")) return;
+  if (!confirm(t("library.session.delete.confirm",
+                 { title: (title || "").slice(0, 50) }))) return;
   const res = await (await fetch("/api/live/delete", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: sid }),
@@ -69,24 +69,25 @@ function rowActions({ value, session, title, stopped, deletable, videoId, st }) 
   if (session && stopped) {
     const why = st ? stopReason(st) : "stopped";
     if (why !== "ended") {
-      add("vres", "▶", "이어받기 — 같은 세션에 이어서 받습니다", async () => {
+      add("vres", "▶", t("library.action.resume.tip"), async () => {
         openFromList(value);
         await resumeSession(session, why);
       });
     }
     if (videoId) {
-      add("vre", "⟳", "전체 영상 전사 — 끝난 방송의 녹화본을 통째로 다시 전사합니다", () =>
+      add("vre", "⟳", t("library.action.whole.tip"), () =>
         openRetranscribe(`https://www.youtube.com/watch?v=${videoId}`,
                          (st && st.source_lang) || "", title));
     }
   } else if (!session) {
     // 저장된 주소를 씁니다. 유튜브가 아닌 녹화본(m3u8 등)은 id 로 주소를 지을 수 없습니다.
     const url = (st && st.url) || `https://www.youtube.com/watch?v=${value}`;
-    add("vre", "⟳", "다시 전사 — 같은 엔진으로도 됩니다. 글자가 같은 줄의 번역은 남습니다", () =>
+    add("vre", "⟳", t("library.action.retranscribe.tip"), () =>
       openRetranscribe(url, (st && st.source_lang) || "", title));
   }
   if (deletable) {
-    add("vdel", "🗑", session ? "이 방송의 자막 내역을 삭제합니다" : "이 전사를 삭제합니다", () => {
+    add("vdel", "🗑", session ? t("library.action.delete.session.tip")
+                             : t("library.action.delete.video.tip"), () => {
       if (session) deleteSession(session, title);
       else deleteVideo(value, title);
     });
@@ -159,7 +160,8 @@ function updateSessionRow(row, s) {
   const m = row.querySelector(".vm");
   if (m) {
     const n = s.lines != null ? s.lines : (s.cues || 0);
-    m.textContent = `${n}줄` + (running ? "" : `  ·  ${LIVE_STATE[s.state] || s.state}`);
+    m.textContent = running ? t("library.row.lines", { n })
+      : t("library.row.linesState", { n, state: LIVE_STATE[s.state] || s.state });
   }
   row.classList.toggle("stopped", !running);
   row.classList.remove("pending");
@@ -226,7 +228,7 @@ function markVideoRow(value) {
 /* 위쪽 막대는 "지금 무엇을 보고 있는가"를 답하는 자리입니다. */
 function setNowTitle(title) {
   const el = $("now-title");
-  el.textContent = title || "영상을 고르거나 추가하십시오";
+  el.textContent = title || t("library.nowTitle.empty");
   el.classList.toggle("empty", !title);
   el.title = title || "";
 }
@@ -255,7 +257,8 @@ async function refreshVideoList(selectId, pre) {
     box.appendChild(videoRow({
       value: "live:" + s.id, session: s.id,
       title: s.title || s.url, videoId: s.video_id || "",
-      meta: `${s.cues}줄` + (running ? "" : `  ·  ${LIVE_STATE[s.state] || s.state}`),
+      meta: running ? t("library.row.lines", { n: s.cues })
+        : t("library.row.linesState", { n: s.cues, state: LIVE_STATE[s.state] || s.state }),
       // 끝난 방송만 지울 수 있습니다. 받는 중인 것은 「중단」이 먼저입니다.
       live: true, stopped: !running, deletable: !running, st: s,
     }));
@@ -263,7 +266,7 @@ async function refreshVideoList(selectId, pre) {
   list.forEach(v => {
     // 로컬 파일은 probe 때 길이를 모릅니다(ffprobe 는 준비물이 아님). 전사가 잰 것을 씁니다.
     const secs = v.duration || v.audio_seconds;
-    const mins = secs ? `${Math.round(secs / 60)}분` : "";
+    const mins = secs ? t("library.row.minutes", { n: Math.round(secs / 60) }) : "";
     box.appendChild(videoRow({
       value: v.id, title: v.title, videoId: v.source === "file" ? "" : v.id,
       meta: [v.source_lang + (v.translated ? `→${v.viewer_lang}` : ""), mins]
@@ -274,7 +277,7 @@ async function refreshVideoList(selectId, pre) {
   if (!box.children.length) {
     const e = document.createElement("div");
     e.className = "empty";
-    e.textContent = "아직 없습니다. 「＋ 추가」로 주소를 넣으십시오.";
+    e.textContent = t("library.empty");
     box.appendChild(e);
   }
 
@@ -285,3 +288,12 @@ async function refreshVideoList(selectId, pre) {
     markVideoRow(keep);
   }
 }
+
+/* The list redraws whenever the videos or the sessions change, but not when the
+ * language does -- and an idle screen can sit on it for a long time. The empty
+ * title says the same, so it is re-set from here too. */
+MW_I18N.onChange(() => {
+  const el = $("now-title");
+  if (el && el.classList.contains("empty")) setNowTitle(null);
+  if ($("video-list")) refreshVideoList();
+});

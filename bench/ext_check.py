@@ -30,7 +30,8 @@ WEB = os.path.join(HERE, "web")
 FAIL = []
 
 # web/ 이 원본, ext/ 가 사본인 파일들.
-SHARED = ("overlay.js", "cuestore.js", "capture.js", "ytid.js", "capture-worklet.js")
+SHARED = ("overlay.js", "cuestore.js", "capture.js", "ytid.js", "capture-worklet.js",
+          "i18n.js", "strings-ext.js")
 
 
 def check(cond, what):

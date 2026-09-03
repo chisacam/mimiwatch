@@ -5,7 +5,48 @@
  * 확장과 공유하는 overlay.js 와 같은 이유입니다. 서로 부르는 것은 전부
  * 실행 시점의 함수 호출이라 파일 순서는 main.js 가 마지막이기만 하면 됩니다. */
 
+// The app language, in two places: the manage menu and the first-time setup
+// dialog. It goes to the server, not into this browser's storage -- the machine
+// has one language, and the extension reads the same answer from /api/backends.
+const UI_LANG_PICKERS = ["ui-lang", "setup-ui-lang"];
+
+MW_I18N.onChange(() => {
+  // These two buttons are written on a state change and then left alone, so a
+  // language switch that does not reload would leave them in the old language.
+  const lib = $("toggle-library"), pan = $("toggle-panel");
+  if (lib) lib.textContent = t(state.libraryHidden ? "header.videos.collapsed" : "header.videos");
+  if (pan) pan.textContent = t(state.panelHidden ? "header.panel.collapsed" : "header.panel");
+});
+
+function bindUiLang() {
+  UI_LANG_PICKERS.forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("change", async () => {
+      const code = el.value;
+      MW_I18N.setLang(code);                     // before the round trip, so it feels instant
+      UI_LANG_PICKERS.forEach(other => { const s = $(other); if (s) s.value = code; });
+      await fetch("/api/uilang", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: code }),
+      }).catch(() => {});
+      // Outside first-time setup the switch ends in a reload. Modules that draw
+      // once and never subscribe, and the elements applyStatic resets back to a
+      // label after JS wrote a title into them, are all correct again after one
+      // -- and this is a setting somebody changes once, not a toggle they flip.
+      // The setup dialog is the exception: reloading would throw away the
+      // choices they are in the middle of making.
+      if (id === "ui-lang") location.reload();
+    });
+  });
+}
+
+function syncUiLangPickers() {
+  UI_LANG_PICKERS.forEach(id => { const s = $(id); if (s) s.value = MW_I18N.current(); });
+}
+
 function bind() {
+  bindUiLang();
   // `.seg`가 아니라 `[data-mode]`로 좁힙니다. `.seg`는 🗑, ⚙, 스크립트 접기,
   // 전체화면처럼 자막과 무관한 단추도 달고 있는 공용 클래스입니다. 그것들을
   // 누르면 state.mode가 undefined가 되어 원문이 사라졌고(번역만 남습니다),
@@ -108,7 +149,7 @@ function bind() {
     const f = $("add-form");
     f.dataset.mode = mode || "";
     $("add-dialog").querySelector("h3").textContent =
-      mode === "tile" ? "타일 추가 · 멀티뷰" : "영상 추가";   // 다시 전사 뒤에 되돌립니다
+      mode === "tile" ? t("add.title.tile") : t("add.title");   // 다시 전사 뒤에 되돌립니다
     renderAsrPicker();
     fillEngineSelect(f.querySelector('select[name="backend"]'), state.backends, state.backend, LOCKED.tr);
     // 타일은 주소로 받는 라이브만 붙입니다. 소리 출처 고르기는 숨깁니다.
@@ -170,7 +211,7 @@ function bind() {
 function setPanel(hidden) {
   state.panelHidden = hidden;
   $("layout").classList.toggle("panel-hidden", hidden);
-  $("toggle-panel").textContent = hidden ? "스크립트 ◂" : "스크립트 ▸";
+  $("toggle-panel").textContent = t(hidden ? "header.panel.collapsed" : "header.panel");
   $("toggle-panel").classList.toggle("on", hidden);
   persist();
 }
@@ -191,12 +232,18 @@ function toggleManage(open) {
 function setLibrary(hidden) {
   state.libraryHidden = hidden;
   $("layout").classList.toggle("library-hidden", hidden);
-  $("toggle-library").textContent = hidden ? "▸ 영상" : "◧ 영상";
+  $("toggle-library").textContent = t(hidden ? "header.videos.collapsed" : "header.videos");
   $("toggle-library").classList.toggle("on", hidden);
   persist();
 }
 
 (async function init() {
+  // The language is settled twice, on purpose. navigator.language is a guess
+  // but it lands before the first paint; the machine's own ui_lang is the real
+  // answer and it arrives a fetch later. Without the guess the page spends that
+  // fetch drawing string keys, which reads as a broken build rather than as a
+  // page that has not finished loading.
+  MW_I18N.setLang(MW_I18N.fromNavigator());
   initTiles();          // restore() 가 자막 자리를 넣으므로 먼저 붙입니다
   restore(); bind();
   const key = scriptWindowKey();
@@ -214,6 +261,11 @@ function setLibrary(hidden) {
     fetch("/api/models").then(r => r.json()).catch(() => null),
   ]);
   applyBackends(cfg);
+  // The machine's choice beats the browser's guess. An empty ui_lang means a
+  // config written before this setting existed -- there the guess is all we
+  // have, and overwriting it with "" would drag the page back to English.
+  if (cfg && cfg.ui_lang) MW_I18N.setLang(cfg.ui_lang);
+  syncUiLangPickers();   // both selects show what we actually settled on
   if (models && !state.scriptOnly) {
     applyModels(models);
     // 첫 실행: 초기 설정을 아직 안 했고 필요한 것도 없습니다. 고르게 합니다.

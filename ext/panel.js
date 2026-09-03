@@ -29,6 +29,9 @@
   }
 
   let node = null, list = null, head = null;
+  // 머리에 적어 둔 것들. 언어가 바뀌면 다시 적어야 하는데, 그때 다시 세우면
+  // 읽던 자리가 통째로 날아갑니다 -- 붙잡아 두고 글자만 갈아 끼웁니다.
+  let follLabel = null, shown = 0;
   let rows = new Map();          // 자막 번호 → 줄 요소
   let hidden = null;             // 우리가 감춘 채팅. 되돌릴 때 씁니다.
   let onSeek = null;
@@ -59,12 +62,15 @@
     // (`require-trusted-types-for 'script'`), 그 문서에서 innerHTML 에
     // 문자열을 넣으면 거부됩니다. content script 가 면제되는지는 크롬 판에
     // 따라 다르므로 아예 기대지 않습니다.
-    head.append(el("b", "", "자막 내역"), el("span", "mw-count", "0줄"));
+    head.append(el("b", "", t("extpanel.title")),
+                el("span", "mw-count", t("extpanel.count", { n: 0 })));
     const foll = el("label", "mw-follow");
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = true;
-    foll.append(box, document.createTextNode(" 따라가기"));
+    // 체크상자와 글자 사이의 한 칸입니다. 문구가 아니라 자리이므로 표 밖에 둡니다.
+    follLabel = document.createTextNode(" " + t("extpanel.follow"));
+    foll.append(box, follLabel);
     head.appendChild(foll);
     list = document.createElement("div");
     list.className = "mw-panel-list";
@@ -107,9 +113,19 @@
     // 되어 진짜 채팅이 감춰진 채로 남습니다.
     const chat = findChat();
     if (chat && chat.style.display === "none") chat.style.display = "";
-    node = list = head = null;
+    node = list = head = follLabel = null;
     rows = new Map();
   }
+
+  /* 언어가 바뀌었습니다. 머리에 적어 둔 우리 문구만 다시 적습니다 -- 자막
+   * 본문과 시각은 언어와 무관하고, 다시 그리면 읽던 자리가 흔들립니다. */
+  function relabel() {
+    if (!node) return;
+    head.querySelector("b").textContent = t("extpanel.title");
+    head.querySelector(".mw-count").textContent = t("extpanel.count", { n: shown });
+    if (follLabel) follLabel.nodeValue = " " + t("extpanel.follow");
+  }
+  MW_I18N.onChange(relabel);
 
   function pin() {
     if (list && follow) list.scrollTop = list.scrollHeight;
@@ -166,7 +182,8 @@
     for (const [id, row] of rows) {
       if (!alive.has(id)) { row.remove(); rows.delete(id); }
     }
-    head.querySelector(".mw-count").textContent = cues.length + "줄";
+    shown = cues.length;
+    head.querySelector(".mw-count").textContent = t("extpanel.count", { n: shown });
     pin();
   }
 

@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "mimiwatch overlay",
+    "description": "Extension name, shown in Chrome's own UI."
+  },
+  "extDesc": {
+    "message": "Puts the subtitles your local mimiwatch server transcribed on top of the YouTube page.",
+    "description": "Extension description, shown in Chrome's own UI."
+  }
+}

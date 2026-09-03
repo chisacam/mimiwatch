@@ -12,13 +12,13 @@ function updateLangStatus() {
   const src = state.doc.source_lang, viewer = $("viewer-lang").value;
   if (src === viewer) {
     el.className = "status";
-    el.innerHTML = `원본 <b>${src}</b> · 내 언어와 같아 <b>번역 없음</b>`;
+    el.innerHTML = t("player.lang.same", { src });
   } else if (state.doc.translated && state.doc.viewer_lang === viewer) {
     el.className = "status";
-    el.innerHTML = `원본 <b>${src}</b> → <b>${viewer}</b> 번역됨`;
+    el.innerHTML = t("player.lang.translated", { src, viewer });
   } else {
     el.className = "status warn";
-    el.innerHTML = `원본 <b>${src}</b> · <b>${viewer}</b> 번역본이 없습니다 (재전사 필요)`;
+    el.innerHTML = t("player.lang.missing", { src, viewer });
   }
 }
 
@@ -107,15 +107,11 @@ function whenApiReady() {
  * 경우입니다. 자막은 서버가 따로 받아 적으므로 그때도 오른쪽 스크립트는
  * 그대로 읽힙니다. */
 function embedErrorText(code) {
-  if (code === 101 || code === 150) {
-    return "이 영상은 다른 사이트에 끼워 넣을 수 없게 되어 있습니다 "
-         + "(멤버십 전용 방송이 대개 그렇습니다). 유튜브에서 열어 두고 "
-         + "오른쪽 스크립트를 읽으십시오 — 자막은 계속 쌓입니다.";
-  }
-  if (code === 100) return "영상을 찾을 수 없습니다. 비공개이거나 지워졌습니다.";
-  if (code === 5) return "브라우저의 재생기가 이 영상을 열지 못했습니다.";
-  if (code === 2) return "영상 주소가 올바르지 않습니다.";
-  return `영상을 재생할 수 없습니다 (code ${code}).`;
+  if (code === 101 || code === 150) return t("player.embed.blocked");
+  if (code === 100) return t("player.embed.notFound");
+  if (code === 5) return t("player.embed.playbackFailed");
+  if (code === 2) return t("player.embed.badId");
+  return t("player.embed.unknown", { code });
 }
 
 /* 안내 상자는 타일을 통째로 덮습니다. 치우지 않으면 다음에 고른
@@ -141,7 +137,7 @@ function playerError(msg, videoId, tile = focusedTile()) {
     a.href = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
     a.target = "_blank";
     a.rel = "noopener";
-    a.textContent = "유튜브에서 열기";
+    a.textContent = t("player.error.openOnYouTube");
     a.className = "seg";
     box.append(document.createElement("br"), a);
   }
@@ -234,7 +230,8 @@ function toggleFullscreen() {
     const t = focusedTile();
     state.fsBaseHeight = (t ? t.el : wrap).clientHeight;
     const req = wrap.requestFullscreen || wrap.webkitRequestFullscreen;
-    if (!req) { fsFailed("이 브라우저는 전체화면을 지원하지 않습니다."); return; }
+    // MW_I18N.t, not the short `t` -- in this scope `t` is the focused tile.
+    if (!req) { fsFailed(MW_I18N.t("player.fullscreen.unsupported")); return; }
     Promise.resolve(req.call(wrap)).catch(err => fsFailed(err.message));
   }
 }
@@ -244,10 +241,10 @@ function toggleFullscreen() {
 function fsFailed(msg) {
   state.fsBaseHeight = 0;
   const b = $("fullscreen");
-  b.textContent = "⛶ 전체화면 불가";
+  b.textContent = t("player.fullscreen.unavailable");
   b.title = msg;
   console.error("[fullscreen]", msg);
-  setTimeout(() => { b.textContent = "⛶ 전체화면"; }, 4000);
+  setTimeout(() => { b.textContent = t("player.fullscreen.enter"); }, 4000);
 }
 
 let fsIdleTimer = null;
@@ -282,12 +279,12 @@ function onFullscreenChange() {
   if (el && (el.tagName === "IFRAME" || el.tagName === "VIDEO")) {
     console.warn("[fullscreen] 플레이어 요소가 전체화면이 되었습니다. 자막이 보이지 않습니다.");
     (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-    fsFailed("유튜브 플레이어가 자체 전체화면을 열었습니다. 아래 「전체화면」 단추를 쓰십시오.");
+    fsFailed(t("player.fullscreen.playerTookOver"));
     return;
   }
   if (!on) state.fsBaseHeight = 0;
   $("fullscreen").classList.toggle("on", on);
-  $("fullscreen").textContent = on ? "⛶ 창으로" : "⛶ 전체화면";
+  $("fullscreen").textContent = on ? t("player.fullscreen.exit") : t("player.fullscreen.enter");
   if (on) {
     showFsControls();
   } else {
@@ -297,3 +294,13 @@ function onFullscreenChange() {
   // 상자 크기가 바뀐 뒤에 재야 합니다. 전환 직후에는 아직 옛 크기입니다.
   requestAnimationFrame(applyCueSize);
 }
+
+/* The language band and the fullscreen button label are written once -- when a
+ * video is opened, and when fullscreen is entered or left. Switching the
+ * language would leave both sitting in the old one. The band belongs to
+ * renderLiveStatus while a live session is attached, so it is left alone then. */
+MW_I18N.onChange(() => {
+  if (!state.live) updateLangStatus();
+  const b = $("fullscreen");
+  if (b) b.textContent = fsElement() ? t("player.fullscreen.exit") : t("player.fullscreen.enter");
+});

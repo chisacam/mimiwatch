@@ -41,6 +41,12 @@ KINDS = {"tr": ("backends", "active"), "asr": ("asr_backends", "asr_active")}
 # `local-hayamimi`를 지키고 있어서 API로는 기본 전사기를 지울 수 있었습니다.
 PROTECTED = {"tr": "local-m2m100", "asr": "tcpp-best"}
 
+# UI languages the string table ships. The web front end and the extension both
+# read this through /api/backends, so adding a language means adding it here and
+# in web/app/i18n.js -- a code the table does not know renders as its key.
+UI_LANGS = ("en", "ko")
+DEFAULT_UI_LANG = "en"
+
 _lock = threading.RLock()
 
 
@@ -161,6 +167,27 @@ def mark_setup_done() -> dict:
         cfg["setup_done"] = True
         save(cfg)
         return cfg
+
+
+def ui_lang(cfg: dict | None = None) -> str:
+    """Which language the UI draws itself in.
+
+    Config files written before this setting existed have no such key, and the
+    browser is the better guess for those -- the front end asks navigator.language
+    when this comes back empty, so returning "" is meaningful and not an error.
+    """
+    code = str((cfg or load()).get("ui_lang") or "")
+    return code if code in UI_LANGS else ""
+
+
+def set_ui_lang(code: str) -> dict:
+    with _lock:
+        if code not in UI_LANGS:
+            return {"error": f"'{code}' is not a UI language ({', '.join(UI_LANGS)})"}
+        cfg = load()
+        cfg["ui_lang"] = code
+        save(cfg)
+        return {"ui_lang": code}
 
 
 def example_default(kind: str) -> str:

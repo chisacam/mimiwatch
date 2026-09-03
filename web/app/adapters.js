@@ -29,11 +29,11 @@ function loadScriptOnce(url, isReady) {
     s.src = url;
     s.async = true;
     s.onload = () => resolve();
-    s.onerror = () => { delete _scriptLoads[url]; reject(new Error(`${url} 을 불러오지 못했습니다`)); };
+    s.onerror = () => { delete _scriptLoads[url]; reject(new Error(t("adapter.error.scriptFailed", { url }))); };
     document.head.appendChild(s);
     setTimeout(() => {
       if (isReady && isReady()) resolve();
-      else { delete _scriptLoads[url]; reject(new Error(`${url} 이 10초 안에 오지 않았습니다`)); }
+      else { delete _scriptLoads[url]; reject(new Error(t("adapter.error.scriptTimeout", { url }))); }
     }, 10000);
   });
   return _scriptLoads[url];
@@ -114,7 +114,7 @@ function ytAdapter() {
     a.live = !!opts.live;
     await whenApiReady();
     if (!(window.YT && window.YT.Player)) {
-      throw new Error("YouTube IFrame API를 불러오지 못했습니다. 네트워크를 확인해 주세요.");
+      throw new Error(t("adapter.youtube.apiFailed"));
     }
     const el = document.createElement("div");
     el.id = "yt-host-" + (++_hostSeq);
@@ -286,13 +286,13 @@ function hlsAdapter() {
     a.video = v;
     const fail = (why) => {
       if (opts.onError) {
-        opts.onError("브라우저가 이 스트림을 직접 열지 못했습니다"
-                     + (why ? ` (${why})` : "") + " — 자막은 서버가 받아 적으므로 계속 쌓입니다.");
+        opts.onError(why ? t("adapter.hls.openFailedReason", { reason: why })
+                         : t("adapter.hls.openFailed"));
       }
     };
     if (v.canPlayType("application/vnd.apple.mpegurl")) {
       v.src = src.url;
-      v.addEventListener("error", () => fail("네이티브 HLS"), { once: true });
+      v.addEventListener("error", () => fail(t("adapter.hls.reason.native")), { once: true });
     } else {
       try {
         await loadScriptOnce("/static/vendor/hls.min.js", () => !!window.Hls);
@@ -300,7 +300,7 @@ function hlsAdapter() {
         fail(err.message);
         return;
       }
-      if (!(window.Hls && Hls.isSupported())) { fail("MSE 없음"); return; }
+      if (!(window.Hls && Hls.isSupported())) { fail(t("adapter.hls.reason.noMse")); return; }
       a.hls = new Hls({ lowLatencyMode: true, enableWorker: true });
       a.hls.on(Hls.Events.ERROR, (_e, data) => {
         if (data && data.fatal) fail(data.details || data.type);
@@ -347,7 +347,7 @@ function twitchAdapter() {
     await loadScriptOnce("https://player.twitch.tv/js/embed/v1.js",
                          () => !!(window.Twitch && window.Twitch.Player));
     if (!(window.Twitch && window.Twitch.Player)) {
-      throw new Error("Twitch 플레이어를 불러오지 못했습니다. 네트워크를 확인해 주세요.");
+      throw new Error(t("adapter.twitch.loadFailed"));
     }
     const el = document.createElement("div");
     el.id = "tw-host-" + (++_hostSeq);
@@ -372,7 +372,7 @@ function twitchAdapter() {
         settle();
       });
       a.player.addEventListener(Twitch.Player.OFFLINE, () => {
-        if (opts.onError) opts.onError(`트위치 채널 ${src.channel} 이 방송 중이 아닙니다.`);
+        if (opts.onError) opts.onError(t("adapter.twitch.offline", { channel: src.channel }));
         settle();
       });
       setTimeout(settle, 15000);
@@ -412,8 +412,7 @@ function mediaAdapter() {
     v.src = src.url;
     v.addEventListener("error", () => {
       if (opts.onError) {
-        opts.onError("브라우저가 이 파일을 재생하지 못했습니다 (형식을 열 수 없음). "
-                     + "자막 내역은 오른쪽에서 그대로 읽을 수 있습니다.");
+        opts.onError(t("adapter.media.playbackFailed"));
       }
     });
     host.appendChild(v);

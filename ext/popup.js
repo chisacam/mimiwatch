@@ -18,6 +18,10 @@ const toTab = (tabId, msg) =>
   new Promise((r) => chrome.tabs.sendMessage(tabId, msg, () => r(chrome.runtime.lastError ? null : true)));
 
 let tabId = null;
+/* 이 탭이 유튜브인가. init 밖에 두는 것은 언어가 바뀌었을 때 「유튜브 탭에서
+ * 열어야」를 그 언어로 다시 적기 위해서입니다 -- 그 문구는 팝업을 여는 순간
+ * 한 번 그려지고 그대로 남습니다. */
+let onYouTube = false;
 let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55, offset: 0,
               panel: false };
 /* 새 세션을 시작할 때 쓰는 값. 자막 모양(prefs)과 나눠 둡니다 -- 저쪽은
@@ -33,6 +37,42 @@ let start = { lang: "", genre: "general", refine: false, profile: "broadcast",
               viewerLang: "ko" };
 const SKEY = "startPrefs";
 
+/* 화면에 쓸 언어는 서버가 들고 있습니다(설정의 `ui_lang`). 팝업이 뜨는 순간에는
+ * 아직 모르므로 표는 영어로 시작하고, 첫 조회가 돌아온 뒤에 정해집니다 -- 그래서
+ * 우리가 적는 문구는 언어가 정해진 다음에 그려야 하고, 나중에 바뀌면(다른 서버로
+ * 옮기는 등) 다시 그려야 합니다.
+ *
+ * 알아낸 값은 저장해 둡니다. 배경 워커와 content script 에는 서버에 언어를 물을
+ * 자리가 없는데(하나는 화면이 없고, 하나는 서버에 직접 닿지 않습니다) 그쪽 문구도
+ * 같은 언어여야 합니다. */
+const LANG_KEY = "uiLang";
+
+async function useLang(code) {
+  // 모르는 코드(빈 문자열 포함)면 i18n 이 브라우저의 짐작으로 갑니다. 표를
+  // 바꾸는 것은 이 첫 줄뿐이라 부르는 쪽이 기다릴 것은 없습니다.
+  const lang = MW_I18N.setLang(code || "");
+  // 같은 값을 다시 적지 않습니다. storage 는 값이 그대로여도 변화 알림을
+  // 띄우고, 그 알림이 붙어 있는 유튜브 탭들과 잠든 워커를 깨웁니다.
+  const got = await chrome.storage.local.get(LANG_KEY);
+  if (got[LANG_KEY] !== lang) chrome.storage.local.set({ [LANG_KEY]: lang });
+}
+
+/* 읽어 오는 중인가. 그동안은 언어가 바뀌어도 다시 그리지 않습니다. */
+let loading = false;
+
+/* 언어가 바뀌면 우리가 적은 것을 다시 적습니다. 붙박이 문구는 i18n 이 손보지만
+ * 고르개 항목·상태줄·단추 이름은 여기서 지은 것입니다. 읽어 오는 중에는
+ * 건너뜁니다 -- loadFromServer 가 곧 전부 다시 그립니다. */
+MW_I18N.onChange(() => {
+  if (loading) return;
+  if (!onYouTube) fail(t("popup.errNotYouTube"));
+  syncProfileHint();
+  syncResumeButton();
+  syncHideButton();
+  refreshState();
+  refillPicker();
+});
+
 function fail(text) {
   $("err").textContent = text;
   $("err").hidden = !text;
@@ -41,8 +81,8 @@ function fail(text) {
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   tabId = tab && tab.id;
-  const onYouTube = tab && /^https:\/\/www\.youtube\.com\//.test(tab.url || "");
-  if (!onYouTube) fail("유튜브 탭에서 열어야 자막을 얹을 수 있습니다.");
+  onYouTube = !!(tab && /^https:\/\/www\.youtube\.com\//.test(tab.url || ""));
+  if (!onYouTube) fail(t("popup.errNotYouTube"));
 
   const b = await send({ type: "base" });
   $("base").value = (b && b.data) || "http://localhost:8900";
@@ -71,9 +111,13 @@ async function init() {
  * 실패했으면 장르·콘텐츠 유형은 빈 채로 남고 변화 알림도 옛 주소를 듣고
  * 있어서, 주소를 고쳐도 팝업은 여전히 쓸 수 없었습니다. */
 async function loadFromServer() {
+  loading = true;
   $("pick").length = 1;
-  await fillPicker();
+  // 장르·콘텐츠 유형을 **먼저** 읽습니다. 그 답에 화면 언어가 실려 오므로,
+  // 고르개 항목처럼 우리가 문구를 지어 붙이는 것은 그 뒤에 그려야 합니다 --
+  // 순서가 반대였을 때는 팝업을 열 때마다 목록만 영어로 잠깐 남았습니다.
   await fillChoices();
+  await fillPicker();
   // 고르개를 채운 **뒤에** 값을 앉힙니다. 비어 있는 select 에 value 를 넣으면
   // 그냥 버려집니다 -- 그래서 매번 처음으로 되돌아가 보였습니다.
   $("lang").value = start.lang || "";
@@ -88,6 +132,7 @@ async function loadFromServer() {
   await refreshState();
   await syncHideButton();
   watchServer();
+  loading = false;
 }
 
 /* 팝업이 열려 있는 동안 서버의 변화(새 세션·상태·영상)를 받아 고르개를 다시
@@ -135,17 +180,20 @@ const RUNNING = ["starting", "loading", "running"];
 
 async function fillChoices() {
   const r = await send({ type: "backends" });
+  // 화면 언어도 이 답에 실려 옵니다. 서버에 닿지 못했으면 브라우저의 짐작으로
+  // 갑니다 -- 그때 뜨는 오류 문구도 사람이 읽을 언어여야 합니다.
+  useLang(r && r.ok ? r.data.ui_lang : "");
   if (!r || !r.ok) return;
   const g = $("genre");
   g.length = 0;                             // 주소를 바꿔 다시 읽을 때 겹치지 않게
   for (const x of (r.data.genres || [])) g.append(new Option(x.label || x.id, x.id));
-  if (!g.length) g.append(new Option("일반", "general"));
+  if (!g.length) g.append(new Option(t("popup.genreGeneral"), "general"));
 
   profiles = r.data.live_profiles || [];
   const p = $("profile");
   p.length = 0;
   for (const x of profiles) p.append(new Option(x.label || x.id, x.id));
-  if (!p.length) p.append(new Option("일반 방송", "broadcast"));
+  if (!p.length) p.append(new Option(t("popup.profileBroadcast"), "broadcast"));
 }
 
 /* 고른 유형이 실제로 몇 초에 끊는지 적어 둡니다. 「일반 방송」이 4초라는
@@ -153,8 +201,8 @@ async function fillChoices() {
 function syncProfileHint() {
   const x = profiles.find((p) => p.id === $("profile").value);
   $("profile-hint").textContent = x
-    ? `발화가 ${x.max_speech}초를 넘으면 끊습니다. 쉼은 ${x.min_silence}초.`
-    : "발화를 몇 초에 끊을지 정합니다.";
+    ? t("popup.hintProfile", { max: x.max_speech, min: x.min_silence })
+    : t("popup.hintProfileNone");
 }
 
 /* 서버가 들고 있는 것을 한 목록으로. 라이브 세션이 위, 녹화본이 아래입니다 --
@@ -163,8 +211,8 @@ async function fillPicker() {
   const sel = $("pick");
   const [s, v] = await Promise.all([send({ type: "sessions" }), send({ type: "videos" })]);
   if (!s || !s.ok) {
-    fail("서버에 닿지 못했습니다: " + ((s && s.error) || "응답 없음")
-         + " — 아래 「서버」 칸의 주소를 확인하십시오. 바꾸면 곧바로 다시 붙습니다.");
+    fail(t("popup.errNoServer",
+           { error: (s && s.error) || t("popup.errNoResponse") }));
     return;
   }
   fail("");
@@ -173,11 +221,16 @@ async function fillPicker() {
     sessionInfo[x.id] = x;
     const running = RUNNING.includes(x.state);
     // 멈춘 것은 그렇게 적어 둡니다. 「이어받기」가 무엇을 가리키는지 보이게요.
-    const tail = running ? "" : x.stopped_by === "ended" ? " · 끝난 방송" : " · 멈춤";
-    sel.append(new Option(`${x.title || x.id} · ${x.cues || 0}줄${tail}`, "live:" + x.id));
+    // 꼬리만 따로 잇지 않고 항목 전체를 한 문구로 둡니다 -- 말 순서가 언어마다
+    // 다르므로 반쪽을 붙여 짓는 것은 한 언어에서만 맞습니다.
+    const key = running ? "popup.pickLines"
+      : x.stopped_by === "ended" ? "popup.pickLinesEnded" : "popup.pickLinesStopped";
+    sel.append(new Option(t(key, { title: x.title || x.id, n: x.cues || 0 }),
+                          "live:" + x.id));
   }
   for (const x of (v && v.data) || []) {
-    sel.append(new Option(`${x.title || x.id} · ${x.cues}줄`, x.id));
+    sel.append(new Option(t("popup.pickLines", { title: x.title || x.id, n: x.cues }),
+                          x.id));
   }
   const now = await send({ type: "watching", tabId });
   if (now && now.data) sel.value = now.data;
@@ -193,33 +246,36 @@ function syncResumeButton() {
   // 멈춘 방송을 골라 두었으면 「새로 받아 적기」 단추 **둘 다** 이어받기가 됩니다 -- 출처는 바꿔
   // 이어받을 수 있습니다(주소로 받던 방송이 멤버십 전용으로 바뀌면 탭 소리로). 예전에는 그
   // 상태로 「주소로」를 누르면 같은 방송이 새 세션으로 갈라졌습니다.
-  $("start-url").textContent = can ? "▶ 이어받기 (주소로)" : "주소로";
-  $("start-tab").textContent = can ? "▶ 이어받기 (이 탭 소리로)" : "이 탭 소리로";
-  $("start-url-cookies").textContent = can ? "🔑 로그인 쿠키 넘기고 이어받기 (주소로)" : "🔑 로그인 쿠키 넘기고 주소로";
+  $("start-url").textContent = t(can ? "popup.resumeFromUrl" : "popup.fromUrl");
+  $("start-tab").textContent = t(can ? "popup.resumeFromTab" : "popup.fromTab");
+  $("start-url-cookies").textContent =
+    t(can ? "popup.resumeWithCookies" : "popup.fromUrlWithCookies");
+  // 「수신이 끊겨 멈춤」은 문구 뒤에 덧붙이지 않고 그 경우의 문구를 따로 둡니다.
   $("start-hint").textContent = can
-    ? `멈춘 방송을 골랐습니다. 누르는 쪽의 소리 출처로 같은 세션에 이어 붙입니다${st.stopped_by === "stream" ? " (수신이 끊겨 멈춤)" : ""}.`
-    : st && st.stopped_by === "ended" ? "끝난 방송입니다. 전체 영상 전사는 mimiwatch 페이지에서 합니다."
-    : "주소로 받으면 브라우저를 닫아도 서버가 계속 받습니다. 멤버십 전용처럼 서버가 받지 못하는 방송은 탭 소리로 받으십시오.";
+    ? t(st.stopped_by === "stream" ? "popup.hintResumePickStream" : "popup.hintResumePick")
+    : st && st.stopped_by === "ended" ? t("popup.hintEnded")
+    : t("popup.hintStart");
 }
 
 async function refreshState() {
   if (!tabId) return;
   chrome.tabs.sendMessage(tabId, { type: "state" }, (r) => {
     if (chrome.runtime.lastError || !r) {
-      $("state").textContent = "이 탭에는 아직 붙지 않았습니다.";
+      $("state").textContent = t("popup.stateNotAttached");
       return;
     }
-    if (!r.mounted) { $("state").textContent = "고르면 이 탭에 얹습니다."; return; }
+    if (!r.mounted) { $("state").textContent = t("popup.statePickToOverlay"); return; }
     // 「안 보인다」는 여러 가지입니다. 붙었는지, 크기가 있는지, 그릴 자막이
     // 있는지를 구별해 적습니다 -- 그래야 어디를 봐야 할지 알 수 있습니다.
-    const bits = [`자막 ${r.cues}줄`];
-    bits.push(r.live ? (r.receiving ? "받는 중" : "종료된 방송") : "녹화본");
-    if (!r.player) bits.push("플레이어 못 찾음");
-    else if (!r.box || !r.box.w) bits.push("화면에 자리 없음");
-    else if (!r.text) bits.push(r.mode === "off" ? "자막 끔" : "지금 구간에 자막 없음");
-    if (r.stalled) bits.push("서버 연결 끊김 (다시 붙는 중)");
-    if (!r.ticking) bits.push("시계 멈춤");
-    if (r.panel) bits.push(r.panelUp ? "자막 내역 세움" : "자리 못 찾음");
+    const bits = [t("popup.stateCues", { n: r.cues })];
+    bits.push(t(r.live ? (r.receiving ? "popup.stateReceiving" : "popup.stateStreamEnded")
+                       : "popup.stateVod"));
+    if (!r.player) bits.push(t("popup.stateNoPlayer"));
+    else if (!r.box || !r.box.w) bits.push(t("popup.stateNoRoom"));
+    else if (!r.text) bits.push(t(r.mode === "off" ? "popup.stateOff" : "popup.stateNoCue"));
+    if (r.stalled) bits.push(t("popup.stateStalled"));
+    if (!r.ticking) bits.push(t("popup.stateNoClock"));
+    if (r.panel) bits.push(t(r.panelUp ? "popup.statePanelUp" : "popup.statePanelNoRoom"));
     $("state").textContent = bits.join(" · ");
   });
 }
@@ -237,10 +293,10 @@ async function pushPrefs() {
 $("pick").addEventListener("change", async (e) => {
   syncResumeButton();
   const r = await send({ type: "watch", tabId, value: e.target.value });
-  if (r && !r.ok) { fail(r.error || "붙이지 못했습니다"); return; }
+  if (r && !r.ok) { fail(r.error || t("popup.errAttach")); return; }
   // 페이지가 아직 우리 것을 들고 있지 않아 새로고침했습니다. 조용히 하면
   // 화면이 저 혼자 다시 뜬 것처럼 보이므로 그렇다고 적어 둡니다.
-  if (r && r.reloaded) $("state").textContent = "페이지를 새로고침해 얹었습니다.";
+  if (r && r.reloaded) $("state").textContent = t("popup.stateReloaded");
   await syncHideButton();
   setTimeout(refreshState, r && r.reloaded ? 1800 : 600);
 });
@@ -271,10 +327,8 @@ $("reset-pos").addEventListener("click", () => { prefs.pos = null; pushPrefs(); 
 async function syncHideButton() {
   const now = await send({ type: "watching", tabId });
   const on = !!(now && now.data);
-  $("hide").textContent = on ? "화면에서 내리기" : "화면에 다시 얹기";
-  $("hide").title = on
-    ? "화면에서만 내립니다. 받아 적기는 계속됩니다"
-    : "고른 것을 이 탭에 다시 얹습니다";
+  $("hide").textContent = t(on ? "popup.hide" : "popup.show");
+  $("hide").title = t(on ? "popup.hideTitle" : "popup.showTitle");
   // 얹을 것이 없으면 누를 것도 없습니다.
   $("hide").disabled = !on && !$("pick").value;
   return on;
@@ -290,11 +344,11 @@ $("hide").addEventListener("click", async () => {
 $("stop").addEventListener("click", async () => {
   const value = $("pick").value;
   const id = value.startsWith("live:") ? value.slice(5) : "";
-  if (!id) { fail("받아 적는 중인 세션이 아닙니다."); return; }
+  if (!id) { fail(t("popup.errNotSession")); return; }
   $("stop").disabled = true;
   const r = await send({ type: "stopSession", sessionId: id, tabId });
   $("stop").disabled = false;
-  if (r && !r.ok) { fail(r.error || "중단하지 못했습니다"); return; }
+  if (r && !r.ok) { fail(r.error || t("popup.errStop")); return; }
   fail("");
   // 화면에서도 내립니다. 받아 적기가 끝났는데 자막만 떠 있으면 아직 도는
   // 것처럼 보입니다. 쌓인 것은 서버에 그대로 남아 다시 고를 수 있습니다.
@@ -304,7 +358,7 @@ $("stop").addEventListener("click", async () => {
   await send({ type: "watch", tabId, value: "" });
   $("pick").value = "";
   await syncHideButton();
-  $("start-hint").textContent = "중단했습니다. 쌓인 자막은 그대로 남아 있습니다.";
+  $("start-hint").textContent = t("popup.hintStopped");
   $("pick").length = 1;
   await fillPicker();
   setTimeout(refreshState, 400);
@@ -319,20 +373,19 @@ async function resumePicked(source, tab) {
   const id = value.startsWith("live:") ? value.slice(5) : "";
   if (!id) return;
   $("start-box").classList.add("busy");
-  $("start-hint").textContent = "이어받는 중…";
+  $("start-hint").textContent = t("popup.hintResuming");
   fail("");
   const r = await send({ type: "resumeSession", sessionId: id, tabId, source: source || "",
                          url: tab ? tab.url : "" });
   $("start-box").classList.remove("busy");
   if (!r || !r.ok) {
-    fail((r && r.error) || "이어받지 못했습니다");
+    fail((r && r.error) || t("popup.errResume"));
     $("start-hint").textContent = "";
     syncResumeButton();
     return;
   }
-  $("start-hint").textContent = r.source === "tab"
-    ? "이 탭의 소리를 다시 받습니다. 쌓인 자막 뒤에 이어 붙습니다."
-    : "이어서 받는 중입니다. 멈춘 사이가 되감기 창 안이면 빠진 것 없이 메워집니다.";
+  $("start-hint").textContent =
+    t(r.source === "tab" ? "popup.hintResumedTab" : "popup.hintResumedUrl");
   $("pick").length = 1;
   await fillPicker();
   $("pick").value = "live:" + id;
@@ -358,9 +411,9 @@ async function startWith(type, opts = {}) {
   if (opts.cookies) {
     // 멤버십 전용 방송: 지금 이 브라우저의 로그인 쿠키를 서버에 넘긴 뒤 주소로 갑니다. 켜 두는
     // 것이 아니라 이 한 번만입니다 -- 서버에 남은 파일은 mimiwatch 페이지에서 지웁니다.
-    $("start-hint").textContent = "로그인 쿠키를 넘기는 중…";
+    $("start-hint").textContent = t("popup.hintPushingCookies");
     const c = await send({ type: "pushCookies" });
-    if (!c || !c.ok) { fail((c && c.error) || "쿠키를 넘기지 못했습니다"); $("start-hint").textContent = ""; return; }
+    if (!c || !c.ok) { fail((c && c.error) || t("popup.errCookies")); $("start-hint").textContent = ""; return; }
   }
   if (pickedResumable()) {
     await resumePicked(type === "startCapture" ? "tab" : "hls", tab);
@@ -368,7 +421,7 @@ async function startWith(type, opts = {}) {
   }
   $("start-box").classList.add("busy");
   fail("");
-  $("start-hint").textContent = "시작하는 중…";
+  $("start-hint").textContent = t("popup.hintStarting");
   const r = await send({
     type, tabId: tab.id, url: tab.url,
     // 탭 제목이 곧 세션 이름입니다. 확장은 크롬이 감추는 그 제목을
@@ -381,17 +434,17 @@ async function startWith(type, opts = {}) {
   });
   $("start-box").classList.remove("busy");
   if (!r || !r.ok) {
-    fail((r && r.error) || "시작하지 못했습니다");
+    fail((r && r.error) || t("popup.errStart"));
     $("start-hint").textContent = "";
     return;
   }
-  $("start-hint").textContent = r.reloaded
-    ? "받는 중입니다. 페이지를 새로고침해 얹었습니다."
+  $("start-hint").textContent = t(r.reloaded
+    ? "popup.hintStartedReloaded"
     : r.skippedReload
       // 탭 소리를 잡는 중이라 새로고침하지 않았습니다. 그러면 자막이
       // 화면에 붙지 않으므로, 무엇을 해야 하는지 적어 둡니다.
-      ? "받는 중입니다. 화면에 얹으려면 이 탭을 새로고침하십시오."
-      : "받는 중입니다.";
+      ? "popup.hintStartedNeedsReload"
+      : "popup.hintStarted");
   $("pick").length = 1;
   await fillPicker();
   $("pick").value = "live:" + r.id;

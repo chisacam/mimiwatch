@@ -27,16 +27,16 @@ function hideLiveNotice() {
 function offerResume(sessionId, why, st) {
   const box = $("live-notice");
   box.textContent = {
-    tab: "자막 수신이 멈춰 있습니다. 탭을 다시 공유하면 이어서 쌓입니다 — ",
-    error: "오류로 멈췄습니다. 원인이 사라졌으면 이어서 받을 수 있습니다 — ",
-    interrupted: "서버가 멈춰 수신이 끊겼습니다 — ",
-    stopped: "수신을 멈춘 방송입니다. 아직 진행 중이면 이어서 받을 수 있습니다 — ",
-    ended: "끝난 방송입니다. 남은 녹화본을 통째로 전사할 수 있습니다 — ",
-  }[why] || "수신이 멈춰 있습니다 — ";
+    tab: t("live.resume.tab"),
+    error: t("live.resume.error"),
+    interrupted: t("live.resume.interrupted"),
+    stopped: t("live.resume.stopped"),
+    ended: t("live.resume.ended"),
+  }[why] || t("live.resume.unknown");
   if (why !== "ended") {
     const b = document.createElement("button");
     b.className = "seg";
-    b.textContent = "이어받기";
+    b.textContent = t("live.resume.button");
     b.onclick = () => resumeSession(sessionId, why, b);
     box.appendChild(b);
   }
@@ -44,8 +44,8 @@ function offerResume(sessionId, why, st) {
   if (vid) {
     const r = document.createElement("button");
     r.className = "seg";
-    r.textContent = "⟳ 전체 영상 전사";
-    r.title = "방송이 끝나 녹화본으로 남았으면, 그 영상 전체를 다시 전사합니다";
+    r.textContent = t("live.retranscribe.button");
+    r.title = t("live.retranscribe.hint");
     r.onclick = () => openRetranscribe(`https://www.youtube.com/watch?v=${vid}`,
                                        st.source_lang || "", st.title || "");
     box.appendChild(r);
@@ -56,7 +56,7 @@ function offerResume(sessionId, why, st) {
 /* 끊긴 세션을 **같은 세션으로** 이어 붙입니다. 안내 띠의 단추와 목록 줄의 ▶ 가
  * 둘 다 여기로 옵니다. `btn` 은 누른 단추(있으면 진행을 적습니다). */
 async function resumeSession(sessionId, why, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = "이어받는 중…"; }
+  if (btn) { btn.disabled = true; btn.textContent = t("live.resume.busy"); }
   // 대본 창을 여기서 잡습니다. 이 클릭이 살아 있는 유일한 지점입니다 --
   // 아래 공유 창을 고르고 나면 크롬이 window.open 을 막습니다. 시작할
   // 때와 같은 이유이고 같은 순서입니다.
@@ -71,8 +71,8 @@ async function resumeSession(sessionId, why, btn) {
   })).json();
   if (res.error) {
     if (pending) { pending.close(); state.scriptWin = null; }
-    showLiveNotice(`이어받지 못했습니다 — ${res.error}`);
-    if (btn) { btn.disabled = false; btn.textContent = "이어받기"; }
+    showLiveNotice(t("live.resume.failed", { error: res.error }));
+    if (btn) { btn.disabled = false; btn.textContent = t("live.resume.button"); }
     return;
   }
   hideLiveNotice();
@@ -92,9 +92,8 @@ async function resumeSession(sessionId, why, btn) {
     // 세션은 이미 살아났는데 소리가 오지 않습니다. 그 상태를 화면에
     // 적어 두지 않으면 「받는 중」인 채로 한 줄도 늘지 않는 이유를
     // 알 길이 없습니다.
-    tabStageNotice("탭을 다시 공유해야 이어집니다.");
-    showLiveNotice("탭을 다시 공유해야 이어집니다. 목록에서 다시 "
-                   + "「이어받기」를 누르십시오.");
+    tabStageNotice(t("live.tab.reshare"));
+    showLiveNotice(t("live.tab.reshareLong"));
     return;
   }
   await pipeCapture(media, sessionId);
@@ -126,7 +125,8 @@ function openRetranscribe(url, lang, title) {
   f.url.value = url;
   if ([...f.lang.options].some(o => o.value === (lang || ""))) f.lang.value = lang || "";
   const h = $("add-dialog").querySelector("h3");
-  h.textContent = title ? `다시 전사 · ${title.slice(0, 40)}` : "다시 전사";
+  h.textContent = title ? t("live.retranscribe.title", { title: title.slice(0, 40) })
+                        : t("live.retranscribe.titlePlain");
   $("add-dialog").showModal();
 }
 
@@ -160,7 +160,7 @@ async function askLiveRestart() {
     // 실패하면 서버는 쓰던 엔진을 그대로 씁니다. 화면의 선택기도
     // 되돌려 놓아야 둘이 어긋나지 않습니다.
     setAsr(state.live.asr);
-    showLiveNotice(`전사 엔진을 바꾸지 못했습니다 — ${res.error}`);
+    showLiveNotice(t("live.asr.switchFailed", { error: res.error }));
     return;
   }
   state.live.asr = state.asr;
@@ -205,7 +205,7 @@ async function startLive(url, lang, probe) {
 async function resumeLive(sessionId) {
   if (state.live && state.live.id === sessionId) return;   // 이미 보고 있음
   const st = await (await fetch(`/api/live/status/${sessionId}`)).json();
-  if (!st.id) { jobError(st.error || "세션을 찾을 수 없습니다"); return; }
+  if (!st.id) { jobError(st.error || MW_I18N.t("live.error.sessionNotFound")); return; }
   const t = soloTile();
   detachTile(t);
   await openSessionInTile(t, st);
@@ -215,7 +215,7 @@ async function resumeLive(sessionId) {
   // 안내를 지우고 지나가므로, 그 뒤에 이 흐름의 안내를 다시 씁니다.
   if (st.source === "tab") {
     const running = LIVE_RUNNING.includes(st.state);
-    tabStageNotice(running ? "" : "수신은 멈춰 있고, 쌓인 자막 내역만 보고 있습니다.", t);
+    tabStageNotice(running ? "" : MW_I18N.t("live.tab.logOnly"), t);
   }
 }
 
@@ -319,7 +319,7 @@ async function attachLive(tile) {
     const st = live.state;
     if (st && !LIVE_RUNNING.includes(st)) { es.close(); return; }
     if (live.rotating) { live.rotating = false; return; }
-    if (tile === focusedTile()) $("lang-status").innerHTML = "라이브 연결 끊김";
+    if (tile === focusedTile()) $("lang-status").innerHTML = t("live.status.disconnected");
   };
 }
 
@@ -338,7 +338,7 @@ function addLiveToPicker(probe, sessionId) {
   const value = "live:" + sessionId;
   const row = videoRow({
     value, session: sessionId, title: probe.title || "",
-    videoId: probe.id || "", meta: "받는 중", live: true, deletable: false,
+    videoId: probe.id || "", meta: t("live.picker.receiving"), live: true, deletable: false,
   });
   row.classList.add("pending");     // 새로고침 전까지의 임시 항목입니다
   box.prepend(row);
@@ -354,7 +354,7 @@ function markLiveStopped(sid) {
   if (!row) return;
   row.classList.add("stopped");
   const m = row.querySelector(".vm");
-  if (m) m.textContent = "자막 중단";
+  if (m) m.textContent = t("live.row.stopped");
 }
 
 /* The stopped entry stands for what the player is showing. Once the viewer
@@ -473,7 +473,7 @@ function renderLiveStatus(tile) {
   if (!m) { el.className = "status"; el.textContent = ""; return; }
   if (m.state === "error") {
     el.className = "status warn";
-    el.textContent = m.error || "라이브 오류";
+    el.textContent = m.error || t("live.status.error");
     if (m.source === "tab" || m.url) offerResume(m.id, stopReason(m), m);
     return;
   }
@@ -481,7 +481,8 @@ function renderLiveStatus(tile) {
   // 받아 적은 것이므로, 세션을 접지 않고 왜 멈췄는지만 알립니다.
   if (m.state === "interrupted") {
     el.className = "status warn";
-    el.innerHTML = `${LIVE_STATE.interrupted} · ${m.lines || 0}줄까지 남아 있습니다`;
+    el.innerHTML = t("live.status.interrupted",
+                     { state: LIVE_STATE.interrupted, n: m.lines || 0 });
     offerResume(m.id, stopReason(m), m);
     return;
   }
@@ -494,10 +495,11 @@ function renderLiveStatus(tile) {
   el.className = "status";
   const src = m.source_lang || "auto";
   const eng = (m.asr || "").replace(/-Q8_0$|\.gguf$/g, "");
-  el.innerHTML = `${LIVE_STATE[m.state] || m.state} · 원본 <b>${src}</b> → <b>${m.viewer_lang}</b>`
-    + (eng ? ` · 전사 <b>${esc(eng)}</b>` : "")
-    + (m.lines ? ` · ${m.lines}줄` : "")
-    + (m.focused === false ? " · <b>대기</b>(소리만 받는 중)" : "");
+  el.innerHTML = t("live.status.headline", { state: LIVE_STATE[m.state] || m.state,
+                                             src, viewer: m.viewer_lang })
+    + (eng ? " · " + t("live.status.engine", { engine: esc(eng) }) : "")
+    + (m.lines ? " · " + t("live.status.lines", { n: m.lines }) : "")
+    + (m.focused === false ? " · " + t("live.status.standby") : "");
 }
 
 /* "중단" ends the transcription session, not the viewing. Nothing here
@@ -542,5 +544,13 @@ function stopLive() {
   markLiveStopped(live.id);
   const el = $("lang-status");
   el.className = "status";
-  el.textContent = "자막 중단됨 · 방송은 계속 재생됩니다";
+  el.textContent = MW_I18N.t("live.status.stopped");
 }
+
+/* The status line and the notice band are written when a status event arrives,
+ * which for a stopped session may have been minutes ago -- switching the
+ * language would leave both of them sitting in the old one. */
+MW_I18N.onChange(() => {
+  const tile = focusedTile();
+  if (tile && tile.live) renderLiveStatus(tile);
+});

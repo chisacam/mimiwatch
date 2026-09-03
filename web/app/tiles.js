@@ -227,7 +227,8 @@ function updateTileBar(tile) {
   if (live) {
     const m = live.lastStatus || {};
     const running = !live.state || LIVE_RUNNING.includes(live.state);
-    st = running ? `${m.lines || live.store.size()}줄` : (LIVE_STATE[live.state] || live.state);
+    st = running ? t("tile.state.lines", { n: m.lines || live.store.size() })
+                 : (LIVE_STATE[live.state] || live.state);
   }
   tile.el.querySelector(".tile-state").textContent = st;
   tile.el.classList.toggle("stopped", !!(live && live.state && !LIVE_RUNNING.includes(live.state)));
@@ -364,8 +365,8 @@ function liveStartArgs(lang) {
 
 async function addTile(url, lang, probe) {
   const cur = focusedTile();
-  if (!cur || !cur.live) { jobError("먼저 라이브 방송을 여십시오. 타일은 그 옆에 붙습니다."); return; }
-  if (state.tiles.length >= 4) { jobError("타일은 넷까지입니다."); return; }
+  if (!cur || !cur.live) { jobError(t("tile.error.needLive")); return; }
+  if (state.tiles.length >= 4) { jobError(t("tile.error.tooMany")); return; }
   const args = liveStartArgs(lang);
   let res, members;
   if (!state.mv) {
@@ -406,12 +407,12 @@ async function dropRow(value) {
   const row = $("video-list").querySelector(`.video-row[data-value="${CSS.escape(value)}"]`);
   const sid = row && row.dataset.session;
   if (!row) return;
-  if (!sid) { jobError("녹화본은 타일로 붙일 수 없습니다 — 멀티뷰에는 라이브만 들어갑니다."); return; }
+  if (!sid) { jobError(t("tile.error.vodNotAllowed")); return; }
   const have = tileBySession(sid);
   if (have) { setFocus(have); return; }
   const cur = focusedTile();
   if (!cur || !cur.live) { openFromList(value); return; }
-  if (state.tiles.length >= 4) { jobError("타일은 넷까지입니다."); return; }
+  if (state.tiles.length >= 4) { jobError(t("tile.error.tooMany")); return; }
   const args = liveStartArgs(null);
   let res, members;
   if (!state.mv) {
@@ -456,3 +457,8 @@ async function openMultiview(gid) {
   applyLayout();
   return true;
 }
+
+/* A tile strip is rewritten on every cue while the stream is being received,
+ * but a stopped tile keeps the strip it last drew -- switching the language
+ * would leave that one in the old language. */
+MW_I18N.onChange(() => { state.tiles.forEach(tile => updateTileBar(tile)); });

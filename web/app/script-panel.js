@@ -23,10 +23,10 @@ function scriptRow(c, i) {
   row.className = "line";
   if (i != null) row.dataset.i = i;
   if (c.id != null) row.dataset.id = c.id;
-  const t = document.createElement("div");
-  t.className = "t";
+  const tEl = document.createElement("div");
+  tEl.className = "t";
   const body = document.createElement("div");
-  row.append(t, body);
+  row.append(tEl, body);
   refreshScriptRow(row, c);
   row.addEventListener("click", () => {
     // 편집 중인 줄에서는 눌러도 움직이지 않습니다. 글자를 고르려던 것이
@@ -77,8 +77,8 @@ function refreshScriptRow(row, c) {
     if (String(c.edited || "").includes("text")) {
       const warn = document.createElement("b");
       warn.className = "tr-stale";
-      warn.title = "원문을 고친 뒤라 이 번역은 옛 문장의 것입니다";
-      warn.textContent = "⟲ 원문과 다름";
+      warn.title = t("panel.row.stale.title");
+      warn.textContent = t("panel.row.stale");
       tr.appendChild(warn);
     }
     body.appendChild(tr);
@@ -90,11 +90,28 @@ function refreshScriptRow(row, c) {
   row.querySelector(":scope > .line-edit")?.remove();
   const pen = document.createElement("button");
   pen.className = "line-edit";
-  pen.title = "이 줄을 고칩니다";
+  pen.title = t("panel.row.edit.title");
   pen.textContent = "✎";
   pen.addEventListener("click", (e) => { e.stopPropagation(); openCueEditor(row, c); });
   row.appendChild(pen);
 }
+
+/* 언어를 바꿔도 이미 그려 둔 줄은 그 자리에 그대로 남습니다 -- 녹화본의 자막
+ * 내역은 열 때 한 번 그리고 그 줄을 고칠 때까지 다시 그리지 않으므로, 딱지와
+ * 편집 단추만 새 언어로 다시 적습니다. 줄을 고르는 중이면 셈도 함께 -- 그쪽은
+ * 다음 누름까지 옛 언어로 남습니다. */
+MW_I18N.onChange(() => {
+  const box = $("script");
+  if (!box) return;
+  box.querySelectorAll(".tr-stale").forEach(el => {
+    el.title = t("panel.row.stale.title");
+    el.textContent = t("panel.row.stale");
+  });
+  box.querySelectorAll(".line-edit").forEach(el => {
+    el.title = t("panel.row.edit.title");
+  });
+  if (state.scriptMode === "tr") syncPicks();
+});
 
 function appendScriptLine(c) {
   const box = $("script");
@@ -134,21 +151,21 @@ function openCueEditor(row, c) {
   src.rows = 2;
   src.value = c.text || "";
   const tr = document.createElement("textarea");
-  src.placeholder = "원문";
+  src.placeholder = t("panel.edit.source");
   tr.className = "ce-tr";
   tr.rows = 2;
-  tr.placeholder = "번역 (비우면 그대로 둡니다)";
+  tr.placeholder = t("panel.edit.translation");
   tr.value = trOf(c) || "";
   const bar = document.createElement("div");
   bar.className = "ce-bar";
   const at = document.createElement("input");
   at.type = "number"; at.step = "0.1"; at.className = "ce-at";
   at.value = (Math.round(cueStart(c) * 10) / 10).toFixed(1);
-  at.title = "이 줄이 뜨는 시각(초)";
-  const save = mkbtn("저장", "primary-seg");
+  at.title = t("panel.edit.at.title");
+  const save = mkbtn(t("panel.edit.save"), "primary-seg");
   const del = mkbtn("🗑", "danger");
-  del.title = "이 줄을 지웁니다";
-  const cancel = mkbtn("취소", "");
+  del.title = t("panel.edit.delete.title");
+  const cancel = mkbtn(t("panel.edit.cancel"), "");
   bar.append(at, document.createElement("span"), save, del, cancel);
   bar.children[1].className = "grow";
   box.append(src, tr, bar);
@@ -267,7 +284,7 @@ function resortCue(c, arr = state.cues) {
  * 완결됩니다. 시각은 지금 재생 위치로 미리 채우고, 번호는 서버가 짓습니다. */
 function openNewCueEditor() {
   const owner = editOwner();
-  if (!owner) { alert("먼저 영상이나 방송을 여십시오."); return; }
+  if (!owner) { alert(t("panel.needTarget")); return; }
   const box = $("script");
   const already = box.querySelector(".line.adding textarea");
   if (already) { already.focus(); return; }            // 한 번에 하나
@@ -286,11 +303,11 @@ function openNewCueEditor() {
   const src = document.createElement("textarea");
   src.className = "ce-src";
   src.rows = 2;
-  src.placeholder = "원문";
+  src.placeholder = t("panel.edit.source");
   const tr = document.createElement("textarea");
   tr.className = "ce-tr";
   tr.rows = 2;
-  tr.placeholder = "번역 (선택 — 쓰면 손편집으로 남아 재번역이 덮지 않습니다)";
+  tr.placeholder = t("panel.new.translation");
   const bar = document.createElement("div");
   bar.className = "ce-bar";
   const at = document.createElement("input");
@@ -298,10 +315,10 @@ function openNewCueEditor() {
   at.step = "0.1";
   at.className = "ce-at";
   at.value = (Math.round(t0 * 10) / 10).toFixed(1);
-  at.title = "이 줄이 뜨는 시각(초)";
+  at.title = t("panel.edit.at.title");
   at.addEventListener("input", () => { tEl.textContent = fmt(+at.value || 0); });
-  const save = mkbtn("저장", "primary-seg");
-  const cancel = mkbtn("취소", "");
+  const save = mkbtn(t("panel.edit.save"), "primary-seg");
+  const cancel = mkbtn(t("panel.edit.cancel"), "");
   bar.append(at, document.createElement("span"), save, cancel);
   bar.children[1].className = "grow";
   ed.append(src, tr, bar);
@@ -430,7 +447,7 @@ const SCRIPT_WIN = "width=460,height=860,menubar=no,toolbar=no";
 function openScriptWindow() {
   const key = state.live ? "live:" + state.live.id
             : (state.doc && !isLiveDoc() ? state.doc.id : "");
-  if (!key) { alert("먼저 영상이나 방송을 여십시오."); return; }
+  if (!key) { alert(t("panel.needTarget")); return; }
   const url = `/?script=${encodeURIComponent(key)}`;
   // 이미 띄워 둔 창이 있으면 그것을 씁니다. 탭 소리로 시작하면 아래에서
   // 미리 열어 두므로, 여기서 새로 열면 빈 창과 대본 창이 따로 남습니다.
@@ -453,13 +470,13 @@ function openPendingScriptWindow() {
   const win = window.open("", "mimiwatch-script", SCRIPT_WIN);
   if (!win) return null;          // 팝업 차단
   win.document.write(
-    '<!doctype html><meta charset="utf-8"><title>자막 내역</title>'
+    '<!doctype html><meta charset="utf-8"><title>' + t("panel.window.title") + '</title>'
     + '<style>html{color-scheme:dark light}'
     + 'body{margin:0;display:grid;place-items:center;height:100vh;'
     + 'font:14px/1.7 system-ui,sans-serif;background:#0e1117;color:#8b95a7;'
     + 'text-align:center;padding:2rem}'
     + '@media(prefers-color-scheme:light){body{background:#fff;color:#666}}'
-    + '</style><div>공유할 탭을 고르면<br>여기에 자막이 쌓입니다.</div>');
+    + '</style><div>' + t("panel.window.waiting") + '</div>');
   win.document.close();
   return win;
 }
@@ -542,8 +559,8 @@ function syncPicks() {
     const c = state.cues.find(x => x.id === id);
     return c && String(c.edited || "").includes("tr");
   }).length;
-  $("tr-count").textContent = n === 0 ? "고른 줄 없음"
-    : `${n}줄 선택` + (kept ? ` (손으로 고친 ${kept}줄은 건너뜁니다)` : "");
+  $("tr-count").textContent = n === 0 ? t("panel.pick.none")
+    : kept ? t("panel.pick.countKept", { n, kept }) : t("panel.pick.count", { n });
   $("tr-go").disabled = n === 0 || n === kept;
 }
 
@@ -572,17 +589,19 @@ async function watchRetranslate(jobId, kept) {
   while (true) {
     await new Promise(r => setTimeout(r, 500));
     const st = await (await fetch(`/api/job/${jobId}`)).json();
-    document.querySelector(".job-label").textContent = "다시 번역하는 중…";
+    document.querySelector(".job-label").textContent = t("panel.retranslate.working");
     const pct = st.total ? Math.round(st.done / st.total * 100) : 0;
     $("job-fill").style.width = pct + "%";
-    $("job-count").textContent = `${st.done}/${st.total}`
-      + (kept ? ` · 건너뜀 ${kept}줄(손으로 고침)` : "");
+    $("job-count").textContent = kept
+      ? t("panel.retranslate.progressKept", { done: st.done, total: st.total, kept })
+      : t("panel.retranslate.progress", { done: st.done, total: st.total });
     if (st.state === "error") { jobError(st.error); return; }
     if (st.state === "cancelled") { box.hidden = true; state.jobId = null; return; }
     if (st.state === "done") {
-      $("job-count").textContent = `${st.done}줄 다시 번역했습니다`
-        + (kept ? ` · 건너뜀 ${kept}줄(손으로 고침)` : "")
-        + (st.skipped ? ` · 옮길 것 없음 ${st.skipped}줄` : "");
+      $("job-count").textContent = t(
+        kept ? (st.skipped ? "panel.retranslate.doneKeptEmpty" : "panel.retranslate.doneKept")
+             : (st.skipped ? "panel.retranslate.doneEmpty" : "panel.retranslate.done"),
+        { done: st.done, kept, skipped: st.skipped });
       setTimeout(() => { box.hidden = true; }, 5000);
       state.jobId = null;
       await reloadCues();

@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "mimiwatch 오버레이",
+    "description": "Extension name, shown in Chrome's own UI."
+  },
+  "extDesc": {
+    "message": "로컬 mimiwatch 서버가 받아 적은 자막을 유튜브 페이지 위에 얹습니다.",
+    "description": "Extension description, shown in Chrome's own UI."
+  }
+}

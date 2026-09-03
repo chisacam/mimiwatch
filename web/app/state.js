@@ -205,7 +205,14 @@ const esc = (t) => String(t).replace(/[&<>"]/g,
  * 상태 이름이 화면에 그대로 나오던 자리에 사람이 읽을 말을 붙입니다. */
 const LIVE_RUNNING = ["starting", "loading", "running"];
 
-const LIVE_STATE = {
-  starting: "시작하는 중", loading: "모델 여는 중", running: "수신 중",
-  stopped: "종료됨", interrupted: "중단됨 (서버 재시작)", error: "오류",
-};
+// The state words the screen shows. The keys are protocol -- the server sends
+// exactly these -- and only the values are language, so the map answers with
+// whatever the string table says at the moment it is read. A plain object of
+// translated strings would freeze at whatever language was current when this
+// file loaded, and the callers read it minutes later, after a language switch.
+const LIVE_STATE = {};
+["starting", "loading", "running", "stopped", "interrupted", "error"].forEach(function (s) {
+  Object.defineProperty(LIVE_STATE, s, {
+    get: function () { return MW_I18N.t("live.state." + s); }, enumerable: true,
+  });
+});

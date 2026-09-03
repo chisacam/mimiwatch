@@ -48,7 +48,8 @@ function renderBackendPicker() {
     // as it goes, so the label would be wrong the moment the first line
     // lands.
     const done = state.doc && (state.doc.backends_done || []).includes(b.id);
-    o.textContent = b.label + (state.doc && !isLiveDoc() && !done ? " (미번역)" : "");
+    o.textContent = state.doc && !isLiveDoc() && !done
+      ? t("engines.picker.untranslated", { label: b.label }) : b.label;
     pick.appendChild(o);
   });
   pick.value = state.backend;
@@ -136,7 +137,7 @@ function renderProfilePicker() {
   state.liveProfiles.forEach(p => {
     const o = document.createElement("option");
     o.value = p.id;
-    o.textContent = `${p.label} · ${p.max_speech}초마다 끊기`;
+    o.textContent = t("engines.profile.option", { label: p.label, n: p.max_speech });
     sel.appendChild(o);
   });
   const saved = loadPrefs().profile;
@@ -164,16 +165,16 @@ async function shutdownServer() {
   // 탭에서 시작했거나, 이 탭을 열기 전부터 돌고 있었거나. 그래서 여기서는
   // 문구만 고르고, 실제로 몇 건을 닫았는지는 응답에서 받습니다.
   const msg = state.live
-    ? "받는 중인 방송을 닫고 서버를 종료합니다. 여기까지 받아 적은 자막은 남습니다.\n\n계속할까요?"
-    : "서버를 종료합니다. 받는 중인 방송이 있으면 함께 닫습니다.\n\n계속할까요?";
+    ? t("engines.shutdown.confirm.live")
+    : t("engines.shutdown.confirm");
   if (!confirm(msg)) return;
 
   const btn = $("shutdown");
   const hint = $("shutdown-group").querySelector(".hint");
   btn.disabled = true;
-  btn.textContent = "종료하는 중…";
+  btn.textContent = t("engines.shutdown.busy");
   $("quit").disabled = true;
-  $("quit").textContent = "종료하는 중…";
+  $("quit").textContent = t("engines.shutdown.busy");
 
   let stopped = null;                     // null = 답을 못 받음
   try {
@@ -191,13 +192,11 @@ async function shutdownServer() {
       .then(r => r.ok).catch(() => false);
     if (alive) {
       $("shutdown-group").classList.add("done");
-      hint.textContent =
-        `서버를 멈추지 못했습니다 (${e.message}). 서버가 이 기능을 모르는 ` +
-        "예전 판일 수 있습니다. 터미널에서 Ctrl-C 로 끄십시오.";
+      hint.textContent = t("engines.shutdown.failed", { error: e.message });
       btn.disabled = false;
-      btn.textContent = "종료";
+      btn.textContent = t("engines.shutdown.button");
       $("quit").disabled = false;
-      $("quit").textContent = "⏻ 종료";
+      $("quit").textContent = t("engines.quit.button");
       return;
     }
   }
@@ -205,15 +204,23 @@ async function shutdownServer() {
   // 여기까지 왔으면 서버는 멈췄습니다. 새로고침해도 돌아올 곳이 없으므로
   // 화면을 그대로 두고 무엇이 끝났는지만 적습니다.
   $("shutdown-group").classList.add("done");
-  hint.textContent =
-    (stopped ? `방송 ${stopped}건을 닫고 서버를 종료했습니다. `
-             : "서버를 종료했습니다. ") +
-    "이 탭은 더 이상 갱신되지 않습니다. 다시 켜려면 "
-    + (state.models && state.models.frozen ? "mimiwatch 를 다시 실행하십시오." : "터미널에서 ./run.sh.");
-  btn.textContent = "종료됨";
-  $("quit").textContent = "종료됨";
+  hint.textContent = [
+    stopped ? t("engines.shutdown.done.n", { n: stopped }) : t("engines.shutdown.done"),
+    t("engines.shutdown.stale"),
+    restartHint(),
+  ].join(" ");
+  btn.textContent = t("engines.shutdown.doneLabel");
+  $("quit").textContent = t("engines.shutdown.doneLabel");
   stopLive();
   closeWindows(stopped);
+}
+
+/* How to start it again -- one whole sentence per case, because the bundle has
+ * no terminal and the repository has no bundle to run. Both the hint and the
+ * shutdown screen say it. */
+function restartHint() {
+  return state.models && state.models.frozen
+    ? t("engines.shutdown.restart.bundle") : t("engines.shutdown.restart.repo");
 }
 
 /* 서버가 멈춘 뒤 창을 닫습니다. 묶음으로 쓰는 사람에게 남는 것은 이 탭뿐이라, 서버만 끄고
@@ -230,11 +237,26 @@ function closeWindows(stopped) {
     window.close();
     setTimeout(() => {
       if (window.closed) return;
-      document.body.innerHTML =
-        `<div class="quit-screen"><h1>mimi<em>watch</em></h1>`
-        + `<p>${stopped ? `방송 ${stopped}건을 닫고 ` : ""}서버를 종료했습니다.</p>`
-        + `<p class="dim">이 탭은 브라우저가 스크립트로 닫게 두지 않습니다. 직접 닫으십시오.<br>`
-        + `다시 켜려면 ${state.models && state.models.frozen ? "mimiwatch 를 다시 실행하십시오." : "터미널에서 ./run.sh."}</p></div>`;
+      // Built node by node, not with innerHTML -- the text comes from the
+      // string table now, and i18n.js promises a translated line never has a
+      // place to smuggle markup into.
+      const screen = document.createElement("div");
+      screen.className = "quit-screen";
+      const h1 = document.createElement("h1");
+      const em = document.createElement("em");
+      em.textContent = "watch";
+      h1.append(document.createTextNode("mimi"), em);
+      const said = document.createElement("p");
+      said.textContent = stopped
+        ? t("engines.shutdown.done.n", { n: stopped }) : t("engines.shutdown.done");
+      const how = document.createElement("p");
+      how.className = "dim";
+      how.append(document.createTextNode(t("engines.quit.manual")),
+                 document.createElement("br"),
+                 document.createTextNode(restartHint()));
+      screen.append(h1, said, how);
+      document.body.textContent = "";
+      document.body.appendChild(screen);
     }, 400);
   }, 300);
 }
@@ -266,19 +288,19 @@ function renderEngineList(kind) {
     const meta = document.createElement("span");
     meta.className = "meta";
     meta.textContent = b.backend === "openai"
-      ? `${b.base_url} · ${b.model}` : "로컬 실행 · 외부 전송 없음";
+      ? `${b.base_url} · ${b.model}` : t("engines.row.local");
     name.appendChild(meta);
 
     const edit = document.createElement("button");
-    edit.textContent = "수정";
+    edit.textContent = t("engines.row.edit");
     edit.disabled = b.backend !== "openai";
     edit.addEventListener("click", () => showEngineForm(kind, b));
 
     const del = document.createElement("button");
     del.className = "danger";
-    del.textContent = "삭제";
+    del.textContent = t("engines.row.delete");
     if (b.id === LOCKED[kind]) {
-      del.title = "기본 로컬 엔진은 삭제할 수 없습니다";
+      del.title = t("engines.row.lockedTip");
       del.disabled = true;
     } else {
       del.addEventListener("click", () => removeEngine(kind, b));
@@ -292,8 +314,9 @@ function showEngineForm(kind, entry) {
   const f = $("engine-form");
   f.dataset.kind = kind;
   f.dataset.editing = entry ? entry.id : "";
-  $("form-title").textContent =
-    (entry ? "엔진 수정" : "엔진 추가") + (kind === "asr" ? " · 전사" : " · 번역");
+  $("form-title").textContent = entry
+    ? t(kind === "asr" ? "engines.form.edit.asr" : "engines.form.edit.tr")
+    : t(kind === "asr" ? "engines.form.add.asr" : "engines.form.add.tr");
   const seed = entry || { label: "", id: "", base_url: "http://localhost:1234",
                           model: kind === "asr" ? "whisper-1" : "",
                           api_key: "", window_s: 240, min_chars: 0 };
@@ -330,7 +353,7 @@ async function saveEngine(e) {
 }
 
 async function removeEngine(kind, b) {
-  if (!confirm(`'${b.label || b.id}' 을(를) 삭제할까요?`)) return;
+  if (!confirm(t("engines.remove.confirm", { name: b.label || b.id }))) return;
   const url = kind === "asr" ? "/api/asr-backends/delete" : "/api/backends/delete";
   const cfg = await (await fetch(url, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -443,12 +466,15 @@ function refreshSetupNotice() {
   let text;
   if (cur) {
     const pct = cur.total ? Math.round(cur.done / cur.total * 100) + "%" : fmtBytes(cur.done);
-    text = `모델을 받는 중입니다 — ${cur.label} ${pct}` + (busy.length > 1 ? ` (남은 것 ${busy.length - 1}개)` : "");
+    text = busy.length > 1
+      ? t("engines.setup.downloading.more", { label: cur.label, pct, n: busy.length - 1 })
+      : t("engines.setup.downloading", { label: cur.label, pct });
   } else if (busy.length) {
-    text = `모델 ${busy.length}개가 내려받기를 기다리고 있습니다.`;
+    text = t("engines.setup.queued", { n: busy.length });
   } else {
-    text = (ov.setup_done ? "필요한 것이 아직 없습니다: " : "처음이시군요. 이 기계에 맞는 엔진을 고르십시오. 없는 것: ")
-           + missing.map(i => i.label).join(", ");
+    const list = missing.map(i => i.label).join(", ");
+    text = ov.setup_done ? t("engines.setup.missing", { list })
+                         : t("engines.setup.first", { list });
   }
   $("setup-text").textContent = text;
   $("setup-start").hidden = busy.length > 0;
@@ -458,15 +484,15 @@ function refreshSetupNotice() {
 
 function stateLabel(it) {
   switch (it.state) {
-    case "ready": return "있음";
-    case "system": return "시스템 것 사용";
-    case "missing": return "없음";
-    case "partial": return `받다 만 것 ${fmtBytes(it.have)}`;
-    case "queued": return "기다리는 중";
+    case "ready": return t("engines.model.state.ready");
+    case "system": return t("engines.model.state.system");
+    case "missing": return t("engines.model.state.missing");
+    case "partial": return t("engines.model.state.partial", { size: fmtBytes(it.have) });
+    case "queued": return t("engines.model.state.queued");
     case "downloading": return it.total
       ? `${Math.round(it.done / it.total * 100)}% · ${fmtBytes(it.done)} / ${fmtBytes(it.total)}`
-      : `${fmtBytes(it.done)} 받음`;
-    case "error": return "실패";
+      : t("engines.model.state.downloaded", { size: fmtBytes(it.done) });
+    case "error": return t("engines.model.state.error");
     default: return it.state;
   }
 }
@@ -478,7 +504,9 @@ function renderModelList() {
   box.textContent = "";
   // 종류별로 묶어 보입니다. 전사 → 번역 → 보조 → 도구 → 목록에 없는 파일.
   const order = { asr: 0, tr: 1, aux: 2, tool: 3, other: 4 };
-  const head = { asr: "전사", tr: "번역", aux: "보조", tool: "도구", other: "목록에 없는 파일" };
+  const head = { asr: "engines.model.kind.asr", tr: "engines.model.kind.tr",
+                 aux: "engines.model.kind.aux", tool: "engines.model.kind.tool",
+                 other: "engines.model.kind.other" };
   const items = [...ov.items].sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
   let lastKind = null;
   items.forEach(it => {
@@ -486,7 +514,7 @@ function renderModelList() {
       lastKind = it.kind;
       const h = document.createElement("div");
       h.className = "model-kind";
-      h.textContent = head[it.kind] || it.kind;
+      h.textContent = head[it.kind] ? t(head[it.kind]) : it.kind;
       box.appendChild(h);
     }
     box.appendChild(modelRow(it));
@@ -499,7 +527,7 @@ function modelRow(it) {
   row.dataset.model = it.id;
   const name = document.createElement("div");
   name.className = "name";
-  name.textContent = it.label + (it.required ? " ·필수" : "");
+  name.textContent = it.required ? t("engines.model.required", { label: it.label }) : it.label;
   const meta = document.createElement("span");
   meta.className = "meta";
   const bits = [stateLabel(it)];
@@ -522,19 +550,19 @@ function modelRow(it) {
 
   const act = document.createElement("button");
   if (["downloading", "queued"].includes(it.state)) {
-    act.textContent = "중단";
+    act.textContent = t("engines.model.cancel");
     act.addEventListener("click", () => postModel("/api/models/cancel", { id: it.id }));
   } else if (["missing", "partial", "error", "system"].includes(it.state)) {
-    act.textContent = it.state === "partial" ? "이어 받기"
-                    : it.state === "error" ? "다시" : "받기";
+    act.textContent = it.state === "partial" ? t("engines.model.resume")
+                    : it.state === "error" ? t("engines.model.retry") : t("engines.model.download");
     act.addEventListener("click", () => downloadModels([it.id]));
   } else {
-    act.textContent = "받기";
+    act.textContent = t("engines.model.download");
     act.disabled = true;
   }
   const del = document.createElement("button");
   del.className = "danger";
-  del.textContent = "삭제";
+  del.textContent = t("engines.row.delete");
   del.disabled = !["ready", "partial", "error"].includes(it.state) || !(it.have || it.state !== "ready");
   del.addEventListener("click", () => deleteModel(it));
   row.append(act, del);
@@ -560,9 +588,9 @@ async function downloadModels(ids, open = false) {
 }
 
 async function deleteModel(it) {
-  const what = it.kind === "tool" ? "도구" : "모델";
-  if (!confirm(`'${it.label}' ${what}을(를) 지울까요? (${fmtBytes(it.have || it.size)})\n`
-               + "다시 쓰려면 다시 받아야 합니다.")) return;
+  const key = it.kind === "tool" ? "engines.model.delete.confirm.tool"
+                                 : "engines.model.delete.confirm.model";
+  if (!confirm(t(key, { label: it.label, size: fmtBytes(it.have || it.size) }))) return;
   await postModel("/api/models/delete", { id: it.id });
 }
 
@@ -652,12 +680,13 @@ function renderSetupChoices(kind, list, current) {
     name.textContent = o.label;
     const meta = document.createElement("small");
     const bits = [];
-    if (o.backend === "openai") bits.push("원격 서버 · 받을 것 없음 · 그 서버가 떠 있어야 합니다");
+    if (o.backend === "openai") bits.push(t("engines.setup.remote"));
     else if (o.model) {
       bits.push(o.model.label);
-      bits.push(o.model.state === "ready" ? "있음" : `${fmtBytes(o.model.size)} 받음`);
+      bits.push(o.model.state === "ready" ? t("engines.model.state.ready")
+                : t("engines.setup.willDownload", { size: fmtBytes(o.model.size) }));
       // M2M-100 은 CTranslate2 를 CPU 로 고정해 씁니다(translate.py).
-      bits.push(o.backend === "local" || o.device === "cpu" ? "CPU" : "GPU가 있으면 GPU");
+      bits.push(o.backend === "local" || o.device === "cpu" ? "CPU" : t("engines.setup.gpuIfAvailable"));
     }
     meta.textContent = bits.join(" · ");
     body.append(name, document.createElement("br"), meta);
@@ -684,11 +713,12 @@ function syncSetupTotal() {
   // M2M-100 은 번역 대체 경로가 늘 필요합니다. Gemma 를 골라도 함께 받습니다.
   const m2m = (state.models || { items: [] }).items.find(i => i.id === "m2m100");
   if (m2m && m2m.state !== "ready" && !names.includes(m2m.label)) {
-    bytes += m2m.size || 0; names.push(m2m.label + " (번역 대체용)");
+    bytes += m2m.size || 0;
+    names.push(t("engines.setup.fallbackName", { label: m2m.label }));
   }
   $("setup-total").textContent = bytes
-    ? `받을 것: ${names.join(", ")} — 약 ${fmtBytes(bytes)}`
-    : "필요한 모델이 다 있습니다. 바로 쓸 수 있습니다.";
+    ? t("engines.setup.total", { list: names.join(", "), size: fmtBytes(bytes) })
+    : t("engines.setup.total.none");
 }
 
 async function submitSetup(e) {
@@ -722,18 +752,30 @@ async function loadCookies() {
   if (!hint) return;
   if (st.present) {
     const when = st.updated ? new Date(st.updated * 1000).toLocaleString() : "";
-    hint.textContent = `쿠키 ${st.count || 0}개가 서버에 있습니다 (${when}에 받음). 주소로 받는 방송에 yt-dlp 가 이 쿠키를 씁니다. `
-      + "쓸 일이 끝났으면 지우십시오 — 계정의 열쇠입니다.";
+    hint.textContent = t("engines.cookies.present", { n: st.count || 0, when });
     del.hidden = false;
   } else {
-    hint.textContent = (st.env ? "환경변수 MIMIWATCH_YTDLP_COOKIES 의 파일을 씁니다. " : "없음. ")
-      + "멤버십 전용 방송을 주소로 받으려면 확장 팝업의 「🔑 로그인 쿠키 넘기고 주소로」를 누르십시오 — 그때만 이 브라우저의 쿠키가 서버로 옵니다.";
+    hint.textContent = st.env ? t("engines.cookies.none.env") : t("engines.cookies.none");
     del.hidden = true;
   }
 }
 
 async function deleteCookies() {
-  if (!confirm("서버에 있는 유튜브 로그인 쿠키를 지울까요? 받는 중인 방송은 다음 재접속부터 쿠키 없이 갑니다.")) return;
+  if (!confirm(t("engines.cookies.delete.confirm"))) return;
   await fetch("/api/cookies/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
   await loadCookies();
 }
+
+/* The pickers, the engine lists and the setup strip are drawn once at startup
+ * and then left alone, so a language change has to redraw them by hand -- the
+ * static pass only reaches the markup. Each one is guarded: the config may not
+ * have arrived yet, and drawing an empty list would empty a filled picker. */
+MW_I18N.onChange(() => {
+  if ((state.liveProfiles || []).length) renderProfilePicker();
+  if ((state.backends || []).length) renderBackendPicker();
+  if ((state.backends || []).length && (state.asrBackends || []).length) {
+    renderEngineList("asr");
+    renderEngineList("tr");
+  }
+  if (state.models) { renderModelList(); refreshSetupNotice(); }
+});

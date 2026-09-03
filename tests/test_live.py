@@ -591,3 +591,59 @@ def test_ffmpeg_is_spawned_without_inheriting_std_handles(session, monkeypatch):
     assert seen["kw"]["stdout"] is subprocess.PIPE
     assert seen["kw"]["stdin"] == subprocess.DEVNULL   # 물려받은 핸들에 기대지 않습니다
     assert "stderr" in seen["kw"]
+
+
+def _probe(stdout: str, code: int = 0):
+    return lambda *a, **k: subprocess.CompletedProcess(args=[], returncode=code,
+                                                       stdout=stdout, stderr="")
+
+
+LIVE_META = json.dumps({"title": "what yt-dlp fetched", "id": "v1", "is_live": True})
+
+
+def test_resolving_the_url_again_does_not_blank_a_title(session, monkeypatch):
+    """An unparseable probe used to leave the session with no name at all.
+
+    A playlist address makes `yt-dlp -j` exit 0 with output that is not JSON, so
+    the metadata was `{}` and the title became "" -- the session lost the name it
+    was listed under, on a reconnect that was otherwise fine.
+    """
+    monkeypatch.setattr(live.subprocess, "run", _probe("not json at all"))
+    monkeypatch.setattr(live, "resolve_audio", lambda url, youtube=True: ("http://x/a.m3u8", {}))
+    session.title = "the name it had"
+    session._resolve_hls()
+    assert session.title == "the name it had"
+
+
+def test_a_rename_outlives_resolving_the_url_again(session, monkeypatch):
+    """yt-dlp's title is a guess we can improve on, never a correction."""
+    monkeypatch.setattr(live.subprocess, "run", _probe(LIVE_META))
+    monkeypatch.setattr(live, "resolve_audio", lambda url, youtube=True: ("http://x/a.m3u8", {}))
+    # Nobody has named it, so the fetched title is an improvement and lands.
+    session.title = ""
+    session._resolve_hls()
+    assert session.title == "what yt-dlp fetched"
+    # Once a person has named it, nothing writes over that.
+    live._sessions[session.id] = session
+    try:
+        assert live.set_title(session.id, "the name I typed")["ok"]
+    finally:
+        live._sessions.pop(session.id, None)
+    assert session.title_by_user is True
+    session._resolve_hls()
+    assert session.title == "the name I typed"
+    assert session.status()["title_by_user"] is True
+
+
+def test_resume_carries_the_rename(monkeypatch):
+    """The mark has to survive a restart -- resume re-resolves the URL right after."""
+    st = {"id": "title-1", "state": "stopped", "stopped_by": "user", "url": "https://x/live",
+          "source": "hls", "source_lang": "ja", "viewer_lang": "ko", "backend": "local-m2m100",
+          "asr_backend": "tcpp-lite", "title": "the name I typed", "title_by_user": True,
+          "media_base": 0.0, "audio_s": 0.0, "lines": 0}
+    store.save_session(st, "")
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
+    assert live.resume("title-1")["resumed"]
+    s = live.get("title-1")
+    assert (s.title, s.title_by_user) == ("the name I typed", True)
+    live._sessions.clear()

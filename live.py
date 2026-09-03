@@ -467,6 +467,10 @@ class LiveSession:
         self.gap_s = 0.0
         # yt-dlp fills this in for hls; the browser supplies it for tab.
         self.title = title
+        # Did a person choose this name? yt-dlp's title is a guess we can improve
+        # on, never a correction, so once someone renames a session nothing may
+        # write over it -- see set_title and _resolve_hls.
+        self.title_by_user = False
         # Reopening this session after a restart needs a video id to embed.
         # The session id is one we made, so it cannot go into the player.
         self.video_id = ""
@@ -584,7 +588,8 @@ class LiveSession:
 
     def status(self) -> dict:
         return {"id": self.id, "state": self.state, "error": self.error,
-                "title": self.title, "url": self.url, "video_id": self.video_id,
+                "title": self.title, "title_by_user": self.title_by_user,
+                "url": self.url, "video_id": self.video_id,
                 "source": self.source,
                 "source_lang": self.lang, "viewer_lang": self.viewer_lang,
                 "backend": self.backend_id,
@@ -1239,7 +1244,14 @@ class LiveSession:
                 d = json.loads(meta.stdout)
             except json.JSONDecodeError:
                 d = {}                    # a playlist address. resolve_audio below decides
-            self.title = d.get("title", "")
+            # Two ways this line used to destroy a good name. A playlist address
+            # parses to {} above, so the title became "" -- the session lost the
+            # name it was listed under. And a resume re-resolves the URL, which put
+            # the fetched title back over one the user had typed; set_title exists
+            # because tab audio has no title to fetch, and a rename that survives
+            # only until the next reconnect is not a rename.
+            if d.get("title") and not self.title_by_user:
+                self.title = d["title"]
             self.video_id = d.get("id", "") or ""
             info = site_of(d, self.url)
             self.site, self.channel = info["site"], info["channel"]
@@ -1707,6 +1719,7 @@ def set_title(session_id: str, title: str) -> dict:
     s = get(session_id)
     if s is not None:
         s.title = title
+        s.title_by_user = True
         s._persist()
         s.emit({"type": "status", **s.status()})
         return {"ok": True, "title": title}
@@ -1718,6 +1731,7 @@ def set_title(session_id: str, title: str) -> dict:
     # before saving.
     video_id = st.pop("video_id", "") or ""
     st["title"] = title
+    st["title_by_user"] = True
     store.save_session(st, video_id)
     bus.publish({"type": "session", **st, "video_id": video_id})
     return {"ok": True, "title": title}
@@ -1989,6 +2003,7 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
                     source="tab" if tab else "hls")
     s.id = session_id
     s.title = st.get("title") or ""
+    s.title_by_user = bool(st.get("title_by_user"))
     s.video_id = st.get("video_id") or ""
     s.site = st.get("site") or ""
     s.channel = st.get("channel") or ""

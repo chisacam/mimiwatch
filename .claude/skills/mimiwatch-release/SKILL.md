@@ -59,8 +59,15 @@ changed, copy them to `ext/` first. `ext_check.py` fails on a byte difference, a
 
 ```sh
 git push origin main
+gh run watch "$(gh run list --workflow check.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
+
+**Confirm `check.yml` went green on the pushed commit before you tag.** Local
+`bench/check_all.py` passing and CI passing are two different facts — CI installs only
+`numpy pytest ruff`, so a test that needs anything else fails only there, and `main` can
+sit red for days without anyone noticing (it did: five consecutive red runs, found only
+because a release was being prepared). Tagging a red `main` publishes it.
 
 Never tag a commit that is not on `main` yet; the workflow checks out the tag and the
 release would carry code no branch has.

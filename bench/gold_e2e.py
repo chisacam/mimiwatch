@@ -20,6 +20,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config, stream, tcpp_asr
 import refine_pass
+import transcribe_vod as vod
 from live import PROFILES
 
 SR = 16000
@@ -66,7 +67,7 @@ def read_ref(path: str) -> list[dict]:
 # ---- 전사 -----------------------------------------------------------------------
 
 def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float,
-               do_refine: bool = False, split: bool = False) -> list[dict]:
+               do_refine: bool = False, merged: bool = False) -> list[dict]:
     with wave.open(wav) as w:
         pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
     prof = PROFILES[profile]
@@ -84,7 +85,8 @@ def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float,
             got = asr.transcribe(hist.with_preroll(s.start, a), SR)
             vad.pop()
             if got["text"].strip():
-                out.append({"start": round(start, 2), "end": round(end, 2), "text": got["text"].strip()})
+                out.append({"start": round(start, 2), "end": round(end, 2),
+                            "text": got["text"].strip(), "lang": got.get("lang") or ""})
                 spans.append((s.start, s.start + len(a)))
 
     for i in range(0, len(pcm), 1600):
@@ -96,7 +98,8 @@ def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float,
     # 다르게 두면 라이브에서 재 둔 것과 비교가 성립하지 않습니다.
     if do_refine:
         print(f"    정제 {fast_n}구간...", file=sys.stderr, flush=True)
-        out = refine_pass.refine(pcm, spans, [o["text"] for o in out], asr, split=split)
+        out = (refine_pass.refine_merged(pcm, spans, [o["text"] for o in out], asr)
+               if merged else vod.refine_cues(pcm, out, spans, asr))
     return {"segments": out, "hallucinations": asr.hallucinations,
             "fast_segments": fast_n,
             "audio_s": len(pcm) / SR, "elapsed_s": round(time.time() - t0, 1)}
@@ -176,8 +179,8 @@ def main():
     ap.add_argument("--window", type=float, default=60.0)
     ap.add_argument("--refine", action="store_true",
                     help="확정본 뒤에 정제 패스를 붙입니다 (라이브와 같은 무리 규칙)")
-    ap.add_argument("--refine-split", action="store_true",
-                    help="정제본을 런타임의 구간 시각으로 도로 여러 줄로 쪼갭니다")
+    ap.add_argument("--refine-merged", action="store_true",
+                    help="49절 재현: 되쪼개지 않고 무리 하나를 자막 한 줄로 둡니다")
     a = ap.parse_args()
 
     ref = read_ref(a.ref)
@@ -186,14 +189,14 @@ def main():
     if a.device: spec["device"] = a.device
     tag = a.tag or (f"{(spec.get('model') or 'whisper')[:12]}-{a.profile}-vad{a.vad_threshold}"
                     + ("-refine" if a.refine else "")
-                    + ("-split" if a.refine_split else ""))
+                    + ("-merged" if a.refine_merged else ""))
     cache = f"{a.wav}.{tag}.asr.json"
     if os.path.exists(cache):
         got = json.load(open(cache, encoding="utf-8"))
         print(f"[{tag}] 전사 재사용 {cache}")
     else:
         got = transcribe(a.wav, spec, a.lang, a.profile, a.vad_threshold,
-                         a.refine, a.refine_split)
+                         a.refine, a.refine_merged)
         json.dump(got, open(cache, "w", encoding="utf-8"), ensure_ascii=False)
     segs = got["segments"]
     hit, n = coverage(ref, segs)

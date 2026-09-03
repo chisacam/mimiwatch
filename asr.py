@@ -104,11 +104,19 @@ class ASRBackend:
     name = "base"
 
     def transcribe(self, samples: np.ndarray, lang: str | None,
-                   on_progress=None, should_stop=None) -> list[dict]:
+                   on_progress=None, speakers: bool = False,
+                   should_stop=None, refine: bool = True) -> list[dict]:
         """`should_stop`이 참을 돌려주면 `stream.Cancelled`를 냅니다.
 
         전사는 녹화본 작업에서 가장 긴 단계입니다. 단계 사이에서만
         확인하면 시작한 뒤로는 끝날 때까지 멈출 수 없습니다.
+
+        `speakers`·`refine`은 전사기마다 할 수 있는 것이 다릅니다. 예전에는
+        부르는 쪽(`jobs`)이 엔진 이름을 보고 넘길지 말지 정했는데, 그 판정이
+        `name == "default"`라 설정에서 고른 로컬 전사기(`tcpp`)에는 화자 딱지가
+        영영 닿지 않았습니다 -- 화면의 「화자 태그 붙이기」가 기본 엔진에서
+        아무 일도 하지 않았다는 뜻입니다. 그래서 표면에 세워 두고, 할 수 없는
+        전사기가 조용히 무시합니다.
         """
         raise NotImplementedError
 
@@ -124,10 +132,11 @@ class DefaultLocal(ASRBackend):
     name = DEFAULT_NAME
 
     def transcribe(self, samples, lang, on_progress=None, speakers=False,
-                   should_stop=None):
+                   should_stop=None, refine=True):
         import transcribe_vod as vod
         return vod.transcribe(samples, lang, on_progress=on_progress,
-                              speakers=speakers, should_stop=should_stop)
+                              speakers=speakers, should_stop=should_stop,
+                              refine=refine)
 
 
 LocalHayamimi = DefaultLocal       # 옛 이름. 시험과 스크립트가 부를 수 있습니다.
@@ -146,13 +155,13 @@ class TranscribeCpp(ASRBackend):
         self.spec = spec
 
     def transcribe(self, samples, lang, on_progress=None, speakers=False,
-                   should_stop=None):
+                   should_stop=None, refine=True):
         import transcribe_vod as vod
         from tcpp_asr import build_live_asr
         engine = build_live_asr(self.spec, lang, threads=4)
         return vod.transcribe(samples, lang, on_progress=on_progress,
                               speakers=speakers, asr=engine,
-                              should_stop=should_stop)
+                              should_stop=should_stop, refine=refine)
 
 
 class OpenAICompatibleASR(ASRBackend):
@@ -204,7 +213,14 @@ class OpenAICompatibleASR(ASRBackend):
         return post_transcription(self.base_url, self.model, self.api_key, audio, lang,
                                   self.timeout)
 
-    def transcribe(self, samples, lang, on_progress=None, should_stop=None):
+    def transcribe(self, samples, lang, on_progress=None, speakers=False,
+                   should_stop=None, refine=True):
+        """`speakers`·`refine`은 받아서 무시합니다.
+
+        창 하나를 통째로 원격에 보내고 구간 시각까지 받아 오는 경로라, 정제가
+        하려는 일(짧게 끊은 것을 다시 합쳐 해독)을 이미 하고 있는 셈입니다.
+        화자 딱지는 CAM++가 이 기계에서 도는 것이므로 원격 경로에는 없습니다.
+        """
         spans = self._cut_points(samples)
         cues: list[dict] = []
         total = len(samples)

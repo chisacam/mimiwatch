@@ -124,7 +124,7 @@ async function submitAdd(e) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: up.path, lang: f.lang.value || null, asr: state.asr,
-        speakers: f.speakers.checked, genre: currentGenre(),
+        speakers: f.speakers.checked, refine: state.refine, genre: currentGenre(),
         viewer_lang: $("viewer-lang").value, backend: state.backend,
       }),
     })).json();
@@ -158,7 +158,7 @@ async function submitAdd(e) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url, lang: f.lang.value || null, asr: state.asr,
-      speakers: f.speakers.checked, genre: currentGenre(),
+      speakers: f.speakers.checked, refine: state.refine, genre: currentGenre(),
       viewer_lang: $("viewer-lang").value, backend: state.backend,
     }),
   })).json();

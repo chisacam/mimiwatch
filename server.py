@@ -798,7 +798,8 @@ class Handler(BaseHTTPRequestHandler):
             body.get("backend") or "",
             body.get("asr") or "",
             bool(body.get("speakers")),
-            body.get("genre")))
+            body.get("genre"),
+            bool(body.get("refine", True))))
 
     def _keep_masked_key(self, kind: str, entry: dict) -> dict:
         """화면이 가린 키(KEY_MASK)를 그대로 돌려보냈으면 저장된 키를 지킵니다.

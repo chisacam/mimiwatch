@@ -264,17 +264,132 @@ def read_wav(path: str) -> WavSamples:
     return WavSamples(path)
 
 
+# 전체 전사 시간에서 정제 패스가 차지하는 몫. 49절 실측에서 정제를 붙이면
+# 30~50% 길어졌습니다. 진행률을 두 몫으로 나누는 데만 씁니다 -- 빠른 패스가
+# 100%에 닿고 나서 한참 더 도는 것처럼 보이면 멈춘 것으로 읽힙니다.
+REFINE_SHARE = 0.35
+
+
+def refine_groups(spans: list[tuple[int, int]]) -> list[list[int]]:
+    """확정 구간을 정제 단위로 묶습니다. 값은 각 무리의 인덱스 목록.
+
+    무리를 닫는 규칙은 라이브(`stream.Refiner.maybe_refine`)와 같습니다.
+    라이브는 「마지막 발화 뒤로 2초가 조용하면 끝」을 흘러가는 시계로
+    판정하는데, 다 받아 둔 오디오에서는 그것이 「다음 발화가 2초 뒤에 온다」가
+    됩니다. 쉬지 않고 말해도 25초에서 끊는 것은 같습니다. 상수를 여기 베끼지
+    않고 `stream`에서 읽는 이유는, 그쪽이 움직이면 이쪽도 함께 움직여야
+    하기 때문입니다.
+    """
+    gap = int(stream.GROUP_GAP_S * SAMPLE_RATE)
+    mx = int(stream.GROUP_MAX_S * SAMPLE_RATE)
+    groups: list[list[int]] = []
+    cur: list[int] = []
+    for i, (start, end) in enumerate(spans):
+        if cur and (start - spans[cur[-1]][1] >= gap
+                    or end - spans[cur[0]][0] >= mx):
+            groups.append(cur)
+            cur = []
+        cur.append(i)
+    if cur:
+        groups.append(cur)
+    return groups
+
+
+def _speaker_for(cues: list[dict], idx: list[int], start: float, end: float) -> str:
+    """새 자막 줄에 붙일 화자. 확정본이 이미 받아 둔 딱지를 물려받습니다.
+
+    되쪼갠 줄마다 CAM++를 다시 돌릴 수도 있지만, 확정본은 이미 구간마다
+    딱지를 달았고 그때 쓴 조각이 더 깁니다 -- 33절이 말한 「구간에 목소리가
+    충분해야 한다」는 조건은 그쪽이 낫습니다. 시간이 가장 많이 겹치는
+    확정 줄의 딱지를 씁니다.
+    """
+    best, best_overlap = "", 0.0
+    for i in idx:
+        c = cues[i]
+        overlap = min(end, c["end"]) - max(start, c["start"])
+        if overlap > best_overlap:
+            best, best_overlap = c.get("speaker", ""), overlap
+    return best
+
+
+def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
+                on_progress=None, should_stop=None) -> list[dict]:
+    """발화 무리를 통째로 다시 해독하고, 구간 시각으로 도로 쪼갭니다.
+
+    확정본은 구간을 따로따로 해독한 것이라 앞뒤 문맥이 없습니다. 무리를
+    합쳐 다시 넘기면 그만큼 좋아집니다(48절: 전체 오류율 57.8 → 55.9).
+
+    **되쪼개는 것이 이 함수의 핵심입니다.** 라이브의 정제는 무리 하나를 한
+    줄로 내보내고 그것으로 충분한데 -- 그 줄은 곧 지나갑니다 -- 녹화본 자막은
+    남아서 플레이어가 시각으로 찾아가는 대상입니다. 무리를 한 줄로 두면
+    자막 줄이 4.8초에서 11.7초로 늘고 끝단 품질이 오히려 떨어졌습니다
+    (49절: chrF 29.3 → 27.7, 전체 이어붙이기는 39.6으로 동일 -- 글자가 아니라
+    시각을 뭉갠 것입니다). 런타임에 구간 시각을 물어 도로 나누면 같은 표본에서
+    32.4로, 재 본 설정 가운데 가장 높습니다.
+
+    시각을 받지 못하는 전사기(원격)나 되돌림에 걸린 무리는 확정본을 그대로
+    둡니다. 좋아지지 않는 자리에서 나빠지지는 않아야 합니다.
+    """
+    groups = refine_groups(spans)
+    pre = int(stream.PREROLL_S * SAMPLE_RATE)
+    out: list[dict] = []
+    for n, g in enumerate(groups):
+        if should_stop and should_stop():
+            raise stream.Cancelled()
+        keep = [cues[i] for i in g]
+        first, last = spans[g[0]][0], spans[g[-1]][1]
+        base = max(0, first - pre)
+        lo, hi = first / SAMPLE_RATE, last / SAMPLE_RATE
+        buf = samples[base:last]
+        joined = " ".join(c["text"] for c in keep if c["text"].strip())
+        if len(buf) >= SAMPLE_RATE // 2:
+            got = asr.transcribe(buf, SAMPLE_RATE, speech_s=len(buf) / SAMPLE_RATE,
+                                 live=False, segments=True)
+            text = got["text"].strip()
+            segs = got.get("segments") or []
+            # 되돌림은 라이브와 같은 문턱입니다. 다시 해독한 것이 확정본을 이어
+            # 붙인 것보다 눈에 띄게 짧으면 말을 삼킨 것이고, 말을 삼킨 해독으로
+            # 멀쩡한 자막을 바꿔치기하는 것이 가장 나쁩니다.
+            if segs and len(text) >= stream.REFINE_MIN_KEEP * len(joined):
+                lang = got.get("lang") or keep[0]["lang"]
+                keep = []
+                for sg in segs:
+                    start = min(max(base / SAMPLE_RATE + sg["start"], lo), hi)
+                    end = min(max(base / SAMPLE_RATE + sg["end"], lo), hi)
+                    # 선행 1초 안에서만 나온 줄은 앞 무리의 꼬리이고, 시각이
+                    # 뭉개진 조각은 자막이 될 수 없습니다. 둘 다 버립니다.
+                    if end - start < 0.05:
+                        continue
+                    cue = {"start": round(start, 3), "end": round(end, 3),
+                           "lang": lang, "text": sg["text"]}
+                    who = _speaker_for(cues, g, start, end)
+                    if who:
+                        cue["speaker"] = who
+                    keep.append(cue)
+                if not keep:                       # 전부 걸러졌으면 확정본을 되돌립니다
+                    keep = [cues[i] for i in g]
+        out.extend(keep)
+        if on_progress:
+            on_progress((n + 1) / len(groups))
+    return out
+
+
 def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress=None,
-               speakers: bool = False, asr=None, should_stop=None) -> list[dict]:
+               speakers: bool = False, asr=None, should_stop=None,
+               refine: bool = True) -> list[dict]:
     """VAD-segment the whole file and decode each segment.
 
     Segment.start is a sample index, which is exactly the media timestamp the
     player needs -- the realtime pipeline throws this away because it only
     ever cared about "now".
 
-    `samples`에서 쓰는 것은 `len()`과 앞에서부터 자르는 것뿐입니다. 그래서
-    `read_wav`가 주는 파일 대응 창(WavSamples)도 그대로 받습니다 -- 두 시간
-    짜리 방송을 배열로 만들지 않으려고 그렇게 두었습니다.
+    `samples`에서 쓰는 것은 `len()`과 잘라 내는 것뿐입니다. 그래서 `read_wav`가
+    주는 파일 대응 창(WavSamples)도 그대로 받습니다 -- 두 시간짜리 방송을
+    배열로 만들지 않으려고 그렇게 두었습니다.
+
+    `refine`이면 확정본을 낸 뒤에 무리째 다시 해독합니다(`refine_cues`).
+    녹화본에는 지연 제약이 없으니 기본으로 켭니다. 대신 전사 시간이 30~50%
+    깁니다 -- 그것이 아까운 자리를 위해 끌 수 있게 두었습니다.
     """
     if asr is None:
         asr = build_live_asr(None, lang, threads=4)
@@ -287,7 +402,10 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
         from speaker_id import SpeakerLabeler
         labeler = SpeakerLabeler()
     cues: list[dict] = []
+    # 자막 줄과 짝이 되는 표본 구간. 정제가 무리를 묶는 데 씁니다.
+    spans: list[tuple[int, int]] = []
     total = len(samples)
+    fast_share = (1.0 - REFINE_SHARE) if refine else 1.0
 
     def drain():
         while not vad.empty():
@@ -308,6 +426,7 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
                 if labeler is not None:
                     cue["speaker"] = labeler.label(buf, SAMPLE_RATE)
                 cues.append(cue)
+                spans.append((seg.start, seg.start + len(buf)))
 
     for i in range(0, total, CHUNK):
         if should_stop and should_stop():
@@ -315,9 +434,15 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
         vad.accept_waveform(samples[i:i + CHUNK])
         drain()
         if on_progress and i % (CHUNK * 300) == 0:
-            on_progress(i / total)
+            on_progress(i / total * fast_share)
     vad.flush()
     drain()
+    if refine and cues:
+        def note(p):
+            if on_progress:
+                on_progress(fast_share + p * REFINE_SHARE)
+        cues = refine_cues(samples, cues, spans, asr, on_progress=note,
+                           should_stop=should_stop)
     return cues
 
 
@@ -346,6 +471,8 @@ def main():
     ap.add_argument("--backend", default="", help="번역 엔진 id (비우면 설정의 기본)")
     ap.add_argument("--speakers", action="store_true",
                     help="화자 딱지를 붙입니다 (S1, S2, ...)")
+    ap.add_argument("--no-refine", action="store_true",
+                    help="정제 패스를 건너뜁니다 (전사가 30~50% 짧아지는 대신 품질이 내려갑니다)")
     args = ap.parse_args()
 
     import jobs
@@ -353,7 +480,8 @@ def main():
     store.init()
     res = jobs.start_transcribe(args.url, args.lang, args.viewer_lang,
                                 backend_id=args.backend, asr_id=args.asr,
-                                speakers=args.speakers, genre=args.genre)
+                                speakers=args.speakers, genre=args.genre,
+                                refine=not args.no_refine)
     job_id = res["id"]
     last = ""
     while True:

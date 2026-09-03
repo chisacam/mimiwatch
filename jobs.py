@@ -398,7 +398,8 @@ def start_retranslate(value: str, backend_id: str, cue_ids=None,
 
 def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                      backend_id: str = "", asr_id: str = "",
-                     speakers: bool = False, genre: str | None = None) -> dict:
+                     speakers: bool = False, genre: str | None = None,
+                     refine: bool = True) -> dict:
     """Take a URL from the UI all the way to a playable cue file.
 
     Everything the CLI does, driven from the browser, with the phase reported
@@ -413,14 +414,15 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                       video=None, asr=asr_id,
                       genre=genre or mw_translate.DEFAULT_GENRE)
     _spawn(job_id, _run_transcribe,
-           (job_id, url, lang, viewer_lang, backend_id, asr_id, speakers, genre))
+           (job_id, url, lang, viewer_lang, backend_id, asr_id, speakers, genre,
+            refine))
     return {"id": job_id}
 
 
 def _run_transcribe(job_id: str, url: str, lang: str | None,
                     viewer_lang: str, backend_id: str,
                     asr_id: str = "", speakers: bool = False,
-                    genre: str | None = None):
+                    genre: str | None = None, refine: bool = True):
     def note(**kw):
         _note(job_id, **kw)
 
@@ -451,8 +453,11 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         note(phase="transcribe", total=int(audio_s))
         engine = mw_asr.build(find_asr(asr_id))
         try:
-            kw = {"speakers": speakers} if engine.name == mw_asr.DEFAULT_NAME else {}
-            cues = engine.transcribe(samples, lang, **kw,
+            # 예전에는 여기서 엔진 이름을 보고 `speakers`를 넘길지 정했습니다.
+            # 그 판정이 `default`라, 설정에서 고른 로컬 전사기(`tcpp`, 기본값이
+            # 그것입니다)에는 화자 딱지가 한 번도 닿지 않았습니다. 이제 표면이
+            # 둘 다 받고, 할 수 없는 전사기가 무시합니다(asr.ASRBackend).
+            cues = engine.transcribe(samples, lang, speakers=speakers, refine=refine,
                                      on_progress=lambda p: note(done=int(p * audio_s)),
                                      should_stop=cancelled)
         except mw_stream.Cancelled:
@@ -468,7 +473,8 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             print(f"[job] external ASR failed ({exc}); using the local engine", flush=True)
             engine = mw_asr.DefaultLocal()
             try:
-                cues = engine.transcribe(samples, lang,
+                cues = engine.transcribe(samples, lang, speakers=speakers,
+                                         refine=refine,
                                          on_progress=lambda p: note(done=int(p * audio_s)),
                                          should_stop=cancelled)
             except mw_stream.Cancelled:

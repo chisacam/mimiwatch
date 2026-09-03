@@ -19,6 +19,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config, stream, tcpp_asr
 import refine_pass
+import transcribe_vod as vod
 from live import PROFILES
 
 PUNCT = re.compile(r"[\s、。，．,.!?！？「」『』（）()\[\]【】…・~〜\-—–\"'“”‘’:;：；♪]")
@@ -121,8 +122,8 @@ def main():
                     help=f"Silero 말 판정 문턱 (기본 {stream.VAD_THRESHOLD})")
     ap.add_argument("--refine", action="store_true",
                     help="확정본 뒤에 정제 패스를 붙입니다 (라이브와 같은 무리 규칙)")
-    ap.add_argument("--refine-split", action="store_true",
-                    help="정제본을 런타임의 구간 시각으로 도로 여러 줄로 쪼갭니다")
+    ap.add_argument("--refine-merged", action="store_true",
+                    help="49절 재현: 되쪼개지 않고 무리 하나를 자막 한 줄로 둡니다")
     a = ap.parse_args()
     if a.diversity is not None:
         tcpp_asr.DIVERSITY_FLOOR = a.diversity
@@ -153,7 +154,10 @@ def main():
         # 실제로 잽니다. 무리 수도 함께 적습니다(구간이 몇 개로 합쳐졌는지).
         groups = 0
         if a.refine:
-            lines = refine_pass.refine(pcm, spans, parts, asr, split=a.refine_split)
+            cues = [{"start": lo / 16000, "end": hi / 16000, "lang": "", "text": t}
+                    for (lo, hi), t in zip(spans, parts)]
+            lines = (refine_pass.refine_merged(pcm, spans, parts, asr)
+                     if a.refine_merged else vod.refine_cues(pcm, cues, spans, asr))
             groups = len(lines)
             parts = [ln["text"] for ln in lines]
         hyp = " ".join(parts)

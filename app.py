@@ -1,19 +1,24 @@
-"""묶음(PyInstaller)의 진입점. 저장소에서 돌 때는 `server.py`를 그대로 씁니다.
+"""Entry point of the bundle (PyInstaller). Running from the repository uses
+`server.py` directly.
 
-실행 파일 하나가 세 얼굴을 갖습니다.
+One executable wears three faces.
 
-  mimiwatch                  서버를 띄우고 브라우저로 화면을 엽니다 (두 번 눌러 띄우는 경우)
-  mimiwatch --port 8951      다른 포트. `--no-browser`로 브라우저를 열지 않습니다
-  mimiwatch --ytdlp ...      yt-dlp로 동작합니다 -- 묶음 안에는 `python -m yt_dlp`를
-                             부를 파이썬이 없으므로 서버가 자기 자신을 이렇게 다시
-                             띄웁니다(`stream.ytdlp_cmd`). 자식 프로세스여야 시간
-                             상한을 걸고 죽일 수 있습니다.
-  mimiwatch --doctor [주소]  bench/doctor.py -- 준비물·백엔드·모델 적재를 한 번에 찍습니다.
-                             묶음에는 파이썬이 없어 그 스크립트를 따로 돌릴 수 없으므로
-                             여기 붙였습니다.
+  mimiwatch                  Starts the server and opens the screen in the browser
+                             (the double-click case)
+  mimiwatch --port 8951      A different port. `--no-browser` does not open the browser
+  mimiwatch --ytdlp ...      Acts as yt-dlp -- the bundle has no Python to call
+                             `python -m yt_dlp` with, so the server launches
+                             itself again like this (`stream.ytdlp_cmd`). It has
+                             to be a child process for a time limit to be put on
+                             it and for it to be killable.
+  mimiwatch --doctor [url]   bench/doctor.py -- prints the prerequisites, the
+                             backends and a model load in one go. The bundle has
+                             no Python, so that script cannot be run on its own;
+                             it is attached here.
 
-창 없이 돌 때(맥의 .app) 표준 출력은 아무 데도 가지 않습니다. 그때는 사용자
-영역의 `mimiwatch.log`로 돌립니다 -- 무엇이 잘못됐는지 볼 곳이 그것뿐입니다.
+When it runs without a window (the macOS .app) standard output goes nowhere.
+Then it is turned towards `mimiwatch.log` in the user area -- that is the only
+place to see what went wrong.
 """
 from __future__ import annotations
 
@@ -32,12 +37,13 @@ def _ytdlp(argv: list[str]) -> int:
 
 
 def _trust_store():
-    """묶음 안의 파이썬에 CA 목록을 알려 줍니다.
+    """Tells the Python inside the bundle where the CA list is.
 
-    PyInstaller 가 넣어 주는 OpenSSL 은 만든 기계의 인증서 경로를 기억하고 있어
-    다른 기계에서는 그 파일이 없습니다. 그러면 허깅페이스도 깃허브도
-    CERTIFICATE_VERIFY_FAILED 가 됩니다 -- 맥의 파이썬은 키체인을 읽지 않습니다.
-    certifi 의 묶음을 가리키면 우리 요청과, 자식으로 뜨는 yt-dlp 도 함께 봅니다.
+    The OpenSSL that PyInstaller puts in remembers the certificate path of the
+    machine it was built on, and on another machine that file is not there. Then
+    both Hugging Face and GitHub become CERTIFICATE_VERIFY_FAILED -- the Python
+    on macOS does not read the keychain. Pointing at certifi's bundle makes our
+    own requests and the yt-dlp that comes up as a child look at it too.
     """
     if not getattr(sys, "frozen", False) or os.environ.get("SSL_CERT_FILE"):
         return
@@ -49,7 +55,7 @@ def _trust_store():
 
 
 def _log_to_file():
-    """표준 출력이 없으면(창 없는 묶음) 로그 파일로 보냅니다."""
+    """When there is no standard output (a windowless bundle), send it to the log file."""
     import paths
     try:
         if sys.stdout is not None and sys.stdout.isatty():
@@ -72,7 +78,7 @@ def main() -> int:
         sys.argv = ["doctor"] + argv[1:]
         runpy.run_path(os.path.join(paths.BASE, "bench", "doctor.py"), run_name="__main__")
         return 0
-    # 윈도우 콘솔의 기본 인코딩(cp949)으로는 한글 제목이 깨집니다.
+    # The Windows console's default encoding (cp949) mangles Korean titles.
     for s in (sys.stdout, sys.stderr):
         try:
             s.reconfigure(encoding="utf-8")
@@ -84,9 +90,10 @@ def main() -> int:
     if want_browser and "--open" not in argv:
         argv.append("--open")
     import server
-    # 서버가 끝나면 파이널라이즈를 거치지 않고 끝냅니다 -- server.hard_exit 참고.
-    # 다른 갈래는 보통 종료로 충분합니다: --ytdlp 는 모델이 없고, --doctor 는 모델을
-    # 올려 보되 주 스레드에서 곧 놓으므로 소멸자가 돌 때 GPU 버퍼가 남지 않습니다.
+    # Once the server is done we end without going through finalization -- see
+    # server.hard_exit. The other branches are fine with a normal exit: --ytdlp
+    # has no model, and --doctor does load a model but lets go of it soon after
+    # on the main thread, so no GPU buffer is left when the destructors run.
     server.hard_exit(server.main(argv) or 0)
 
 

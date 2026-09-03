@@ -1,29 +1,35 @@
-"""작업 상태와 라이브 자막의 영속화.
+"""Persistence for job state and live subtitles.
 
-전사 결과(`data/<id>.json`)와 엔진 설정(`backends.json`)은 이미 파일로 남지만,
-진행 중인 작업과 라이브 세션은 전부 프로세스 메모리에만 있었습니다. 녹화본
-전사는 몇 분이라 다시 돌리면 그만이지만 라이브는 다릅니다. 두 시간짜리 방송을
-받아 적던 중에 서버를 한 번 재시작하면 그때까지의 자막이 통째로 사라졌습니다.
-브라우저에만 쌓여 있었으므로 탭을 새로고침해도 마찬가지였습니다.
+Transcription results (`data/<id>.json`) and engine settings (`backends.json`)
+already survive as files, but running jobs and live sessions lived entirely in
+process memory. A VOD transcription takes a few minutes, so re-running it costs
+nothing; live is different. Restarting the server once while taking down a
+two-hour broadcast lost every subtitle written until then. They had only ever
+accumulated in the browser, so refreshing the tab did the same.
 
-**저장 형태**. 작업과 세션 레코드는 열로 펼치지 않고 JSON 한 덩어리로 넣습니다.
-이 두 딕셔너리는 그대로 HTTP 응답 본문이 되므로, 열로 펼치면 필드가 하나 늘 때마다
-스키마와 응답이 어긋날 자리가 생깁니다. 조회 조건이 id 하나뿐이라 펼쳐서 얻을
-것도 없습니다. 반대로 자막은 정식 테이블입니다. 정제본이 확정 줄 여러 개를
-흡수하면서 그 줄들을 지우고, 번역이 나중에 따로 도착하므로, 한 줄 단위로
-갱신하고 지울 수 있어야 합니다.
+**Storage shape**. Job and session records go in as one JSON blob rather than
+spread across columns. These two dictionaries become the HTTP response body as
+they are, so spreading them across columns creates a place for the schema and
+the response to disagree every time a field is added. The only query condition
+is a single id, so there is nothing to gain by spreading them either.
+Subtitles, by contrast, are a real table. A refined line absorbs several final
+lines and deletes them, and its translation arrives separately later, so it has
+to be possible to update and delete one line at a time.
 
-**동시성**. 서버는 ThreadingHTTPServer이고, 라이브 세션마다 번역 작업 스레드와
-내려받기 스레드가 따로 돕니다(예전에는 자막 한 줄마다 스레드를 띄웠습니다). 연결을
-스레드별로 두면(threading.local) 그 수명이 짧은 요청 스레드마다 연결을 열게 되므로,
-**연결 하나를 락으로 감싸는 쪽**을 골랐습니다. 이 코드에는 트랜잭션을 오래 붙들고 있는
-경로가 없어서 그래도 됩니다. 몇 시간씩 붙어 있는 SSE 핸들러조차 접속 순간에 백로그를 한 번 읽고 나면
-DB를 건드리지 않습니다. 그래서 `check_same_thread=False`로 열고 모든 접근을
-`_lock` 안에서 합니다.
+**Concurrency**. The server is a ThreadingHTTPServer, and every live session
+runs a translation job thread and a download thread of its own (it used to
+spawn a thread per subtitle line). A connection per thread (threading.local)
+would open one for every short-lived request thread, so **one connection
+wrapped in a lock** was chosen instead. This code has no path that holds a
+transaction open for long, which is what makes that acceptable. Even an SSE
+handler attached for hours reads the backlog once at connect time and then
+never touches the DB. So it is opened with `check_same_thread=False` and every
+access happens inside `_lock`.
 
-WAL은 그래도 켭니다. 커밋마다 fsync를 하지 않아 자막 쓰기가 디스크를 기다리지
-않고, 재시작이 이 파일의 존재 이유인 만큼 저널 방식이 중간에 끊겨도 복구되는
-쪽이 낫습니다.
+WAL is still turned on. It does not fsync on every commit, so a subtitle write
+does not wait on the disk, and since restarts are the reason this file exists
+at all, a journal mode that recovers from being cut off partway is the better
+one.
 """
 from __future__ import annotations
 
@@ -36,17 +42,18 @@ import time
 import paths
 
 BASE = paths.BASE
-# 저장 위치. `MIMIWATCH_DATA_DIR`로 바꿀 수 있습니다 -- 시험이 임시 디렉터리에
-# 서버를 띄울 때, 또는 큰 wav 를 다른 디스크에 두고 싶을 때. 저장소에서 돌면
-# `<저장소>/data`, 묶음이면 사용자 영역입니다(paths.py).
+# Where things are stored. `MIMIWATCH_DATA_DIR` overrides it -- when a test
+# brings the server up in a temporary directory, or when a large wav belongs on
+# another disk. Running from the repo it is `<repo>/data`; in a bundle it is the
+# user area (paths.py).
 DATA = paths.data_dir()
 DB = os.path.join(DATA, "mimiwatch.db")
 
 _lock = threading.Lock()
 _db: sqlite3.Connection | None = None
 
-# 마이그레이션 단계를 사용자에게 시키지 않습니다. 시작할 때마다 IF NOT EXISTS로
-# 만들고, 그것으로 끝입니다.
+# The user is never asked to run a migration step. Every start creates the
+# tables with IF NOT EXISTS, and that is all.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
   id       TEXT PRIMARY KEY,
@@ -81,16 +88,16 @@ CREATE TABLE IF NOT EXISTS docs (
 );
 """
 
-# 열 이름이 바뀌었습니다. 예전 판으로 만든 파일에는 `session`과 `t`가 있고,
-# IF NOT EXISTS는 이미 있는 테이블을 그냥 두므로 여기서 따로 옮깁니다.
+# Column names changed. A file made by an older version has `session` and `t`,
+# and IF NOT EXISTS leaves an existing table alone, so the move happens here.
 #
-# `session`을 `owner`로 바꾼 것은 이 표가 이제 라이브 세션만 담지 않기
-# 때문입니다. 녹화본 자막도 같은 표에 들어옵니다 -- 저장 모양이 갈려 있어서
-# 자막 한 줄을 고치는 길이 두 벌이었고, 내보내기·편집·재번역이 그 갈래를
-# 하나씩 더 짊어져야 했습니다.
+# `session` became `owner` because this table no longer holds only live
+# sessions. VOD subtitles come into the same table -- with the storage shape
+# split, there were two ways to edit one subtitle line, and export, editing and
+# re-translation each had to carry one more branch.
 #
-# `t`를 `start`로 바꾼 것은 이제 짝이 되는 `end`가 생겼기 때문입니다.
-# 녹화본은 구간을 실제로 재어 두었고, 라이브는 끝 시각을 모릅니다(0).
+# `t` became `start` because it now has a matching `end`. A VOD's ranges were
+# actually measured; live does not know the end time (0).
 COLUMN_MOVES = [("session", "owner"), ("t", "start")]
 
 
@@ -105,27 +112,27 @@ def _connect() -> sqlite3.Connection:
         _db.execute("PRAGMA busy_timeout=5000")
         _migrate_columns(_db)
         _db.executescript(SCHEMA)
-        _migrate_columns(_db)      # 갓 만든 표에는 걸릴 것이 없습니다
+        _migrate_columns(_db)      # a freshly made table has nothing to move
         _db.commit()
     return _db
 
 
 def _migrate_columns(db: sqlite3.Connection):
-    """옛 열 이름을 새 이름으로 옮깁니다. 이미 옮겼으면 아무것도 하지 않습니다."""
+    """Move the old column names to the new ones. Does nothing once moved."""
     have = {r[1] for r in db.execute("PRAGMA table_info(cues)")}
     if not have:
-        return                      # 표가 아직 없습니다. SCHEMA가 만듭니다.
+        return                      # no table yet. SCHEMA creates it.
     for old, new in COLUMN_MOVES:
         if old in have and new not in have:
             db.execute(f"ALTER TABLE cues RENAME COLUMN {old} TO {new}")
             have.discard(old)
             have.add(new)
     if "end" not in have:
-        # 이미 쌓인 자막은 전부 라이브라 끝 시각이 없습니다. 0은 「모른다」는
-        # 뜻이고, 내보낼 때 다음 줄까지로 지어 줍니다.
+        # Every subtitle accumulated so far is live and has no end time. 0
+        # means "unknown", and export synthesizes it up to the next line.
         db.execute("ALTER TABLE cues ADD COLUMN end REAL NOT NULL DEFAULT 0")
     if "edited" not in have:
-        # 사람이 손댄 자리를 적어 둡니다. 빈 문자열이면 기계가 적은 그대로.
+        # Records where a person edited. Empty means as the machine wrote it.
         db.execute("ALTER TABLE cues ADD COLUMN edited TEXT NOT NULL DEFAULT ''")
 
 
@@ -146,7 +153,7 @@ def _rows(sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         return _connect().execute(sql, args).fetchall()
 
 
-# ---- 작업 -----------------------------------------------------------------
+# ---- Jobs ------------------------------------------------------------------
 
 def save_job(job: dict):
     _write("INSERT OR REPLACE INTO jobs (id, updated, doc) VALUES (?, ?, ?)",
@@ -159,21 +166,23 @@ def all_jobs() -> list[dict]:
 
 
 def prune_jobs(keep: int = 200):
-    """작업 레코드는 진행률 표시용이라 오래된 것을 붙들 이유가 없습니다.
-    자막과 달리 지워도 사용자가 잃는 것이 없으므로 여기만 상한을 둡니다."""
+    """Job records exist to show progress, so there is no reason to hold on to
+    old ones. Unlike subtitles, deleting them costs the user nothing, so this
+    is the only place with a cap."""
     _write("DELETE FROM jobs WHERE id NOT IN "
            "(SELECT id FROM jobs ORDER BY updated DESC LIMIT ?)", (keep,))
 
 
-# ---- 라이브 세션 -----------------------------------------------------------
+# ---- Live sessions ---------------------------------------------------------
 
 def save_session(status: dict, video_id: str = ""):
     now = time.time()
     _write("INSERT INTO sessions (id, started, updated, video_id, doc) "
            "VALUES (?, ?, ?, ?, ?) "
            "ON CONFLICT(id) DO UPDATE SET updated=excluded.updated, "
-           # video_id는 방송 정보를 받아 오기 전에는 비어 있습니다. 나중에
-           # 채워진 값을 빈 문자열로 되돌리지 않도록 있을 때만 덮어씁니다.
+           # video_id is empty until the broadcast metadata arrives. It is
+           # overwritten only when present, so a value filled in later is not
+           # reset to an empty string.
            "  video_id=CASE WHEN excluded.video_id != '' "
            "             THEN excluded.video_id ELSE sessions.video_id END, "
            "  doc=excluded.doc",
@@ -199,10 +208,12 @@ def sessions(limit: int = 50) -> list[dict]:
 
 
 def delete_session(session_id: str) -> bool:
-    """세션과 그 자막을 지웁니다. 받는 중인 세션을 막는 것은 live.py의 일입니다.
+    """Delete a session and its subtitles. Blocking a session that is still
+    being received is live.py's job.
 
-    예전에는 지울 길이 없어 목록이 자라기만 했습니다 -- 최근 20개만 보이는
-    목록 뒤에 시험용 세션과 실패한 세션이 쌓여 진짜 방송이 밀려났습니다.
+    There used to be no way to delete, so the list only grew -- test sessions
+    and failed sessions piled up behind a list that shows only the most recent
+    20, and the real broadcasts were pushed out.
     """
     with _lock:
         db = _connect()
@@ -218,13 +229,15 @@ def running_session_ids() -> list[str]:
             ("starting", "loading", "running")]
 
 
-# ---- 라이브 자막 -----------------------------------------------------------
+# ---- Live subtitles --------------------------------------------------------
 
 def save_cue(session_id: str, cue: dict):
-    """확정 줄을 넣거나, 정제본으로 같은 id의 줄을 갈아 끼웁니다.
+    """Insert a final line, or replace the line with the same id with a
+    refined one.
 
-    갈아 끼울 때 번역은 비웁니다. 정제본은 문장이 바뀐 것이므로 앞 번역은
-    이미 틀린 문장에 대한 번역입니다. 새 번역은 곧 따로 도착합니다.
+    The translation is cleared on replacement. A refined line is a changed
+    sentence, so the earlier translation is a translation of a sentence that is
+    already wrong. The new translation arrives separately, soon.
     """
     _write("INSERT INTO cues (owner, cue_id, kind, start, end, text, lang, speaker) "
            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
@@ -232,10 +245,11 @@ def save_cue(session_id: str, cue: dict):
            "  kind=excluded.kind, start=excluded.start, end=excluded.end, "
            "  text=excluded.text, "
            "  lang=excluded.lang, speaker=excluded.speaker, tr='{}'",
-           # `.get(k, "")`는 키가 없을 때만 기본값을 냅니다. 키가 있고
-           # 값이 None이면 None이 그대로 바인딩되어, 열의 DEFAULT ''도
-           # 적용되지 않은 채 NOT NULL에 걸립니다. 자막 한 줄을 잃는 것도
-           # 아니고 세션이 끝나므로, 값 쪽에서 한 번 더 거릅니다.
+           # `.get(k, "")` yields the default only when the key is missing.
+           # With the key present and the value None, None binds as it is,
+           # the column's DEFAULT '' does not apply either, and it hits NOT
+           # NULL. That does not cost one subtitle line, it ends the session,
+           # so the values are filtered once more here.
            (session_id, int(cue["id"]), cue.get("kind") or "",
             float(cue.get("t") or 0), float(cue.get("end") or 0),
             cue.get("text") or "",
@@ -251,9 +265,9 @@ def drop_cues(session_id: str, cue_ids: list[int]):
 
 
 def save_translation(session_id: str, cue_id: int, backend: str, text: str):
-    # 읽고 고쳐 쓰는 것을 한 락 안에서 합니다. json_set()을 쓰면 한 문장이지만
-    # SQLite 빌드에 JSON1이 있느냐에 달리게 되고, 그것은 이 도구가 굳이 질
-    # 필요가 없는 의존입니다.
+    # The read-modify-write happens inside one lock. json_set() would make it
+    # a single statement but would depend on whether the SQLite build has
+    # JSON1, and that is a dependency this tool has no need to take on.
     with _lock:
         db = _connect()
         row = db.execute("SELECT tr, edited FROM cues WHERE owner = ? AND cue_id = ?",
@@ -262,10 +276,11 @@ def save_translation(session_id: str, cue_id: int, backend: str, text: str):
             return
         tr = json.loads(row["tr"] or "{}")
         tr[backend] = text
-        # 기계가 방금 번역했으니 「원문과 다름」 표시는 걷습니다. 이 번역은
-        # 지금 있는 원문의 것입니다. 사람이 손댔다는 표시("tr")는 남깁니다 --
-        # 그 줄은 애초에 재번역이 건너뛰므로 여기 오지 않지만, 라이브에서
-        # 늦게 도착한 번역이 덮는 경우가 있습니다.
+        # The machine just translated, so the "differs from the source" mark
+        # comes off. This translation belongs to the source text as it now
+        # stands. The hand-edited mark ("tr") stays -- re-translation skips
+        # such a line in the first place so it does not come here, but in live
+        # a translation arriving late does overwrite it.
         flags = {f for f in (row["edited"] or "").split(",") if f} - {"text"}
         db.execute("UPDATE cues SET tr = ?, edited = ? "
                    "WHERE owner = ? AND cue_id = ?",
@@ -275,17 +290,21 @@ def save_translation(session_id: str, cue_id: int, backend: str, text: str):
 
 
 def cues(owner: str) -> list[dict]:
-    """쌓인 자막을 **시각순으로**. 번호는 신원이지 순서가 아닙니다.
+    """The accumulated subtitles, **in time order**. The number is identity,
+    not order.
 
-    전사가 만든 줄은 번호와 시각의 순서가 같지만(정제본도 흡수한 첫 줄의
-    id·시각을 물려받습니다), 사람이 써 넣은 줄(insert_cue)은 번호가 늘
-    마지막이면서 시각은 빈 자리 어딘가입니다. 번호로 정렬하면 그 줄이
-    끝에 붙어 내보내기 순서, 번역 문맥(앞 몇 줄), 화면의 시각 조회가 전부
-    어긋납니다. 번호는 같은 시각 안의 결정적 순서로만 씁니다.
+    For lines transcription made, number order and time order agree (a refined
+    line inherits the id and the time of the first line it absorbed), but a
+    line a person wrote in (insert_cue) always has the last number while its
+    time sits somewhere in an empty gap. Sorting by number sticks that line on
+    the end and throws off the export order, the translation context (the
+    preceding few lines) and the time lookup on screen, all of them. The number
+    is used only as a deterministic order within the same time.
 
-    시작 시각은 `t`로 냅니다. 열 이름은 `start`이지만 이 딕셔너리는 그대로
-    SSE 로 나가고 브라우저가 `t`로 읽습니다 -- 저장 이름을 바꿨다고 통신
-    형식까지 흔들 이유가 없습니다. `end`는 0이면 모른다는 뜻입니다.
+    The start time comes out as `t`. The column is named `start`, but this
+    dictionary goes out over SSE as it is and the browser reads `t` -- renaming
+    the storage is no reason to shake the wire format too. An `end` of 0 means
+    unknown.
     """
     return [{"id": r["cue_id"], "kind": r["kind"], "t": r["start"],
              "end": r["end"],
@@ -301,15 +320,16 @@ def cue_count(owner: str) -> int:
 
 
 def replace_cues(owner: str, rows: list[dict]):
-    """한 소유자의 자막을 통째로 갈아 끼웁니다. 녹화본 전사가 끝났을 때처럼
-    앞의 것이 의미를 잃는 경우에만 씁니다."""
+    """Replace one owner's subtitles wholesale. Used only when what came
+    before has lost its meaning, as when a VOD transcription finishes."""
     with _lock:
         db = _connect()
         db.execute("DELETE FROM cues WHERE owner = ?", (owner,))
-        # `edited`도 함께 씁니다. 빠뜨렸던 동안, 이 함수를 지나는 경로(엔진을
-        # 바꿔 전체 번역, 같은 영상 다시 넣기)가 사람이 손댄 표시를 전부
-        # 지웠습니다 -- 「원문과 다름」이 사라지고 손편집 번역이 뭉텅이
-        # 재번역에 덮였습니다.
+        # `edited` is written along with the rest. While it was left out, the
+        # paths through this function (translate everything after switching
+        # engines, re-adding the same video) erased every hand-edit mark --
+        # "differs from the source" disappeared and hand-edited translations
+        # were overwritten by bulk re-translation.
         db.executemany(
             "INSERT INTO cues (owner, cue_id, kind, start, end, text, lang, "
             "speaker, tr, edited) VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -324,11 +344,12 @@ def replace_cues(owner: str, rows: list[dict]):
 
 
 def update_cue(owner: str, cue_id: int, **fields) -> bool:
-    """자막 한 줄의 몇 칸만 고칩니다. 편집과 재번역이 쓰는 자리입니다.
+    """Change only a few fields of one subtitle line. This is what editing and
+    re-translation use.
 
-    파일에 담아 두던 시절에는 한 글자를 고치려면 그 영상의 자막을 통째로
-    다시 써야 했습니다. 83분짜리가 수백 줄인데, 그 도중에 서버가 죽으면
-    전부 잃습니다.
+    Back when this was kept in a file, changing one character meant rewriting
+    that video's subtitles wholesale. An 83-minute video is several hundred
+    lines, and if the server dies partway through, all of it is lost.
     """
     cols = {k: v for k, v in fields.items()
             if k in ("kind", "start", "end", "text", "lang", "speaker", "edited")}
@@ -350,23 +371,26 @@ def update_cue(owner: str, cue_id: int, **fields) -> bool:
 
 
 def owner_of(value: str) -> str:
-    """화면의 목록이 쓰는 값(`live:<세션>` 또는 영상 id)을 표의 owner 로."""
+    """The value the on-screen list uses (`live:<session>` or a video id), as
+    the table's owner."""
     return value[5:] if value.startswith("live:") else value
 
 
-# 사람이 손댄 자리. 빈 문자열이면 기계가 적은 그대로입니다.
-#   "text" -- 원문을 고쳤습니다. 붙어 있는 번역은 **고치기 전 문장**의
-#             번역이므로 더 이상 맞지 않습니다. 화면이 그렇게 표시합니다.
-#   "tr"   -- 번역을 손으로 고쳤습니다. 뭉텅이 재번역이 이 줄을 덮으면
-#             사람이 한 일이 지워지므로, 그때 건너뛰라는 표시입니다.
+# Where a person edited. An empty string means as the machine wrote it.
+#   "text" -- the source text was edited. The translation attached to it is a
+#             translation of **the sentence before the edit**, so it no longer
+#             matches. The screen says so.
+#   "tr"   -- the translation was edited by hand. If bulk re-translation
+#             overwrote this line, the person's work would be erased, so this
+#             is the mark that tells it to skip.
 EDIT_FLAGS = ("text", "tr")
 
 
 def edit_cue(owner: str, cue_id: int, *, text=None, tr=None, backend="",
              start=None, end=None) -> dict | None:
-    """자막 한 줄을 사람이 고칩니다.
+    """A person edits one subtitle line.
 
-    돌려주는 것은 고쳐진 줄이고, 그 줄이 없으면 None 입니다.
+    Returns the edited line, or None when there is no such line.
     """
     with _lock:
         db = _connect()
@@ -379,7 +403,8 @@ def edit_cue(owner: str, cue_id: int, *, text=None, tr=None, backend="",
         if text is not None and text != row["text"]:
             cols.append("text = ?")
             args.append(text)
-            # 원문이 바뀌었으니 붙어 있는 번역은 옛 문장의 것입니다.
+            # The source changed, so the translation attached to it belongs
+            # to the old sentence.
             flags.add("text")
         if tr is not None:
             trs = json.loads(row["tr"] or "{}")
@@ -387,17 +412,19 @@ def edit_cue(owner: str, cue_id: int, *, text=None, tr=None, backend="",
             trs[key] = tr
             cols.append("tr = ?")
             args.append(json.dumps(trs, ensure_ascii=False))
-            # 사람이 번역을 맞춰 두었으므로 어긋남 표시는 내려갑니다.
+            # The person has matched the translation up, so the mismatch
+            # mark comes down.
             flags.add("tr")
             flags.discard("text")
         if start is not None:
             new_start = float(start)
             cols.append("start = ?")
             args.append(new_start)
-            # 끝 시각도 같이 옮깁니다. 시작만 옮기면 길이가 늘거나 줄고,
-            # 앞으로 당긴 경우에는 끝이 시작보다 앞서는 자막이 나옵니다 --
-            # SRT 로 내보내면 도구가 버리거나 통째로 무너집니다. 「이 줄을
-            # 조금 앞으로」는 길이를 그대로 두고 옮기라는 뜻입니다.
+            # The end time moves with it. Moving only the start grows or
+            # shrinks the duration, and pulling it earlier produces a subtitle
+            # whose end precedes its start -- exported as SRT, a tool either
+            # discards it or falls over wholesale. "This line a little
+            # earlier" means move it and leave the duration alone.
             if end is None and row["end"] > row["start"]:
                 cols.append("end = ?")
                 args.append(new_start + (row["end"] - row["start"]))
@@ -405,7 +432,7 @@ def edit_cue(owner: str, cue_id: int, *, text=None, tr=None, backend="",
             cols.append("end = ?")
             args.append(float(end))
         if not cols:
-            return _row_to_cue(row)      # 바꿀 것이 없었습니다
+            return _row_to_cue(row)      # there was nothing to change
         cols.append("edited = ?")
         args.append(",".join(sorted(flags)))
         db.execute(f"UPDATE cues SET {', '.join(cols)} "
@@ -424,16 +451,19 @@ def _row_to_cue(r) -> dict:
 
 def insert_cue(owner: str, start: float, text: str, *, lang: str = "",
                tr: str = "", backend: str = "", end: float = 0.0) -> dict:
-    """사람이 자막 한 줄을 새로 써 넣습니다.
+    """A person writes in a new subtitle line.
 
-    지우는 줄은 대개 잘못 인식된 것이고(효과음을 대사로 듣는 등), 그 통에
-    놓친 대사가 빈 시간대로 남습니다. 그 자리를 채우는 길입니다.
+    A line that gets deleted is usually a misrecognition (hearing a sound
+    effect as speech, say), and the speech missed in the process is left as an
+    empty stretch of time. This is the way to fill that place.
 
-    번호는 이 소유자의 마지막 번호 다음입니다 -- 번호는 신원일 뿐이고 읽는
-    순서는 cues()가 시각으로 정렬합니다. 번역을 함께 쓰면 손편집("tr")으로
-    표시해 뭉텅이 재번역이 덮지 않게 합니다. 원문만 쓰면 표시 없이 둡니다 --
-    기계 번역이 붙을 수 있어야 하고, 붙은 번역은 이 원문의 것이라 「원문과
-    다름」 표시가 설 이유도 없습니다.
+    The number is the one after this owner's last -- the number is only
+    identity, and cues() sorts the reading order by time. When a translation is
+    written along with it, it is marked hand-edited ("tr") so that bulk
+    re-translation does not overwrite it. When only the source text is written,
+    it is left unmarked -- machine translation has to be able to attach, and an
+    attached translation belongs to this source text, so there is no reason for
+    the "differs from the source" mark to stand either.
     """
     with _lock:
         db = _connect()
@@ -451,8 +481,9 @@ def insert_cue(owner: str, start: float, text: str, *, lang: str = "",
 
 
 def delete_cue(owner: str, cue_id: int) -> bool:
-    """줄 하나를 지웁니다. 번호는 다시 매기지 않습니다 -- 라이브에서는 정제본이
-    자기가 흡수한 줄의 번호를 물려받으므로 번호가 곧 신원입니다."""
+    """Delete one line. The numbers are not reassigned -- in live a refined
+    line inherits the number of the line it absorbed, so the number is
+    identity."""
     with _lock:
         db = _connect()
         cur = db.execute("DELETE FROM cues WHERE owner = ? AND cue_id = ?",
@@ -461,12 +492,14 @@ def delete_cue(owner: str, cue_id: int) -> bool:
         return cur.rowcount > 0
 
 
-# ---- 녹화본 -----------------------------------------------------------------
+# ---- VOD -------------------------------------------------------------------
 #
-# 예전에는 `data/<영상id>.json` 파일 하나에 메타와 자막을 함께 담았습니다.
-# 자막만 이쪽 표로 옮기고 메타는 `docs`에 JSON 한 덩어리로 남깁니다 --
-# 세션 레코드와 같은 이유입니다. 조회 조건이 id 하나뿐이고, 그대로 HTTP
-# 응답이 되므로 열로 펼치면 필드가 늘 때마다 어긋날 자리가 생깁니다.
+# It used to be one `data/<video id>.json` file holding the metadata and the
+# subtitles together. Only the subtitles moved to this table; the metadata
+# stays in `docs` as one JSON blob -- the same reason as for the session
+# records. The only query condition is a single id, and it becomes the HTTP
+# response as it is, so spreading it across columns creates a place to
+# disagree every time a field is added.
 
 def save_doc(video_id: str, meta: dict):
     _write("INSERT OR REPLACE INTO docs (id, updated, doc) VALUES (?, ?, ?)",
@@ -479,7 +512,7 @@ def doc(video_id: str) -> dict | None:
 
 
 def doc_ids() -> list[str]:
-    """최근에 손댄 것부터. 목록이 그 순서로 보여 줍니다."""
+    """Most recently touched first. The list shows them in that order."""
     return [r["id"] for r in
             _rows("SELECT id FROM docs ORDER BY updated DESC")]
 
@@ -496,12 +529,13 @@ LEGACY = os.path.join(DATA, "legacy")
 
 
 def import_legacy_docs() -> int:
-    """`data/<영상id>.json` 을 표로 옮깁니다. 기동할 때 한 번 돌고, 옮길 것이
-    없으면 아무것도 하지 않습니다.
+    """Move `data/<video id>.json` into the table. Runs once at startup, and
+    does nothing when there is nothing to move.
 
-    **원본을 지우지 않고 `data/legacy/` 로 옮깁니다.** 옮기는 일이 어긋나도
-    되돌아갈 자리가 있어야 합니다. 그 디렉터리는 아무도 읽지 않으므로,
-    한동안 써 보고 괜찮으면 지우면 됩니다.
+    **The originals are moved to `data/legacy/` rather than deleted.** If the
+    move goes wrong, there has to be somewhere to go back to. Nobody reads
+    that directory, so it can be deleted once it has been used for a while
+    and seems fine.
     """
     if not os.path.isdir(DATA):
         return 0
@@ -519,10 +553,10 @@ def import_legacy_docs() -> int:
             print(f"[store] {name} 을 읽지 못해 그대로 둡니다: {exc}")
             continue
         if not isinstance(old, dict) or "cues" not in old:
-            continue                # 우리 것이 아닙니다
+            continue                # not ours
         rows = old.pop("cues", [])
-        # 옛 판은 자막마다 `translation` 하나만 달고 있었습니다. 백엔드별
-        # 지도로 접어 넣습니다 -- jobs.migrate() 가 하던 일입니다.
+        # The old version carried only one `translation` per subtitle. It is
+        # folded into a per-backend map -- what jobs.migrate() used to do.
         for c in rows:
             if "translations" not in c:
                 c["translations"] = ({"local-m2m100": c["translation"]}

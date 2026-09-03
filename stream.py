@@ -1,20 +1,24 @@
-"""오디오를 발화 단위로 잘라 받아 적고, 끝난 무리를 다시 해독하는 루프.
+"""The loop that cuts audio into utterances, writes them down, and decodes a
+finished group again.
 
-구조는 hayamimi(MIT, oboroge0)의 `realtime_transcribe`에서 가져왔습니다.
-다만 그쪽은 언어를 모른 채 들어오는 소리를 상대하므로 언어 판별, 언어별
-모델 라우팅, 무리 안에서 언어가 바뀔 때의 분할, 재해독 뒤 언어 재판정까지
-짊어지고 있습니다. 이 프로젝트는 세션마다 언어를 하나로 고정하고 다국어
-모델 하나(whisper-large-v3-turbo)로 처리하므로 그 절반이 죽은 코드입니다.
-그래서 옮겨 오면서 걷어냈습니다.
+The structure comes from `realtime_transcribe` in hayamimi (MIT, oboroge0).
+That one deals with sound coming in without knowing the language, though, so it
+carries language identification, per-language model routing, splitting when the
+language changes inside a group, and re-judging the language after a re-decode.
+This project fixes one language per session and handles it with a single
+multilingual model (whisper-large-v3-turbo), so half of that is dead code. It
+was cleared out while porting.
 
-남긴 것은 세 가지입니다.
+Three things were kept.
 
-- **선행 오디오**: VAD가 잡아낸 발화 시작점보다 조금 앞에서부터 잘라
-  넘깁니다. 말머리가 잘려 나가는 것을 막습니다.
-- **2패스 정제**: 짧게 끊어 즉시 내보낸 확정본과 별개로, 발화 한 무리가
-  끝나면 합쳐서 다시 해독합니다. 문맥이 길어져 결과가 좋아집니다.
-- **순서 보장**: 정제는 한 개의 작업 스레드가 넣은 순서대로 처리합니다.
-  호출마다 스레드를 띄우면 시작 순서와 실행 순서가 달라져 자막이 뒤섞입니다.
+- **Lead-in audio**: the cut is passed on from a little before the utterance
+  start the VAD found. It stops the head of the speech from being cut away.
+- **Two-pass refinement**: separately from the finals cut short and sent out
+  at once, an utterance group that is over is joined up and decoded again. The
+  context gets longer and the result gets better.
+- **Order guaranteed**: refinement is handled by one worker thread in the order
+  things went in. Starting a thread per call makes the start order and the run
+  order differ, and the subtitles come out jumbled.
 """
 from __future__ import annotations
 
@@ -32,81 +36,88 @@ import sherpa_onnx
 import paths
 
 SAMPLE_RATE = 16000
-WINDOW_SIZE = 512      # VAD가 한 번에 보는 표본 수 (16kHz에서 약 32ms)
+WINDOW_SIZE = 512      # how many samples the VAD looks at at once (about 32ms at 16kHz)
 
-# VAD가 잡은 발화 시작점보다 이만큼 앞에서부터 넘깁니다. 자음 하나가 잘리면
-# 첫 단어가 통째로 달라지므로, 여유를 두는 편이 낫습니다.
+# The cut is passed on from this much before the utterance start the VAD found.
+# Losing a single consonant changes the whole first word, so leaving some room
+# is the better way.
 PREROLL_S = 1.0
 
-GROUP_GAP_S = 2.0      # 이만큼 조용하면 발화 한 무리가 끝난 것으로 봅니다
-GROUP_MAX_S = 25.0     # 쉬지 않고 말해도 여기서 끊습니다 (오디오 보관 한도)
+GROUP_GAP_S = 2.0      # this much silence is taken as an utterance group being over
+GROUP_MAX_S = 25.0     # cut here even if the talking never pauses (the audio-keeping limit)
 
-# 재해독이 확정본을 합친 것보다 이만큼 짧으면 믿지 않습니다. 재해독은 내용을
-# 다듬는 것이지 잃는 것이 아니므로, 크게 줄었다면 무언가 잘못된 것입니다.
+# If a re-decode comes out this much shorter than the finals joined together it
+# is not trusted. A re-decode polishes the content, it does not lose it, so a
+# large drop means something went wrong.
 REFINE_MIN_KEEP = 0.7
 
 
 def model_dir() -> str:
-    """모델을 두는 곳. `MIMIWATCH_MODEL_DIR`로 바꿀 수 있습니다.
+    """Where the models are kept. Changeable with `MIMIWATCH_MODEL_DIR`.
 
-    규칙은 `paths.py`에 있습니다(윈도우는 `%LOCALAPPDATA%`, 그 밖은
-    `~/.local/share`). 예전에는 여기서 직접 계산했는데, 설정과 저장소가
-    묶음(PyInstaller)일 때 같은 뿌리로 나와야 해서 한 곳으로 모았습니다.
-    이 이름은 부르는 쪽이 많아 그대로 둡니다.
+    The rules are in `paths.py` (`%LOCALAPPDATA%` on Windows, `~/.local/share`
+    elsewhere). This used to work it out itself, but the config and the storage
+    have to come out of the same root in a bundle (PyInstaller), so it was
+    gathered into one place. This name has many callers, so it stays.
     """
     return paths.model_dir()
 
 
 class Cancelled(RuntimeError):
-    """사용자가 작업을 멈췄습니다.
+    """The user stopped the job.
 
-    전사는 한 시간짜리 영상에서 가장 긴 단계입니다. 예전에는 취소를
-    단계 사이에서만 확인해서, 전사가 시작되면 끝날 때까지 멈출 수
-    없었습니다 -- 낮은 사양에서 무거운 모델을 잘못 고르면 그저 기다리는
-    수밖에 없었습니다. 이 예외로 해독 루프 안에서 빠져나옵니다.
+    Transcription is the longest stage on an hour-long video. Cancellation used
+    to be checked only between the stages, so once transcription had started it
+    could not be stopped until it finished -- picking a heavy model by mistake
+    on a low-spec machine left nothing to do but wait. This exception is the way
+    out from inside the decoding loop.
     """
 
 
 _YTDLP: list[str] | None = None
 _FFMPEG: str | None = None
 
-# yt-dlp 한 번 부르는 데 허용하는 시간(초). 유튜브 쪽이 멎으면 yt-dlp도 같이
-# 멎는데, 상한이 없으면 그 요청 스레드(또는 세션)가 영영 기다립니다. 주소
-# 해석은 보통 몇 초입니다.
+# How long (in seconds) one yt-dlp call is allowed. When YouTube's side stalls
+# yt-dlp stalls with it, and without an upper bound that request thread (or
+# session) waits forever. Resolving an address usually takes a few seconds.
 YTDLP_TIMEOUT_S = 90.0
 
 
 def ytdlp_cmd() -> list[str]:
-    """yt-dlp를 부르는 명령.
+    """The command that calls yt-dlp.
 
-    **가상환경에 깔린 것을 먼저 씁니다.** yt-dlp는 파이썬 패키지이고,
-    설치 스크립트가 여기에 최신으로 넣어 둡니다. 그러면 시스템에 낡은
-    판이 있어도 가려집니다 -- 유튜브가 추출 경로를 자주 바꿔서, 몇 달
-    지난 판은 포맷 목록을 통째로 받지 못합니다(이슈 #1).
+    **What is installed in the virtualenv comes first.** yt-dlp is a Python
+    package and the install script puts the latest one in there. That hides an
+    old version on the system -- YouTube changes its extraction paths often, so
+    a version a few months old fails to get the format list at all (issue #1).
 
-    `python -m yt_dlp`로 부릅니다. 경로를 짐작하지 않아도 되고, 스크립트
-    껍데기가 어디에 어떤 이름으로 놓였든 상관없습니다.
+    It is called as `python -m yt_dlp`. No path has to be guessed, and it does
+    not matter where the script shim was put or under what name.
 
-    없으면 PATH의 `yt-dlp`로 물러납니다. 예전 설치본이 그렇습니다.
+    Without it, it falls back to `yt-dlp` on PATH. That is what an older
+    install looks like.
 
-    **도구 디렉터리에 받아 둔 독립 실행 파일이 있으면 그것이 먼저입니다.**
-    묶음(PyInstaller)으로 배포하면 안에 든 yt-dlp는 판이 박혀 있어 몇 달
-    뒤에는 낡습니다 -- 가상환경에 두어 해결했던 그 문제가 묶음에서 되돌아옵니다.
-    yt-dlp가 배포하는 독립 실행 파일은 `-U`로 스스로 판올림하므로, 「엔진
-    관리 › 모델·도구」에서 받아 두면 묶음을 다시 만들지 않아도 최신을 씁니다.
+    **A standalone executable fetched into the tools directory comes before all
+    of them.** Shipping as a bundle (PyInstaller) pins the version of the
+    yt-dlp inside, so a few months later it is stale -- the very problem that
+    keeping it in the virtualenv solved comes back in the bundle. The
+    standalone executable yt-dlp ships updates itself with `-U`, so fetching it
+    in "Engine management › Models and tools" means the latest is used without
+    building the bundle again.
 
-    묶음 안에서는 `python -m yt_dlp`를 부를 파이썬이 없습니다. 실행 파일
-    자신을 `--ytdlp`로 다시 띄우면 `app.py`가 그 인자를 보고 yt_dlp의
-    main으로 넘깁니다. 자식 프로세스로 두는 이유는 그대로입니다 -- 시간
-    상한을 걸고 죽일 수 있어야 합니다(유튜브가 멎으면 같이 멎습니다).
+    Inside a bundle there is no Python to call `python -m yt_dlp` with.
+    Starting the executable itself again with `--ytdlp` makes `app.py` see that
+    argument and hand it over to yt_dlp's main. The reason for keeping it a
+    child process is unchanged -- it has to be killable under a time limit
+    (when YouTube stalls, it stalls with it).
     """
     global _YTDLP
     if _YTDLP is None:
         standalone = paths.tool("yt-dlp")
         if standalone:
             _YTDLP = [standalone]
-        # find_spec은 모듈을 실행하지 않습니다. import 하면 1초 가까이
-        # 걸리는데, 이 함수는 자주 불립니다.
+        # find_spec does not run the module. Importing it takes close to a
+        # second, and this function is called often.
         elif importlib.util.find_spec("yt_dlp") is not None:
             _YTDLP = ([sys.executable, "--ytdlp"] if paths.frozen()
                       else [sys.executable, "-m", "yt_dlp"])
@@ -118,18 +129,22 @@ def ytdlp_cmd() -> list[str]:
 
 
 def deno_path() -> str | None:
-    """유튜브 JS 챌런지를 풀 deno. 도구 디렉터리 → 흔한 자리 → PATH."""
+    """deno, to solve YouTube's JS challenge. Tools directory → the usual
+    places → PATH."""
     return paths.which("deno")
 
 
 def _js_runtime_args() -> list[str]:
-    """yt-dlp에 JS 런타임 자리를 알려 줍니다.
+    """Tell yt-dlp where the JS runtime is.
 
-    2025.11부터 유튜브 추출은 외부 JS 런타임(deno)이 있어야 온전합니다. yt-dlp는 맥·
-    리눅스에서 **PATH만** 뒤지므로, Finder에서 띄운 묶음(PATH가 짧음)은 홈브루 deno를
-    못 찾고 「모델·도구」로 받은 것도 모릅니다 -- 그래서 경로를 직접 넘깁니다.
-    `--remote-components ejs:github`은 풀이 스크립트(yt-dlp-ejs)가 없거나 판이 어긋날 때
-    깃허브에서 받아 오게 하는 보험입니다. 기본은 꺼져 있어 조용히 포맷만 사라집니다.
+    Since 2025.11 YouTube extraction is only whole with an external JS runtime
+    (deno). On macOS and Linux yt-dlp searches **PATH only**, so a bundle
+    started from Finder (where PATH is short) cannot find a Homebrew deno and
+    knows nothing of one fetched through "Models and tools" -- hence handing
+    the path over directly. `--remote-components ejs:github` is the insurance
+    that has the solver script (yt-dlp-ejs) fetched from GitHub when it is
+    missing or its version does not line up. It is off by default, and the
+    formats just quietly disappear.
     """
     deno = deno_path()
     if not deno:
@@ -138,22 +153,26 @@ def _js_runtime_args() -> list[str]:
 
 
 def ytdlp_args(*opts: str, url: str) -> list[str]:
-    """yt-dlp 호출 한 줄. 주소는 언제나 `--` 뒤에 둡니다.
+    """One yt-dlp call line. The address always goes after `--`.
 
-    주소 칸에 `-`로 시작하는 것을 붙여 넣으면 옵션으로 읽힙니다 -- `--version`이면
-    판 번호가 나오고 끝이지만 `--exec`면 명령이 실행됩니다. 붙여 넣는 값은 사용자가
-    통제하지 않는 곳(채팅, 게시글)에서 오기도 하므로 다섯 호출 자리가 전부 여기를
-    지나게 합니다. `--no-playlist`도 여기서 붙입니다: 재생목록이 딸린 주소에서 `-j`가
-    여러 줄을 내면 부르는 쪽의 JSON 해석이 통째로 넘어졌습니다.
+    Pasting something that starts with `-` into the address box makes it read
+    as an option -- with `--version` a version number comes out and that is
+    that, but with `--exec` a command runs. A pasted value sometimes comes from
+    somewhere the user does not control (a chat, a post), so all five call
+    sites are made to pass through here. `--no-playlist` goes on here too: when
+    `-j` printed several lines for an address with a playlist attached, the
+    caller's JSON parsing fell over whole.
     """
     return ytdlp_cmd() + ["--no-warnings", "--no-playlist", *opts, "--", url]
 
 
 def _usable_stderr():
-    """자식에게 물려줄 수 있는 표준 오류. 성치 않으면 `DEVNULL`.
+    """A standard error that can be handed down to a child. `DEVNULL` if it is
+    not sound.
 
-    `fileno()`가 번호를 답해도 그 뒤의 핸들이 닫혀 있을 수 있어 `fstat`으로
-    한 번 두드려 봅니다. 창 없이 뜬 파이썬은 `sys.stderr`가 아예 None입니다.
+    `fileno()` can answer with a number while the handle behind it is closed,
+    so it is knocked on once with `fstat`. A Python that came up without a
+    window has `sys.stderr` as None outright.
     """
     try:
         fd = sys.stderr.fileno()
@@ -164,27 +183,31 @@ def _usable_stderr():
 
 
 def child_io(*, stderr: bool = True) -> dict:
-    """자식 프로세스(ffmpeg·yt-dlp)에 넘길 표준 입출력.
+    """The standard I/O to hand to a child process (ffmpeg, yt-dlp).
 
-    **물려받은 핸들에 기대지 않습니다.** `Popen`은 stdin/stderr를 따로 주지
-    않으면 부모 것을 물려주려고 복제(DuplicateHandle)하는데, 부모의 그 핸들이
-    유효하지 않으면 자식을 낳기도 전에
+    **Inherited handles are not relied on.** Unless stdin/stderr are given
+    separately, `Popen` duplicates the parent's (DuplicateHandle) to hand them
+    down, and if that handle of the parent's is not valid it falls over with
 
         OSError: [WinError 6] 핸들이 잘못되었습니다
 
-    로 넘어집니다. 0.3.1의 윈도우 사용자가 라이브 세션의 `_spawn_ffmpeg`에서
-    정확히 이렇게 죽었습니다 -- 표준 오류가 성치 않은 채로 뜬 프로세스(콘솔
-    없이 띄운 묶음, 작업 스케줄러·서비스로 띄운 것, 출력을 이상하게 돌려놓고
-    부른 셸)입니다. 앞선 yt-dlp 호출은 `capture_output=True`로 stdout·stderr를
-    파이프로 잡고 있어 살아남았고, 파이프를 stdout에만 건 ffmpeg이 걸렸습니다.
+    before the child is even born. A Windows user on 0.3.1 died exactly this
+    way in a live session's `_spawn_ffmpeg` -- a process that came up with an
+    unsound standard error (a bundle started without a console, one started by
+    the task scheduler or as a service, a shell called with its output
+    redirected oddly). The yt-dlp call before it survived because
+    `capture_output=True` was holding stdout and stderr on pipes, and the
+    ffmpeg that had a pipe on stdout only was the one that got caught.
 
-    stdin은 언제나 NUL입니다. ffmpeg에도 yt-dlp에도 넣어 줄 것이 없고,
-    터미널에서 돌 때 자식이 키 입력을 가져가는 일도 함께 막습니다.
+    stdin is always NUL. There is nothing to feed either ffmpeg or yt-dlp, and
+    it also stops the child from taking the keystrokes when running in a
+    terminal.
 
-    stderr는 성한 것이 있으면 그대로 물려줍니다 -- ffmpeg의 오류 한 줄이
-    콘솔이나 mimiwatch.log에 남아야 다음 보고가 진단 가능해집니다. 성치
-    않으면 버립니다. 부르는 쪽이 stderr를 직접 잡는 자리(`capture_output`,
-    `stderr=PIPE`)에서는 `stderr=False`로 부릅니다 -- 두 번 줄 수 없습니다.
+    stderr is handed down as it is when there is a sound one -- a line of
+    ffmpeg's error has to be left in the console or in mimiwatch.log for the
+    next report to be diagnosable. If it is not sound it is thrown away. At the
+    call sites that catch stderr themselves (`capture_output`, `stderr=PIPE`)
+    it is called with `stderr=False` -- it cannot be given twice.
     """
     kw = {"stdin": subprocess.DEVNULL}
     if stderr:
@@ -193,15 +216,18 @@ def child_io(*, stderr: bool = True) -> dict:
 
 
 def ffmpeg_cmd() -> str:
-    """ffmpeg 실행 파일. PATH → 흔한 자리(홈브루 등) → 도구 디렉터리 순입니다.
+    """The ffmpeg executable. In the order PATH → the usual places (Homebrew
+    and such) → the tools directory.
 
-    예전에는 `"ffmpeg"`라는 이름을 그대로 Popen에 넘겼습니다. 터미널에서는
-    되지만 Finder에서 띄운 묶음은 PATH가 짧아 홈브루 것을 못 찾고, 설치
-    스크립트 없이 묶음만 받은 사람에게는 ffmpeg 자체가 없습니다. 그 경우
-    「엔진 관리 › 모델·도구」에서 받아 도구 디렉터리에 둡니다(modelhub.py).
+    The name `"ffmpeg"` used to be handed to Popen as it is. That works in a
+    terminal, but a bundle started from Finder has a short PATH and cannot find
+    the Homebrew one, and someone who took only the bundle without the install
+    script has no ffmpeg at all. In that case it is fetched in "Engine
+    management › Models and tools" and put in the tools directory
+    (modelhub.py).
 
-    없으면 무엇을 하면 되는지를 담아 FileNotFoundError를 냅니다. 이 오류는
-    세션과 작업의 오류 칸에 그대로 실립니다.
+    Without it, a FileNotFoundError carrying what to do about it is raised.
+    This error is carried straight into the error box of a session or a job.
     """
     global _FFMPEG
     if _FFMPEG is None or not os.path.exists(_FFMPEG):
@@ -216,34 +242,38 @@ def ffmpeg_cmd() -> str:
 
 
 def reset_tool_cache():
-    """도구를 새로 받았을 때 부릅니다. 위 둘은 한 번 찾은 값을 기억합니다."""
+    """Called when a tool has just been fetched. The two above remember the
+    value they found once."""
     global _YTDLP, _FFMPEG
     _YTDLP = None
     _FFMPEG = None
 
 
 def _cookie_args() -> list[str]:
-    """멤버십 전용 방송을 받으려면 로그인한 쿠키가 있어야 합니다.
+    """Taking in a members-only stream needs a logged-in cookie.
 
-    유튜브는 아이디·비밀번호 로그인을 받지 않고 OAuth 도 더는 통하지
-    않습니다. 쿠키뿐입니다.
+    YouTube does not take an id-and-password login and OAuth no longer works
+    either. Cookies are all there is.
 
-      MIMIWATCH_YTDLP_COOKIES            쿠키 파일 (Netscape 형식)
-      MIMIWATCH_YTDLP_COOKIES_BROWSER    브라우저에서 바로 (chrome, firefox …)
+      MIMIWATCH_YTDLP_COOKIES            a cookie file (Netscape format)
+      MIMIWATCH_YTDLP_COOKIES_BROWSER    straight from a browser (chrome, firefox …)
 
-    **파일 쪽을 권합니다.** 유튜브는 열려 있는 탭의 계정 쿠키를 계속
-    갈아 치우므로, 평소 쓰는 브라우저 프로필에서 바로 읽으면 얼마 못 가
-    무효가 됩니다. 시크릿 창에서 로그인해 내보낸 뒤 그 창을 닫으면 그
-    쿠키는 회전되지 않습니다(README 참조).
+    **The file is the recommended side.** YouTube keeps rotating the account
+    cookies of an open tab, so reading straight from the browser profile in
+    everyday use goes invalid before long. Log in in an incognito window,
+    export, and close that window, and those cookies are not rotated (see the
+    README).
 
-    둘 다 있으면 파일이 이깁니다. 함께 주면 yt-dlp 가 시크릿 세션이 아닌
-    평소 쿠키를 덮어써 버립니다.
+    With both, the file wins. Given together, yt-dlp overwrites the incognito
+    session's cookies with the everyday ones.
     """
     path = (os.environ.get("MIMIWATCH_YTDLP_COOKIES") or "").strip()
     if path:
         return ["--cookies", path]
-    # 확장이 넘겨 준 쿠키(POST /api/cookies/youtube). 환경변수가 있으면 그쪽이 우선입니다.
-    # 파일을 지우면(화면의 「지우기」) 다음 호출부터 빠집니다 -- reset_tool_cache 가 같이 불립니다.
+    # Cookies handed over by the extension (POST /api/cookies/youtube). If the
+    # environment variable is there, that side comes first. Deleting the file
+    # ("Delete" on the screen) drops it from the next call on --
+    # reset_tool_cache is called along with it.
     pushed = paths.cookies_path()
     if os.path.isfile(pushed):
         return ["--cookies", pushed]
@@ -254,28 +284,33 @@ def _cookie_args() -> list[str]:
 
 
 def default_threads(device: str) -> int:
-    """CPU로 돌릴 때는 스레드를 더 씁니다.
+    """More threads are used when running on the CPU.
 
-    GPU 경로에서 4는 넉넉합니다 -- 무거운 일은 GPU가 하고 CPU는 앞뒤만
-    맡습니다. CPU로 돌리면 그 4가 전부이므로 코어 수에 맞춰 올립니다.
-    논리 코어를 다 쓰면 오히려 나빠지는 일이 잦아 절반에서 멈춥니다.
+    On the GPU path 4 is plenty -- the GPU does the heavy work and the CPU only
+    takes the ends. Running on the CPU makes those 4 everything, so the number
+    goes up with the core count. Using every logical core often makes it worse
+    instead, so it stops at half.
 
-    전사와 번역이 같은 규칙을 쓰도록 여기에 둡니다. 둘 다 stream을 이미
-    가져오므로, 한쪽이 다른 쪽의 런타임에 묶이지 않습니다.
+    It lives here so that transcription and translation use the same rule. Both
+    already import stream, so neither gets tied to the other's runtime.
     """
     if (device or "").strip().lower() == "cpu":
         return max(4, min(8, (os.cpu_count() or 8) // 2))
     return 4
 
 
-# 어느 Silero 파일을 쓸지. 기본은 k2 재수출(v4 계열, 643KB). `silero_vad_v5.onnx`(2.3MB)도
-# 같은 자리에서 받을 수 있고 bench/vad_ab.py 가 둘을 맞대어 잽니다.
+# Which Silero file to use. The default is the k2 re-export (the v4 line,
+# 643KB). `silero_vad_v5.onnx` (2.3MB) can be fetched from the same place and
+# bench/vad_ab.py measures the two against each other.
 VAD_FILE = os.environ.get("MIMIWATCH_VAD_MODEL") or "silero_vad.onnx"
-# 말이라고 볼 확률의 문턱. Silero 기본은 0.5인데 **0.3으로 낮춥니다.** 정답 자막이 있는
-# 노래 표본 넷에서 0.5 → 0.3이 전체 오류율 64.4% → 59.0%로 유일하게 오차를 넘는 이득이었고
-# (반주 위의 노랫소리를 0.5는 무음으로 봄: 277초 곡에서 말 57초 → 177초), 대화 표본
-# 셋에서는 말 판정 초·빈 구간·환각 차단이 그대로였습니다(RESULTS.md 44절). 0.2는 다시
-# 나빠졌습니다(61.2%). `MIMIWATCH_VAD_THRESHOLD`로 되돌릴 수 있습니다.
+# The threshold on the probability of counting as speech. Silero's default is
+# 0.5, but it is **lowered to 0.3.** On four music samples that have reference
+# subtitles, 0.5 → 0.3 was the only gain past the error margin, overall error
+# rate 64.4% → 59.0% (0.5 takes singing over an accompaniment as silence: on a
+# 277 s song, 57 s of speech → 177 s), and on three conversational samples the
+# seconds judged as speech, the empty stretches and the hallucination blocking
+# were unchanged (RESULTS.md section 44). 0.2 got worse again (61.2%).
+# `MIMIWATCH_VAD_THRESHOLD` puts it back.
 VAD_THRESHOLD = float(os.environ.get("MIMIWATCH_VAD_THRESHOLD") or 0.3)
 
 
@@ -283,11 +318,12 @@ def build_vad(min_silence: float = 0.35,
               max_speech: float = 12.0,
               model_file: str | None = None,
               threshold: float | None = None) -> sherpa_onnx.VoiceActivityDetector:
-    """발화를 잘라 주는 Silero VAD.
+    """The Silero VAD that cuts the utterances apart.
 
-    min_silence는 얼마나 조용해야 발화가 끝났다고 볼지, max_speech는 쉬지
-    않고 말할 때 강제로 끊는 길이입니다. 짧게 끊을수록 자막이 빨리 나오지만
-    문맥이 짧아지므로, 그 손해는 정제 단계가 되돌립니다.
+    min_silence is how quiet it has to be for an utterance to count as over,
+    max_speech the length at which talking that never pauses is cut by force.
+    The shorter the cut the sooner the subtitle comes out, but the shorter the
+    context gets, and that loss is what the refinement pass undoes.
     """
     vad_model = os.path.join(model_dir(), model_file or VAD_FILE)
     if not os.path.exists(vad_model):
@@ -310,14 +346,15 @@ def build_vad(min_silence: float = 0.35,
 
 
 class AudioHistory:
-    """최근 오디오를 들고 있다가 선행 구간과 정제용 원본을 떼어 줍니다."""
+    """Holds the recent audio and tears off the lead-in region and the source
+    audio for refinement."""
 
     def __init__(self, sample_rate: int = SAMPLE_RATE, keep_s: float = 30.0):
         self.sr = sample_rate
         self.keep = int(keep_s * sample_rate)
         self.buf = np.zeros(0, dtype=np.float32)
-        self.offset = 0          # buf[0]이 전체에서 몇 번째 표본인지
-        self.last_seg_end = 0    # 선행 구간이 앞 발화를 침범하지 않도록
+        self.offset = 0          # which sample of the whole buf[0] is
+        self.last_seg_end = 0    # so the lead-in does not intrude on the previous utterance
 
     def push(self, chunk: np.ndarray):
         self.buf = np.concatenate([self.buf, chunk])
@@ -339,11 +376,11 @@ class AudioHistory:
 
 
 class Refiner:
-    """끝난 발화 무리를 합쳐 다시 해독합니다.
+    """Joins a finished utterance group up and decodes it again.
 
-    확정본은 2~4초짜리 조각을 따로따로 해독한 것이라 문맥이 없습니다. 한
-    무리가 끝나면 그 구간의 원본 오디오를 통째로 다시 넘겨, 앞뒤를 아는
-    상태로 받아 적게 합니다.
+    The finals are 2~4 second pieces decoded one by one, so they have no
+    context. Once a group is over, the source audio of that stretch is handed
+    over again whole, to be written down knowing what came before and after.
     """
 
     def __init__(self, asr, history: AudioHistory, sink,
@@ -353,11 +390,12 @@ class Refiner:
         self.sink = sink
         self.sr = sample_rate
         self.spans: list[tuple[int, int, str, str]] = []   # start, end, text, speaker
-        self._last_refined = ""          # refine_prompt 실험용: 직전 정제본
-        # 작업 스레드는 하나입니다. 호출마다 스레드를 띄우면 start() 순서와
-        # 실제 실행 순서가 달라져, 무음으로 닫힌 무리와 강제로 닫힌 무리가
-        # 뒤바뀐 채 출력됩니다. 큐 하나를 한 소비자가 비우면 넣은 순서가
-        # 곧 오디오의 시간 순서이므로 그럴 수 없습니다.
+        self._last_refined = ""          # for the refine_prompt experiment: the last refined line
+        # There is one worker thread. Starting a thread per call makes the
+        # start() order and the actual run order differ, and a group closed by
+        # silence and a group closed by force come out swapped. With one
+        # consumer draining one queue, the order things went in is the order of
+        # the audio in time, so that cannot happen.
         self._tasks: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -365,24 +403,25 @@ class Refiner:
     def _loop(self):
         while True:
             task = self._tasks.get()
-            if task is None:                              # close()가 보낸 끝 표시
+            if task is None:                              # the end mark close() sent
                 self._tasks.task_done()
                 return
             try:
                 task()
-            except Exception as exc:                      # 한 무리의 실패가
-                print(f"[refine] 실패: {exc}", flush=True)  # 세션을 죽이면 안 됩니다
+            except Exception as exc:                      # one group failing
+                print(f"[refine] 실패: {exc}", flush=True)  # must not kill the session
             finally:
                 self._tasks.task_done()
 
     def close(self, timeout: float = 10.0):
-        """작업 스레드를 끝냅니다. 남은 무리는 마저 처리하고 나옵니다.
+        """End the worker thread. The groups left over are handled through
+        before it comes out.
 
-        이것이 없던 동안 `_loop`는 영영 `get()`에서 기다렸고, 그 스레드가
-        `self`를 쥐고 있으니 `self.asr`(전사 모델 한 벌)·`history`·`sink`가
-        세션이 끝난 뒤에도 회수되지 않았습니다. 세션마다 모델이 하나씩
-        쌓이는 셈입니다. 세션이 끝나는 자리에서 꼭 부릅니다 -- 두 번 불러도
-        됩니다.
+        While this did not exist, `_loop` waited at `get()` forever, and since
+        that thread held `self`, `self.asr` (one copy of the transcription
+        model), `history` and `sink` were not reclaimed even after the session
+        ended. A model piled up per session, in effect. It must be called where
+        a session ends -- calling it twice is fine.
         """
         if not self._thread.is_alive():
             return
@@ -411,11 +450,13 @@ class Refiner:
             return
 
         def work():
-            # 25초짜리 무리의 재해독은 0.5~1초가 걸립니다. 수신 경로에서
-            # 그대로 돌리면 다음 발화의 확정본이 그만큼 늦어지므로 여기서
-            # 처리합니다.
-            # 정제 패스에만 직전 정제본을 프롬프트로 넘길 수 있습니다(엔진 설정의
-            # `refine_prompt`). 고유명사 일관성을 노리는 실험용이고 기본은 꺼져 있습니다.
+            # Re-decoding a 25 second group takes 0.5~1 second. Running it on
+            # the receiving path as it is would delay the next utterance's
+            # final by that much, so it is handled here.
+            # The last refined line can be handed over as a prompt to the
+            # refinement pass only (`refine_prompt` in the engine settings). It
+            # is for an experiment aiming at proper-noun consistency and is off
+            # by default.
             kw = {}
             if getattr(self.asr, "refine_prompt", False) and self._last_refined:
                 kw["prompt"] = self._last_refined[-200:]
@@ -427,9 +468,10 @@ class Refiner:
                 text = fast_joined
             if not text.strip():
                 return
-            # forced_lang이 아니라 이번 해독이 알아낸 언어를 씁니다. 「자동
-            # 판별」에서는 forced_lang이 빈 문자열이고, 그것을 자막에 실어
-            # 보내면 번역기가 원본 언어를 몰라 그냥 돌아섭니다.
+            # The language this decode worked out is used, not forced_lang.
+            # Under "Auto-detect" forced_lang is an empty string, and carrying
+            # that out on the subtitle leaves the translator not knowing the
+            # source language, so it simply turns back.
             lang = got.get("lang") or self.asr.forced_lang
             tag = f"{speaker}|{lang}" if speaker else lang
             print(f"[refine/{tag}] {text}", flush=True)
@@ -442,15 +484,18 @@ class Refiner:
 def run_stream(chunks, vad, asr, sink, history: AudioHistory,
                refiner: Refiner | None = None, speaker_labeler=None,
                sample_rate: int = SAMPLE_RATE):
-    """오디오 조각을 받아 VAD로 자르고, 잘린 발화를 받아 적습니다.
+    """Take audio pieces, cut them with the VAD, and write the cut utterances
+    down.
 
-    chunks가 ndarray가 아니면 "지금 비우라"는 신호입니다. 방송이 끊겨
-    영영 오지 않을 무음을 기다리는 대신 진행 중인 발화를 확정합니다.
+    A chunk that is not an ndarray is the signal to "flush now". Instead of
+    waiting for a silence that will never come because the stream broke off,
+    the utterance in progress is made final.
     """
     audio_pos = 0.0
-    # 해독 한 번이 실패했다고 방송 전체를 놓지 않습니다. 다만 장치가
-    # 정말로 죽었으면 계속 시도해 봐야 소용이 없으므로, 연달아 실패하면
-    # 그때는 포기합니다. translate.py의 차단기와 같은 생각입니다.
+    # One failed decode is not reason to let go of the whole stream. But if the
+    # device really has died there is no use in going on trying, so after a run
+    # of failures it does give up then. The same thinking as translate.py's
+    # breaker.
     fails = 0
     for chunk in chunks:
         if not isinstance(chunk, np.ndarray):
@@ -470,18 +515,20 @@ def run_stream(chunks, vad, asr, sink, history: AudioHistory,
         if refiner is not None and not vad.is_speech_detected():
             refiner.maybe_refine(int(audio_pos * sample_rate))
 
-    # 소리가 끝났습니다(방송 종료, ffmpeg 종료). 걸려 있는 발화를 확정하고
-    # 마지막 무리도 정제합니다. 이것이 없으면 마지막 몇 줄은 거친 확정본으로만
-    # 남습니다 -- 위의 None 신호와 같은 일을 끝에서 한 번 더 합니다.
+    # The sound is over (the stream ended, ffmpeg ended). The utterance left
+    # hanging is made final and the last group is refined too. Without this the
+    # last few lines are left as rough finals only -- the same thing the None
+    # signal above does, done once more at the end.
     vad.flush()
     _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate, fails)
     if refiner is not None:
         refiner.maybe_refine(int(audio_pos * sample_rate), force=True)
 
 
-# 해독이 연달아 이만큼 실패하면 장치가 죽은 것으로 보고 세션을 놓습니다.
-# 한 번의 실패는 그 조각만 버리고 넘어갑니다 -- 라이브에서 한 줄을 잃는
-# 것과 방송 전체를 잃는 것은 다른 이야기입니다.
+# This many decodes failing in a row is taken as the device having died and the
+# session is let go. A single failure throws that piece away and moves on --
+# losing one line on a live stream and losing the whole stream are different
+# stories.
 DECODE_FAIL_LIMIT = 5
 
 
@@ -499,8 +546,9 @@ def _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate,
         try:
             result = asr.transcribe(samples, sample_rate, speech_s=raw_speech_s)
         except Exception as exc:
-            # GPU 드라이버가 조각 하나에서 넘어지는 일이 있습니다. 예전에는
-            # 이 예외가 run_stream을 뚫고 나가 세션을 통째로 끝냈습니다.
+            # A GPU driver does fall over on a single piece sometimes. This
+            # exception used to go out through run_stream and end the session
+            # whole.
             fails += 1
             print(f"[전사 실패 {fails}/{DECODE_FAIL_LIMIT}] "
                   f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
@@ -511,7 +559,7 @@ def _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate,
         latency_ms = (time.perf_counter() - t0) * 1000
         text = result["text"].strip()
         if not text:
-            continue          # 효과음이나 잡음: 자막도 화자도 남기지 않습니다
+            continue          # a sound effect or noise: no subtitle, no speaker is left
 
         speaker = speaker_labeler.label(samples, sample_rate) if speaker_labeler else ""
         print(f"[{speaker + '|' if speaker else ''}{result['lang']}/"

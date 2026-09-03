@@ -15,17 +15,21 @@ Three backends share one interface:
              社長 as "대통령" and ホロメン as "호르몬").
   OpenAICompatible  Any /v1/chat/completions endpoint: LM Studio, Ollama,
              a hosted API, a company gateway. One adapter covers all of them.
-  LocalGemma Gemma를 이 프로세스 안에서 직접 돌립니다. 지금의 기본값입니다.
+  LocalGemma Runs Gemma directly inside this process. The current default.
 
-번역 품질을 실제로 가르는 것은 백엔드 선택이 아니라 **프롬프트**였습니다
-(measurements/RESULTS.md 19~27절). 그래서 이 계층은 두 가지를 더 받습니다.
+What actually decides translation quality was not the choice of backend but the
+**prompt** (measurements/RESULTS.md sections 19-27). So this layer takes two
+more things.
 
-  genre    발화의 성격. 프롬프트 한 벌을 고릅니다 -- 기술 발표의 화자와
-           게임 방송의 화자는 쓰는 말이 다릅니다. 백엔드가 아니라 보고 있는
-           영상의 속성이므로, 엔진을 바꿔도 따라오지 않습니다.
-  context  이 줄 직전의 자막 몇 줄. 자막 한 줄만으로는 뜻이 정해지지 않는
-           경우가 많습니다(`束縛強め。`가 문맥 없이는 "구속 강함",
-           있으면 "집착 강해"). 프롬프트를 쓰지 않는 백엔드는 무시합니다.
+  genre    The character of the speech. It picks one set of prompts -- the
+           speaker at a tech talk and the speaker on a game stream use
+           different language. It is a property of the video being watched
+           rather than of the backend, so it does not follow along when the
+           engine changes.
+  context  The few subtitle lines just before this one. One subtitle line on
+           its own often does not fix the meaning (`束縛強め。` is "구속 강함"
+           without context, "집착 강해" with it). A backend that does not use
+           prompts ignores it.
 """
 from __future__ import annotations
 
@@ -59,25 +63,29 @@ BROKEN_MARKERS = ("⁇", "\ufffd")
 
 
 # ---------------------------------------------------------------------------
-# 장르 프리셋
+# Genre presets
 #
-# 22절에서 모델을 바꿔 본 결과, 자막 번역의 실패는 모델 용량보다 **발화의
-# 성격**에서 왔습니다. 기술 발표에서는 전사기가 제품명을 뭉개고, 게임
-# 방송에서는 화자가 문장을 끝내지 않습니다. 한 벌의 프롬프트로 둘 다
-# 잘하기는 어렵습니다.
+# Swapping models in section 22 showed that the failures in subtitle
+# translation came from **the character of the speech** rather than from model
+# capacity. At a tech talk the transcriber mangles product names; on a game
+# stream the speaker does not finish sentences. One set of prompts can hardly
+# do both well.
 #
-# 프리셋은 관찰한 실패에서 거꾸로 끌어냈습니다.
+# The presets were drawn backwards out of the failures observed.
 #
-#   tech    `Datadog`이 `Data Doc`으로, `Route 53`이 `RAT fifty three`로
-#           들어옵니다. 번역기는 이 줄의 문맥을 아는 유일한 지점이므로
-#           복원을 맡깁니다.
-#   gaming  파편을 문장으로 완성하는 것이 가장 나쁜 실패였습니다. 없는
-#           주어와 없는 결말을 금지합니다.
-#   chat    줄임말과 은어가 많습니다. 모르면 지어내지 말고 음차합니다.
-#   music   가사는 문법보다 이미지와 어순이 우선입니다.
+#   tech    `Datadog` comes in as `Data Doc`, `Route 53` as `RAT fifty
+#           three`. The translator is the only point that knows this line's
+#           context, so restoring them is left to it.
+#   gaming  Completing a fragment into a sentence was the worst failure. A
+#           subject that is not there and an ending that is not there are
+#           forbidden.
+#   chat    Full of abbreviations and slang. What it does not know it
+#           transliterates rather than invents.
+#   music   In lyrics, imagery and word order come before grammar.
 
-# 모든 프리셋이 공유하는 끝부분. 출력 형식 지시는 장르와 무관하므로 한 군데
-# 두고, `{context}`는 문맥을 붙이지 않을 때 빈 문자열이 됩니다.
+# The tail every preset shares. The output-format instruction has nothing to
+# do with the genre, so it sits in one place, and `{context}` becomes an empty
+# string when no context is attached.
 _PROMPT_TAIL = ("Output only the translation, with no quotes, notes, or "
                 "romanization.\n\n{context}{text}")
 
@@ -150,29 +158,33 @@ GENRE_PROMPTS = {
 
 DEFAULT_GENRE = "general"
 
-# 직전 자막을 함께 넘길 때 원문 앞에 끼웁니다.
+# Inserted before the source text when the preceding subtitles are passed
+# along.
 #
-# 이 블록의 모양이 결과를 크게 가릅니다. 처음에는 "참고용"이라고 한 번만
-# 적고 대상 줄을 그 뒤에 그냥 두었는데, 63줄 중 4줄에서 모델이 대상 대신
-# **참고 줄을 번역했습니다**(`ここまで。`가 "이번에 V스포 보컬 노래
-# 방송으로요."로 나왔습니다). 지시를 대상 줄 바로 앞에 한 번 더 두어
-# 경계를 다시 세웁니다.
+# The shape of this block decides a great deal. At first it said "for
+# reference" once and simply left the target line after it, and on 4 lines out
+# of 63 the model **translated the reference lines** instead of the target
+# (`ここまで。` came out as "이번에 V스포 보컬 노래 방송으로요."). Putting the
+# instruction once more immediately before the target line re-establishes the
+# boundary.
 CONTEXT_BLOCK = ("Context -- these {src} lines came before and are NOT to be "
                  "translated:\n{lines}\n\n"
                  "Now translate only this one {src} line:\n")
-# 몇 줄을 붙일지는 0·1·2·3·5·8을 재서 정했습니다(RESULTS.md 28절).
+# How many lines to attach was decided by measuring 0, 1, 2, 3, 5 and 8
+# (RESULTS.md section 28).
 #
-# 위로는 **5줄부터 모델이 옮기기를 그만둡니다.** `って。`가 `って`로,
-# 번역되지 않은 채 돌아옵니다. `looks_broken`은 이것을 잡지 못합니다 --
-# 비어 있지도, 길지도 않고, `⁇`도 없으니까요. 네 번 돌려 네 번 같았으므로
-# 우연이 아닙니다.
+# Upwards, **from 5 lines the model stops translating.** `って。` comes back as
+# `って`, untranslated. `looks_broken` does not catch this -- it is neither
+# empty nor long, and there is no `⁇` either. Four runs out of four were the
+# same, so it is not chance.
 #
-# 아래로는 1줄이 모자랍니다. `あなたはどうして生きてるの？百文字以内で
-# 答えよ。`의 뒷문장이 통째로 사라졌습니다.
+# Downwards, 1 line is not enough. The second sentence of
+# `あなたはどうして生きてるの？百文字以内で答えよ。` disappeared wholesale.
 #
-# 2와 3의 차이는 크지 않습니다. 3에서만 바로잡히는 줄이 몇 개 있어
-# (`うちに心奪われる`가 "집에서"에서 "우리에게"로) 3을 골랐지만, 표본
-# 63줄에서 나온 얇은 차이입니다. **최적이라고 부를 근거는 아닙니다.**
+# The difference between 2 and 3 is not large. A few lines come out right only
+# at 3 (`うちに心奪われる` going from "집에서" to "우리에게"), which is why 3
+# was chosen, but it is a thin difference out of a 63-line sample. **It is not
+# grounds for calling it optimal.**
 CONTEXT_LINES = 3
 
 
@@ -183,10 +195,10 @@ def genre_prompt(genre: str | None) -> str:
 
 def render_prompt(prompt: str, src: str, tgt: str, text: str,
                   context: list[str] | None = None) -> str:
-    """`{context}`가 없는 사용자 정의 프롬프트도 그대로 동작합니다.
+    """A custom prompt without `{context}` still works as it is.
 
-    str.format은 남는 키워드를 무시하므로, backends.json에 예전 모양의
-    프롬프트가 들어 있어도 문맥만 빠진 채 정상적으로 렌더됩니다.
+    str.format ignores leftover keywords, so a prompt of the old shape sitting
+    in backends.json renders fine, just without the context.
     """
     block = ""
     if context:
@@ -196,12 +208,13 @@ def render_prompt(prompt: str, src: str, tgt: str, text: str,
 
 
 class TranslationFailed(RuntimeError):
-    """번역 결과를 쓸 수 없습니다.
+    """The translation result cannot be used.
 
-    한동안 이 자리에서 원문을 그대로 돌려주었습니다. 그러면 부르는 쪽이
-    "번역이 원문과 같다"와 "번역이 실패했다"를 구분할 수 없습니다. 실제로
-    라이브에서는 그 줄이 저장도 발행도 되지 않아 통째로 사라졌고, 대체
-    백엔드도 실패를 알아채지 못해 한 번도 발동하지 않았습니다.
+    For a while this place returned the source text as it was. Then the caller
+    cannot tell "the translation equals the source" from "the translation
+    failed". In live the line was in fact neither stored nor published and
+    disappeared wholesale, and the fallback backend never noticed a failure
+    and so never once fired.
     """
 
 
@@ -224,10 +237,10 @@ class Translator:
 
     def translate(self, text: str, src: str, tgt: str,
                   context: list[str] | None = None) -> str:
-        """`context`는 이 줄 직전의 자막들입니다.
+        """`context` is the subtitles just before this line.
 
-        프롬프트를 쓰지 않는 백엔드는 무시합니다 -- M2M-100에는 문맥을
-        받을 자리가 없습니다.
+        A backend that does not use prompts ignores it -- M2M-100 has nowhere
+        to take context.
         """
         raise NotImplementedError
 
@@ -242,7 +255,7 @@ class Translator:
 
 
 class _M2MModel:
-    """M2M-100 한 벌. `models.shared`가 프로세스에 하나만 둡니다."""
+    """One copy of M2M-100. `models.shared` keeps just one per process."""
 
     def __init__(self, model_dir: str, device: str, compute_type: str):
         import ctranslate2
@@ -250,7 +263,7 @@ class _M2MModel:
 
         self.sp = spm.SentencePieceProcessor(
             model_file=os.path.join(model_dir, "sentencepiece.model"))
-        # CTranslate2의 Translator는 여러 스레드에서 함께 써도 됩니다.
+        # CTranslate2's Translator is safe to use from several threads.
         self.tr = ctranslate2.Translator(model_dir, device=device,
                                          compute_type=compute_type)
         with open(os.path.join(model_dir, "shared_vocabulary.json"), encoding="utf-8") as f:
@@ -273,14 +286,16 @@ class LocalM2M(Translator):
 
     def translate(self, text: str, src: str, tgt: str,
                   context: list[str] | None = None) -> str:
-        # context는 받지만 쓰지 않습니다. M2M-100은 한 문장을 한 문장으로
-        # 옮기는 모델이라 앞 줄을 붙일 자리가 없습니다.
+        # context is taken but not used. M2M-100 is a model that renders one
+        # sentence as one sentence, so there is nowhere to attach the
+        # preceding lines.
         stripped = (text or "").strip()
         if not stripped or src == tgt:
             return text
         if not (self.supports(src) and self.supports(tgt)):
-            # 이 언어쌍을 모릅니다. 원문을 돌려주면 부르는 쪽이 번역된 줄로
-            # 오해하므로 실패로 알립니다.
+            # This language pair is unknown. Returning the source text
+            # would have the caller mistake it for a translated line, so a
+            # failure is reported instead.
             raise TranslationFailed(f"M2M-100이 {src}→{tgt}를 지원하지 않습니다")
         models.touch(self._key)
         try:
@@ -308,7 +323,8 @@ class LocalM2M(Translator):
         except TranslationFailed:
             raise
         except Exception as exc:
-            # 실패를 원문으로 바꿔 돌려주면 부르는 쪽이 알 길이 없습니다.
+            # Turning a failure into the source text gives the caller no
+            # way to know.
             raise TranslationFailed(f"M2M-100: {exc}") from exc
 
 
@@ -317,8 +333,8 @@ class OpenAICompatible(Translator):
 
     name = "openai-compatible"
 
-    # 장르 표에 옮겨 두었습니다. 이름은 남겨 둡니다 -- 프롬프트를 직접
-    # 지정하지 않은 백엔드가 무엇을 쓰는지 여기서 읽히는 편이 낫습니다.
+    # Moved into the genre table. The name stays -- it is better to be able
+    # to read here what a backend that did not specify a prompt itself uses.
     DEFAULT_PROMPT = GENRE_PROMPTS[DEFAULT_GENRE]["prompt"]
 
     def __init__(self, base_url: str, model: str, api_key: str = "",
@@ -374,7 +390,7 @@ class OpenAICompatible(Translator):
 
 
 class _LlamaHolder:
-    """Gemma 한 벌과 그 자물쇠. 처음 청할 때 올립니다."""
+    """One copy of Gemma and its lock. Loaded on the first request."""
 
     def __init__(self, model_path: str, device: str, n_ctx: int, threads: int,
                  n_gpu_layers: int):
@@ -401,15 +417,17 @@ class _LlamaHolder:
 
 
 class LocalGemma(Translator):
-    """Gemma를 이 프로세스 안에서 직접 돌립니다.
+    """Runs Gemma directly inside this process.
 
-    전사 모델을 스스로 서빙하게 되면서 번역만 다른 앱에 맡길 이유가
-    없어졌습니다. LM Studio 같은 별도 서버 없이 같은 GGUF를 그대로 씁니다.
-    OpenAICompatible 경로는 그대로 두었으므로, 더 큰 모델을 다른 기계에서
-    돌리고 싶을 때는 그쪽을 쓰면 됩니다.
+    Once the transcription model was served here, there was no reason to leave
+    translation alone to another app. The same GGUF is used as it is, without a
+    separate server like LM Studio. The OpenAICompatible path was left in
+    place, so anyone who wants to run a larger model on another machine can use
+    that.
 
-    프롬프트는 원격 경로와 같은 것을 씁니다. 같은 모델을 두 경로로 부를 때
-    결과가 달라지면 비교가 성립하지 않습니다.
+    The prompt is the same one the remote path uses. If calling the same model
+    down two paths gave different results, there would be no comparison to
+    make.
     """
 
     name = "local-gemma"
@@ -422,31 +440,37 @@ class LocalGemma(Translator):
 
         self.model_path = model_path or os.path.join(
             stream.model_dir(), "gemma-4-E4B_q4_0-it.gguf")
-        # 설정에는 파일 이름만 적을 수 있습니다(전사 쪽 `resolve_asr`와 같은
-        # 규칙). 허깅페이스에서 받은 모델(modelhub)이 그렇게 등록됩니다.
+        # The settings may name only the file (the same rule as
+        # `resolve_asr` on the transcription side). A model downloaded from
+        # Hugging Face (modelhub) is registered that way.
         if not os.path.isabs(self.model_path) and not os.path.exists(self.model_path):
             self.model_path = os.path.join(stream.model_dir(), self.model_path)
-        # `cpu`면 한 층도 GPU에 올리지 않습니다. 내장 그래픽처럼 전사와
-        # 나눠 쓰기 빠듯한 기계에서, 번역만이라도 CPU로 돌려 두면 자막이
-        # 서로를 기다리지 않습니다. 번역은 줄당 0.2초라 CPU로도 충분합니다.
+        # With `cpu`, not one layer goes on the GPU. On a machine where
+        # sharing with transcription is tight, such as integrated graphics,
+        # running at least the translation on the CPU keeps the subtitles from
+        # waiting on each other. Translation is 0.2s per line, so the CPU is
+        # enough.
         self.device = (device or "auto").strip().lower()
         self.n_gpu_layers = 0 if self.device == "cpu" else -1
-        # 백엔드에 프롬프트를 직접 적어 두었다면 그것이 우선입니다. 장르는
-        # 그 자리를 비워 둔 백엔드에만 적용됩니다.
+        # A prompt written into the backend itself takes precedence. The
+        # genre applies only to a backend that left that place empty.
         self.prompt = prompt or genre_prompt(genre)
         self.max_tokens = max_tokens
         self._n_ctx = n_ctx
         self._threads = threads
-        # 모델은 프로세스에 한 벌입니다(models.py). 프롬프트(장르)는 이 객체의
-        # 것이고 모델은 공유하므로, 장르가 다른 세션과 작업이 같은 Gemma를
-        # 씁니다. 첫 번역 때 올립니다 -- 미리 올리면 세션 시작이 그만큼 늦습니다.
+        # There is one copy of the model per process (models.py). The prompt
+        # (the genre) belongs to this object while the model is shared, so
+        # sessions and jobs with different genres use the same Gemma. It is
+        # loaded on the first translation -- loading it ahead of time would
+        # delay the session start by that much.
         self._key = ("gemma", self.model_path, self.device, n_ctx, threads, self.n_gpu_layers)
         self._holder = models.shared(
             self._key,
             lambda: _LlamaHolder(self.model_path, self.device, n_ctx, threads,
                                  self.n_gpu_layers))
-        # llama.cpp의 컨텍스트는 동시 호출을 견디지 못합니다. 자막 한 줄마다
-        # 번역 스레드가 뜨므로 모델과 함께 사는 자물쇠로 직렬화합니다.
+        # llama.cpp's context does not survive concurrent calls. A
+        # translation thread comes up for every subtitle line, so they are
+        # serialised through a lock that lives with the model.
         self._lock = self._holder.lock
 
     def _ensure(self):
@@ -465,9 +489,9 @@ class LocalGemma(Translator):
                 messages=[{"role": "user", "content": msg}],
                 temperature=0.2, max_tokens=self.max_tokens)
         answer = (out["choices"][0]["message"].get("content") or "").strip()
-        # 생각을 적고 나오는 모델이면 그 부분을 걷어냅니다. 자막 한 줄에
-        # 추론을 붙이면 지연만 늘고 답은 나아지지 않는다는 것을 원격 경로에서
-        # 이미 확인했습니다.
+        # For a model that writes out its thinking, that part is stripped.
+        # The remote path already confirmed that attaching reasoning to a
+        # one-line subtitle only adds latency without improving the answer.
         if "</think>" in answer:
             answer = answer.rsplit("</think>", 1)[-1].strip()
         if looks_broken(answer, stripped):
@@ -476,11 +500,13 @@ class LocalGemma(Translator):
 
 
 class Lazy(Translator):
-    """첫 호출에서야 만듭니다.
+    """Built only on the first call.
 
-    대체용 M2M-100은 기본 엔진이 실패할 때만 필요한데, 예전에는 `build()`마다
-    미리 만들었습니다 -- 세션을 열 때마다 473MB를 (한 번은) 읽는 셈이었고,
-    모델 파일이 없는 기계에서는 Gemma가 멀쩡해도 여기서 넘어졌습니다.
+    The M2M-100 used as a fallback is needed only when the default engine
+    fails, but it used to be built ahead of time in every `build()` -- which
+    amounted to reading 473MB (once) every time a session was opened, and on a
+    machine without the model file it fell over here even with Gemma perfectly
+    fine.
     """
 
     name = "lazy"
@@ -564,14 +590,16 @@ def build(spec: dict | None, genre: str | None = None) -> Translator:
     """spec = {"backend": "local"} or
        {"backend": "openai", "base_url": ..., "model": ..., "api_key": ...}
 
-    `genre`는 백엔드가 아니라 보고 있는 영상의 성질입니다. 같은 Gemma로
-    기술 발표와 게임 방송을 모두 번역하되 프롬프트만 갈아 끼웁니다.
+    `genre` is a property of the video being watched, not of the backend. The
+    same Gemma translates both a tech talk and a game stream, with only the
+    prompt swapped.
     """
     spec = spec or {}
     min_chars = int(spec.get("min_chars", DEFAULT_MIN_CHARS) or 0)
     if spec.get("backend") == "gemma":
         device = (spec.get("device") or "auto").strip().lower()
-        # CPU로 돌리면 스레드 4는 모자랍니다. 전사와 같은 규칙을 씁니다.
+        # Four threads is not enough on the CPU. The same rule as for
+        # transcription.
         gemma = LocalGemma(spec.get("model_path"),
                            n_ctx=int(spec.get("n_ctx", 2048)),
                            threads=int(spec.get("threads")
@@ -579,8 +607,9 @@ def build(spec: dict | None, genre: str | None = None) -> Translator:
                            prompt=spec.get("prompt"), genre=genre,
                            device=device)
         gemma.min_chars = min_chars
-        # 모델 파일이 없거나 적재가 실패해도 자막이 원문으로 남지는 않도록
-        # M2M-100을 뒤에 둡니다. 어느 쪽이 실제로 답했는지는 기록됩니다.
+        # M2M-100 sits behind it so that a missing model file or a failed
+        # load does not leave the subtitles as the source text. Which of the
+        # two actually answered is recorded.
         return WithFallback(gemma, Lazy(LocalM2M))
     if spec.get("backend") == "openai":
         remote = OpenAICompatible(spec["base_url"], spec["model"],

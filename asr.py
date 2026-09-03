@@ -1,29 +1,32 @@
 """Transcription backends: the local GGUF runtime, or an external ASR service.
 
-로컬(transcribe.cpp의 Whisper)이 기본입니다 -- 무료이고 밖으로 나가지 않으며
-이 기계에서 38~88배속입니다. 밖에 손을 뻗는 이유는 어려운 소리의 품질입니다:
-2026-08-27 표본에서 발표는 깨끗이 받아 적혔지만 네 명이 겹쳐 말하는 방송은
-줄을 통째로 잃었습니다.
+Local (transcribe.cpp's Whisper) is the default -- it is free, nothing goes
+outside, and it runs at 38~88x on this machine. The reason to reach outside is
+quality on difficult audio: in the 2026-08-27 sample a talk was written down
+cleanly, but a stream with four people talking over each other lost whole lines.
 
-외부 경로는 OpenAI 의 `/v1/audio/transcriptions` 모양입니다(Whisper 와 그 호환
-서버들). 두 갈래로 씁니다.
+The external path has the shape of OpenAI's `/v1/audio/transcriptions` (Whisper
+and the servers compatible with it). It is used two ways.
 
-  - 녹화본(`OpenAICompatibleASR`): 방송 전체는 어떤 요청 크기 제한도 넘으므로
-    조용한 지점에서 몇 분짜리 창으로 잘라 보내고, 창마다 돌아온 구간 시각에
-    창의 시작을 더합니다.
-  - 라이브(`OpenAIStreamASR`): VAD 가 잘라 낸 발화 한 조각(2~12초)을 그때그때
-    보냅니다. 로컬 엔진과 같은 표면(`transcribe(samples, sr, …)`)을 내놓아
-    `run_stream`/`Refiner`가 어느 쪽인지 모르게 합니다. 지연은 왕복 시간만큼
-    늘고, 그것은 사용자가 고른 거래입니다 -- 무료 로컬 모델보다 나은 인식을
-    비용을 내고 사려는 사람이 있습니다.
+  - VOD (`OpenAICompatibleASR`): a whole stream goes over any request size limit,
+    so it is cut at a quiet point into windows of a few minutes and sent, and the
+    window's start is added to the segment timestamps that come back for each
+    window.
+  - Live (`OpenAIStreamASR`): one utterance slice the VAD cut out (2~12 s) is sent
+    as it comes. It puts out the same surface as the local engine
+    (`transcribe(samples, sr, …)`) so that `run_stream`/`Refiner` cannot tell
+    which is which. The latency grows by the round trip, and that is the trade
+    the user chose -- there are people willing to pay for recognition better than
+    a free local model.
 
 Both must return cues carrying media-relative timestamps, because the player
 aligns subtitles by looking them up against getCurrentTime(), not by
 estimating.
 
-이름에 남아 있던 "hayamimi"는 이 프로젝트가 처음 전사 엔진으로 빌려 쓰던
-저장소입니다. 지금은 그 코드에 기대지 않으므로 이름도 함께 걷어냈습니다.
-옛 설정(`local-hayamimi`)은 그대로 기본 엔진으로 읽힙니다.
+The "hayamimi" that lingered in the names is the repository this project first
+borrowed as its transcription engine. It no longer leans on that code, so the
+name was cleared away with it. The old config (`local-hayamimi`) still reads as
+the default engine.
 """
 from __future__ import annotations
 
@@ -41,8 +44,8 @@ import stream
 
 SAMPLE_RATE = 16000
 
-# OpenAI 의 verbose_json 은 언어를 코드가 아니라 이름("japanese")으로 줍니다.
-# 자막에는 코드가 실려야 번역기가 알아봅니다.
+# OpenAI's verbose_json gives the language as a name ("japanese"), not a code.
+# The subtitle has to carry the code for the translator to recognise it.
 LANG_NAMES = {"japanese": "ja", "korean": "ko", "english": "en", "chinese": "zh",
               "mandarin": "zh", "spanish": "es", "french": "fr", "german": "de",
               "russian": "ru", "portuguese": "pt", "italian": "it", "vietnamese": "vi",
@@ -68,10 +71,11 @@ def wav_bytes(samples: np.ndarray) -> bytes:
 
 def post_transcription(base_url: str, model: str, api_key: str, audio: bytes,
                        lang: str | None, timeout: float) -> dict:
-    """`/v1/audio/transcriptions`에 wav 하나를 보내고 verbose_json 을 받습니다.
+    """Sends one wav to `/v1/audio/transcriptions` and gets verbose_json back.
 
-    multipart 를 손으로 짓습니다 -- 표준 라이브러리만 쓰는 서버라 requests 가
-    없고, 칸이 넷뿐이라 라이브러리를 들일 만한 일이 아닙니다.
+    The multipart body is built by hand -- this is a server that uses the standard
+    library only, so there is no requests, and with just four fields it is not
+    worth bringing a library in.
     """
     boundary = uuid.uuid4().hex
     parts = []
@@ -106,23 +110,24 @@ class ASRBackend:
     def transcribe(self, samples: np.ndarray, lang: str | None,
                    on_progress=None, speakers: bool = False,
                    should_stop=None, refine: bool = True) -> list[dict]:
-        """`should_stop`이 참을 돌려주면 `stream.Cancelled`를 냅니다.
+        """Raises `stream.Cancelled` when `should_stop` returns true.
 
-        전사는 녹화본 작업에서 가장 긴 단계입니다. 단계 사이에서만
-        확인하면 시작한 뒤로는 끝날 때까지 멈출 수 없습니다.
+        Transcription is the longest stage of a VOD job. Checking only between
+        stages means it cannot be stopped once started until it ends.
 
-        `speakers`·`refine`은 전사기마다 할 수 있는 것이 다릅니다. 예전에는
-        부르는 쪽(`jobs`)이 엔진 이름을 보고 넘길지 말지 정했는데, 그 판정이
-        `name == "default"`라 설정에서 고른 로컬 전사기(`tcpp`)에는 화자 딱지가
-        영영 닿지 않았습니다 -- 화면의 「화자 태그 붙이기」가 기본 엔진에서
-        아무 일도 하지 않았다는 뜻입니다. 그래서 표면에 세워 두고, 할 수 없는
-        전사기가 조용히 무시합니다.
+        What `speakers` and `refine` can do differs per transcriber. The caller
+        (`jobs`) used to look at the engine name to decide whether to pass them,
+        and that test was `name == "default"`, so speaker tags never once reached
+        the local transcriber (`tcpp`) chosen in the config -- meaning the
+        screen's "Attach speaker tags" did nothing at all on the default engine.
+        So they stand on the surface instead, and a transcriber that cannot do
+        them quietly ignores them.
         """
         raise NotImplementedError
 
 
 DEFAULT_NAME = "default"
-# 옛 설정과 요청이 쓰던 이름. 같은 것으로 읽습니다.
+# The name the old config and requests used. It reads as the same thing.
 LEGACY_DEFAULT_IDS = ("local-hayamimi",)
 
 
@@ -139,14 +144,14 @@ class DefaultLocal(ASRBackend):
                               refine=refine)
 
 
-LocalHayamimi = DefaultLocal       # 옛 이름. 시험과 스크립트가 부를 수 있습니다.
+LocalHayamimi = DefaultLocal       # The old name. Tests and scripts may call it.
 
 
 class TranscribeCpp(ASRBackend):
-    """transcribe.cpp의 GGUF 모델로 구간을 해독합니다.
+    """Decodes segments with transcribe.cpp's GGUF models.
 
-    구간 분할과 시각 계산은 로컬 경로와 똑같이 VAD가 맡고, 해독만 갈아
-    끼웁니다.
+    Segmentation and timestamp computation are the VAD's job exactly as on the
+    local path; only the decode is swapped.
     """
 
     name = "tcpp"
@@ -165,7 +170,7 @@ class TranscribeCpp(ASRBackend):
 
 
 class OpenAICompatibleASR(ASRBackend):
-    """POST windows of audio to /v1/audio/transcriptions (녹화본).
+    """POST windows of audio to /v1/audio/transcriptions (VOD).
 
     `verbose_json` gives per-segment timestamps relative to the window; the
     window offset restores them to media time. Windows are cut on a low-energy
@@ -215,17 +220,18 @@ class OpenAICompatibleASR(ASRBackend):
 
     def transcribe(self, samples, lang, on_progress=None, speakers=False,
                    should_stop=None, refine=True):
-        """`speakers`·`refine`은 받아서 무시합니다.
+        """`speakers` and `refine` are taken and ignored.
 
-        창 하나를 통째로 원격에 보내고 구간 시각까지 받아 오는 경로라, 정제가
-        하려는 일(짧게 끊은 것을 다시 합쳐 해독)을 이미 하고 있는 셈입니다.
-        화자 딱지는 CAM++가 이 기계에서 도는 것이므로 원격 경로에는 없습니다.
+        This path sends a whole window to the remote and gets the segment
+        timestamps back with it, so it is already doing what refinement sets out
+        to do (join the short cuts back together and decode them). Speaker tags
+        are CAM++ running on this machine, so the remote path has none.
         """
         spans = self._cut_points(samples)
         cues: list[dict] = []
         total = len(samples)
         for start, end in spans:
-            # 창 하나가 몇십 초 분량이므로 사이에서 확인하면 충분합니다.
+            # One window is tens of seconds of audio, so checking between them is enough.
             if should_stop and should_stop():
                 raise stream.Cancelled()
             data = self._post(wav_bytes(samples[start:end]), lang)
@@ -252,15 +258,16 @@ class OpenAICompatibleASR(ASRBackend):
 
 
 class OpenAIStreamASR:
-    """라이브용: VAD 가 잘라 낸 발화 한 조각을 그때그때 원격에 보냅니다.
+    """For live: sends one utterance slice the VAD cut out to the remote as it comes.
 
-    `tcpp_asr.TranscribeCppASR`와 같은 표면입니다 -- `run_stream`과 `Refiner`가
-    부르는 것은 `transcribe(samples, sample_rate, speech_s=…, live=…)` 하나와
-    `forced_lang`·`label`뿐이라, 이 둘이 같으면 어느 쪽이 들어가도 세션은
-    모릅니다. 갈아 끼우는 일은 `tcpp_asr.LiveASR`가 맡습니다.
+    The same surface as `tcpp_asr.TranscribeCppASR` -- all `run_stream` and
+    `Refiner` call is the one `transcribe(samples, sample_rate, speech_s=…,
+    live=…)` plus `forced_lang` and `label`, so when those two match the session
+    does not know which one went in. Swapping is `tcpp_asr.LiveASR`'s job.
 
-    실패는 예외로 냅니다. `_drain`이 연달아 다섯 번까지는 그 조각만 버리고
-    넘어가고, 그 뒤에는 세션을 놓습니다 -- 로컬 엔진의 규칙과 같습니다.
+    Failures are raised as exceptions. `_drain` drops just that slice and moves
+    on for up to five in a row, and after that it lets the session go -- the same
+    rule as the local engine.
     """
 
     name = "openai-asr"
@@ -271,7 +278,8 @@ class OpenAIStreamASR:
         self.base_url = spec["base_url"].rstrip("/")
         self.model = spec["model"]
         self.api_key = spec.get("api_key", "")
-        # 조각 하나는 길어야 12초입니다. 30초 안에 답이 없으면 그 조각은 버립니다.
+        # One slice is 12 seconds at the longest. With no answer within 30 seconds
+        # that slice is dropped.
         self.timeout = float(spec.get("timeout") or 30.0)
         self.forced_lang = lang or ""
         self.min_switch_s = 0.0
@@ -281,7 +289,7 @@ class OpenAIStreamASR:
         self.threads = 0
         self.hallucinations = 0
 
-    # --- RoutedASR 표면 -------------------------------------------------------
+    # --- The RoutedASR surface ----------------------------------------------
     punct = None
     ko_spacer = None
 
@@ -302,19 +310,19 @@ class OpenAIStreamASR:
     def partial(self, samples, sample_rate, lang_hint=None) -> str:
         return ""
 
-    # 구간 시각을 내지 못합니다. 이 표면은 발화 한 조각을 통째로 보내고
-    # 글자만 돌려받습니다 -- 녹화본 정제(되쪼개기)가 성립하지 않습니다.
+    # It cannot produce segment timestamps. This surface sends a whole utterance
+    # slice and gets only text back -- VOD refinement (the re-split) does not hold.
     supports_segments = False
 
     def transcribe(self, samples: np.ndarray, sample_rate: int,
                    known_lang: str | None = None, speech_s: float | None = None,
                    live: bool = True, segments: bool = False) -> dict:
-        """`segments`(구간 시각)는 받아서 무시합니다.
+        """`segments` (the segment timestamps) is taken and ignored.
 
-        이 원격 표면은 발화 한 조각을 통째로 보내고 글자만 돌려받습니다.
-        부르는 쪽은 「달라고 했는데 안 왔다」를 이미 다뤄야 하므로 -- 원격
-        서버가 verbose_json 을 안 줄 수도 있습니다 -- 여기서 예외를 내는
-        것보다 빈 손으로 돌아서는 편이 낫습니다.
+        This remote surface sends a whole utterance slice and gets only text
+        back. The caller already has to handle "asked for them and they did not
+        come" -- a remote server may not give verbose_json -- so turning back
+        empty-handed is better than raising an exception here.
         """
         if sample_rate != SAMPLE_RATE:
             raise ValueError(f"16kHz만 지원합니다 (받은 값 {sample_rate})")

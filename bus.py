@@ -1,27 +1,32 @@
-"""화면에 밀어 주는 전역 변화 알림.
+"""Global change notifications pushed to the screen.
 
-라이브 자막은 세션마다 SSE(`/api/live/events/<id>`)로 흘러가지만, 그 밖의
-것 -- 새 세션이 생겼다, 세션이 끝났다, 전사가 끝나 목록에 영상이 늘었다,
-다른 창에서 재번역이 돌고 있다 -- 은 화면이 새로고침해야 알았습니다. 확장에서
-시작한 방송이 mimiwatch 탭에 보이지 않았고, 목록의 「받는 중」이 방송이 끝난
-뒤에도 그대로였습니다.
+Live subtitles flow per session over SSE (`/api/live/events/<id>`), but
+everything else -- a new session appeared, a session ended, a transcription
+finished and the list gained a video, a retranslation is running in another
+window -- was only known once the screen refreshed. A stream started from the
+extension did not appear in the mimiwatch tab, and "downloading" in the list
+stayed there after the stream had ended.
 
-여기 한 줄기(`/api/events`)로 그런 변화를 전부 내보냅니다. 내용은 세 가지입니다.
+This one stream (`/api/events`) sends out every such change. There are five
+kinds of content.
 
-    {"type": "session", ...세션 status..., "deleted"?: true}
-    {"type": "video",   "id": <영상id>, "reason": "saved"|"translated"|"deleted"}
-    {"type": "job",     ...작업 레코드...}
-    {"type": "model",   ...modelhub.status()...}   내려받기 진행과 완료
-    {"type": "multiview", "id": <묶음id>, "focus": <세션id>, "members": [세션id...],
+    {"type": "session", ...session status..., "deleted"?: true}
+    {"type": "video",   "id": <video id>, "reason": "saved"|"translated"|"deleted"}
+    {"type": "job",     ...job record...}
+    {"type": "model",   ...modelhub.status()...}   download progress and completion
+    {"type": "multiview", "id": <group id>, "focus": <session id>, "members": [session id...],
                           "deleted"?: true}
-                        멀티뷰 묶음이 생기거나 초점·멤버가 바뀌거나 없어졌다(live.py 멀티뷰 절)
+                        a multiview group appeared, its focus or members changed, or it
+                        went away (live.py, the multiview section)
 
-받는 쪽은 그 부분만 갱신합니다(`web/app/bus.js`). 세션 알림은 자막 한 줄마다
-오므로 화면은 목록의 그 줄만 제자리에서 고치고, 모르는 세션이 나타났을 때만
-목록을 다시 읽습니다.
+The receiving side refreshes only that part (`web/app/bus.js`). Session
+notifications arrive for every subtitle line, so the screen fixes just that row
+of the list in place, and re-reads the list only when a session it does not know
+about appears.
 
-구독자 큐가 가득 차면(화면이 멎어 읽어 가지 않음) 그 구독자의 알림은 버립니다.
-놓친 알림은 다시 붙을 때 목록을 한 번 새로 읽어 메우므로 잃는 것이 없습니다.
+When a subscriber's queue fills up (the screen is stuck and not reading), that
+subscriber's notifications are thrown away. Nothing is lost, because the missed
+notifications are filled in by re-reading the list once when it reattaches.
 """
 from __future__ import annotations
 
@@ -55,7 +60,7 @@ def publish(event: dict):
         try:
             q.put_nowait(data)
         except queue.Full:
-            pass                      # 읽어 가지 않는 구독자. 다시 붙을 때 메웁니다.
+            pass                      # A subscriber that is not reading. It fills in on reattach.
 
 
 def subscribers() -> int:

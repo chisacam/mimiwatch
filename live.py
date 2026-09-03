@@ -22,8 +22,8 @@ import queue
 import re
 from collections import deque
 import subprocess
-# 이름을 따로 들여옵니다. 시험(bench/live_errors.py)이 `live.subprocess`를
-# 가짜로 갈아 끼우는데, 그 가짜에는 예외 클래스가 없습니다.
+# The name is imported separately. The test (bench/live_errors.py) swaps
+# `live.subprocess` for a fake, and that fake has no exception classes.
 from subprocess import TimeoutExpired
 import sys
 import threading
@@ -45,10 +45,12 @@ from tcpp_asr import build_live_asr
 
 CHUNK = 1600            # 0.1s per VAD feed
 
-# 탭 오디오를 받을 때 큐에 쌓아 둘 최대 길이(초). 전사가 실시간을 못 따라가면
-# 여기가 찹니다. 브라우저는 재생을 늦출 수 없으므로 -- 사용자가 실제로 듣고
-# 있는 소리입니다 -- 넘치면 가장 오래된 것부터 버리고 몇 초를 버렸는지 적습니다.
-# 조용히 밀리다 20분 뒤 자막이 나오는 것보다 낫습니다.
+# The most audio (in seconds) to hold queued while receiving tab audio. This
+# fills up when transcription cannot keep up with real time. The browser cannot
+# slow playback down -- it is the sound the user is actually listening to -- so
+# on overflow the oldest is dropped and how many seconds were dropped is written
+# down. Better than silently falling behind and producing a subtitle 20 minutes
+# later.
 INGEST_MAX_S = 300.0
 
 # hayamimi's 12s force-split suits a single speaker who eventually pauses.
@@ -81,41 +83,46 @@ PROFILES = {
                   "label_ko": "합방·다인 대화 (발화가 겹침)"},
 }
 
-# HLS 수신이 끊겼을 때 같은 세션 안에서 다시 붙어 보는 횟수. 사이의 기다림은
-# 3초·6초·9초…로 늘어나 다 합쳐 1분 남짓입니다. 그 안에 돌아오지 않으면
-# 포기하고 「이어받기」에 맡깁니다 -- 그쪽은 사용자가 시키는 일입니다.
+# How many times to reattach within the same session when HLS reception breaks.
+# The waits in between grow to 3s, 6s, 9s… for a little over a minute in total.
+# If it has not come back by then we give up and leave it to "Resume" -- that
+# one is the user's call.
 HLS_RECONNECT_TRIES = 5
 
-# 한 조각(CHUNK)의 길이. 링과 시계가 같은 단위를 씁니다.
+# The length of one chunk (CHUNK). The ring and the clock use the same unit.
 FRAME_S = CHUNK / SAMPLE_RATE
 
-# 초점이 없는 세션이 들고 있는 최근 소리(초). 멀티뷰에서 다른 방송을 보는 동안에도
-# 소리는 계속 받아 두고, 초점이 돌아오면 여기부터 받아 적습니다 -- 전환 직전 몇 초가
-# 자막에 남고 첫 줄이 곧 뜹니다. 이보다 오래된 소리는 버립니다.
+# How much recent audio (in seconds) an unfocused session holds. While another
+# broadcast is being watched in multiview the sound keeps being received, and when
+# focus returns transcription starts from here -- the few seconds before the switch
+# stay in the subtitles and the first line appears right away. Audio older than
+# this is dropped.
 RING_S = 30.0
 
 
 class Ring:
-    """읽기 스레드와 받아 적는 스레드 사이의 최근 소리.
+    """Recent audio between the reading thread and the transcribing thread.
 
-    예전에는 ffmpeg 을 읽는 일과 VAD·해독이 **한 스레드의 한 for 루프**였습니다. 그러면
-    받아 적기를 멈추는 순간 파이프를 아무도 읽지 않아 ffmpeg 이 서고, 멀티뷰처럼
-    「소리는 계속 받되 지금은 받아 적지 않는」 세션을 둘 수 없었습니다. 읽기는 여기에
-    넣기만 하고, 받아 적는 쪽은 여기서 꺼내기만 합니다.
+    Reading ffmpeg and running the VAD and decoding used to be **one for loop in one
+    thread**. Then the moment transcription stopped nobody was reading the pipe, so
+    ffmpeg stalled, and a session that "keeps receiving sound but is not transcribing
+    right now" -- which is what multiview needs -- was impossible. Reading only puts
+    things in here, and the transcribing side only takes them out.
 
-    항목은 소리 `("audio", recv_s, ndarray)` 와 표식 `("flush",)` `("rebase", base, note)`
-    `("end",)` 입니다. 소리는 조각마다 읽기 시계의 값(recv_s)을 물고 있어서, 링에서 한참
-    기다렸다 꺼내져도 자막 시각이 그 조각의 진짜 시각이 됩니다. 가득 차면 **소리만**
-    오래된 것부터 버리고 표식은 남깁니다 -- 재접속으로 시간 기준이 바뀐 사실까지 버리면
-    그 뒤 조각의 시각이 전부 틀어집니다.
+    An item is either audio `("audio", recv_s, ndarray)` or a marker `("flush",)`
+    `("rebase", base, note)` `("end",)`. Every audio chunk carries the reading clock's
+    value (recv_s) with it, so even when it is taken out after a long wait in the ring
+    the subtitle's time is that chunk's real time. When full, **only audio** is
+    dropped oldest-first and the markers are kept -- dropping the fact that a
+    reconnect moved the time base would throw off the times of every chunk after it.
     """
     TIMEOUT = object()
 
     def __init__(self, max_s: float):
         self._d: deque = deque()
         self._cv = threading.Condition()
-        self._audio = 0                  # 소리 항목 수
-        self.dropped_s = 0.0             # 넘쳐서 버린 소리(초)
+        self._audio = 0                  # how many audio items
+        self.dropped_s = 0.0             # audio dropped on overflow (seconds)
         self.max_frames = 1
         self.set_max(max_s)
 
@@ -149,8 +156,9 @@ class Ring:
             return self._audio >= self.max_frames
 
     def wait_room(self, timeout: float) -> bool:
-        """소리 자리가 나기를 기다립니다. 초점 세션의 읽기 스레드가 씁니다 -- 받아 적기가
-        느리면 버리는 대신 여기서 서서, 예전에 ffmpeg 파이프가 차던 것과 같은 역압이 됩니다."""
+        """Wait for room for audio. The focused session's reading thread uses this --
+        when transcription is slow it stalls here instead of dropping, which is the same
+        back pressure the ffmpeg pipe used to give."""
         with self._cv:
             return self._cv.wait_for(lambda: self._audio < self.max_frames, timeout)
 
@@ -168,22 +176,23 @@ class Ring:
         with self._cv:
             return self._audio * FRAME_S
 
-# 세션이 들고 있는 최근 이벤트 수(SSE 재접속용). LiveSession.emit 참조.
+# How many recent events a session holds (for SSE reconnects). See LiveSession.emit.
 EVENT_LOG_MAX = 2000
-# `_text_of`에서 "기록에 없음"을 "흡수됨(None)"과 구분하는 표식.
+# The marker that tells "not in the record" from "absorbed (None)" in `_text_of`.
 _UNKNOWN = object()
 
 _sessions: dict[str, "LiveSession"] = {}
 _lock = threading.Lock()
-# 프로세스에 **한 세션만** 받아 적습니다. 전사 모델은 한 벌을 나눠 쓰는데(models.py) 같은
-# 모델을 두 세션이 동시에 돌리는 것은 바인딩이 보장하지 않습니다(tcpp_asr.py). 멀티뷰의
-# 초점이 옮겨 갈 때 옛 세션이 이 토큰을 놓은 뒤에야 새 세션이 잡습니다 -- 그 사이의 소리는
-# 새 세션의 링이 들고 있으므로 잃는 것이 없습니다.
+# **Only one session in the process** transcribes. The transcription model is one
+# shared copy (models.py), and the bindings do not guarantee two sessions running the
+# same model at once (tcpp_asr.py). When multiview focus moves, the new session takes
+# this token only after the old one has let it go -- the sound in between is held by
+# the new session's ring, so nothing is lost.
 _transcriber = threading.Lock()
 
-# 끝난 세션의 마지막 상태는 SQLite가 들고 있습니다. 예전에는 메모리 딕셔너리에
-# 최근 20개만 남겨 두었는데, 재시작하면 그마저 사라지는 데다 상한을 넘긴 세션은
-# 살아 있는 서버에서도 404가 되었습니다.
+# SQLite holds a finished session's last status. Previously an in-memory dict kept
+# only the most recent 20, which was lost on restart anyway, and a session past the
+# cap became a 404 even on a running server.
 
 
 _TWITCH_LOGIN = re.compile(r"twitch\.tv/(?!videos/)([A-Za-z0-9_]+)", re.I)
@@ -191,15 +200,16 @@ _M3U8 = re.compile(r"\.m3u8(\?|$)", re.I)
 
 
 def site_of(d: dict, url: str = "") -> dict:
-    """yt-dlp `-j` 결과에서 화면이 임베드에 쓰는 것만 골라냅니다.
+    """Pick out of a yt-dlp `-j` result only what the UI needs for embedding.
 
-    화면은 예전에 `video_id` 가 있으면 유튜브 플레이어에 넣었습니다. 이제 트위치와 생
-    m3u8 도 받으므로 어느 사이트인지를 서버가 말해 줘야 합니다 -- 트위치의 id 는 숫자
-    스트림 번호라 유튜브 플레이어에 넣으면 아무것도 나오지 않습니다.
+    The UI used to put anything with a `video_id` into the YouTube player. Now that
+    Twitch and raw m3u8 are accepted too, the server has to say which site it is -- a
+    Twitch id is a numeric stream number, and putting it in the YouTube player shows
+    nothing.
 
       site     "youtube" | "twitch" | "other"
-      channel  트위치 로그인명(임베드가 이것으로 채널을 찾습니다). 다른 사이트는 빈 값
-      video_id yt-dlp 의 id 그대로 (유튜브면 영상 id)
+      channel  the Twitch login name (the embed finds the channel by it). Empty elsewhere
+      video_id yt-dlp's id as it is (the video id on YouTube)
     """
     key = (d.get("extractor_key") or d.get("extractor") or "").lower()
     dom = (d.get("webpage_url_domain") or "").lower()
@@ -222,11 +232,12 @@ def looks_like_m3u8(url: str) -> bool:
 def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
     """Audio-only rendition plus what the manifest says about media time."""
     why = []
-    # 마지막의 `worst`는 영상이 섞인(muxed) 가장 작은 HLS 입니다. 2026-08에 7주 묵은
-    # yt-dlp 가 오디오 전용 포맷을 하나도 못 받아 라이브가 통째로 죽었습니다 -- ffmpeg 은
-    # 영상 섞인 스트림에서도 소리만 뽑으므로, 파이프가 조금 굵어질 뿐 받아 적기는 됩니다.
-    # 234/233 은 유튜브의 오디오 전용 itag 입니다. 다른 사이트에서는 없는 것을 두 번
-    # 물어보느라 몇 초를 쓰므로 건너뜁니다.
+    # The `worst` at the end is the smallest HLS with video muxed in. In 2026-08 a
+    # seven-week-old yt-dlp got no audio-only format at all and live died outright --
+    # ffmpeg pulls just the sound out of a muxed stream too, so the pipe only gets a
+    # little fatter and transcription still works. 234/233 are YouTube's audio-only
+    # itags. On other sites they spend a few seconds asking twice for something that
+    # is not there, so they are skipped.
     fmts = ("234", "233", "bestaudio", "worst") if youtube else ("bestaudio", "worst")
     for fmt in fmts:
         try:
@@ -242,14 +253,16 @@ def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
             return lines[0], manifest_info(lines[0])
         why.append(f"{fmt}: {(out.stderr or '').strip().splitlines()[-1]}"
                    if (out.stderr or "").strip() else f"{fmt}: 빈 결과")
-    # yt-dlp가 한 말을 그대로 실어 보냅니다. "해석할 수 없습니다"만으로는
-    # 손댈 곳을 알 수 없습니다 -- 판올림이 필요한지, 로그인이 필요한지,
-    # 애초에 라이브가 아닌지가 저 줄에 적혀 있습니다.
+    # Carry what yt-dlp said verbatim. "Could not resolve" on its own does not
+    # tell you where to look -- whether an update is needed, whether a login is
+    # needed, or whether it was never live in the first place is written in
+    # that line.
     ver = ytdlp_version()
     hint = ""
     if all("format is not available" in w for w in why):
-        # 셋 다 없다면 특정 포맷이 빠진 것이 아니라 목록을 통째로 못 받은
-        # 것입니다. 거의 언제나 yt-dlp가 낡아서입니다.
+        # If all three are missing, it is not that one format is absent but
+        # that the whole list did not come back. Almost always because yt-dlp
+        # is old.
         hint = (f" — 포맷을 하나도 받지 못했습니다. yt-dlp({ver or '판 미상'})가 "
                 f"낡았을 수 있습니다"
                 + (" (45일 넘음)" if ytdlp_stale(ver) else "")
@@ -260,7 +273,7 @@ def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
 
 
 def ytdlp_version() -> str:
-    """설치된 yt-dlp의 판. 못 물으면 빈 문자열."""
+    """The installed yt-dlp's version. An empty string if it cannot be asked."""
     try:
         out = subprocess.run(stream.ytdlp_cmd() + ["--version"], capture_output=True,
                              text=True, timeout=20,
@@ -271,14 +284,15 @@ def ytdlp_version() -> str:
 
 
 def ytdlp_stale(version: str, days: int = 45) -> bool:
-    """이 판이 낡았는가.
+    """Is this version old.
 
-    yt-dlp의 판은 YYYY.MM.DD입니다. 유튜브가 추출 경로를 자주 바꾸고
-    yt-dlp가 그때마다 따라가므로, 몇 달 지난 판은 포맷 목록을 통째로 받지
-    못하는 일이 흔합니다. 기준을 90일에서 45일로 낮췼습니다 -- 2026-08 실측에서
-    7주 전 판이 이미 라이브 오디오 포맷을 하나도 받지 못했습니다. 그러면 234도
-    233도 bestaudio도 전부 "Requested format is not available"이 됩니다 -- 포맷이
-    없는 것이 아니라 아무것도 못 읽은 것입니다.
+    A yt-dlp version is YYYY.MM.DD. YouTube changes its extraction path often
+    and yt-dlp follows every time, so a version a few months old commonly
+    fails to get the format list at all. The bar was lowered from 90 days to
+    45 -- in a 2026-08 measurement a version seven weeks old already got no
+    live audio format whatsoever. Then 234, 233 and bestaudio all become
+    "Requested format is not available" -- not that the format is missing, but
+    that nothing could be read.
     """
     try:
         y, m, d = (int(x) for x in version.split(".")[:3])
@@ -303,8 +317,9 @@ def manifest_info(m3u8: str) -> dict:
     """
     info = {"seq": None, "target": None, "pdt": None,
             "segments": 0, "window_s": 0.0, "media_base": 0.0,
-            # #EXT-X-ENDLIST 가 있으면 끝난 재생목록(녹화본)입니다. 라이브인지 모르는(other)
-            # 주소가 이것을 달고 있으면 ffmpeg 이 끝난 뒤 다시 붙을 것이 없습니다.
+            # #EXT-X-ENDLIST means a finished playlist (a recording). If an address
+            # we do not know to be live (other) carries this, there is nothing to
+            # reattach to once ffmpeg ends.
             "ended": False}
     try:
         with urllib.request.urlopen(m3u8, timeout=10) as r:
@@ -350,25 +365,27 @@ def media_base_from(pdt: str | None, release_ts: float | None,
     return max(0.0, (first - release_ts) + window_s)
 
 
-# 정제본이 어떤 확정 줄을 흡수했는지 가릴 때 앞 글자가 그대로 들어 있는지로
-# 보면 안 됩니다. 정제는 합친 오디오를 다시 해독하므로 같은 말이라도 글자가
-# 조금 달라집니다(실측: `무기도 풀제열이야?`가 `무기도 풀제일이야?`가 됨).
-# 그러면 흡수 판정이 빗나가 거친 확정본과 정제본이 나란히 남습니다.
-# 화면에서는 눈에 덜 띄지만 저장분에 둘 다 쌓여, 새로고침하면 같은 발화가
-# 두 번 나옵니다. 그래서 글자 일치가 아니라 겹치는 정도로 봅니다.
+# Which final lines a refined line absorbed must not be decided by whether the
+# earlier characters are contained verbatim. Refinement re-decodes the joined
+# audio, so the same speech comes out slightly different (measured: `무기도
+# 풀제열이야?` became `무기도 풀제일이야?`). Then the absorption test misses and
+# the rough final is left standing next to the refined line. It is less visible on
+# screen, but both pile up in storage, so a reload shows the same utterance twice.
+# So we look at how much overlaps, not at an exact text match.
 COVER_RATIO = 0.6
-# 정제는 한 무리의 발화를 합쳐 다시 해독한 것이므로, 그 무리보다 훨씬 오래된
-# 줄까지 거슬러 올라가 흡수할 일은 없습니다.
+# A refined line is one utterance group joined and re-decoded, so it never reaches
+# back to absorb lines much older than that group.
 COVER_WINDOW_S = 30.0
-# 짧은 줄은 유사도로 보면 안 됩니다. `はい` 두 글자는 어떤 정제본에나 들어
-# 있어서, 느슨하게 보면 관계없는 것까지 삼킵니다.
+# Short lines must not be judged by similarity. The two characters `はい` are in
+# every refined line, so a loose test swallows unrelated ones too.
 COVER_EXACT_BELOW = 4
-# 무리 한가운데에서 못 알아본 줄이 이만큼까지 이어져도 같은 무리로 봅니다.
+# A run of unrecognised lines this long in the middle of a group still counts as
+# the same group.
 COVER_GAP = 2
 
 
 def _covers(final_text: str, refined: str) -> bool:
-    """정제본이 이 확정 줄을 담고 있는가."""
+    """Does this refined line contain this final line."""
     a = final_text.strip()
     if not a:
         return False
@@ -380,7 +397,7 @@ def _covers(final_text: str, refined: str) -> bool:
 
 
 class Sink:
-    """전사 루프가 내놓는 줄을 세션의 발행 경로로 넘깁니다."""
+    """Hand the lines the transcription loop produces to the session's publishing path."""
 
     def __init__(self, session: "LiveSession"):
         self.s = session
@@ -400,25 +417,29 @@ class LiveSession:
                  title: str = ""):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
-        # 소리를 어디서 받는가. "hls"는 서버가 yt-dlp로 주소를 풀어 ffmpeg으로
-        # 직접 당기고, "tab"은 브라우저가 자기 탭에서 들리는 소리를 올려 줍니다.
-        # 멤버십 전용 방송처럼 서버가 받을 수 없는 것을 위한 길입니다 -- 쿠키도
-        # 필요 없고, 사용자가 공유 대화상자에서 직접 고른 탭입니다.
+        # Where the sound comes from. "hls" means the server resolves the address
+        # with yt-dlp and pulls it directly with ffmpeg; "tab" means the browser
+        # uploads what it hears in its own tab. It is the route for what the server
+        # cannot receive, such as a members-only broadcast -- no cookies needed
+        # either, and the tab is one the user picked in the share dialog themselves.
         self.source = "tab" if source == "tab" else "hls"
         self.lang = lang
         self.viewer_lang = viewer_lang
         self.backend_id = backend_id
         self.asr_backend_id = asr_backend_id
-        # 프로필(콘텐츠 유형)은 발화를 몇 초에 끊을지를 정하고, 장르는 그
-        # 발화를 어떤 어휘로 옮길지를 정합니다. 겹쳐 보이지만 다른 축입니다 --
-        # 게임 방송과 잡담 방송은 끊는 간격이 같아도 쓰는 말이 다르고,
-        # 기술 발표는 녹화본에도 있습니다.
+        # The profile (content type) decides how many seconds an utterance is cut
+        # at; the genre decides what vocabulary that utterance is translated into.
+        # They look like they overlap but they are different axes -- a gaming stream
+        # and a chatting stream split at the same interval but use different words,
+        # and a technical talk exists as a recording too.
         self.genre = genre if genre in mw_translate.GENRE_PROMPTS \
             else mw_translate.DEFAULT_GENRE
-        # 정제는 발화 한 무리가 끝나기를 2초 기다렸다 합쳐서 다시 해독합니다.
-        # 문맥이 길어져 결과가 좋아지지만, 그만큼 자막이 늦게 자리를 잡고
-        # 이미 뜬 줄이 통째로 바뀝니다. 말이 빠르게 오가는 방송에서는 짧게
-        # 끊어 바로 내보내는 편이 따라가기 쉬울 수 있어 끌 수 있게 둡니다.
+        # Refinement waits 2 seconds for one utterance group to end, then joins it
+        # and decodes again. The longer context makes the result better, but the
+        # subtitle settles that much later and a line already on screen changes
+        # wholesale. On a broadcast where speech goes back and forth quickly,
+        # cutting short and sending out at once can be easier to follow, so it is
+        # left switchable.
         self.refine = refine
         prof = PROFILES.get(profile, PROFILES["broadcast"])
         self.profile = profile if profile in PROFILES else "broadcast"
@@ -426,24 +447,28 @@ class LiveSession:
         self.min_silence = prof["min_silence"]
         self.state = "starting"
         self.error: str | None = None
-        # 왜 멈췄는가. "user"는 「중단」을 눌렀거나 서버를 끈 것, "ended"는
-        # 방송이 끝난 것, "stream"은 수신이 끊겼는데 다시 붙지 못한 것입니다.
-        # 셋이 다 `stopped`로 보이면 화면은 이어받기를 권할지 정할 수 없습니다.
+        # Why it stopped. "user" is pressing "Stop" or shutting the server down,
+        # "ended" is the broadcast having finished, "stream" is reception breaking
+        # with no reattach. If all three looked like `stopped`, the UI could not
+        # decide whether to offer a resume.
         self.stopped_by = ""
-        # 이어받을 때, 끊기기 직전까지 받아 둔 미디어 위치입니다. 0이면
-        # 새로 시작하는 세션이라 되감을 것이 없습니다.
+        # On resume, the media position received up to just before the break.
+        # 0 means a session starting fresh, with nothing to rewind to.
         self.resume_from = 0.0
-        # resume_from 까지 되감아 메울지. 세션 안의 자동 재접속만 그렇게 합니다 -- 끊긴 지
-        # 몇 초라 DVR 창 안에서 바로 이어집니다. 사용자의 「이어받기」는 되감지 않습니다:
-        # 한 시간 멈춘 뒤 이어받으면 한 시간치를 먼저 받아 적느라 지금 보는 자리의 자막이
-        # 한참 뒤에나 나왔습니다. 지금 라이브 끝에서 시작하고 빠진 구간은 한 줄로 적습니다.
+        # Whether to rewind to resume_from and fill the hole. Only the automatic
+        # reconnect inside a session does that -- it is a few seconds since the break,
+        # so it picks straight up inside the DVR window. The user's "Resume" does not
+        # rewind: resuming after an hour's stop meant transcribing that hour first, so
+        # the subtitle for the place being watched came out much later. It starts at
+        # the live edge now and writes the gap down as one line.
         self._rewind = False
-        # 메우지 못한 구간(초). 0보다 크면 자막에 그렇게 적습니다.
+        # The stretch that could not be filled (seconds). Above 0, it is written
+        # into the subtitles.
         self.gap_s = 0.0
-        # hls는 yt-dlp가 채우고, tab은 브라우저가 넣어 줍니다.
+        # yt-dlp fills this in for hls; the browser supplies it for tab.
         self.title = title
-        # 재시작 뒤 이 세션을 다시 열려면 임베드할 영상 id가 필요합니다.
-        # 세션 id는 우리가 만든 것이라 플레이어에 넣을 수 없습니다.
+        # Reopening this session after a restart needs a video id to embed.
+        # The session id is one we made, so it cannot go into the player.
         self.video_id = ""
         self.media_base = 0.0        # media seconds at the first sample we get
         self.window_s = 0.0          # DVR window we skipped to reach live
@@ -453,65 +478,76 @@ class LiveSession:
         self.translated = 0
         self._seq = 0
         self._subs: list[queue.Queue] = []
-        # 나간 이벤트의 최근 기록. 끊겼다 다시 붙는 구독자가 `Last-Event-ID`를
-        # 들고 오면 여기서 빠진 것만 다시 보냅니다 -- 백로그 전부가 아니라.
-        # 2000개면 자막 몇 백 줄에 번역·상태까지 넉넉히 한 시간 남짓입니다.
+        # A recent record of the events that went out. When a subscriber that broke
+        # off reattaches carrying `Last-Event-ID`, only what it missed is resent from
+        # here -- not the whole backlog. 2000 is comfortably a little over an hour of
+        # a few hundred subtitle lines plus their translations and statuses.
         self._eseq = 0
         self._elog: deque[tuple[int, str]] = deque(maxlen=EVENT_LOG_MAX)
         self._stop = threading.Event()
-        # 발행 경로의 자물쇠. 확정 줄은 수신 스레드가, 정제본은 정제 스레드가
-        # 넣습니다 -- 둘이 동시에 `_recent`를 고치면 한쪽의 `remove`가 다른
-        # 쪽의 `del [:-40]`과 엉켜 ValueError가 나거나 엉뚱한 줄을 흡수합니다.
+        # The publishing path's lock. Final lines go in from the receiving thread
+        # and refined lines from the refinement thread -- if the two touch `_recent`
+        # at once, one's `remove` tangles with the other's `del [:-40]` and either
+        # raises ValueError or absorbs the wrong line.
         self._pub_lock = threading.RLock()
         self._ff: subprocess.Popen | None = None
-        # 읽는 쪽(ffmpeg 스레드, 탭이면 feed())과 받아 적는 스레드 사이. Ring 참조.
-        # 시계는 둘입니다 -- `_recv_*` 는 읽는 쪽이 **받은** 자리, `media_base`/`audio_s`
-        # 는 받아 적는 쪽이 **지금 해독하는 조각**의 자리입니다. 혼자 받는 세션에서는
-        # 둘이 같이 가지만, 링에 소리가 고여 있으면 뒤쪽이 앞쪽보다 늦습니다.
+        # Between the reading side (the ffmpeg thread, or feed() for a tab) and the
+        # transcribing thread. See Ring. There are two clocks -- `_recv_*` is where
+        # the reading side has **received** to, and `media_base`/`audio_s` is where
+        # **the chunk being decoded right now** sits. On a session receiving alone the
+        # two move together, but when sound pools in the ring the latter runs behind.
         #
-        # 탭 소리는 브라우저가 재생을 늦출 수 없으므로(사용자가 듣고 있는 소리입니다)
-        # 받아 적기가 밀리면 링을 길게(INGEST_MAX_S) 잡고, 넘치면 가장 오래된 것부터
-        # 버리며 몇 초를 버렸는지 적습니다. 조용히 밀리다 20분 뒤 자막이 나오는
-        # 것보다 낫습니다. 주소 세션은 파이프가 역압을 주므로 링이 넘칠 일이 없습니다.
+        # The browser cannot slow tab audio down (it is the sound the user is
+        # listening to), so when transcription falls behind the ring is made long
+        # (INGEST_MAX_S), and on overflow the oldest is dropped and how many seconds
+        # were dropped is written down. Better than silently falling behind and
+        # producing a subtitle 20 minutes later. An address session's pipe gives back
+        # pressure, so its ring never overflows.
         self._ring = Ring(INGEST_MAX_S if self.source == "tab" else RING_S)
         self._recv_base = 0.0
         self._recv_s = 0.0
-        self.dropped_s = 0.0        # 링이 넘쳐 버린 소리(초). 탭 세션이 feed() 로 되돌려 줍니다
-        self._ended = False         # 읽기가 끝났다(방송 종료·포기). 링의 ("end",) 와 함께
+        self.dropped_s = 0.0        # sound dropped on ring overflow (s). feed() returns it
+        self._ended = False         # reading ended (broadcast over, or given up); with ("end",)
         self._rx: threading.Thread | None = None
-        # 초점: 이 세션의 소리를 지금 받아 적는가. 혼자 받는 세션은 태어날 때부터 초점이고
-        # 멀티뷰에서만 꺼집니다(set_focus). 초점이 없는 동안에도 링은 채워집니다.
+        # Focus: is this session's sound being transcribed right now. A session
+        # receiving alone is focused from birth and is only turned off in multiview
+        # (set_focus). The ring keeps filling while there is no focus too.
         self._focus = threading.Event()
         self._focus.set()
-        self.group = ""             # 멀티뷰 묶음 id. 비면 혼자 받는 세션
-        self.site = ""              # "youtube" | "twitch" | "other" (site_of). 화면이 임베드를 고름
-        self.channel = ""           # 트위치 로그인명
-        self._warm_persisted_s = 0.0   # 대기 중 마지막으로 상태를 적었을 때의 _recv_s
+        self.group = ""             # multiview bundle id. Empty means a session receiving alone
+        self.site = ""              # "youtube" | "twitch" | "other" (site_of). Picks the embed
+        self.channel = ""           # the Twitch login name
+        self._warm_persisted_s = 0.0   # the _recv_s at the last status write while on standby
         self._asr = None            # released on stop; see _release()
-        # 인식기 객체는 세션이 끝나면 놓아주지만 어떤 엔진이었는지는
-        # 남아야 합니다. 객체에서 그때그때 읽으면, 놓아준 뒤에 쓰이는
-        # 마지막 상태 저장이 기본값으로 덮어써서 기록이 거짓말을 합니다.
+        # The recogniser object is let go when the session ends, but which engine
+        # it was has to stay. Reading it off the object each time meant the last
+        # status write, which happens after it is let go, overwrote it with the
+        # default and the record lied.
         self.asr_label = ""
         self._tr = None
         # Refine replaces the final that covered the same speech. Matching on
         # the text hayamimi already emitted is enough here because a refined
         # group repeats its members' words.
         self._recent: list[dict] = []
-        # 번역은 **작업 스레드 하나**가 넣은 순서대로 합니다.
+        # Translation happens in the order things were put in, by **one worker
+        # thread**.
         #
-        # 예전에는 자막 한 줄마다 스레드를 새로 띄웠습니다. 모델 자물쇠가
-        # 어차피 하나라 나란히 돌 수도 없었고, 두 시간 방송이면 스레드가
-        # 수천 번 만들어졌으며, 무엇보다 **끝나는 순서가 정해지지 않았습니다.**
-        # 정제본은 흡수한 첫 확정 줄의 id를 물려받는데, 그 확정 줄의 번역
-        # 스레드가 정제본의 번역보다 늦게 끝나면 같은 id로 옛 부분 번역이
-        # 발행·저장되어 정제본 아래에 엉뚱한 번역이 남았습니다. 큐 하나를
-        # 한 소비자가 비우면 순서가 곧 발행 순서이고, 아래 `_text_of`로
-        # 이미 덮인 줄의 번역은 건너뜁니다 -- Gemma 시간도 그만큼 아낍니다.
+        # Previously a new thread was started for every subtitle line. There was one
+        # model lock anyway so they could not run side by side, a two-hour broadcast
+        # created thousands of threads, and above all **the order they finished in
+        # was not fixed.** A refined line inherits the id of the first final line it
+        # absorbed, so if that final line's translation thread finished later than
+        # the refined line's, the old partial translation was published and stored
+        # under the same id and the wrong translation was left under the refined
+        # line. With one consumer draining one queue the order is the publishing
+        # order, and `_text_of` below skips translating a line already replaced --
+        # which saves that much Gemma time too.
         self._tr_q: queue.Queue = queue.Queue()
         self._tr_thread: threading.Thread | None = None
-        # id별 지금 화면에 있는 원문. 번역이 끝났을 때 그 줄이 아직 이 글자인지
-        # 확인하는 데 씁니다. 정제본이 흡수한 줄은 여기서 빠지고, 물려받은
-        # id는 정제본의 글자로 바뀝니다.
+        # The source text currently on screen, per id. Used to check, when a
+        # translation finishes, whether that line is still this text. A line a
+        # refined line absorbed drops out of here, and the inherited id changes to
+        # the refined line's text.
         self._text_of: dict[int, str] = {}
 
     # ---- fan-out ----------------------------------------------------------
@@ -535,7 +571,8 @@ class LiveSession:
                 q.put((self._eseq, data))
 
     def replay_since(self, last_id) -> list[tuple[int, str]] | None:
-        """`last_id` 뒤에 나간 이벤트. 기록 밖이면 None -- 그때는 백로그 전부."""
+        """The events that went out after `last_id`. None if it is outside the record
+        -- then the whole backlog."""
         try:
             last = int(last_id)
         except (TypeError, ValueError):
@@ -560,8 +597,9 @@ class LiveSession:
                 "genre": self.genre,
                 "window_s": round(self.window_s, 1),
                 "audio_s": round(self.audio_s, 1),
-                # 받아 적은 자리(media_base+audio_s)와 따로, 읽는 쪽이 받은 자리. 초점이
-                # 없는 세션은 앞쪽이 멈춰 있어도 뒤쪽은 계속 나아갑니다. 이어받기는 뒤쪽에서.
+                # Separate from where transcription reached (media_base+audio_s):
+                # where the reading side received to. On a session with no focus the
+                # former stands still while the latter keeps going. Resume uses the latter.
                 "recv_s": round(self._recv_s, 1),
                 "recv_t": round(self._recv_base + self._recv_s, 2),
                 "ring_s": round(self._ring.seconds(), 1),
@@ -573,8 +611,9 @@ class LiveSession:
     def _persist(self):
         st = self.status()
         store.save_session(st, self.video_id)
-        # 목록을 보고 있는 모든 화면에 알립니다 -- 새 세션, 줄 수, 상태 변화.
-        # 자막 한 줄마다 오지만 화면은 그 줄만 제자리에서 고치므로 가볍습니다.
+        # Tell every screen looking at the list -- a new session, the line count, a
+        # state change. It arrives on every subtitle line, but the screen only fixes
+        # that one line in place, so it is light.
         bus.publish({"type": "session", **st})
 
     # ---- publishing -------------------------------------------------------
@@ -599,31 +638,33 @@ class LiveSession:
             self._trim_text_of()
             store.save_cue(self.id, cue)
             self.emit(cue)
-            # 줄 수는 상태에 들어 있으므로 자막 한 줄마다 상태도 같이 적습니다.
-            # 몇 초에 한 번이라 비용이 없고, 어디까지 받아 적었는지가 재시작
-            # 뒤에 정확해집니다.
+            # The line count is part of the status, so the status is written along
+            # with every subtitle line. It is once every few seconds so it costs
+            # nothing, and how far transcription got is accurate after a restart.
             self._persist()
             self._translate_async(cue)
         else:
             # A refined group supersedes the finals whose words it contains.
-            # 정제는 한 무리의 발화를 합친 것이므로, 흡수 대상도 그 무리처럼
-            # 이어져 있어야 합니다. 아무 데서나 고르면 `はい` 같은 짧은
-            # 맞장구가 한참 전 것까지 걸려, 정제본이 그 옛 줄의 시각과 id를
-            # 물려받아 과거 자막 자리에 끼어듭니다.
+            # A refined line is one utterance group joined, so what it absorbs has
+            # to be contiguous like that group. Picking from anywhere means a short
+            # interjection like `はい` matches something from long ago, and the
+            # refined line inherits that old line's time and id and wedges itself
+            # into a past subtitle slot.
             #
-            # 다만 꼬리에서부터 훑으면 안 됩니다. 정제는 무음 2초를 기다렸다
-            # 오므로 그 사이에 다음 발화의 확정본이 먼저 들어와 있고, 거기서
-            # 멈춰 버리면 아무것도 흡수하지 못해 같은 말이 두 줄로 남습니다.
-            # 그래서 위치에 관계없이 가장 긴 연속 구간을 찾습니다.
+            # But it must not be scanned from the tail. Refinement arrives after
+            # waiting 2 seconds of silence, so the next utterance's final has come
+            # in by then, and stopping there absorbs nothing and leaves the same
+            # speech as two lines. So the longest contiguous run is found regardless
+            # of where it is.
             hits = [i for i, c in enumerate(self._recent)
                     if c["kind"] == "final"
                     and media_t - c["t"] <= COVER_WINDOW_S
                     and _covers(c["text"], text)]
-            # 걸린 줄들을 덩어리로 묶습니다. 무리 한가운데 한둘이 판정에서
-            # 빠지는 일은 흔합니다 -- 정제 재해독에서 글자가 크게 갈리면
-            # (`いや空込みだ`가 `川上だ`가 되는 식) 그 줄만 못 알아봅니다.
-            # 거기서 무리를 쪼개면 한쪽만 흡수되고 나머지가 중복으로 남으므로,
-            # 그 정도 틈은 건너뜁니다.
+            # Bundle the matched lines into runs. One or two in the middle of a
+            # group commonly fail the test -- when the refinement re-decode diverges
+            # badly (`いや空込みだ` becoming `川上だ`, say) only that line goes
+            # unrecognised. Splitting the group there absorbs one side and leaves
+            # the rest as duplicates, so a gap that small is stepped over.
             groups: list[list[int]] = []
             for i in hits:
                 if groups and i - groups[-1][-1] <= COVER_GAP + 1:
@@ -631,18 +672,19 @@ class LiveSession:
                 else:
                     groups.append([i])
             best = max(groups, key=len) if groups else []
-            # 가장 큰 덩어리는 그 안의 빠진 줄까지 통째로 대체합니다. 정제본은
-            # 무리 하나를 통째로 다시 받아 적은 것이니까요.
+            # The biggest run replaces everything inside it, the missed lines
+            # included. A refined line is one whole group transcribed again.
             covered = ([self._recent[i] for i in range(best[0], best[-1] + 1)]
                        if best else [])
             target = covered[0] if covered else None
             if target is None:
-                # 흡수할 확정 줄을 하나도 못 찾았습니다(재해독에서 글자가 크게
-                # 갈렸거나, 그 줄들이 이미 `_recent` 밖으로 밀려났거나). 이때
-                # 예전에는 `self._seq` -- 곧 **가장 최근 줄의 번호** -- 를 그대로
-                # 썼는데, 그 줄은 이 정제본과 무관한 다음 발화일 수 있습니다.
-                # 그러면 그 발화의 원문이 덮이고 번역까지 비워졌습니다. 짝을
-                # 못 찾은 정제본은 새 줄로 넣습니다.
+                # Not one final line to absorb was found (the re-decode diverged
+                # badly, or those lines have already been pushed out of `_recent`).
+                # Previously `self._seq` -- that is, **the most recent line's
+                # number** -- was used as it was, but that line can be the next
+                # utterance, unrelated to this refined line. Then that utterance's
+                # source text was overwritten and its translation emptied too. A
+                # refined line that found no match goes in as a new line.
                 self._seq += 1
                 self.lines += 1
             cue = {"type": "cue", "id": target["id"] if target else self._seq,
@@ -651,10 +693,11 @@ class LiveSession:
                    "replaces": [c["id"] for c in covered]}
             for c in covered:
                 self._recent.remove(c)
-                self._text_of[c["id"]] = None      # 흡수됨. 번역 대기열의 그 줄은 버립니다
+                self._text_of[c["id"]] = None      # absorbed. Dropped from the translation queue
             self._text_of[cue["id"]] = text
-            # 정제본이 흡수한 줄은 화면에서 사라지므로 저장분에서도 지웁니다.
-            # 자기 id를 물려받은 한 줄만 남기고 그 자리를 정제본으로 덮습니다.
+            # A line a refined line absorbed disappears from the screen, so it is
+            # deleted from storage too. Only the one line whose id was inherited is
+            # kept, and that slot is overwritten with the refined line.
             store.drop_cues(self.id, [c["id"] for c in covered
                                       if c["id"] != cue["id"]])
             store.save_cue(self.id, cue)
@@ -662,40 +705,44 @@ class LiveSession:
             self._translate_async(cue)
 
     def _context_for(self, cue: dict) -> list[str]:
-        """이 줄 직전의 자막 몇 줄. 번역기에 참고로 넘깁니다.
+        """The few subtitle lines just before this one. Passed to the translator as context.
 
-        `self._recent`에서 **이 줄보다 이른 것만** 고릅니다. 확정 줄이면
-        방금 자기 자신이 맨 뒤에 붙어 있고, 정제본이면 흡수한 줄들이 이미
-        빠진 대신 기다리는 동안 들어온 뒤 줄이 남아 있습니다. 시각으로
-        거르면 두 경우가 한 규칙으로 처리됩니다.
+        Only **what is earlier than this line** is taken from `self._recent`. For
+        a final line, it has just appended itself at the end; for a refined line,
+        the lines it absorbed are already gone but the later lines that came in
+        during the wait remain. Filtering by time handles both cases with one rule.
         """
-        # 우리가 적은 안내(kind=note)는 발화가 아닙니다. 문맥에 넣으면
-        # 번역기가 「서버가 멈춘 사이 …」를 앞 문장으로 알고 옮깁니다.
+        # A notice we wrote ourselves (kind=note) is not speech. Putting it in the
+        # context makes the translator read "서버가 멈춘 사이 …" as the preceding
+        # sentence and translate it.
         older = [c["text"] for c in self._recent
                  if c["t"] < cue["t"] and c.get("kind") != "note"]
         return older[-mw_translate.CONTEXT_LINES:]
 
     def _trim_text_of(self, keep: int = 500):
-        """`_text_of`가 방송 길이만큼 자라지 않게 합니다. 번역은 발행 직후
-        줄을 서므로 몇백 줄 뒤의 것을 다시 볼 일은 없습니다.
+        """Keep `_text_of` from growing with the length of the broadcast. Translation
+        queues up right after publishing, so there is never a reason to look at
+        something several hundred lines back.
 
-        잘려 나간 줄은 `_superseded`가 **모른다**고 답하고, 모르는 줄은 번역합니다.
-        예전에는 "없음"을 "흡수됨"으로 읽어, 번역기가 500줄 넘게 밀린 느린 기계에서
-        그 줄들이 영영 번역되지 않았습니다. 흡수된 줄은 None 으로 남겨 구분합니다.
+        For a line that was trimmed away `_superseded` answers **unknown**, and an
+        unknown line gets translated. Previously "absent" was read as "absorbed", so
+        on a slow machine where the translator fell more than 500 lines behind those
+        lines were never translated. An absorbed line is left as None to keep the two
+        apart.
         """
         if len(self._text_of) > keep * 2:
             for k in sorted(self._text_of)[:-keep]:
                 del self._text_of[k]
 
     def _translate_async(self, cue: dict):
-        # 우리가 적은 안내입니다. 번역기에 넘길 것이 아닙니다.
+        # A notice we wrote ourselves. Not something to hand the translator.
         if cue.get("kind") == "note":
             return
         if self.lang and self.lang == self.viewer_lang:
             return
-        # 문맥은 여기서 붙잡습니다. 번역이 차례를 기다리는 사이에도 자막은
-        # 계속 들어오므로, 작업 스레드 안에서 읽으면 그때의 `_recent`는 이
-        # 줄의 앞이 아닙니다.
+        # The context is captured here. Subtitles keep coming in while a
+        # translation waits its turn, so reading it inside the worker thread would
+        # not give what came before this line.
         ctx = self._context_for(cue)
         self._tr_q.put((dict(cue), ctx))
         if self._tr_thread is None or not self._tr_thread.is_alive():
@@ -706,17 +753,18 @@ class LiveSession:
     def _translate_loop(self):
         while True:
             item = self._tr_q.get()
-            if item is None:                      # _release()가 보낸 끝 표시
+            if item is None:                      # the end marker _release() sent
                 return
             cue, ctx = item
             try:
                 self._translate(cue, ctx)
-            except Exception as exc:              # 한 줄의 실패가 뒤 줄을 막으면 안 됩니다
+            except Exception as exc:              # one line's failure must not block the rest
                 print(f"[live] 번역 루프 오류: {exc}", file=sys.stderr, flush=True)
 
     def _superseded(self, cue: dict) -> bool:
-        """이 줄이 그 사이 정제본에 흡수되었거나 글자가 바뀌었는가. 기록에서 잘려 나가
-        모르는 줄은 아직 살아 있는 것으로 봅니다."""
+        """Has this line been absorbed by a refined line, or its text changed, in the
+        meantime. A line trimmed out of the record, and so unknown, counts as still
+        alive."""
         cur = self._text_of.get(cue["id"], _UNKNOWN)
         return cur is not _UNKNOWN and cur != cue["text"]
 
@@ -724,12 +772,12 @@ class LiveSession:
         src = cue.get("lang") or self.lang or ""
         if not src or src == self.viewer_lang:
             return
-        # 차례를 기다리는 동안 정제본이 이 줄을 흡수했으면 번역할 것이 없습니다.
-        # 정제본 자신의 번역이 뒤에 줄 서 있습니다.
+        # If a refined line absorbed this line while it waited its turn there is
+        # nothing to translate. The refined line's own translation is queued behind.
         if self._superseded(cue):
             return
-        # 한 번 붙잡아 둡니다. 세션이 끝나면 `_release()`가 `_tr`를 None으로
-        # 놓는데, 큐에 남은 줄은 그 전에 비웁니다(`_close_translator`).
+        # Held once. When the session ends `_release()` sets `_tr` to None, but the
+        # lines left in the queue are drained before that (`_close_translator`).
         tr = self._tr
         if tr is None:
             return
@@ -738,21 +786,23 @@ class LiveSession:
         try:
             out = tr.translate(cue["text"], src, self.viewer_lang, context)
         except Exception as exc:
-            # 실패했다고 줄을 버리지 않습니다. 그러면 시청자에게는 그 발화가
-            # 아예 없었던 것처럼 보입니다. 번역할 수 없었다는 사실이 남도록
-            # 원문을 그 자리에 넣고, 왜 실패했는지는 로그에 적습니다.
+            # A line is not thrown away because it failed. That would make the
+            # utterance look to the viewer as if it never happened. The source text
+            # goes in that slot so the fact that it could not be translated remains,
+            # and why it failed goes into the log.
             print(f"[live] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
             out = cue["text"]
         if not (out or "").strip():
             return
-        # 번역하는 몇백 밀리초 사이에 정제본이 들어왔을 수 있습니다. 그러면
-        # 이 결과는 이미 화면에 없는 글자의 번역이고, 같은 id를 물려받은
-        # 정제본의 번역을 덮어쓰게 됩니다 -- 버립니다.
+        # A refined line may have arrived during the few hundred milliseconds of
+        # translating. Then this result is the translation of text that is no longer
+        # on screen, and it would overwrite the translation of the refined line that
+        # inherited the same id -- so it is discarded.
         if self._superseded(cue):
             return
-        # 번역이 원문과 같아도 저장합니다. 고유명사나 짧은 감탄사는 그대로
-        # 두는 것이 옳은 번역이고, 예전에는 이 경우를 실패로 보아 줄이
-        # 사라졌습니다.
+        # The translation is stored even when it equals the source text. Leaving a
+        # proper noun or a short interjection as it is is the correct translation,
+        # and previously this case was read as a failure and the line vanished.
         self.translated += 1
         store.save_translation(self.id, cue["id"], self.backend_id, out)
         self.emit({"type": "translation", "id": cue["id"],
@@ -763,10 +813,13 @@ class LiveSession:
         threading.Thread(target=self._run, daemon=True).start()
 
     def set_focus(self, on: bool):
-        """이 세션의 소리를 받아 적을지. 꺼도 세션은 살아서 소리를 계속 받습니다(링).
+        """Whether to transcribe this session's sound. Turned off, the session stays
+        alive and keeps receiving sound (the ring).
 
-        켜면 받아 적는 스레드가 토큰(_transcriber)을 잡고 링에 고인 것부터 해독합니다.
-        끄면 지금 도는 run_stream 이 걸린 발화를 확정하고 물러납니다 -- 그 뒤 토큰이 풀립니다.
+        Turned on, the transcribing thread takes the token (_transcriber) and decodes
+        starting from what pooled in the ring. Turned off, the run_stream now running
+        finalises the utterance it is holding and withdraws -- the token is released
+        after that.
         """
         if on == self._focus.is_set():
             return
@@ -779,8 +832,9 @@ class LiveSession:
               f"받아 적은 {self.audio_s:.0f}초)",
               flush=True)
         if self.source == "tab":
-            # 탭 소리는 브라우저가 늦출 수 없어 초점일 때는 길게 받아 둡니다. 초점이 아니면
-            # 그만큼 들고 있을 이유가 없습니다 -- 돌아왔을 때 30초면 충분합니다.
+            # The browser cannot slow tab audio down, so while focused a long
+            # stretch is held. Without focus there is no reason to hold that much --
+            # 30 seconds is enough for when it comes back.
             self._ring.set_max(INGEST_MAX_S if on else RING_S)
         self._persist()
         self.emit({"type": "status", **self.status()})
@@ -788,26 +842,28 @@ class LiveSession:
     def stop(self):
         self.stopped_by = self.stopped_by or "user"
         self._stop.set()
-        # 한 번 읽어 둡니다. 읽기 스레드의 `_reap_ff` 가 그 사이 `_ff` 를 None 으로
-        # 바꿀 수 있어, 두 번 읽으면 여기서 AttributeError 가 났습니다.
+        # Read once. The reading thread's `_reap_ff` can set `_ff` to None in the
+        # meantime, so reading it twice raised AttributeError here.
         ff = self._ff
         if ff:
             ff.terminate()
-        # 탭 세션에는 읽기 스레드가 없어 아무도 ("end",) 를 넣어 주지 않습니다. 받아
-        # 적는 쪽이 링에서 기다리고 있으므로 여기서 직접 깨웁니다.
+        # A tab session has no reading thread, so nobody puts ("end",) in. The
+        # transcribing side is waiting on the ring, so it is woken here directly.
         if self.source == "tab":
             self._ended = True
             self._ring.push(("end",))
 
-    # ---- 탭 오디오 수신 ---------------------------------------------------
+    # ---- tab audio intake -------------------------------------------------
     def feed(self, raw: bytes) -> dict:
-        """브라우저가 올린 16kHz 모노 int16 PCM 한 덩어리. 탭 세션의 「읽기」는 이것입니다.
+        """One block of 16kHz mono int16 PCM the browser uploaded. This is a tab
+        session's "reading".
 
-        VAD가 받는 0.1초 조각으로 잘라 링에 넣습니다 -- ffmpeg 경로와 같은 크기입니다.
-        run_stream은 조각 하나마다 VAD를 먹이고 정제 시점을 재므로, 2초를 통째로
-        넘기면 그 두 가지가 같이 거칠어집니다. 링이 넘치면 오래된 것부터 버리고
-        (기다리지 않습니다 -- 이 요청은 브라우저가 기다리고 있습니다) 몇 초를 버렸는지
-        되돌려 줍니다.
+        It is cut into the 0.1s chunks the VAD takes and put into the ring -- the same
+        size as the ffmpeg path. run_stream feeds the VAD one chunk at a time and
+        measures the refinement point off it, so handing over a whole 2 seconds makes
+        both of those coarse together. On ring overflow the oldest is dropped (without
+        waiting -- the browser is waiting on this request) and how many seconds were
+        dropped is returned.
         """
         if self.source != "tab":
             return {"error": "이 세션은 탭 오디오를 받지 않습니다"}
@@ -825,32 +881,36 @@ class LiveSession:
                 "dropped_s": round(self.dropped_s, 1)}
 
     def _resume_point(self, info: dict, release_ts: float | None):
-        """끊긴 자리에서 다시 받으려면 재생목록의 어디부터 읽어야 하는가.
+        """Where in the playlist to start reading to receive again from the break.
 
-        유튜브는 지금 진행 중인 방송도 얼마간 되감을 수 있게 내어 줍니다
-        (DVR 창). 서버가 멈춘 사이가 그 창 안이면 **한 조각도 잃지 않고**
-        이어 붙일 수 있습니다. 창보다 오래 멈춰 있었으면 메우지 못한 만큼을
-        `gap_s`에 남겨, 화면에 그렇게 적습니다.
+        YouTube serves even a broadcast in progress with some rewind available
+        (the DVR window). If the time the server was down falls inside that
+        window, it can be joined back up **without losing a single chunk**. If
+        it was down longer than the window, what could not be filled is left in
+        `gap_s` and written on screen as such.
 
-        돌려주는 것은 (ffmpeg의 -live_start_index, 건너뛴 초)입니다.
+        Returns (ffmpeg's -live_start_index, seconds skipped).
         """
         first = media_base_from(info.get("pdt"), release_ts, 0.0)
         segs = int(info.get("segments") or 0)
         seg_dur = (self.window_s / segs) if segs else float(info.get("target") or 2.0)
-        want = self.resume_from - first        # 재생목록 앞에서 몇 초를 건너뛸까
+        want = self.resume_from - first        # how many seconds to skip from the playlist's front
 
         if seg_dur <= 0 or self.window_s <= 0:
-            # 창을 읽지 못했습니다. 되감기를 시도하지 않고 라이브 끝에서
-            # 받되, 얼마를 잃었는지는 알 수 없으므로 적지 않습니다.
+            # The window could not be read. Receive from the live edge without
+            # attempting a rewind, and since how much was lost is unknown, do
+            # not write it down.
             return -2, self.window_s
         if want <= 0:
-            # 우리가 멈춘 지점이 이미 창 밖으로 밀려났습니다. 남아 있는
-            # 가장 오래된 것부터 받고, 그 사이는 잃은 것으로 적습니다.
+            # The point where we stopped has already been pushed out of the
+            # window. Receive from the oldest thing left, and write the space
+            # in between down as lost.
             self.gap_s = max(0.0, -want)
             return 0, 0.0
         if want >= self.window_s:
-            # 창 안에서 못 메울 것이 없습니다 -- 우리가 멈춘 지점이 아직
-            # 라이브 끝보다 뒤이므로 그냥 끝에서 이어 받습니다.
+            # There is nothing inside the window left unfilled -- the point
+            # where we stopped is still past the live edge, so just resume
+            # from the edge.
             self.gap_s = 0.0
             return -2, self.window_s
         idx = max(0, int(want / seg_dur))
@@ -858,17 +918,19 @@ class LiveSession:
         return idx, idx * seg_dur
 
     def _release(self):
-        """이 세션이 쥔 것을 놓습니다.
+        """Let go of what this session holds.
 
-        모델 가중치는 이제 `models.py`가 프로세스에 한 벌만 들고 있으므로
-        여기서 놓는 것은 이 세션의 해독 세션·번역기 껍데기·최근 줄입니다.
-        예전에는 세션마다 모델을 새로 올렸고 끝난 세션이 등록부에 남아 그것을
-        붙잡았습니다 -- 한 오후에 일곱 세션으로 23GB까지 갔습니다. 그 문제는
-        모델을 공유하는 것으로 뿌리에서 없어졌고, 여기는 참조를 끊는 자리로
-        남습니다.
+        `models.py` now keeps one copy of the model weights per process, so
+        what is let go here is this session's decode session, the translator
+        shell and the recent lines. Previously every session loaded the model
+        anew and a finished session stayed in the registry holding on to it --
+        one afternoon reached 23GB with seven sessions. Sharing the model
+        removed that problem at the root, and this stays as the place where
+        the references are cut.
         """
-        # 읽기 스레드가 링에 자리가 나기를 기다리고 있을 수 있습니다. 받아 적는 쪽이
-        # 없어졌으니 그 기다림도 끝내야 합니다 -- 이 깃발이 그 루프의 탈출 조건입니다.
+        # The reading thread may be waiting for room in the ring. The transcribing
+        # side is gone, so that wait has to end too -- this flag is that loop's
+        # exit condition.
         self._stop.set()
         self._asr = None
         self._close_translator()
@@ -882,13 +944,14 @@ class LiveSession:
             self._reap_ff()
 
     def _reap_ff(self, timeout: float = 2.0):
-        """끝난(또는 방금 죽인) ffmpeg 을 거둡니다.
+        """Reap the ffmpeg that ended (or was just killed).
 
-        예전에는 terminate/kill 만 하고 wait 를 하지 않아, 끝난 ffmpeg 이 다음
-        Popen 이 뜰 때까지 `<defunct>` 로 남았습니다. 재접속마다 하나씩 쌓여 ps 에
-        고아처럼 보였습니다. 좀비는 메모리를 먹지 않지만 사용자가 「프로세스가
-        남는다」고 볼 근거가 됩니다. 2초 안에 안 끝나면(파이프 닫힘을 못 본 경우)
-        그대로 둡니다 -- 부모가 끝나면 어차피 거둬집니다.
+        Previously only terminate/kill was called and never wait, so a finished
+        ffmpeg stayed `<defunct>` until the next Popen came up. One piled up per
+        reconnect and they looked like orphans in ps. A zombie eats no memory,
+        but it is grounds for a user to say "processes are being left behind".
+        If it does not end within 2 seconds (having missed the pipe closing) it
+        is left alone -- it gets reaped anyway when the parent ends.
         """
         ff, self._ff = self._ff, None
         if ff is None:
@@ -899,11 +962,13 @@ class LiveSession:
             pass
 
     def _close_translator(self, timeout: float = 10.0):
-        """번역 작업 스레드를 끝냅니다. 줄 서 있는 것은 마저 번역하고 나옵니다.
+        """End the translation worker thread. It translates what is queued before
+        leaving.
 
-        마지막 몇 줄의 번역이 세션이 끝났다는 이유로 사라지면, 방송 끝의
-        인사가 원문으로만 남습니다. 대신 한없이 기다리지는 않습니다 -- 번역기가
-        멎어 있으면 10초 뒤 그냥 놓습니다.
+        If the last few lines' translations disappeared because the session ended,
+        the goodbye at the end of a broadcast would be left as source text only.
+        It does not wait forever, though -- if the translator is stuck it is let
+        go after 10 seconds.
         """
         t = self._tr_thread
         if t is None or not t.is_alive():
@@ -916,10 +981,11 @@ class LiveSession:
         # playlist. Without it ffmpeg reads a full-DVR playlist from the top
         # and transcribes the broadcast's opening greetings while the viewer
         # watches its live edge.
-        # `-nostdin`: 소리는 우리가 stdout 파이프로 받아 갑니다. ffmpeg 이
-        # 표준 입력을 들여다볼 일이 없고, 터미널에서 돌 때 키 입력을 가져가는
-        # 것도 막습니다. 표준 입출력은 stream.child_io 를 보십시오 -- 부모의
-        # 핸들을 물려주다 윈도우에서 넘어지던 자리입니다.
+        # `-nostdin`: we take the sound over the stdout pipe. ffmpeg has no
+        # reason to look at standard input, and this also stops it taking key
+        # presses when run in a terminal. For standard I/O see stream.child_io
+        # -- that is where inheriting the parent's handles used to fall over on
+        # Windows.
         self._ff = subprocess.Popen(
             [stream.ffmpeg_cmd(), "-loglevel", "error", "-nostdin",
              "-live_start_index", str(start_index), "-i", src,
@@ -927,8 +993,8 @@ class LiveSession:
             stdout=subprocess.PIPE, **stream.child_io())
 
     def _start_reader(self, src, start_index):
-        """ffmpeg 을 세우고 그것을 읽는 스레드를 띄웁니다. 탭 세션은 `feed()` 가
-        읽기 역할이라 여기서 할 일이 없습니다."""
+        """Stand ffmpeg up and start the thread that reads it. A tab session has
+        nothing to do here because `feed()` plays the reading role."""
         if self.source == "tab":
             return
         self._spawn_ffmpeg(src, start_index)
@@ -937,34 +1003,38 @@ class LiveSession:
         self._rx.start()
 
     def _push_audio(self, samples):
-        """읽은 조각을 링에 넣습니다. 초점 세션이면 자리가 날 때까지 기다립니다 --
-        받아 적기가 느려도 버리지 않는 것이 예전 파이프의 동작이었습니다. 초점이
-        없으면 링이 오래된 것부터 버립니다."""
+        """Put a chunk that was read into the ring. On a focused session it waits
+        until there is room -- not dropping even when transcription is slow was the
+        old pipe's behaviour. Without focus, the ring drops the oldest."""
         item = ("audio", self._recv_s, samples)
         while (self._ring.full() and self._focus.is_set()
                and not self._stop.is_set()):
             self._ring.wait_room(0.2)
         self._ring.push(item)
-        # 대기 세션은 자막이 없어 상태가 저장될 계기가 없습니다. 재시작 뒤 「어디까지
-        # 받았는가」(recv_t)가 몇 시간 전으로 남지 않게 이따금 적어 둡니다.
+        # A standby session has no subtitles, so nothing triggers a status write.
+        # It is written now and then so that "how far it received" (recv_t) is not
+        # left hours behind after a restart.
         if (not self._focus.is_set()
                 and self._recv_s - self._warm_persisted_s >= RING_S):
             self._warm_persisted_s = self._recv_s
             self._persist()
 
     def _read_loop(self):
-        """ffmpeg이 내놓는 소리를 0.1초 조각으로 링에 넣습니다. **끊기면 같은 세션
-        안에서 다시 붙습니다.** 읽기 스레드에서 돕니다.
+        """Put the sound ffmpeg produces into the ring as 0.1s chunks. **On a break
+        it reattaches within the same session.** Runs on the reading thread.
 
-        예전에는 ffmpeg이 끝나면 곧 세션이 「종료됨」이었습니다. 방송이 끝난
-        것과 재생목록을 잠깐 못 받은 것이 같은 결말이었고, 두 시간 방송이
-        30분에 한 번 끊기면 자막이 새 세션으로 갈라졌습니다. 이제 ffmpeg이
-        스스로 끝나면 방송이 아직 진행 중인지 다시 물어보고, 진행 중이면 끊긴
-        자리(DVR 창 안이면 한 조각도 잃지 않고)에서 이어 받습니다. 못 메운
-        구간은 자막에 적습니다 -- 이어받기와 같은 규칙입니다.
+        Previously the session was "ended" as soon as ffmpeg finished. The broadcast
+        being over and the playlist briefly not arriving had the same outcome, and a
+        two-hour broadcast that broke once every 30 minutes split its subtitles into
+        new sessions. Now, when ffmpeg ends by itself, whether the broadcast is still
+        in progress is asked again, and if it is, reception resumes at the break
+        (without losing a single chunk if it is inside the DVR window). The stretch
+        that could not be filled is written into the subtitles -- the same rule as
+        resume.
 
-        조각 사이에 `("flush",)` 표식을 한 번 넣어 걸려 있던 발화를 확정시킵니다.
-        끝나면 `("end",)` 를 넣습니다 -- 받아 적는 쪽은 그것을 보고 물러납니다.
+        A `("flush",)` marker is put in once between chunks to finalise the utterance
+        being held. At the end `("end",)` goes in -- the transcribing side sees that
+        and withdraws.
         """
         need = CHUNK * 2
         attempt = 0
@@ -983,13 +1053,13 @@ class LiveSession:
                     break
                 samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
                 self._recv_s += len(samples) / SAMPLE_RATE
-                attempt = 0                  # 소리가 오면 재시도 횟수는 처음부터
+                attempt = 0                  # when sound arrives the retry count starts over
                 self._push_audio(samples)
             if self._stop.is_set():
                 break
-            # ffmpeg이 스스로 끝났습니다. 방송이 끝났거나, 재생목록을 잠깐
-            # 못 받은 것입니다. 먼저 거두고(좀비로 남지 않게), 걸려 있는 발화를
-            # 확정합니다.
+            # ffmpeg ended by itself. Either the broadcast is over, or the
+            # playlist briefly did not arrive. Reap it first (so it is not left
+            # a zombie), then finalise the utterance being held.
             self._reap_ff()
             self._ring.push(("flush",))
             reattached = False
@@ -1002,8 +1072,8 @@ class LiveSession:
                 if outcome == "ended":
                     self.stopped_by = "ended"
                     break
-                # 아직 붙지 못했습니다. 잠깐 기다렸다 다음 시도로. stop()이
-                # 오면 기다림이 곧 끝납니다.
+                # Not attached yet. Wait a moment, then on to the next attempt.
+                # If stop() comes the wait ends right away.
                 if self._stop.wait(min(3.0 * attempt, 15.0)):
                     break
             if reattached:
@@ -1016,26 +1086,31 @@ class LiveSession:
             break
 
     def _consume(self):
-        """링에서 조각을 꺼내 `run_stream` 에 넘깁니다. 받아 적는 스레드에서 돕니다.
+        """Take chunks out of the ring and hand them to `run_stream`. Runs on the
+        transcribing thread.
 
-        소리 조각은 읽기 시계의 값을 물고 오므로 `audio_s` 를 **그 값으로 맞춥니다**
-        (더하지 않고). 링에 고여 있던 30초를 몰아서 해독해도 각 줄의 시각은 그 조각이
-        방송에서 실제로 있던 자리입니다. 표식은 순서대로 처리합니다 -- flush 는 걸린
-        발화를 확정하고(None), rebase 는 재접속 뒤의 새 시간 기준과 빠진 구간 안내이고,
-        end 는 읽기가 끝났다는 뜻입니다. 초점을 잃으면 걸린 발화만 확정하고 물러납니다;
-        세션은 그대로 살아 소리를 계속 받습니다.
+        An audio chunk arrives carrying the reading clock's value, so `audio_s` is
+        **set to that value** (not added to). Even when 30 seconds that pooled in the
+        ring are decoded in one go, each line's time is where that chunk actually sat
+        in the broadcast. The markers are handled in order -- flush finalises the
+        utterance being held (None), rebase is the new time base after a reconnect
+        plus the notice about the missing stretch, and end means reading has finished.
+        On losing focus it finalises only the utterance being held and withdraws; the
+        session stays alive and keeps receiving sound.
         """
-        idle_flush = self.source == "tab"   # 탭만 무음 2초에 비웁니다 -- 예전 규칙 그대로
+        idle_flush = self.source == "tab"   # only a tab flushes on 2s of silence -- as before
         idle = False
         waited = 0.0
         while not self._stop.is_set() and self._focus.is_set():
-            # 짧게 기다립니다. 초점이 옮겨 가면 그만큼 빨리 알아채야 다음 세션이 토큰을
-            # 받습니다. 무음 판정(2초)은 기다린 시간을 더해서 냅니다.
+            # Wait briefly. When focus moves, noticing that much sooner is what lets
+            # the next session get the token. The silence test (2 seconds) is made by
+            # adding up the time waited.
             item = self._ring.pop(timeout=0.5)
             if item is Ring.TIMEOUT:
                 waited += 0.5
-                # 소리가 오지 않습니다 -- 탭이라면 영상을 멈췄거나 공유가 끊긴 것.
-                # 오지 않을 무음을 기다리는 대신 걸려 있는 발화를 확정합니다.
+                # No sound is arriving -- on a tab, the video was paused or the
+                # share was cut. Instead of waiting for silence that will not come,
+                # finalise the utterance being held.
                 if idle_flush and not idle and waited >= 2.0:
                     idle = True
                     yield None
@@ -1059,19 +1134,21 @@ class LiveSession:
             if self.state != "error":
                 self.state = "stopped"
             return
-        # 초점만 잃었습니다. 걸린 발화를 확정하고 조용히 물러납니다.
+        # Only focus was lost. Finalise the utterance being held and withdraw quietly.
         yield None
 
     def _reconnect(self, attempt: int) -> str:
-        """끊긴 자리에서 ffmpeg을 다시 세웁니다.
+        """Stand ffmpeg back up at the break.
 
-        돌려주는 것은 "ok"(붙었음) / "ended"(방송이 끝났음) / "retry"(지금은
-        못 붙었음)입니다. 붙었으면 `self._ff`가 새 프로세스입니다.
+        Returns "ok" (attached) / "ended" (the broadcast is over) / "retry"
+        (could not attach right now). If it attached, `self._ff` is the new
+        process.
         """
-        # 지금까지 받은 자리. 새 재생목록의 시각 기준(_recv_base)이 여기서
-        # 다시 계산되므로 _recv_s는 0부터 다시 셉니다 -- media_t = base + s.
+        # Where reception got to so far. The new playlist's time base
+        # (_recv_base) is recomputed here, so _recv_s counts from 0 again --
+        # media_t = base + s.
         self.resume_from = self._recv_base + self._recv_s
-        self._rewind = True                  # 방금 끊긴 자리는 DVR 창 안입니다. 메웁니다
+        self._rewind = True                  # the break just now is inside the DVR window. Fill it
         try:
             src, start_index = self._resolve_hls(reconnect=True)
         except Exception as exc:
@@ -1083,8 +1160,10 @@ class LiveSession:
         self._recv_s = 0.0
         print(f"[live] 세션 {self.id} 다시 붙음 ({attempt}회, 빠진 구간 {self.gap_s:.0f}초)",
               flush=True)
-        # 새 시간 기준과 빠진 구간 안내는 링을 **거쳐서** 갑니다. 여기서 바로 발행하면
-        # 링에 남아 있는 옛 조각들보다 앞서 도착해, 그 조각들의 시각이 새 기준으로 찍힙니다.
+        # The new time base and the notice about the missing stretch go **through**
+        # the ring. Publishing them directly here would make them arrive ahead of the
+        # old chunks still in the ring, and those chunks would be stamped with the
+        # new base.
         note = (f"⋯ 수신이 끊겨 약 {int(self.gap_s)}초를 받지 못했습니다 ⋯"
                 if self.gap_s >= 1.0 else "")
         self._ring.push(("rebase", self._recv_base, note))
@@ -1093,28 +1172,31 @@ class LiveSession:
         return "ok"
 
     def _run(self):
-        # 여기는 소리를 어디서 받을지만 정하고, 받아 적는 일은 _transcribe가
-        # 합니다. 모델을 놓는 finally는 그쪽에 있습니다 -- 이 함수의 finally는
-        # 세션을 등록부에서 빼는 일만 하므로, 무엇이 실패해도 실행됩니다.
-        # (예전에 여기서 모델 이름을 `del` 하다가 try가 그 이름을 만들기 전에
-        # 실패하면 UnboundLocalError가 진짜 예외를 덮고 _release()까지
-        # 건너뛰어, 세션 하나가 3GB인 채로 남았습니다. 이슈 #1.)
+        # This only decides where the sound comes from; _transcribe does the
+        # transcribing. The finally that lets the model go is over there -- this
+        # function's finally only takes the session out of the registry, so it
+        # runs no matter what fails. (Previously it `del`d the model names here,
+        # and when the try failed before it had made those names,
+        # UnboundLocalError covered the real exception and skipped _release()
+        # too, leaving one session sitting at 3GB. Issue #1.)
         try:
             src = start_index = None
             if self.source == "hls":
                 src, start_index = self._resolve_hls()
                 if src is None:
-                    return      # 오류는 _resolve_hls가 이미 알렸습니다
-                self.media_base = self._recv_base   # 아직 스레드가 없어 그냥 복사합니다
+                    return      # _resolve_hls has already reported the error
+                self.media_base = self._recv_base   # no thread yet, so just copy it
             else:
-                # 탭 오디오에는 풀 재생목록도, 맞출 방송 시각도 없습니다.
-                # 사용자가 듣고 있는 그 순간이 0초입니다 -- 오히려 화면 위
-                # 자막 정렬에는 이쪽이 정확합니다. 사용자의 재생 위치가
-                # 곧 기준이기 때문입니다.
+                # Tab audio has neither a full playlist nor a broadcast time to
+                # line up with. The moment the user is listening to is 0 seconds
+                # -- which is in fact more accurate for aligning subtitles over
+                # the player, because the user's playback position is the
+                # reference.
                 #
-                # 이어받기면 멈춘 자리에서 시간축을 이어 갑니다. 0으로
-                # 되돌리면 새 자막이 옛 자막 사이에 끼어 들어가 스크립트
-                # 순서가 뒤엉킵니다. 새 세션에서는 resume_from이 0입니다.
+                # On a resume the time axis continues from where it stopped.
+                # Going back to 0 would wedge new subtitles in among the old ones
+                # and tangle the transcript's order. On a new session resume_from
+                # is 0.
                 self.media_base = self._recv_base = self.resume_from
             self.state = "loading"
             self._persist()
@@ -1123,8 +1205,8 @@ class LiveSession:
         except Exception as exc:
             self.state = "error"
             self.error = f"{type(exc).__name__}: {exc}"[:300]
-            # 화면에는 한 줄만 갑니다. 어디서 났는지는 로그에 남겨야
-            # 다음 보고가 진단 가능해집니다.
+            # Only one line goes to the screen. Where it came from has to stay
+            # in the log for the next report to be diagnosable.
             print(f"[live] 세션 {self.id} 실패:", file=sys.stderr)
             traceback.print_exc()
             self._persist()
@@ -1134,12 +1216,12 @@ class LiveSession:
             _retire(self)
 
     def _resolve_hls(self, reconnect: bool = False):
-        """방송 주소를 ffmpeg이 읽을 수 있는 것으로 풀어냅니다.
+        """Resolve the broadcast address into something ffmpeg can read.
 
-        돌려주는 것은 (재생목록 주소, -live_start_index)이고, 첫 값이 None이면
-        더 갈 수 없다는 뜻입니다 -- 상태와 오류는 여기서 이미 알렸습니다.
-        `reconnect`면 「라이브가 아님」은 오류가 아니라 방송이 끝난 것이므로
-        상태를 건드리지 않고 None만 돌려줍니다.
+        Returns (playlist address, -live_start_index); a first value of None
+        means there is no going further -- the status and the error have already
+        been reported here. On `reconnect`, "not live" is not an error but the
+        broadcast being over, so it returns None without touching the status.
         """
         d = {}
         try:
@@ -1148,30 +1230,30 @@ class LiveSession:
                                   timeout=stream.YTDLP_TIMEOUT_S,
                                   **stream.child_io(stderr=False))
         except TimeoutExpired:
-            # 정보를 못 받아도 아래 resolve_audio가 한 번 더 시도합니다.
-            # 거기서도 안 되면 그쪽이 이유를 실어 예외를 냅니다.
+            # Even if the metadata does not come back, resolve_audio below tries
+            # once more. If that fails too it raises with the reason attached.
             meta = subprocess.CompletedProcess(args=[], returncode=-1,
                                                stdout="", stderr="시간 초과")
         if meta.returncode == 0:
             try:
                 d = json.loads(meta.stdout)
             except json.JSONDecodeError:
-                d = {}                    # 재생목록 주소. 아래 resolve_audio가 판단합니다
+                d = {}                    # a playlist address. resolve_audio below decides
             self.title = d.get("title", "")
             self.video_id = d.get("id", "") or ""
             info = site_of(d, self.url)
             self.site, self.channel = info["site"], info["channel"]
-            # 생 m3u8 은 yt-dlp 의 범용 추출기가 라이브인지 모릅니다(is_live 가 None).
-            # 사용자가 라이브로 넣은 것이니 모르면 라이브로 봅니다. 아니라고 하면(False)
-            # 그때만 막습니다.
+            # yt-dlp's generic extractor does not know whether a raw m3u8 is live
+            # (is_live is None). The user entered it as live, so unknown counts as
+            # live. Only an explicit no (False) blocks it.
             not_live = (d.get("is_live") is False if self.site == "other"
                         else not d.get("is_live"))
             if not_live:
                 if reconnect:
                     return None, None
                 self.state = "error"
-                # 방금 끝난 방송도 여기로 옵니다. /api/probe가 볼 때는
-                # 라이브였는데 그 사이 끝난 경우입니다.
+                # A broadcast that has just ended comes here too -- it was live
+                # when /api/probe looked and ended in the meantime.
                 self.error = ("라이브가 아닙니다. 방송이 방금 끝났거나 "
                               "녹화본 주소일 수 있습니다. 녹화본은 "
                               "「＋ 영상 추가」로 처리하십시오.")
@@ -1181,9 +1263,11 @@ class LiveSession:
 
         src, info = resolve_audio(self.url, youtube=self.site != "other" and self.site != "twitch")
         if reconnect and info.get("ended"):
-            # 재생목록이 끝났다고 스스로 말합니다(녹화본 m3u8). yt-dlp 는 라이브인지 몰라
-            # 「끝남」이라 하지 않으므로, 여기서 알아보지 않으면 ffmpeg 이 끝날 때마다 같은
-            # 꼬리에 다시 붙어 같은 말을 되받아 적습니다 -- 실제로 수십 번 그랬습니다.
+            # The playlist says itself that it is finished (a recording's m3u8).
+            # yt-dlp does not know whether it is live so it never says "ended", and
+            # without recognising it here ffmpeg reattaches to the same tail every
+            # time it finishes and transcribes the same speech over again -- which
+            # it actually did dozens of times.
             return None, None
         release_ts = None
         if meta.returncode == 0:
@@ -1196,7 +1280,8 @@ class LiveSession:
             start_index, skipped = self._resume_point(info, release_ts)
         self._recv_base = media_base_from(info.get("pdt"), release_ts, skipped)
         if self.resume_from and not self._rewind:
-            # 이어받기: 라이브 끝에서 시작합니다. 멈춘 자리와의 거리가 빠진 구간입니다.
+            # Resume: start at the live edge. The distance from where it stopped
+            # is the missing stretch.
             self.gap_s = max(0.0, self._recv_base - self.resume_from) if self._recv_base else 0.0
         print(f"[live] playlist: {info.get('segments')} segments / "
               f"{self.window_s:.0f}s window, media_base={self._recv_base:.0f}s"
@@ -1206,47 +1291,51 @@ class LiveSession:
         return src, start_index
 
     def _transcribe(self, src, start_index):
-        """소리를 받아 자막으로 내보냅니다. 소리가 어디서 오는지는 모릅니다.
+        """Take sound in and send subtitles out. It does not know where the sound
+        comes from.
 
-        ffmpeg 파이프든 브라우저가 올린 조각이든 여기부터는 같은 길입니다 --
-        `run_stream`이 받는 것은 float32 조각을 내놓는 제너레이터뿐입니다.
+        Whether it is an ffmpeg pipe or chunks the browser uploaded, the path is the
+        same from here -- all `run_stream` takes is a generator producing float32
+        chunks.
 
-        받아 적기는 **초점을 쥔 동안**만 합니다(_episode). 혼자 받는 세션은 처음부터
-        초점이라 에피소드가 하나뿐이고, 멀티뷰에서는 초점이 오갈 때마다 하나씩입니다.
-        그 사이 이 스레드는 초점을 기다리고, 읽기 스레드는 링을 채웁니다.
+        Transcription happens only **while focus is held** (_episode). A session
+        receiving alone is focused from the start so it has just one episode; in
+        multiview there is one for every time focus comes and goes. In between, this
+        thread waits for focus and the reading thread fills the ring.
         """
-        self._start_reader(src, start_index)   # 탭이면 할 일 없음 -- feed() 가 넣습니다
+        self._start_reader(src, start_index)   # nothing to do for a tab -- feed() puts it in
         self.state = "running"
         self._persist()
         self.emit({"type": "status", **self.status()})
         if self.gap_s >= 1.0:
-            # 조용한 구멍을 남기지 않습니다. 되감아도 메우지 못한
-            # 구간이 있으면 스크립트에 그렇게 적습니다 -- 자막이
-            # 없는 것과 받아 적지 못한 것은 다른 이야기입니다.
+            # No silent hole is left behind. If there is a stretch a rewind
+            # could not fill, the transcript says so -- there being no subtitle
+            # and not having been able to transcribe are two different stories.
             self.publish_line(
                 "note",
                 f"⋯ 서버가 멈춘 사이 약 {int(self.gap_s)}초를 받지 "
                 f"못했습니다 ⋯", self.lang or "", "")
         if self.source == "tab" and self.resume_from:
-            # 탭 오디오는 되감을 수 없습니다. 공유가 끊긴 동안의 소리는
-            # 아무 데도 남아 있지 않으므로 몇 초인지도 알 수 없습니다.
+            # Tab audio cannot be rewound. The sound from while the share was
+            # cut is nowhere, so not even how many seconds it was is known.
             self.publish_line(
                 "note", "⋯ 여기서부터 탭 소리를 다시 받습니다. 공유가 "
                 "끊긴 사이는 받지 못했습니다 ⋯", self.lang or "", "")
         while not self._stop.is_set() and not self._ended:
             if not self._focus.wait(0.5):
-                continue                 # 대기 세션: 링만 채워지고 있습니다
+                continue                 # a standby session: only the ring is filling
             self._episode()
-        if self.state != "error":        # 수신 루프가 포기했으면 그 말을 남깁니다
+        if self.state != "error":        # if the receive loop gave up, leave its word standing
             self.state = "stopped"
         self._persist()
         self.emit({"type": "status", **self.status()})
 
     def _ensure_engines(self):
-        """전사기·번역기를 처음 초점을 받을 때 한 번 만듭니다. 가중치는 프로세스가 나눠
-        쓰므로(models.py) 세션이 드는 것은 해독 세션과 껍데기뿐이고, 초점을 잃어도 놓지
-        않습니다 -- 다음 초점에서 바로 씁니다. 대기 중 「관리」에서 엔진을 바꾼 것은
-        asr_backend_id/backend_id 에 적혀 있다가 여기서 반영됩니다."""
+        """Build the transcriber and the translator once, on first getting focus. The
+        process shares the weights (models.py) so what a session holds is only the
+        decode session and a shell, and it is not let go on losing focus -- the next
+        focus uses it right away. An engine changed under "Manage" while on standby is
+        written in asr_backend_id/backend_id and applied here."""
         fresh = self._asr is None
         cfg = config.load()
         if self._tr is None:
@@ -1263,21 +1352,25 @@ class LiveSession:
             self._asr = build_live_asr(asr_spec, self.lang, threads=4)
             self.asr_label = self._asr.label
         if fresh:
-            # 엔진 이름이 상태에 실려야 화면이 「전사 <엔진>」을 적습니다.
+            # The engine name has to ride in the status for the UI to write
+            # "transcription <engine>".
             self._persist()
             self.emit({"type": "status", **self.status()})
 
     def _episode(self):
-        """초점을 쥔 동안의 run_stream 한 번. 프로세스의 전사 토큰 안에서 돕니다.
+        """One run_stream for as long as focus is held. Runs inside the process's
+        transcription token.
 
-        VAD·오디오 이력·정제기는 매번 새로 만듭니다 -- 셋 다 run_stream 시작을 0으로
-        놓은 표본 위치를 기준으로 하므로, 초점이 없던 공백을 넘겨 이어 쓰면 선행 구간과
-        정제 원본이 엉뚱한 소리를 가리킵니다. 정제기의 close() 까지 토큰 안에서 끝내야
-        다른 세션이 같은 모델을 돌리기 시작할 때 이쪽의 마지막 해독이 끝나 있습니다.
+        The VAD, the audio history and the refiner are built anew every time -- all
+        three go by a sample position that puts run_stream's start at 0, so carrying
+        them across the gap where there was no focus makes the lead-in and the
+        refinement source point at the wrong sound. The refiner's close() has to
+        finish inside the token too, so that this side's last decode is done by the
+        time another session starts running the same model.
         """
         while not _transcriber.acquire(timeout=0.5):
             if not self._focus.is_set() or self._stop.is_set():
-                return               # 기다리는 사이 초점이 다른 데로 갔습니다
+                return               # focus went elsewhere while we waited
         vad = history = refiner = None
         try:
             if not self._focus.is_set() or self._stop.is_set() or self._ended:
@@ -1293,14 +1386,16 @@ class LiveSession:
                   flush=True)
             run_stream(self._consume(), vad, asr, sink, history, refiner)
             if refiner is not None:
-                # 마지막 무리의 정제가 끝나기를 기다립니다. 초점이 옮겨 간 뒤나 상태를
-                # 「종료됨」으로 적은 뒤에 정제본이 도착하면 안 됩니다.
+                # Wait for the last group's refinement to finish. A refined line
+                # must not arrive after focus has moved, or after the status has
+                # been written as "ended".
                 refiner.close()
         finally:
-            # 정제 스레드를 꼭 끝냅니다. 살려 두면 그 스레드가 전사 모델을
-            # 쥐고 있어 아래 del 이 소용없습니다. 그리고 **정말 끝난 뒤에** 토큰을
-            # 놓습니다 -- close() 는 10초만 기다리는데, 그 뒤에도 정제 해독이 돌고
-            # 있으면 다음 세션이 같은 모델을 동시에 돌리게 됩니다.
+            # The refinement thread must be ended. Left alive it holds the
+            # transcription model and the del below achieves nothing. And the token
+            # is released only **after it has really finished** -- close() waits
+            # just 10 seconds, and if a refinement decode is still running after
+            # that the next session would run the same model at the same time.
             if refiner is not None:
                 refiner.close()
                 th = getattr(refiner, "_thread", None)
@@ -1322,9 +1417,10 @@ RUNNING_STATES = ("starting", "loading", "running")
 
 
 def _evict_outside(keep_group: str):
-    """다른 세션을 멈춥니다. `keep_group` 이 비면 전부 -- 「한 사람이 한 방송을 본다」는
-    예전 규칙 그대로입니다. 멀티뷰는 제 묶음만 남기고 나머지를 멈춥니다. 남겨 두면
-    ffmpeg 과 링이 아무도 보지 않는 방송을 위해 돌아갑니다."""
+    """Stop the other sessions. All of them if `keep_group` is empty -- the old rule
+    that "one person watches one broadcast", as it was. Multiview keeps its own bundle
+    and stops the rest. Left running, an ffmpeg and a ring would turn for a broadcast
+    nobody is watching."""
     for sid in list(_sessions):
         s = get(sid)
         if s is not None and (not keep_group or s.group != keep_group):
@@ -1340,14 +1436,15 @@ def _new_session(url: str, lang: str | None, viewer_lang: str, backend_id: str,
                     source=source, title=title)
     s.group = group
     if not focused:
-        # 대기 세션으로 태어납니다. set_focus() 는 상태를 내보내는데 아직 등록도
-        # 되지 않았으니 깃발만 내립니다.
+        # It is born a standby session. set_focus() sends the status out and it is
+        # not even registered yet, so only the flag is lowered.
         s._focus.clear()
         if s.source == "tab":
             s._ring.set_max(RING_S)
     with _lock:
         _sessions[s.id] = s
-    # 첫 자막이 나오기 전에 서버가 죽어도 세션이 있었다는 사실은 남습니다.
+    # Even if the server dies before the first subtitle, the fact that the session
+    # existed remains.
     s._persist()
     s.start()
     return s
@@ -1365,15 +1462,17 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
     return {"id": s.id, "source": s.source}
 
 
-# ---- 멀티뷰 ---------------------------------------------------------------------
+# ---- multiview ------------------------------------------------------------------
 #
-# 여러 방송을 한 화면에 두고 보되 소리와 자막은 **초점** 하나만. 서버에서 묶음(Group)은
-# 얇습니다 -- 멤버 세션 id 와 초점이 어느 것인지. 초점이 아닌 멤버는 소리만 받고(링)
-# 받아 적지 않으며, 초점이 옮겨 가면 옛 것이 물러난 뒤 새 것이 링에 고인 것부터 잇습니다.
-# 묶음은 메모리에만 있습니다. 재시작하면 멤버 세션은 「중단됨」으로 남고 묶음은 없어집니다
-# -- 다시 묶는 것은 사용자가 시킬 일입니다.
+# Several broadcasts sit on one screen, but the sound and the subtitles belong to the
+# **focused** one only. On the server a bundle (Group) is thin -- the member session
+# ids and which one has focus. A member without focus only receives sound (the ring)
+# and does not transcribe, and when focus moves the old one withdraws before the new
+# one picks up from what pooled in its ring. A bundle lives only in memory. On
+# restart the member sessions are left "interrupted" and the bundle is gone -- putting
+# them back together is the user's call.
 
-MULTIVIEW_MAX = 4          # 화면이 4분할까지입니다. ffmpeg 도 그만큼 뜹니다
+MULTIVIEW_MAX = 4          # the screen splits into four at most. That many ffmpegs come up too
 
 
 class Group:
@@ -1398,9 +1497,11 @@ def _publish_group(g: Group, deleted: bool = False):
 
 
 def _apply_focus(g: Group, sid: str):
-    """묶음의 초점을 `sid` 로. **옛 것을 먼저 끕니다** -- 그래야 옛 세션의 run_stream 이
-    정제까지 끝내고 전사 토큰을 놓은 뒤 새 세션이 잡습니다(같은 모델을 두 세션이 동시에
-    돌리지 않습니다). 그 사이 새 세션의 소리는 링에 있으므로 잃지 않습니다."""
+    """Move the bundle's focus to `sid`. **The old one is turned off first** -- that
+    way the old session's run_stream finishes refinement and lets the transcription
+    token go before the new session takes it (two sessions never run the same model at
+    once). The new session's sound is in its ring in the meantime, so nothing is
+    lost."""
     g.focus = sid
     for m in g.members:
         s = get(m)
@@ -1412,9 +1513,10 @@ def _apply_focus(g: Group, sid: str):
 
 
 def _leave_group(s: LiveSession):
-    """끝난 세션을 묶음에서 뺍니다. 초점이었으면 남은 첫 멤버로 옮기고, 비면 묶음을 지웁니다."""
+    """Take a finished session out of its bundle. If it had focus, move focus to the
+    first member left; if none are left, delete the bundle."""
     g = _groups.get(s.group) if s.group else None
-    s.group = ""                     # 끝난 세션은 묶음의 것이 아닙니다(목록의 ⊞ 표시가 남지 않게)
+    s.group = ""                     # a finished session is not the bundle's (no ⊞ in the list)
     if g is None or s.id not in g.members:
         return
     g.members.remove(s.id)
@@ -1440,16 +1542,16 @@ def _source_ok(src: dict) -> str:
 
 def _member_from(src: dict, gid: str, lang, viewer_lang, backend_id, profile,
                  asr_backend_id, refine, genre) -> LiveSession | dict:
-    """소스 하나를 묶음의 멤버로. 이미 받는 중인 세션(`session`)이면 편입하고, 아니면
-    대기 세션으로 새로 만듭니다."""
+    """One source as a member of the bundle. A session already receiving (`session`)
+    is folded in; otherwise a new standby session is made."""
     sid = src.get("session")
     if sid:
         s = get(sid)
         if s is not None and s.state in RUNNING_STATES:
             s.group = gid
             return s
-        # 멈춘 방송입니다. 같은 세션으로 이어받아 대기 멤버로 넣습니다 -- 목록에서 끌어다
-        # 놓은 지난 방송이 여기로 옵니다.
+        # A stopped broadcast. It is resumed as the same session and put in as a
+        # standby member -- a past broadcast dragged out of the list comes here.
         got = resume(sid, asr_backend_id=asr_backend_id, backend_id=backend_id, group=gid)
         if "error" in got:
             return got
@@ -1465,9 +1567,10 @@ def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
                     backend_id: str, profile: str = "broadcast",
                     asr_backend_id: str = "", refine: bool = True,
                     genre: str | None = None, focus: str | None = None) -> dict:
-    """묶음을 만듭니다. `sources` 의 각 항목은 `{"session": id}`(지금 보는 것을 편입) 또는
-    `{"url": ...}` / `{"source": "tab", "title": ...}`(새 대기 세션)입니다. 초점은 `focus`
-    가 가리키는 세션, 없으면 첫 멤버입니다. 묶음 밖의 세션은 전부 멈춥니다."""
+    """Make a bundle. Each item of `sources` is either `{"session": id}` (fold in what
+    is being watched now) or `{"url": ...}` / `{"source": "tab", "title": ...}` (a new
+    standby session). Focus goes to the session `focus` points at, or to the first
+    member if there is none. Every session outside the bundle is stopped."""
     sources = list(sources or [])
     if not sources:
         return {"error": "소스가 없습니다"}
@@ -1479,13 +1582,14 @@ def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
             return {"error": why}
     g = Group()
     with _lock:
-        _groups[g.id] = g                # 멤버가 이어받기로 들어올 때 찾을 수 있어야 합니다
+        _groups[g.id] = g                # it has to be findable when a member comes in by resume
     members: list[LiveSession] = []
     for src in sources:
         m = _member_from(src, g.id, lang, viewer_lang, backend_id, profile,
                          asr_backend_id, refine, genre)
         if isinstance(m, dict):
-            # 편입할 세션이 없습니다. 방금 만든 대기 세션들은 되돌리고 묶음도 지웁니다.
+            # There is no session to fold in. The standby sessions just made are
+            # rolled back and the bundle deleted too.
             for made in members:
                 if not any(sr.get("session") == made.id for sr in sources):
                     made.stop()
@@ -1539,14 +1643,14 @@ def multiview_add(gid: str, src: dict, lang: str | None, viewer_lang: str,
     if m.id not in g.members:
         g.members.append(m.id)
     if m.id != g.focus:
-        m.set_focus(False)           # 편입한 세션이 혼자 초점을 쥐고 있었을 수 있습니다
+        m.set_focus(False)           # the folded-in session may have been holding focus alone
     _evict_outside(g.id)
     _publish_group(g)
     return m.status()
 
 
 def multiview_remove(gid: str, sid: str) -> dict:
-    """타일을 닫습니다 = 그 세션을 멈추고 묶음에서 뺍니다."""
+    """Close a tile = stop that session and take it out of the bundle."""
     g = _groups.get(gid)
     if g is None:
         return {"error": "no such group"}
@@ -1554,8 +1658,8 @@ def multiview_remove(gid: str, sid: str) -> dict:
         return {"error": "그 세션은 이 묶음에 없습니다"}
     s = get(sid)
     if s is not None:
-        s.stop()                     # 끝나면 _retire → _leave_group 이 뒷정리를 하지만,
-    g.members.remove(sid)            # 화면은 지금 답을 받아야 하므로 여기서 먼저 뺍니다
+        s.stop()                     # once it ends _retire → _leave_group tidies up, but
+    g.members.remove(sid)            # the UI needs an answer now, so it is removed here first
     if s is not None:
         s.group = ""
     if not g.members:
@@ -1587,15 +1691,15 @@ def multiview_stop(gid: str) -> dict:
 
 
 def set_title(session_id: str, title: str) -> dict:
-    """세션 이름을 고칩니다.
+    """Fix a session's name.
 
-    탭 소리에는 가져올 제목이 없습니다. 크롬은 캡처 트랙의 label 에 탭 제목이
-    아니라 불투명한 식별자를 넣습니다 -- 실측한 값이
-    `web-contents-media-stream://8D6F…` 입니다. 시작할 때 이름을 못 적었거나
-    잘못 적었으면 나중에 고치는 수밖에 없습니다.
+    Tab audio has no title to fetch. Chrome puts an opaque identifier in the
+    capture track's label rather than the tab title -- the measured value is
+    `web-contents-media-stream://8D6F…`. If the name could not be written at
+    the start, or was written wrong, fixing it later is the only way.
 
-    끝난 세션도 고칠 수 있어야 합니다. 무엇을 들었는지는 대개 다 듣고 나서
-    목록을 볼 때 문제가 되니까요.
+    A finished session has to be fixable too. What it was you listened to
+    usually becomes a question when you look at the list afterwards.
     """
     title = (title or "").strip()[:200]
     if not title:
@@ -1609,8 +1713,9 @@ def set_title(session_id: str, title: str) -> dict:
     st = store.session(session_id)
     if not st:
         return {"error": "no such session"}
-    # store.session 은 doc 에 video_id 를 얹어 돌려줍니다. 그대로 다시 넣으면
-    # doc 안에 그 열이 한 번 더 들어가므로 떼어 내고 저장합니다.
+    # store.session returns the doc with video_id laid on top. Putting it back as
+    # it is would put that column inside the doc once more, so it is taken off
+    # before saving.
     video_id = st.pop("video_id", "") or ""
     st["title"] = title
     store.save_session(st, video_id)
@@ -1619,14 +1724,15 @@ def set_title(session_id: str, title: str) -> dict:
 
 
 def notify_edit(owner: str, cue: dict, backend: str = ""):
-    """고친 줄을 보고 있는 창들에 알립니다.
+    """Tell the windows that are watching about an edited line.
 
-    본 창에서 고치면 대본 창에도 바로 반영되어야 합니다. 받는 중인 세션만
-    구독자가 있으므로(끝난 세션의 SSE 는 백로그를 다 보내고 닫습니다),
-    여기서 할 일이 없으면 조용히 지나갑니다.
+    An edit in the main window has to show up in the Subtitle log window right
+    away. Only a session that is receiving has subscribers (a finished session's
+    SSE sends the whole backlog and closes), so if there is nothing to do here
+    it passes quietly.
 
-    새 이벤트 종류를 만들지 않고 자막이 도착할 때와 같은 모양으로 보냅니다.
-    브라우저는 이미 id 로 줄을 찾아 제자리에서 갈아 끼웁니다.
+    No new event kind is invented; it is sent in the same shape as an arriving
+    subtitle. The browser already finds the line by id and swaps it in place.
     """
     s = get(owner)
     if s is None:
@@ -1642,8 +1748,8 @@ def notify_edit(owner: str, cue: dict, backend: str = ""):
 
 
 def notify_translation(owner: str, cue_id: int, kind: str, text: str):
-    """다시 번역한 줄을 보고 있는 창들에 흘려보냅니다. 받는 중인 세션이
-    아니면 구독자가 없으므로 조용히 지나갑니다."""
+    """Push a re-translated line out to the windows that are watching. If the
+    session is not receiving there are no subscribers, so it passes quietly."""
     s = get(owner)
     if s is not None:
         s.emit({"type": "translation", "id": int(cue_id),
@@ -1657,26 +1763,27 @@ def notify_drop(owner: str, cue_id: int):
 
 
 def feed(session_id: str, raw: bytes) -> dict:
-    """브라우저가 올린 탭 오디오 한 덩어리를 세션에 넣습니다."""
+    """Put one block of tab audio the browser uploaded into the session."""
     s = get(session_id)
     if not s:
-        # 서버가 재시작됐거나 세션이 끝났습니다. 브라우저는 이 답을 보고
-        # 공유를 스스로 끊습니다 -- 아무도 듣지 않는 소리를 계속 올리는
-        # 것보다 낫습니다.
+        # The server restarted, or the session ended. The browser sees this
+        # answer and cuts the share itself -- better than going on uploading
+        # sound nobody is listening to.
         return {"error": "no such session"}
     return s.feed(raw)
 
 
 def shutdown(timeout: float = 8.0) -> int:
-    """서버를 끄기 전에 세션을 제대로 닫습니다.
+    """Close the sessions properly before shutting the server down.
 
-    그냥 프로세스를 죽이면 DB에 `running`으로 남고, 다음 기동의 복구 스윕이
-    그것을 **중단됨**으로 표시합니다. 사용자가 스스로 끈 것과 서버가 죽은
-    것이 기록에서 구분되지 않는 셈입니다.
+    Just killing the process leaves them `running` in the DB, and the next
+    start-up's recovery sweep marks them **interrupted**. That is, the record
+    does not tell the user shutting down themselves apart from the server
+    dying.
 
-    `stop()`은 신호만 보내므로 여기서 기다립니다 -- 수신 루프가 ffmpeg의
-    끊긴 파이프를 알아채고 상태를 `stopped`로 적을 때까지입니다. 기다리지
-    않으면 애써 부른 보람이 없습니다.
+    `stop()` only sends a signal, so we wait here -- until the receive loop
+    notices ffmpeg's broken pipe and writes the state as `stopped`. Without
+    waiting, having bothered to call it counts for nothing.
     """
     with _lock:
         live_ids = list(_sessions)
@@ -1699,16 +1806,18 @@ def _retire(session: "LiveSession"):
     its subtitles stay in SQLite, so a late poll -- or a poll after the next
     restart -- still gets an answer instead of a 404.
 
-    **자기 자신일 때만** 뺍니다. 세션이 오류로 끝나면 화면은 곧 「이어받기」를 보이는데,
-    옛 세션의 `_run`은 정제기·번역 워커가 닫히기까지 최대 20초 더 살아 있습니다. 그 사이
-    같은 id 로 이어받은 새 세션이 등록부에 들어가면, 옛 것의 finally 가 그 새 세션을 빼고
-    상태를 자기 것(error)으로 덮어썼습니다 -- 새 세션은 「중단」도 듣지 않는 고아가 됐습니다.
+    It is removed **only when it is itself**. When a session ends in error the UI
+    shows "Resume" soon after, but the old session's `_run` stays alive up to 20
+    seconds longer while the refiner and the translation worker close. If a new
+    session resumed under the same id entered the registry in that window, the old
+    one's finally took that new session out and overwrote the status with its own
+    (error) -- the new session became an orphan that did not even hear "Stop".
     """
     with _lock:
         if _sessions.get(session.id) is session:
             _sessions.pop(session.id, None)
         else:
-            return                          # 이미 다른(이어받은) 세션이 그 자리에 있습니다
+            return                          # another (resumed) session is already in that slot
     _leave_group(session)
     session._persist()
 
@@ -1731,9 +1840,10 @@ def recent(limit: int = 50) -> list[dict]:
     A live session leaves no cue file, so before this it existed only for as
     long as the tab stayed open. The picker needs a list to offer.
 
-    한도가 20이던 때 표에는 42개가 있었습니다 -- 절반이 보이지 않았고 지울
-    길도 없었습니다. 이제 지울 수 있으니(`delete`) 한도는 넉넉히 두고,
-    화면이 `?limit=`로 더 청할 수 있습니다.
+    When the limit was 20 the table held 42 -- half of them were invisible and
+    there was no way to delete them either. Now that they can be deleted
+    (`delete`) the limit is left generous, and the UI can ask for more with
+    `?limit=`.
     """
     with _lock:
         live_now = {sid: s.status() for sid, s in _sessions.items()}
@@ -1744,8 +1854,9 @@ def recent(limit: int = 50) -> list[dict]:
 
 
 def delete(session_id: str) -> dict:
-    """세션과 그 자막을 지웁니다. 받는 중이면 먼저 멈춰야 합니다 -- 받는
-    도중에 표에서 지우면 다음 줄이 곧바로 다시 만들어 유령 세션이 됩니다."""
+    """Delete a session and its subtitles. It has to be stopped first if it is
+    receiving -- deleting it from the table mid-reception makes the next line
+    create it again right away, leaving a ghost session."""
     if get(session_id) is not None:
         return {"error": "받는 중인 세션은 지울 수 없습니다. 먼저 「중단」하십시오."}
     if not store.delete_session(session_id):
@@ -1802,7 +1913,8 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     spec = config.find_backend(backend_id)
     if spec is None:
         return {"error": f"'{backend_id}' 백엔드가 없습니다"}
-    # 장르는 보고 있는 영상의 성질이므로 백엔드를 바꿔도 그대로입니다.
+    # The genre is a property of the video being watched, so it stays across a
+    # backend change.
     s._tr = mw_translate.build(spec, s.genre)
     s.backend_id = backend_id
     return {"backend": backend_id}
@@ -1810,22 +1922,27 @@ def set_backend(session_id: str, backend_id: str) -> dict:
 
 def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
            source: str = "", url: str = "", group: str = "") -> dict:
-    """끊긴 세션의 수신을 **같은 세션으로** 이어 붙입니다.
+    """Join a broken session's reception back up **as the same session**.
 
-    지금까지는 서버가 죽으면 그 세션은 거기서 끝이었습니다. 이어받은 척하면
-    조용한 구멍이 생긴다는 이유였는데, 구멍을 조용하지 않게 만들면 그 이유가
-    없어집니다 -- 빠진 초를 자막 한 줄로 적습니다.
+    Until now, when the server died that session ended there. The reason was
+    that pretending to have resumed leaves a silent hole -- and making the hole
+    not silent removes that reason: the missing seconds are written as one
+    subtitle line.
 
-    **되감지 않습니다.** 예전에는 DVR 창 안이면 멈춘 자리까지 되감아 메웠는데,
-    그러면 이어받기가 늦을수록 그만큼을 먼저 받아 적느라 지금 보는 자리의 자막은
-    한참 뒤에 나왔습니다(느린 엔진이면 더). 사용자가 보는 것은 지금이므로 지금
-    라이브 끝에서 시작합니다. 세션 안의 자동 재접속(몇 초 끊김)만 되감습니다.
+    **It does not rewind.** Previously, when it was inside the DVR window, it
+    rewound to where it stopped and filled the hole, which meant the later the
+    resume the more had to be transcribed first, so the subtitle for the place
+    being watched came out much later (more so with a slow engine). What the
+    user is watching is now, so it starts at the live edge now. Only the
+    automatic reconnect inside a session (a break of a few seconds) rewinds.
 
-    세션 id를 그대로 쓰므로 자막은 이어집니다. 자동으로 하지 않습니다 --
-    서버를 켰다고 방송을 다시 받기 시작하는 것은 사용자가 시킨 일이 아닙니다.
+    The session id is reused, so the subtitles continue. It is not done
+    automatically -- starting to receive a broadcast again because the server
+    was switched on is not something the user asked for.
 
-    `group` 을 주면 그 멀티뷰 묶음의 멤버로 살아납니다(대기 세션 -- 묶음에 초점이
-    없을 때만 초점을 받습니다). 목록의 멈춘 방송을 화면에 끌어다 놓는 길입니다.
+    Given a `group`, it comes back as a member of that multiview bundle (a
+    standby session -- it only gets focus when the bundle has none). This is the
+    route for dragging a stopped broadcast from the list onto the screen.
     """
     st = store.session(session_id)
     if not st:
@@ -1833,27 +1950,32 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     if st.get("state") in ("starting", "loading", "running"):
         return {"error": "이미 받는 중입니다"}
     if get(session_id) is not None:
-        # 저장된 상태는 끝났지만 옛 세션의 스레드가 아직 정리 중입니다(정제·번역 마무리,
-        # 최대 20초). 그 위에 새 세션을 얹으면 옛 finally 가 새 것을 밀어냅니다.
+        # The stored status says finished, but the old session's threads are still
+        # tidying up (wrapping up refinement and translation, up to 20 seconds).
+        # Laying a new session on top of that lets the old finally push the new one
+        # out.
         return {"error": "앞선 수신을 정리하는 중입니다. 몇 초 뒤 다시 누르십시오."}
-    # 소리 출처는 바꿔 이어받을 수 있습니다. 주소로 받던 방송이 도중에 멤버십 전용으로 바뀌면
-    # 탭 소리로, 탭 소리로 받던 것을 브라우저를 닫고 이어 가려면 주소로. 자막은 세션 id 로
-    # 이어지므로 출처가 바뀌어도 한 줄기입니다. 미디어 시각은 두 출처 모두 `resume_from`
-    # 에서 이어 갑니다.
+    # The audio source can be changed on resume. A broadcast received by address
+    # that turns members-only partway through goes to tab audio; one received as tab
+    # audio that you want to carry on after closing the browser goes to the address.
+    # The subtitles continue by session id, so it is one thread even across a source
+    # change. The media time continues from `resume_from` for both sources.
     tab = (source or st.get("source")) == "tab"
     live_url = (url or "").strip() or (st.get("url") or "")
     if not tab and not live_url:
         return {"error": "주소가 남아 있지 않아 이어받을 수 없습니다. 탭 소리로 이어받으십시오."}
 
-    # 한 번에 한 방송만 받습니다. start() 와 같은 규칙입니다 -- 모델을 두 벌
-    # 올려 둘 이유가 없습니다. 묶음에 들어가는 것이면 그 묶음만 남깁니다.
+    # Only one broadcast is received at a time. The same rule as start() -- there
+    # is no reason to keep two copies of the model loaded. If it is going into a
+    # bundle, only that bundle is kept.
     g = _groups.get(group) if group else None
     if group and g is None:
         return {"error": "no such group"}
     _evict_outside(group)
 
-    # 엔진은 부르는 쪽이 준 것이 우선입니다(「관리」에서 바꾼 뒤 이어받기). 설정에 없는
-    # id 면 저장된 것을 씁니다 -- 이어받기가 엔진 이름 하나 때문에 실패하면 안 됩니다.
+    # What the caller passed wins for the engines (changing them under "Manage",
+    # then resuming). An id that is not in the config falls back to the stored one --
+    # a resume must not fail over one engine name.
     cfg = config.load()
     asr_id = (asr_backend_id if config.find("asr", asr_backend_id, cfg)
               else (st.get("asr_backend") or ""))
@@ -1870,23 +1992,24 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     s.video_id = st.get("video_id") or ""
     s.site = st.get("site") or ""
     s.channel = st.get("channel") or ""
-    s.error = None                       # 왜 멈췄었는지는 이제 지난 일입니다
-    # 이어 붙이려면 번호가 이어져야 합니다. 새 줄이 옛 줄의 id를 다시 쓰면
-    # 화면에서 그 자리를 덮어씁니다.
+    s.error = None                       # why it had stopped is water under the bridge now
+    # Joining up means the numbers have to continue. A new line reusing an old
+    # line's id would overwrite that slot on screen.
     prior = store.cues(session_id)
     s._seq = max((int(c["id"]) for c in prior), default=0)
     s.lines = len(prior)
-    # 「받은 자리」(recv_t)에서 잇습니다. 멀티뷰의 대기 세션은 받아 적은 자리(media_base+
-    # audio_s)가 몇 시간 전에 멈춰 있을 수 있는데, 거기서 되감으면 DVR 창 안이라도 이미
-    # 본 구간을 다시 받아 적게 됩니다. 옛 기록에는 recv_t 가 없으므로 그때는 예전 식으로.
+    # It continues from "where it received to" (recv_t). A multiview standby
+    # session's transcribed position (media_base+audio_s) can be stuck hours back,
+    # and rewinding from there would transcribe an already-watched stretch again even
+    # inside the DVR window. An old record has no recv_t, so in that case the old way.
     s.resume_from = float(st.get("recv_t")
                           or (float(st.get("media_base") or 0.0) + float(st.get("audio_s") or 0.0)))
     if g is not None:
         s.group = g.id
         if g.focus in (None, s.id):
-            g.focus = s.id               # 초점이 없는 묶음이면 이것이 초점
+            g.focus = s.id               # in a bundle with no focus, this is the focus
         else:
-            s._focus.clear()             # 있으면 대기 세션으로 살아납니다
+            s._focus.clear()             # if there is one, it comes back as a standby session
             if s.source == "tab":
                 s._ring.set_max(RING_S)
         if s.id not in g.members:
@@ -1898,22 +2021,24 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     s.start()
     if g is not None:
         _publish_group(g)
-    # 브라우저는 source를 보고 탭 공유를 다시 물을지 정합니다. 탭 세션은
-    # 서버가 되감을 수 없으므로 소리를 다시 들려주지 않으면 한 줄도 늘지
-    # 않은 채 「받는 중」으로 남습니다.
+    # The browser looks at source to decide whether to ask for the tab share
+    # again. The server cannot rewind a tab session, so unless the sound is played
+    # to it again it stays "receiving" without a single line being added.
     return {"id": s.id, "resumed": True, "source": s.source}
 
 
 def set_asr(session_id: str, asr_backend_id: str) -> dict:
-    """돌아가는 세션의 전사 엔진을 갈아 끼웁니다.
+    """Swap the transcription engine on a running session.
 
-    예전에는 세션을 다시 시작해야 했습니다. 그러면 세션 id가 바뀌고 자막은
-    세션 id로 저장되므로 **그때까지의 스크립트가 화면에서 사라졌습니다.**
-    번역기는 이미 세션 안에서 갈아 끼우고 있었으니(set_backend) 전사기만
-    그럴 이유가 없습니다. 한 영상 안에서 자막은 이어져야 합니다.
+    Previously the session had to be restarted. That changed the session id, and
+    subtitles are stored by session id, so **the transcript up to then vanished
+    from the screen.** The translator was already being swapped inside the
+    session (set_backend), so there is no reason only the transcriber should not
+    be. Within one video the subtitles have to continue.
 
-    이미 나간 줄은 그것을 받아 적은 엔진의 것으로 남고, 이후만 새 엔진이
-    맡습니다 -- 번역기 쪽과 같은 규칙입니다.
+    A line already sent stays the work of the engine that transcribed it, and
+    only what follows is the new engine's -- the same rule as on the translator
+    side.
     """
     s = get(session_id)
     if not s:
@@ -1922,8 +2047,8 @@ def set_asr(session_id: str, asr_backend_id: str) -> dict:
     if spec is None:
         return {"error": f"'{asr_backend_id}' 전사 엔진이 없습니다"}
     if s._asr is None:
-        # 아직 한 번도 초점을 받지 않아 엔진을 만들지 않았습니다(멀티뷰의 대기 세션).
-        # 첫 초점에서 이 id 로 만듭니다.
+        # It has never had focus, so no engine was built (a multiview standby
+        # session). It is built with this id at the first focus.
         s.asr_backend_id = asr_backend_id
         s._persist()
         return {"asr": asr_backend_id, "label": "", "device": "", "threads": 0}
@@ -1932,7 +2057,8 @@ def set_asr(session_id: str, asr_backend_id: str) -> dict:
     try:
         info = s._asr.swap(spec)
     except Exception as exc:
-        # 실패하면 쓰던 것이 그대로 남습니다. 바꾸려다 방송을 잃지 않습니다.
+        # On failure what was in use stays. You do not lose the broadcast trying
+        # to change it.
         return {"error": f"{exc}"}
     s.asr_backend_id = asr_backend_id
     s.asr_label = info["label"]

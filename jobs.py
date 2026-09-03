@@ -1,18 +1,21 @@
-"""배경 작업: 녹화본 전사와 (재)번역.
+"""Background jobs: VOD transcription and (re)translation.
 
-번역은 처음에는 전사할 때 한 번 하고 자막 파일에 박아 두는 것이었습니다.
-엔진을 비교하려면 이미 전사한 영상을 다시 번역할 수 있어야 하므로, 번역은
-엔진 id별로 따로 들고, 작업은 배경 스레드에서 돌며 시청자는 계속 봅니다.
+Translation started out as something done once during transcription and baked
+into the subtitle file. Comparing engines requires being able to translate an
+already-transcribed video again, so translations are held separately per engine
+id, the job runs on a background thread, and the viewer keeps watching.
 
-**번역 루프는 한 벌입니다(`_translate_rows`).** 예전에는 셋이었습니다 --
-전체 번역, 골라서 재번역, 전사 직후 번역. 셋 중 하나만 손으로 고친 번역을
-건너뛰었고, 다른 둘은 자막을 통째로 다시 쓰면서 `edited` 표시까지 지웠습니다.
-엔진을 바꾸는 것만으로 사람이 맞춰 둔 번역이 덮이고 「원문과 다름」 표시가
-사라졌습니다. 이제 셋 모두 같은 루프를 지나며, 그 루프는 한 줄씩
-`store.save_translation`으로 씁니다.
+**There is one translate loop (`_translate_rows`).** There used to be three --
+translate everything, re-translate a selection, translate right after
+transcription. Only one of the three skipped hand-edited translations; the
+other two rewrote the subtitles wholesale and erased the `edited` marks along
+with them. Merely switching engines overwrote a translation a person had
+matched up and made the "differs from the source" mark disappear. Now all three
+go through the same loop, and that loop writes one line at a time with
+`store.save_translation`.
 
-설정은 `config.py`가 맡습니다. 여기 남은 `load_config` 등은 부르는 쪽을
-그대로 두려는 이름뿐입니다.
+`config.py` handles the settings. Names like `load_config` left here are only
+so the callers stay as they are.
 """
 from __future__ import annotations
 
@@ -32,9 +35,9 @@ import live
 import store
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DATA = store.DATA                 # 내려받은 wav 도 자막과 같은 곳에
+DATA = store.DATA                 # the downloaded wav goes where the subtitles go
 
-# config.py로 옮긴 것들. server.py와 시험이 이 이름으로 부릅니다.
+# Moved to config.py. server.py and the tests call them by these names.
 load_config = config.load
 save_config = config.save
 find_backend = config.find_backend
@@ -43,16 +46,18 @@ PROTECTED = config.PROTECTED
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
-# 작업 id → 그 작업을 도는 스레드. 종료가 스레드 끝을 기다리는 데 씁니다(wait_idle).
+# Job id → the thread running that job. Shutdown uses it to wait for the
+# thread to end (wait_idle).
 _threads: dict[str, threading.Thread] = {}
 
 
 def _note(job_id: str, **kw):
-    """진행 상태를 고치고 곧바로 디스크에 밀어 넣습니다.
+    """Update the progress state and push it to disk right away.
 
-    메모리 사본을 없애고 SQLite만 보게 할 수도 있지만, 폴링이 0.7초마다 들어오는
-    경로라 조회는 메모리에서 답하는 편이 낫습니다. 쓰기는 레코드 통째로 하므로
-    이 사이에 락 안에서 증가한 카운터도 함께 실려 나갑니다.
+    The in-memory copy could be dropped so that only SQLite is consulted, but
+    this is a path polled every 0.7 seconds, so answering a query from memory
+    is better. The write covers the whole record, so a counter incremented
+    inside the lock in the meantime rides out along with it.
     """
     with _lock:
         j = _jobs.get(job_id)
@@ -61,19 +66,21 @@ def _note(job_id: str, **kw):
         j.update(kw)
         snapshot = dict(j)
     store.save_job(snapshot)
-    # 다른 창도 이 작업의 진행을 봅니다. 시작한 창은 폴링으로도 보지만, 확장이나
-    # 다른 탭에서 시작한 작업은 이것이 유일한 길입니다.
+    # Other windows watch this job's progress too. The window that started it
+    # sees it by polling as well, but for a job started from the extension or
+    # from another tab this is the only way.
     bus.publish({"type": "job", **snapshot})
 
 
 def _new_job(**fields) -> str:
-    """작업 레코드를 만들어 메모리와 표에 넣고 id를 돌려줍니다."""
+    """Make a job record, put it in memory and in the table, return the id."""
     job_id = uuid.uuid4().hex[:12]
     job = {"id": job_id, "state": "running", "done": 0, "total": 0,
            "started": time.time(), "error": None, "skipped": 0, "kept": 0,
            "degraded": False, "failures": 0,
-           # 줄마다 셉니다. 어느 모델이 실제로 글을 내놓았는지를 숫자로
-           # 보여 주기 위해서입니다 -- "언젠가 대체가 있었다"가 아니라.
+           # Counted per line. This is to show in numbers which model
+           # actually produced the text -- not "a fallback happened at some
+           # point".
            "by_remote": 0, "by_local": 0, "cancel": False}
     job.update(fields)
     with _lock:
@@ -85,11 +92,12 @@ def _new_job(**fields) -> str:
 
 
 def restore() -> int:
-    """재시작 전에 돌던 작업을 되살립니다 -- 상태만.
+    """Restore the jobs that were running before the restart -- the state only.
 
-    작업을 굴리던 스레드는 프로세스와 함께 사라졌으므로 그 전사는 다시
-    진행되지 않습니다. `running`인 채로 두면 UI가 끝나지 않을 폴링을 계속하게
-    되니, 중단되었다고 정직하게 적습니다. 어디까지 갔었는지는 그대로 남습니다.
+    The thread that drove a job went away with the process, so that
+    transcription does not carry on. Left as `running`, the UI would keep
+    polling something that will never end, so it is honestly recorded as
+    interrupted. How far it had got stays as it was.
     """
     hit = 0
     with _lock:
@@ -106,10 +114,11 @@ def restore() -> int:
     return hit
 
 
-# 녹화본도 라이브와 같은 표에 담깁니다. 예전에는 `data/<영상id>.json` 파일
-# 하나였는데, 그러면 자막 한 줄을 고칠 때마다 그 영상의 자막을 통째로 다시
-# 써야 합니다. 83분짜리가 수백 줄이고, 쓰는 도중에 죽으면 전부 잃습니다.
-# 아래 셋은 부르는 쪽을 그대로 두려고 이름을 남긴 껍데기입니다.
+# VODs go in the same table as live. It used to be one `data/<video id>.json`
+# file, and then every edit to one subtitle line meant rewriting that video's
+# subtitles wholesale. An 83-minute video is several hundred lines, and dying
+# partway through the write loses all of it. The three below are shells whose
+# names remain so the callers stay as they are.
 
 def has_video(vid: str) -> bool:
     return store.doc(vid) is not None
@@ -119,8 +128,9 @@ def load_video(vid: str) -> dict:
     meta = store.doc(vid)
     if meta is None:
         raise KeyError(vid)
-    # id 를 함께 냅니다. 자막 한 줄을 고치려면 화면이 그 줄을 가리킬 수
-    # 있어야 하는데, 위치(index)는 한 줄만 지워도 어긋납니다.
+    # The id comes out with it. Editing one subtitle line requires the screen
+    # to be able to point at that line, and a position (index) is thrown off by
+    # deleting a single line.
     cues = [{"id": c["id"], "start": c["t"], "end": c["end"], "lang": c["lang"],
              "text": c["text"], "translations": c["translations"],
              "edited": c["edited"]}
@@ -132,9 +142,10 @@ def load_video(vid: str) -> dict:
 
 
 def save_video(vid: str, doc: dict):
-    """전사 결과를 통째로 씁니다. **전사가 끝났을 때만** 부릅니다 -- 자막을
-    전부 갈아 끼우므로, 번역이나 편집처럼 몇 줄만 바뀌는 일에는 쓰지
-    않습니다. 그쪽은 `store.save_translation`/`store.edit_cue`입니다."""
+    """Write the transcription result wholesale. Called **only once the
+    transcription has finished** -- it replaces every subtitle, so it is not
+    used for work that changes a few lines, like translation or editing. That
+    is `store.save_translation`/`store.edit_cue`."""
     doc = dict(doc)
     cues = doc.pop("cues", [])
     doc["backends_done"] = sorted({b for c in cues
@@ -187,13 +198,14 @@ def _cancelled(job_id: str) -> bool:
 
 
 def cancel_all() -> list[str]:
-    """도는 작업을 전부 취소로 표시합니다. 서버 종료가 부릅니다.
+    """Mark every running job cancelled. Server shutdown calls it.
 
-    예전에는 종료 단추가 라이브 세션만 닫고 작업은 그대로 두었습니다. 전사·번역
-    스레드가 모델을 붙든 채 남으면 인터프리터 종료가 그 모델을 놓지 못하고,
-    ggml-metal 의 종료 소멸자가 `GGML_ASSERT([rsets->data count] == 0)` 로
-    abort 했습니다 -- 이 맥의 크래시 리포트 8건이 전부 그 스택이었습니다. 표시만
-    하고 기다리지는 않습니다. 기다림은 `wait_idle` 이 맡습니다.
+    The shutdown button used to close only the live sessions and leave the jobs
+    alone. With a transcription or translation thread left holding a model,
+    interpreter shutdown cannot release that model, and ggml-metal's shutdown
+    destructor aborted on `GGML_ASSERT([rsets->data count] == 0)` -- all eight
+    crash reports on this Mac were that same stack. This only marks; it does
+    not wait. The waiting is `wait_idle`'s job.
     """
     with _lock:
         ids = [jid for jid, j in _jobs.items() if j["state"] == "running"]
@@ -208,8 +220,8 @@ def running() -> list[str]:
 
 
 def _spawn(job_id: str, target, args: tuple = ()):
-    """작업 스레드를 띄우고 기억해 둡니다 -- `wait_idle` 이 상태가 아니라 스레드를
-    기다리기 위해서입니다."""
+    """Start the job thread and remember it -- so that `wait_idle` waits on
+    the thread rather than on the state."""
     t = threading.Thread(target=target, args=args, daemon=True, name=f"job-{job_id}")
     with _lock:
         _threads[job_id] = t
@@ -217,18 +229,20 @@ def _spawn(job_id: str, target, args: tuple = ()):
 
 
 def wait_idle(timeout: float) -> bool:
-    """작업 스레드가 전부 끝날 때까지 기다립니다. 다 끝났으면 True.
+    """Wait until every job thread has ended. True when they all have.
 
-    상태가 `cancelled` 로 바뀐 것을 보고 돌아오면 이릅니다 -- `_note` 는 메모리를
-    먼저 고치고 그 다음에 SQLite 에 적으므로, 그 사이에 `os._exit` 가 오면 다음
-    기동이 그 작업을 「서버가 재시작되어 중단」으로 잘못 적습니다. 스레드의 마지막
-    일이 그 저장이라 스레드가 끝난 것을 기다리면 저장도 끝나 있습니다.
+    Returning on seeing the state turn `cancelled` is too early -- `_note`
+    updates memory first and writes to SQLite after, so an `os._exit` landing
+    in between makes the next startup wrongly record that job as
+    "서버가 재시작되어 중단되었습니다". That save is the thread's last piece of
+    work, so waiting for the thread to end means the save has finished too.
 
-    기다리는 동안 새로 들어온 작업도 함께 취소합니다. 서버는 `_stop_server` 가 돌기
-    전까지 요청을 받으므로 `cancel_all` 직후 시작된 작업이 있을 수 있습니다.
-    취소 깃발은 조각 경계마다 읽으므로 몇 초 안에 멎는 것이 보통이고, 원격 엔진이
-    답을 안 주는 것처럼 멎지 않는 경우를 위해 상한을 둡니다 -- 그 뒤는 부르는
-    쪽이 프로세스를 그냥 끝냅니다.
+    Jobs that arrive while waiting are cancelled along with the rest. The
+    server takes requests until `_stop_server` runs, so a job may have started
+    right after `cancel_all`. The cancel flag is read at every chunk boundary,
+    so stopping within a few seconds is the norm, and there is a cap for the
+    cases that do not stop, such as a remote engine that never answers -- after
+    that the caller simply ends the process.
     """
     deadline = time.time() + timeout
     while True:
@@ -253,14 +267,16 @@ def delete_asr_backend(backend_id: str) -> dict:
     return config.delete("asr", backend_id)
 
 
-# ---- 번역 -------------------------------------------------------------------
+# ---- Translation -----------------------------------------------------------
 
 def _context(cues: list[dict], i: int) -> list[str]:
-    """`cues[i]` 직전 몇 줄. 번역기에 참고로 넘깁니다.
+    """The few lines just before `cues[i]`. Passed to the translator as
+    reference.
 
-    녹화본은 라이브와 달리 앞뒤가 전부 이미 나와 있으므로 인덱스로 바로
-    잘라내면 됩니다. 뒤쪽은 넘기지 않습니다 -- 라이브에서는 있을 수 없는
-    정보라 두 경로의 번역이 달라집니다. 안내(note)는 발화가 아니므로 뺍니다.
+    Unlike live, a VOD already has everything before and after out, so it can
+    be sliced straight off by index. What comes after is not passed -- that is
+    information live cannot have, and the two paths' translations would differ.
+    A note is not an utterance, so it is left out.
     """
     n = mw_translate.CONTEXT_LINES
     return [c["text"] for c in cues[max(0, i - n):i]
@@ -268,18 +284,21 @@ def _context(cues: list[dict], i: int) -> list[str]:
 
 
 def _hand_translated(c: dict) -> bool:
-    """사람이 번역을 손으로 맞춘 줄. 뭉텅이 번역이 덮으면 되돌릴 수 없습니다."""
+    """A line whose translation a person matched up by hand. Once bulk
+    translation overwrites it, there is no getting it back."""
     return "tr" in (c.get("edited") or "")
 
 
 def _translate_rows(job_id: str, owner: str, spec: dict, meta: dict,
                     cues: list[dict], todo: list[dict], genre: str | None) -> bool:
-    """`todo`를 한 줄씩 번역해 표에 씁니다. 세 경로가 전부 여기를 지납니다.
+    """Translate `todo` one line at a time and write it to the table. All
+    three paths go through here.
 
-    돌려주는 값은 끝까지 갔는지(True)/취소되었는지(False)입니다. 진행률은
-    작업 레코드에 적고, 보고 있는 라이브 창에는 SSE로 곧바로 흘려보냅니다.
-    `todo`는 이미 손편집 줄을 뺀 것이어야 합니다 -- 그 판단은 부르는 쪽이
-    하고 `kept`로 적습니다.
+    The return value is whether it ran to the end (True) or was cancelled
+    (False). Progress is recorded in the job record, and streamed straight over
+    SSE to a live window that is watching. `todo` must already have the
+    hand-edited lines taken out -- that judgement is the caller's, and it
+    records it as `kept`.
     """
     tr = mw_translate.build(spec, genre)
     bid = spec.get("id") or config.PROTECTED["tr"]
@@ -296,8 +315,9 @@ def _translate_rows(job_id: str, owner: str, spec: dict, meta: dict,
         if _cancelled(job_id):
             _note(job_id, state="cancelled", done=n, skipped=skipped)
             return False
-        # 원본 언어는 그 줄이 들고 있는 것을 먼저 씁니다. 「자동 판별」로
-        # 켠 세션은 메타의 source_lang 이 비어 있습니다.
+        # For the source language, what the line itself carries comes first.
+        # A session started with "auto-detect" has an empty source_lang in the
+        # metadata.
         src = c.get("lang") or meta.get("source_lang") or ""
         if not src or src == tgt or not tr.should_translate(c["text"], src, tgt):
             skipped += 1
@@ -306,20 +326,24 @@ def _translate_rows(job_id: str, owner: str, spec: dict, meta: dict,
                 out = tr.translate(c["text"], src, tgt,
                                    _context(cues, by_id.get(c["id"], 0)))
             except Exception as exc:
-                # 실패했다고 줄을 버리면 그 발화가 없었던 것처럼 보입니다.
-                # 원문을 남기고 왜 실패했는지만 적습니다.
+                # Dropping the line because it failed makes it look as if
+                # that utterance never happened. The source text is kept and
+                # only the reason for the failure is recorded.
                 print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
                 out = c["text"]
-            # 대체 백엔드가 낸 줄은 그 백엔드 이름으로 남깁니다. 닿지 않은
-            # 엔드포인트가 만든 것처럼 기록하면 비교가 성립하지 않습니다.
+            # A line the fallback backend produced is filed under that
+            # backend's name. Recording it as if an endpoint that was never
+            # reached had made it would leave no comparison to make.
             from_primary = getattr(tr, "last_used", "primary") == "primary"
-            # 번역이 원문과 같아도 저장합니다. 고유명사나 짧은 감탄사는
-            # 그대로 두는 것이 옳은 번역입니다.
+            # A translation identical to the source is stored anyway. For a
+            # proper noun or a short interjection, leaving it as it is is the
+            # correct translation.
             if (out or "").strip():
                 key = bid if from_primary else config.PROTECTED["tr"]
                 store.save_translation(owner, c["id"], key, out)
-                # 보고 있는 창에도 바로 닿게 합니다(받는 중인 라이브만 구독자가
-                # 있습니다. 아니면 조용히 지나갑니다).
+                # Reaches the window that is watching right away (only a
+                # live session still being received has subscribers; otherwise
+                # this passes quietly).
                 live.notify_translation(owner, c["id"], c.get("kind") or "final", out)
             with _lock:
                 _jobs[job_id]["by_remote" if from_primary else "by_local"] += 1
@@ -334,17 +358,18 @@ def _mark_translated(owner: str):
     if d is not None:
         d["translated"] = True
         store.save_doc(owner, d)
-        # 번역이 붙었습니다. 이 영상을 열어 둔 다른 창은 자막을 다시 읽습니다.
+        # A translation has attached. Other windows with this video open
+        # re-read the subtitles.
         bus.publish({"type": "video", "id": owner, "reason": "translated"})
 
 
 def start_retranslate(value: str, backend_id: str, cue_ids=None,
                       genre: str | None = None) -> dict:
-    """자막을 (다시) 번역합니다. 녹화본이든 라이브든 같은 길입니다.
+    """(Re)translate the subtitles. The same path for a VOD or for live.
 
-    `cue_ids`가 None이면 전부입니다 -- 화면에서 번역 엔진을 바꾸었을 때가
-    이 경우입니다. 사람이 고친 번역은 어느 경우에도 건드리지 않고 `kept`로
-    셉니다.
+    A `cue_ids` of None means all of them -- that is the case when the
+    translation engine was switched on screen. A translation a person edited is
+    not touched in either case, and is counted as `kept`.
     """
     spec = find_backend(backend_id)
     if spec is None:
@@ -367,15 +392,16 @@ def start_retranslate(value: str, backend_id: str, cue_ids=None,
     if not todo and want is not None:
         return {"error": f"고른 {len(picked)}줄이 모두 손으로 고친 번역입니다"}
 
-    # 장르를 고르지 않았다면 이 영상을 전사할 때 골랐던 것을 씁니다. 다시
-    # 번역할 때마다 되묻지 않기 위해서입니다.
+    # With no genre chosen, the one chosen when this video was transcribed is
+    # used. This is so as not to ask again on every re-translation.
     genre = genre or meta.get("genre")
     job_id = _new_job(kind="retranslate", video=value, owner=owner,
                       backend=backend_id, genre=genre or mw_translate.DEFAULT_GENRE,
                       total=len(todo), kept=len(kept))
     if not todo:
-        # 전부 손편집이라 할 일이 없습니다. 작업은 만들어 둡니다 -- 화면이
-        # 그 id를 폴링하므로 끝났다고 답할 자리가 있어야 합니다.
+        # Everything is hand-edited, so there is nothing to do. The job is
+        # created anyway -- the screen polls that id, so there has to be
+        # somewhere to answer that it is done.
         _note(job_id, state="done", elapsed=0.0)
         return {"id": job_id, "total": 0, "kept": len(kept)}
 
@@ -386,15 +412,16 @@ def start_retranslate(value: str, backend_id: str, cue_ids=None,
                 _note(job_id, state="done",
                       elapsed=round(time.time() - _jobs[job_id]["started"], 1))
         except (Exception, SystemExit) as exc:
-            # SystemExit도 받습니다. Exception이 아니라 놓치면 스레드가 조용히
-            # 죽고 작업은 `running`으로 영원히 남습니다.
+            # SystemExit is caught too. It is not an Exception, and missing
+            # it leaves the thread dying quietly and the job standing as
+            # `running` forever.
             _note(job_id, state="error", error=str(exc)[:300])
 
     _spawn(job_id, run)
     return {"id": job_id, "total": len(todo), "kept": len(kept)}
 
 
-# ---- 전사 -------------------------------------------------------------------
+# ---- Transcription ---------------------------------------------------------
 
 def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                      backend_id: str = "", asr_id: str = "",
@@ -437,7 +464,7 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
                  error="진행 중인 라이브입니다. 녹화본 흐름은 종료된 영상만 다룹니다.")
             return
 
-        # 로컬 파일은 내려받는 것이 아니라 변환하는 것입니다. 이름을 정직하게 답니다.
+        # A local file is not downloaded but converted. Name it honestly.
         note(phase="convert" if meta.get("source") == "file" else "download")
         os.makedirs(DATA, exist_ok=True)
         try:
@@ -453,16 +480,18 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         note(phase="transcribe", total=int(audio_s))
         engine = mw_asr.build(find_asr(asr_id))
         try:
-            # 예전에는 여기서 엔진 이름을 보고 `speakers`를 넘길지 정했습니다.
-            # 그 판정이 `default`라, 설정에서 고른 로컬 전사기(`tcpp`, 기본값이
-            # 그것입니다)에는 화자 딱지가 한 번도 닿지 않았습니다. 이제 표면이
-            # 둘 다 받고, 할 수 없는 전사기가 무시합니다(asr.ASRBackend).
+            # This used to look at the engine name here to decide whether to
+            # pass `speakers`. That test was `default`, so the speaker labels
+            # never once reached the local transcriber picked in the settings
+            # (`tcpp`, which is the default). Now the surface takes both, and a
+            # transcriber that cannot do it ignores it (asr.ASRBackend).
             cues = engine.transcribe(samples, lang, speakers=speakers, refine=refine,
                                      on_progress=lambda p: note(done=int(p * audio_s)),
                                      should_stop=cancelled)
         except mw_stream.Cancelled:
-            # 사용자가 멈춘 것은 실패가 아닙니다. 대체 엔진으로 다시
-            # 시도하면 멈추라는 말을 무시하는 셈이 됩니다.
+            # The user stopping it is not a failure. Retrying with the
+            # fallback engine would amount to ignoring the instruction to
+            # stop.
             note(state="cancelled"); return
         except Exception as exc:
             if engine.name == mw_asr.DEFAULT_NAME:
@@ -480,10 +509,11 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             except mw_stream.Cancelled:
                 note(state="cancelled"); return
         note(asr_used=engine.name)
-        # 오디오를 여기서 놓습니다. 116분짜리 wav 는 float32 로 445MB 인데,
-        # 이 이름이 함수 프레임에 남아 있으면 그 다음의 번역 단계 -- 천 줄이면
-        # 몇 분입니다 -- 내내 붙들려 있었습니다. 전사가 끝난 뒤로는 아무도
-        # 쓰지 않습니다(audio_s 는 이미 숫자로 떠 두었습니다).
+        # The audio is released here. A 116-minute wav is 445MB as float32,
+        # and with this name left in the function frame it stayed held all
+        # through the translation stage that follows -- a few minutes for a
+        # thousand lines. Nobody uses it once transcription has finished
+        # (audio_s is already held as a number).
         del samples
         if cancelled():
             note(state="cancelled"); return
@@ -493,11 +523,13 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             counts[c["lang"]] = counts.get(c["lang"], 0) + 1
         source_lang = lang or (max(counts, key=counts.get) if counts else "unknown")
 
-        # 같은 영상을 다시 넣어도 다른 엔진으로 이미 만든 번역과 사람이
-        # 손댄 표시를 버리지 않습니다. 같은 오디오의 전사는 같으므로, 글자가
-        # 그대로인 줄은 가진 것을 그대로 물려받습니다. (원문 자체를 고쳤던
-        # 줄은 새 전사와 글자가 다르므로 물려받지 못합니다 -- 다시 전사한다는
-        # 것은 전사를 새로 받겠다는 뜻이니 그 편이 맞습니다.)
+        # Re-adding the same video does not throw away the translations
+        # already made with another engine, nor the hand-edit marks. The
+        # transcription of the same audio is the same, so a line whose text is
+        # unchanged inherits what it had. (A line whose source text was itself
+        # edited has text different from the new transcription and so cannot
+        # inherit -- re-transcribing means asking for a fresh transcription, so
+        # that is the right way round.)
         previous = []
         if has_video(meta["id"]):
             try:
@@ -529,8 +561,9 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
                  elapsed=round(time.time() - _jobs[job_id]["started"], 1))
             return
 
-        # 번역은 다른 두 경로와 같은 루프를 씁니다. 이 엔진으로 이미 번역된
-        # 줄(다시 넣은 영상)과 손으로 맞춘 줄은 건너뜁니다.
+        # Translation uses the same loop as the other two paths. Lines
+        # already translated with this engine (a re-added video) and lines
+        # matched up by hand are skipped.
         spec = find_backend(backend_id) or {"backend": "local"}
         bid = spec.get("id") or config.PROTECTED["tr"]
         owner = meta["id"]
@@ -541,11 +574,12 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
              skipped=len(rows) - len(todo))
         finished = _translate_rows(job_id, owner, spec, doc, rows, todo, genre)
         if not finished:
-            return                      # 취소는 루프가 이미 적었습니다
+            return                      # the loop already recorded the cancel
         _mark_translated(owner)
         note(phase="done", state="done", done=len(todo),
              elapsed=round(time.time() - _jobs[job_id]["started"], 1))
     except (Exception, SystemExit) as exc:
-        # SystemExit도 받습니다. Exception이 아니라 위에서 놓치면 스레드가
-        # 조용히 죽고 작업은 `running`으로 영원히 남습니다.
+        # SystemExit is caught too. It is not an Exception, and missing it
+        # above leaves the thread dying quietly and the job standing as
+        # `running` forever.
         note(state="error", error=str(exc)[:300])

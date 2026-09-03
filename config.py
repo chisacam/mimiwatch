@@ -1,19 +1,19 @@
-"""엔진 설정(`backends.json`)을 읽고 쓰는 한 곳.
+"""The one place that reads and writes the engine settings (`backends.json`).
 
-예전에는 `jobs.load_config()`가 있는데도 `live.py`가 같은 파일을 세 자리에서
-직접 열어 읽었습니다 -- `jobs`가 `live`를 import 하므로 반대 방향으로는
-가져올 수 없었기 때문입니다. 그러면 예시 설정에서 새 엔진을 들여오는 일
-(`_seed`)이 라이브 경로에서는 돌지 않고, 파일 모양이 바뀌면 고칠 곳이
-넷이 됩니다. 이 모듈은 프로젝트 안의 다른 모듈을 가져오지 않으므로 누구나
-가져올 수 있습니다.
+`jobs.load_config()` existed, and yet `live.py` used to open and read the same
+file directly in three places -- because `jobs` imports `live`, so it could not
+be imported the other way round. That meant the work of bringing new engines in
+from the example config (`_seed`) did not run on the live path, and a change to
+the file's shape had four places to fix. This module imports no other module in
+the project, so anyone can import it.
 
-쓰기는 **원자적**입니다. 이 파일에는 실제 주소와 API 키가 들어 있어, 쓰는
-도중에 죽어 반쯤 남은 파일은 다음 기동을 통째로 막습니다. 임시 파일에 쓰고
-`os.replace`로 바꿉니다.
+Writing is **atomic**. This file holds real endpoints and API keys, and a
+half-written file left behind by dying mid-write blocks the whole next startup.
+It is written to a temporary file and swapped in with `os.replace`.
 
-읽고-고쳐-쓰기는 한 락 안에서 합니다. 화면에서 엔진 둘을 잇달아 저장하면
-두 요청 스레드가 같은 파일을 동시에 고치는데, 락이 없으면 뒤에 쓴 쪽이 앞의
-것을 지웁니다.
+Read-modify-write happens inside one lock. Saving two engines one after another
+from the screen has two request threads changing the same file at once, and
+without the lock the one that writes second erases what the first wrote.
 """
 from __future__ import annotations
 
@@ -26,19 +26,23 @@ import threading
 import paths
 
 BASE = paths.BASE
-# `MIMIWATCH_CONFIG`로 다른 파일을 쓸 수 있습니다(시험이 임시 파일을 씁니다).
-# 묶음(PyInstaller)으로 돌 때는 묶음 안이 읽기 전용이라 사용자 영역으로 나갑니다.
+# `MIMIWATCH_CONFIG` can point at a different file (the tests use a temporary
+# one). Running as a bundle (PyInstaller) it goes out into the user area,
+# because the inside of a bundle is read-only.
 CONFIG = paths.config_path()
-# 예시 설정은 프로그램과 함께 다닙니다 -- 저장소 안, 또는 묶음 안.
+# The example config travels with the program -- inside the repo, or inside the bundle.
 EXAMPLE_CONFIG = os.path.join(BASE, "backends.example.json")
 
-# 설정의 키 이름. 번역기는 `backends`/`active`, 전사기는 `asr_backends`/`asr_active`.
+# The key names in the config. Translators are `backends`/`active`, transcribers
+# are `asr_backends`/`asr_active`.
 KINDS = {"tr": ("backends", "active"), "asr": ("asr_backends", "asr_active")}
 
-# 지울 수 없는 기본 엔진. 번역은 대체 경로(WithFallback)가 M2M-100을 늘 뒤에
-# 두므로 그 설정이 있어야 하고, 전사는 목록에서 사라지면 고를 것이 없어집니다.
-# 화면(app.js의 LOCKED)과 같은 값이어야 합니다 -- 예전에는 서버가 이미 없는
-# `local-hayamimi`를 지키고 있어서 API로는 기본 전사기를 지울 수 있었습니다.
+# The default engines that cannot be deleted. Translation needs that entry
+# because the fallback path (WithFallback) always keeps M2M-100 behind it, and
+# for transcription, if it disappears from the list there is nothing left to
+# pick. This must be the same value as the screen's (LOCKED in app.js) -- the
+# server used to be protecting `local-hayamimi`, which no longer existed, so the
+# default transcriber could be deleted through the API.
 PROTECTED = {"tr": "local-m2m100", "asr": "tcpp-best"}
 
 # UI languages the string table ships. The web front end and the extension both
@@ -51,8 +55,8 @@ _lock = threading.RLock()
 
 
 def load() -> dict:
-    """설정을 읽습니다. 처음이면 예시를 복사하고, 예시에 새로 생긴 엔진을
-    들여옵니다."""
+    """Reads the settings. On the first run it copies the example, and it brings in
+    engines that have newly appeared in the example."""
     with _lock:
         if not os.path.exists(CONFIG) and os.path.exists(EXAMPLE_CONFIG):
             os.makedirs(os.path.dirname(CONFIG) or ".", exist_ok=True)
@@ -108,18 +112,20 @@ def _relabel(cfg: dict, example: dict) -> list[str]:
 
 
 def _seed(cfg: dict) -> dict:
-    """예시에 새로 생긴 엔진을 사용자 설정에 들여옵니다.
+    """Brings engines that have newly appeared in the example into the user's settings.
 
-    backends.json은 첫 실행 때 한 번 복사되고 그 뒤로는 손대지 않습니다 --
-    실제 주소와 API 키가 들어 있어 덮어쓸 수 없기 때문입니다. 그런데 그러면
-    나중에 추가된 기본 엔진이 기존 사용자에게 영영 닿지 않습니다. 경량
-    전사기를 넣고도 아무도 못 보는 일이 실제로 있었습니다.
+    backends.json is copied once on the first run and left alone after that --
+    it holds real endpoints and API keys, so it cannot be overwritten. But then
+    a default engine added later never reaches an existing user. A light
+    transcriber was actually added once and nobody could see it.
 
-    한 번 들여온 id는 `seeded`에 적어 둡니다. 그래서 사용자가 지운 엔진은
-    다시 살아나지 않고, **정말로 새로 생긴 것만** 들어옵니다.
+    An id brought in once is written down in `seeded`. So an engine the user
+    deleted does not come back to life, and **only what is genuinely new**
+    comes in.
 
-    처음 이 코드를 만나는 설정에는 `seeded`가 없습니다. 그때는 지금 가지고
-    있는 것을 이미 본 것으로 치고, 예시에만 있는 것을 들여옵니다.
+    A config meeting this code for the first time has no `seeded`. In that case
+    whatever it holds right now counts as already seen, and what exists only in
+    the example is brought in.
     """
     example = _example()
     if not example:
@@ -128,7 +134,7 @@ def _seed(cfg: dict) -> dict:
     added = []
     for key, _active in KINDS.values():
         have = {b["id"] for b in cfg.get(key, [])}
-        seen |= have                      # 지금 가진 것은 이미 본 것입니다
+        seen |= have                      # What it holds now counts as already seen
         for entry in example.get(key, []):
             if entry["id"] in have or entry["id"] in seen:
                 continue
@@ -166,13 +172,14 @@ def find_asr(engine_id: str) -> dict | None:
 
 
 def active(kind: str, cfg: dict | None = None) -> str:
-    """지금 기본으로 쓰는 엔진 id. 없으면 지울 수 없는 기본."""
+    """The id of the engine used as the default right now. If there is none, the
+    default that cannot be deleted."""
     _, active_key = KINDS[kind]
     return (cfg or load()).get(active_key) or PROTECTED[kind]
 
 
 def set_active(kind: str, engine_id: str) -> dict:
-    """기본으로 쓸 엔진을 바꿉니다. 초기 설정 화면이 부릅니다."""
+    """Changes which engine is used as the default. The first-time setup screen calls it."""
     key, active_key = KINDS[kind]
     with _lock:
         cfg = load()
@@ -184,8 +191,9 @@ def set_active(kind: str, engine_id: str) -> dict:
 
 
 def setup_done(cfg: dict | None = None) -> bool:
-    """초기 설정을 마쳤는가. 이 표시가 생기기 전의 설정 파일에는 없습니다 -- 그때는
-    필요한 모델이 다 있으면 마친 것으로 봅니다(화면 쪽 판단)."""
+    """Has the first-time setup been finished? Config files written before this mark
+    existed do not have it -- for those, having every model that is needed counts as
+    finished (the screen decides)."""
     return bool((cfg or load()).get("setup_done"))
 
 
@@ -219,13 +227,14 @@ def set_ui_lang(code: str) -> dict:
 
 
 def example_default(kind: str) -> str:
-    """예시 설정의 기본 활성 엔진. 활성 엔진을 지웠을 때 되돌아갈 자리입니다."""
+    """The example config's default active engine. Where to fall back to when the
+    active engine has been deleted."""
     _, active_key = KINDS[kind]
     return _example().get(active_key) or PROTECTED[kind]
 
 
 def upsert(kind: str, entry: dict) -> dict:
-    """엔진 하나를 넣거나 갈아 끼웁니다. 화면의 「엔진 관리」가 부릅니다."""
+    """Puts in or swaps out one engine. The screen's "Engine management" calls it."""
     key, _ = KINDS[kind]
     with _lock:
         cfg = load()
@@ -236,11 +245,13 @@ def upsert(kind: str, entry: dict) -> dict:
 
 
 def delete(kind: str, engine_id: str) -> dict:
-    """엔진 하나를 설정에서 지웁니다. 번역·전사가 같은 규칙입니다.
+    """Deletes one engine from the settings. Translation and transcription follow the
+    same rule.
 
-    지운 것이 활성 엔진이었으면 예시 설정의 기본으로 되돌립니다(그것이 남아
-    있을 때). 예전에는 번역 쪽이 무조건 M2M-100으로 되돌아갔는데, 예시의
-    기본은 Gemma입니다 -- 지운 뒤 첫 세션이 갑자기 품질이 떨어졌습니다.
+    If what was deleted was the active engine, it falls back to the example
+    config's default (when that one is still there). Translation used to fall
+    back to M2M-100 unconditionally, but the example's default is Gemma -- the
+    first session after a deletion suddenly dropped in quality.
     """
     key, active_key = KINDS[kind]
     protected = PROTECTED[kind]

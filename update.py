@@ -1,24 +1,29 @@
-"""깃허브 릴리스로 새 판을 확인하고, 묶음(PyInstaller)이면 받아서 갈아 끼웁니다.
+"""Checks GitHub releases for a new version and, as a bundle (PyInstaller),
+downloads it and swaps it in.
 
-세 단계가 전부 여기에 있습니다.
+All three stages are here.
 
-  확인   -- releases/latest 를 하루 한 번(또는 화면의 단추로) 물어 태그를
-            지금 판과 비교합니다. 밖으로 나가는 요청은 이 조회 하나입니다.
-            `backends.json` 의 `"update_check": false` 나 환경변수
-            MIMIWATCH_NO_UPDATE_CHECK 로 끌 수 있습니다.
-  내려받기 -- 이 플랫폼의 자산(zip/tar.gz)을 사용자 영역의 updates/ 에 받습니다.
-            모델 내려받기와 같은 규칙으로 `.part` 에 받고 이어 받습니다.
-  적용   -- 실행 파일은 자기 자신을 덮어쓸 수 없으므로, 교체 스크립트를
-            띄워 두고 서버가 스스로 꺼집니다. 스크립트는 프로세스가 끝나기를
-            기다렸다가 옛 묶음을 `.old` 로 물리고 새 것을 그 자리에 놓은 뒤
-            같은 인자로 다시 띄웁니다. 교체가 실패하면 옛것을 되돌립니다.
+  Check    -- Asks releases/latest once a day (or from the button on the screen)
+              and compares the tag with the version running now. This one query
+              is the only request that goes out. It can be turned off with
+              `"update_check": false` in `backends.json` or the environment
+              variable MIMIWATCH_NO_UPDATE_CHECK.
+  Download -- Fetches this platform's asset (zip/tar.gz) into updates/ in the
+              user area. It goes into a `.part` and resumes, by the same rule as
+              a model download.
+  Apply    -- An executable cannot overwrite itself, so a swap script is
+              launched and the server shuts itself down. The script waits for
+              the process to end, moves the old bundle aside as `.old`, puts the
+              new one in its place, and launches it again with the same
+              arguments. If the swap fails, the old one is put back.
 
-**저장소에서 돌 때는 알리기만 합니다.** 갈아 끼울 묶음이 없으니 적용은
-거절하고, 화면은 `git pull` 을 안내합니다.
+**Running from the repository it only notifies.** There is no bundle to swap in,
+so apply is refused, and the screen points at `git pull`.
 
-지금 판이 어디서 오는가: 묶음에는 빌드가 구운 `_version.txt` 가 들어 있고
-(packaging/mimiwatch.spec), 저장소에서는 `git describe` 입니다. 태그를 못
-읽으면(해시뿐이면) 비교할 근거가 없으므로 새 판이 있다고 말하지 않습니다.
+Where the current version comes from: a bundle carries a `_version.txt` baked in
+by the build (packaging/mimiwatch.spec), and from the repository it is
+`git describe`. When the tag cannot be read (only a hash), there is no ground
+for a comparison, so we do not say there is a new version.
 """
 from __future__ import annotations
 
@@ -41,7 +46,8 @@ API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 USER_AGENT = "mimiwatch (+https://github.com/chisacam/mimiwatch)"
 CHUNK = 1 << 20
 PROGRESS_EVERY_S = 0.4
-# 자동 확인 사이의 최소 간격. 화면의 「새 판 확인」(force)은 이것을 무시합니다.
+# The minimum interval between automatic checks. The screen's "Check for a new
+# version" (force) ignores it.
 CHECK_EVERY_S = 24 * 3600.0
 
 _lock = threading.Lock()
@@ -52,10 +58,11 @@ _worker: threading.Thread | None = None
 _auto: threading.Thread | None = None
 
 
-# ---- 판 번호 ------------------------------------------------------------------
+# ---- Version numbers ----------------------------------------------------------
 
 def current_version() -> str:
-    """지금 도는 판. 묶음의 `_version.txt` → 환경변수 → git describe → 0.0.0."""
+    """The version running now. The bundle's `_version.txt` → environment variable
+    → git describe → 0.0.0."""
     try:
         with open(os.path.join(paths.BASE, "_version.txt"), encoding="utf-8") as f:
             v = f.read().strip()
@@ -76,18 +83,21 @@ def current_version() -> str:
 
 
 def parse_version(v: str) -> tuple[int, ...]:
-    """`v0.3.2` 나 `0.3.2-5-gabc` 에서 숫자 부분만. 못 읽으면 빈 튜플."""
+    """Only the numeric part of `v0.3.2` or `0.3.2-5-gabc`. An empty tuple when it
+    cannot be read."""
     m = re.match(r"v?(\d+(?:\.\d+)*)", (v or "").strip())
     return tuple(int(x) for x in m.group(1).split(".")) if m else ()
 
 
 def is_newer(latest: str, current: str) -> bool:
-    """릴리스 태그가 지금 판보다 새로운가.
+    """Is the release tag newer than the version running now?
 
-    양쪽 다 읽혀야 참일 수 있습니다. 지금 판이 태그 없는 해시뿐이라면 비교할
-    근거가 없는 것이지 새 판이 있는 것이 아닙니다 -- 개발 중에 띠가 서지
-    않아야 합니다. 태그보다 앞선 작업본(`0.3.2-5-g…`)도 기준은 0.3.2 이므로
-    같은 태그의 릴리스를 새 판이라고 말하지 않습니다.
+    Both sides have to be readable for this to be true at all. If the current
+    version is only a tagless hash, that means there is no ground for a
+    comparison, not that there is a new version -- no banner should stand up
+    during development. A working copy ahead of the tag (`0.3.2-5-g…`) is
+    measured as 0.3.2 too, so a release of that same tag is not called a new
+    version.
     """
     pl, pc = parse_version(latest), parse_version(current)
     return bool(pl) and bool(pc) and pl > pc
@@ -95,10 +105,12 @@ def is_newer(latest: str, current: str) -> bool:
 
 def pick_asset(assets: list[dict], platform: str | None = None,
                machine: str | None = None) -> dict | None:
-    """이 플랫폼의 묶음 자산. 이름은 빌드 스크립트가 짓는 그대로입니다.
+    """This platform's bundle asset. The names are exactly as the build script makes
+    them.
 
-    윈도우의 `-cuda`/`-cpu` 변형은 고르지 않습니다 -- 릴리스의 기본은 Vulkan
-    하나이고, 변형을 쓰는 사람은 직접 만든 것이라 자동 판올림 대상이 아닙니다.
+    The Windows `-cuda`/`-cpu` variants are not picked -- the release default is
+    Vulkan alone, and anyone using a variant built it themselves, so it is not
+    subject to automatic updates.
     """
     plat = platform or sys.platform
     mach = machine or __import__("platform").machine().lower()
@@ -116,7 +128,7 @@ def pick_asset(assets: list[dict], platform: str | None = None,
     return None
 
 
-# ---- 확인 ----------------------------------------------------------------------
+# ---- Check ---------------------------------------------------------------------
 
 def _dir() -> str:
     d = os.path.join(paths.home(), "updates")
@@ -136,7 +148,7 @@ def _get_json(url: str) -> dict:
 
 
 def status() -> dict:
-    """화면이 보는 상태. 네트워크에 나가지 않습니다."""
+    """The state the screen sees. It does not go out to the network."""
     with _lock:
         st = dict(_state)
     st.pop("file", None)
@@ -146,13 +158,13 @@ def status() -> dict:
 
 
 def check(force: bool = False) -> dict:
-    """releases/latest 를 물어 상태를 고칩니다. 확인 사이 간격은 하루입니다 --
-    재시작해도 다시 묻지 않게 마지막 결과를 파일로 남깁니다."""
+    """Asks releases/latest and fixes up the state. The interval between checks is a
+    day -- the last result is left in a file so that a restart does not ask again."""
     with _lock:
         checked = _state["checked"]
         busy = _state["state"] in ("downloading", "applying")
     if not force and not checked:
-        # 재시작 직후: 지난 결과가 아직 하루 안이면 그것을 씁니다.
+        # Just after a restart: if the last result is still within the day, use it.
         try:
             with open(_cache_path(), encoding="utf-8") as f:
                 saved = json.load(f)
@@ -166,7 +178,7 @@ def check(force: bool = False) -> dict:
     if not force and checked and time.time() - checked < CHECK_EVERY_S:
         return status()
     if busy:
-        return status()          # 받는 중에 목록을 갈아 끼우지 않습니다
+        return status()          # We do not swap the listing while downloading
     try:
         rel = _get_json(API_LATEST)
         tag = (rel.get("tag_name") or "").strip()
@@ -187,7 +199,7 @@ def check(force: bool = False) -> dict:
         except OSError:
             pass
         if fresh:
-            _publish()           # 열려 있는 화면에 띠를 세웁니다
+            _publish()           # Stands the banner up on any open screen
     except Exception as exc:
         with _lock:
             _state.update(checked=time.time(), error=f"확인 실패: {str(exc)[:200]}")
@@ -202,7 +214,7 @@ def _publish():
     bus.publish({"type": "update", **status()})
 
 
-# ---- 내려받기 -------------------------------------------------------------------
+# ---- Download ------------------------------------------------------------------
 
 def download() -> dict:
     with _lock:
@@ -260,10 +272,10 @@ def _download(asset: dict):
     _publish()
 
 
-# ---- 적용 ----------------------------------------------------------------------
+# ---- Apply ---------------------------------------------------------------------
 
 def apply() -> dict:
-    """교체 스크립트를 띄웁니다. 부르는 쪽(server)이 응답을 보내고 꺼집니다."""
+    """Launches the swap script. The caller (server) sends the response and shuts down."""
     if not paths.frozen():
         return {"error": "저장소에서 돌고 있습니다. `git pull` 로 받으십시오 -- "
                          "갈아 끼울 묶음이 없습니다."}
@@ -292,10 +304,12 @@ def apply() -> dict:
 
 
 def _stage_and_script(zip_path: str) -> str:
-    """새 판을 stage/ 에 풀고, 프로세스가 끝난 뒤 바꿔치기할 스크립트를 씁니다.
+    """Extracts the new version into stage/ and writes the script that will do the
+    swap once the process has ended.
 
-    맥의 압축 풀기는 `ditto` 입니다 -- 파이썬 zipfile 은 .app 안의 심볼릭 링크와
-    실행 권한을 잃어버려, 풀어 놓은 앱이 열리지 않습니다.
+    On macOS the extraction is `ditto` -- Python's zipfile loses the symlinks
+    and the executable bits inside the .app, and the extracted app then does not
+    open.
     """
     stage = os.path.join(_dir(), "stage")
     shutil.rmtree(stage, ignore_errors=True)
@@ -390,7 +404,7 @@ nohup {shlex.quote(os.path.join(root, "mimiwatch"))}{run_args} >/dev/null 2>&1 &
     return script
 
 
-# ---- 자동 확인 ------------------------------------------------------------------
+# ---- Automatic check -----------------------------------------------------------
 
 def _enabled() -> bool:
     if os.environ.get("MIMIWATCH_NO_UPDATE_CHECK"):
@@ -403,7 +417,8 @@ def _enabled() -> bool:
 
 
 def start_auto_check():
-    """하루 한 번 배경에서 확인합니다. 기동 자체를 늦추지 않게 조금 미룹니다."""
+    """Checks once a day in the background. It is put off a little so as not to slow
+    the startup itself."""
     global _auto
     if _auto is not None or not _enabled():
         return

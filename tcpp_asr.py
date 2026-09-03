@@ -1,10 +1,10 @@
-"""transcribe.cpp의 GGUF 모델을 hayamimi 라이브 경로에 끼워 넣는 어댑터.
+"""Adapter that fits transcribe.cpp's GGUF models into the hayamimi live path.
 
-hayamimi의 run_stream/Refiner는 RoutedASR 객체를 받아 몇 개의 메서드만
-호출합니다. 여기서는 언어가 고정된 단일 모델로 그 표면을 흉내 냅니다.
-_identify_lang이 고정 언어를 그대로 돌려주므로 Refiner의 언어 재판정
-분기는 항상 "변경 없음"으로 닫히고, _get/_decode_full/_replace/ko_spacer는
-호출되지 않습니다.
+hayamimi's run_stream/Refiner takes a RoutedASR object and calls only a few of
+its methods. Here a single model with a fixed language imitates that surface.
+_identify_lang returns the fixed language as it is, so the Refiner's
+language-re-judgement branch always closes as "no change", and
+_get/_decode_full/_replace/ko_spacer are never called.
 """
 from __future__ import annotations
 
@@ -18,15 +18,16 @@ from transcribe_cpp.errors import OutputTruncated, UnsupportedRequest
 import models
 import stream
 
-# 반복 폭주 판정: 4-gram 다양도가 이 값 아래면 환각으로 봅니다. 실측에서
-# 정상 구간은 0.92~0.98, Fun-ASR의 폭주 구간은 0.06이었습니다.
+# Runaway-repetition judgement: 4-gram diversity below this value counts as a
+# hallucination. In measurements a healthy stretch was 0.92~0.98, and Fun-ASR's
+# runaway stretch was 0.06.
 NGRAM_N = 4
 DIVERSITY_FLOOR = 0.35
 MIN_CHARS_TO_JUDGE = 40
 
 
 def ngram_diversity(text: str, n: int = NGRAM_N) -> float:
-    """서로 다른 n-gram 비율. 같은 구절을 반복하면 0에 가까워집니다."""
+    """The ratio of distinct n-grams. Repeating the same phrase drives it towards 0."""
     s = "".join(text.split())
     if len(s) < n:
         return 1.0
@@ -42,23 +43,24 @@ def looks_hallucinated(text: str) -> bool:
 
 
 def resolve_device(want: str) -> str:
-    """쓸 백엔드를 정합니다.
+    """Decides which backend to use.
 
-    `auto`는 있는 것 중 가장 빠른 것을 고릅니다 -- GPU가 있으면 GPU입니다.
-    `cpu`는 GPU가 있어도 CPU로 돌립니다. 그 편이 나은 기계가 있습니다:
-    내장 그래픽은 시스템 메모리를 CPU와 나눠 쓰고 대역폭도 좁아, 코어가
-    넉넉한 노트북에서는 CPU가 더 빠르거나 최소한 다른 일을 방해하지
-    않습니다. 전사와 번역이 같은 작은 iGPU를 다투는 것도 피할 수 있습니다.
+    `auto` picks the fastest one available -- if there is a GPU, it is the GPU.
+    `cpu` runs on the CPU even when there is a GPU. Some machines are better off
+    that way: integrated graphics share system memory with the CPU and have
+    narrow bandwidth, so on a laptop with plenty of cores the CPU is faster, or
+    at least does not get in the way of other work. It also keeps transcription
+    and translation from fighting over the same small iGPU.
 
-    `vulkan`/`metal`/`cuda`/`rocm`처럼 딱 집어 줄 수도 있습니다. 없는 것을
-    집으면 세우지 않고 auto로 물러납니다 -- 설정 한 줄 때문에 전사가 아예
-    안 되는 것보다 낫습니다.
+    One can also be named outright, like `vulkan`/`metal`/`cuda`/`rocm`. Naming
+    one that is not there falls back to auto instead of refusing to start -- that
+    is better than one config line stopping transcription altogether.
     """
     import transcribe_cpp as tc
 
     want = (want or "auto").strip().lower()
     if want in ("", "auto", "gpu"):
-        # 'gpu'라는 정책은 없습니다. auto가 이미 GPU를 먼저 고릅니다.
+        # There is no 'gpu' policy. auto already picks the GPU first.
         return "auto"
     try:
         if tc.backend_available(want):
@@ -80,70 +82,77 @@ def _shared_model(path: str, device: str):
 
 
 class TranscribeCppASR:
-    """RoutedASR 자리에 들어가는 단일 언어 어댑터."""
+    """A single-language adapter that goes in RoutedASR's place."""
 
     def __init__(self, model_path: str, lang: str | None, threads: int = 4,
                  label: str = "", device: str = "auto", whisper: dict | None = None,
                  refine_prompt: bool = False):
         self.device = resolve_device(device)
-        # Whisper 해독 손잡이. 설정(`asr_backends`)의 `whisper: {no_speech_thold, logprob_thold,
-        # compression_ratio_thold, condition_on_prev_tokens, temperature, temperature_inc}` 를
-        # 그대로 넘깁니다. 비어 있으면 런타임 기본값(0.6 / -1.0 / 2.4 / false / 0.0+0.2).
-        # 값을 바꾸는 근거는 bench/whisper_ab.py 로 재서 만듭니다 -- 기본은 그대로 둡니다.
+        # Whisper decode knobs. The config's (`asr_backends`) `whisper: {no_speech_thold,
+        # logprob_thold, compression_ratio_thold, condition_on_prev_tokens, temperature,
+        # temperature_inc}` is passed through as it is. Empty means the runtime defaults
+        # (0.6 / -1.0 / 2.4 / false / 0.0+0.2). The grounds for changing a value are made by
+        # measuring with bench/whisper_ab.py -- the defaults are left alone.
         self.whisper_opts = {k: v for k, v in (whisper or {}).items() if v is not None}
-        # 정제 패스에만 직전 정제본을 initial_prompt 로 넘길지. 빠른 패스에는 넣지 않습니다 --
-        # 이전 텍스트 조건화는 반복 환각을 키우는 것으로 알려져 있습니다(whisper.cpp #3744).
+        # Whether to pass the previous refined line as initial_prompt to the refinement pass
+        # only. It is not given to the fast pass -- conditioning on previous text is known to
+        # grow repetition hallucinations (whisper.cpp #3744).
         self.refine_prompt = bool(refine_prompt)
-        # 원본 언어를 자동 판별에 맡기면 여기로 None이 들어옵니다. 그대로
-        # 두면 transcribe가 내놓는 lang이 None이 되고, 그 값이 자막 한 줄을
-        # 타고 store.save_cue까지 가서 NOT NULL 제약에 걸립니다. 첫 확정
-        # 줄에서 세션이 통째로 끝났습니다. 판별을 맡긴다는 뜻은 이 코드
-        # 안에서 빈 문자열 하나로만 적습니다.
+        # Leaving the source language to automatic detection arrives here as
+        # None. Left as it is, the lang transcribe puts out becomes None, and
+        # that value rides a subtitle line all the way to store.save_cue and
+        # hits the NOT NULL constraint. The whole session ended on the first
+        # final line. Inside this code, "detection is left to the model" is
+        # written one way only: as an empty string.
         self.forced_lang = lang or ""
         self.min_switch_s = 0.0
-        # os.path.basename을 씁니다. "/"로만 자르면 윈도우의 역슬래시
-        # 경로에서 전체 경로가 통째로 화면의 엔진 이름이 됩니다.
+        # os.path.basename is used. Cutting on "/" alone makes the whole path
+        # the engine name on screen for a Windows backslash path.
         self.label = label or os.path.basename(model_path)
         self.hallucinations = 0
 
         self.threads = threads
-        # 모델(가중치)은 프로세스에 한 벌입니다(models.py). 해독 세션은 우리
-        # 것입니다 -- 상태를 들고 있어 세션마다 따로 두는 것이 맞고, 만드는
-        # 비용도 가중치 적재와는 비교가 되지 않습니다.
+        # There is one copy of the model (the weights) per process (models.py).
+        # The decode session is ours -- it holds state, so one per session is
+        # right, and the cost of making one does not compare to loading the
+        # weights.
         self._key = _model_key(model_path, self.device)
         self._model = _shared_model(model_path, self.device)
         self._session = self._model.session(n_threads=threads)
         self._check_language()
         print(f"[asr] {self.label} · {self.device} · {threads}스레드",
               file=sys.stderr, flush=True)
-        # 바인딩 세션은 동시 호출을 보장하지 않습니다. 라이브 경로는
-        # 빠른 패스와 정제 패스가 서로 다른 스레드에서 들어오므로
-        # 직렬화합니다.
+        # The binding's session makes no promise about concurrent calls. On the
+        # live path the fast pass and the refinement pass come in on different
+        # threads, so they are serialised.
         self._lock = threading.Lock()
-        # 이 모델이 구간 시각을 낼 수 있는가. 녹화본 정제는 다시 해독한 결과를
-        # 그 시각으로 되쪼개는 것이 전부라(49절), 못 내는 모델에서는 정제를
-        # 아예 걸지 않습니다 -- 물어 보면 UnsupportedRequest 가 나고, 그것을
-        # 무리마다 맞으면 해독 값만 치르고 자막은 그대로입니다. 기본 경량
-        # 전사기(SenseVoice Small)와 moonshine 이 `none` 입니다.
+        # Whether this model can produce segment timestamps. VOD refinement is
+        # nothing but re-splitting the re-decoded result by those timestamps
+        # (section 49), so on a model that cannot produce them refinement is not
+        # run at all -- asking raises UnsupportedRequest, and taking that once
+        # per utterance group pays the decode cost and leaves the subtitles as
+        # they were. The default light transcriber (SenseVoice Small) and
+        # moonshine are `none`.
         self.supports_segments = self._model.capabilities.max_timestamp_kind in (
             "segment", "word", "token")
 
     def _check_language(self):
-        """이 모델이 이 언어를 아는지 시작할 때 물어봅니다.
+        """Asks at startup whether this model knows this language.
 
-        영어 전용 모델(moonshine 등)에 일본어를 물리면 해독할 때마다
-        UnsupportedRequest 가 납니다. 그것을 그냥 두면 자막이 몇 줄 나오지
-        않다가 세션이 끝나고, 로그에는 같은 예외가 여러 줄 쌓입니다.
-        재시도해도 결과가 달라질 수 없는 실패이므로 여기서 잘라 냅니다 --
-        방송을 20초 받아 본 뒤가 아니라, 시작하는 순간에 압니다.
+        Handing Japanese to an English-only model (moonshine and the like)
+        raises UnsupportedRequest on every decode. Left alone, the session ends
+        after barely a few subtitle lines, and the log piles up several lines of
+        the same exception. It is a failure that cannot come out differently on
+        a retry, so it is cut off here -- known the moment we start, not after
+        taking 20 seconds of the stream.
 
-        무음 0.1초면 충분합니다. moonshine 기준 50밀리초쯤 듭니다.
+        0.1 seconds of silence is enough. It costs about 50 milliseconds on moonshine.
         """
         self._probe_language(self._session, self.label)
 
     def _probe_language(self, session, label: str):
         if not self.forced_lang:
-            return              # 자동 판별에 맡긴 경우는 물어볼 것이 없습니다
+            return              # nothing to ask when detection is left to the model
         try:
             session.run(np.zeros(1600, dtype=np.float32),
                         language=self.forced_lang)
@@ -153,11 +162,11 @@ class TranscribeCppASR:
                 f"지원하지 않습니다. 원본 언어를 바꾸거나 다른 전사 엔진을 "
                 f"고르십시오. ({exc})") from exc
         except Exception:
-            # 다른 실패는 여기서 판단하지 않습니다. 무음 한 조각으로
-            # 모델 전체를 단정할 근거가 없습니다.
+            # Other failures are not judged here. One slice of silence is no
+            # grounds for a verdict on the whole model.
             pass
 
-    # --- RoutedASR가 노출하는 속성들 -------------------------------------
+    # --- The attributes RoutedASR exposes -----------------------------------
     @property
     def punct(self):
         return None
@@ -172,7 +181,7 @@ class TranscribeCppASR:
     def reset_session(self):
         pass
 
-    # --- 언어 판정: 고정이므로 판정하지 않습니다 -------------------------
+    # --- Language judgement: fixed, so nothing is judged --------------------
     def _identify_lang(self, samples: np.ndarray, sample_rate: int) -> str:
         return self.forced_lang
 
@@ -184,12 +193,12 @@ class TranscribeCppASR:
 
     def partial(self, samples: np.ndarray, sample_rate: int,
                 lang_hint: str | None = None) -> str:
-        # forced_lang이 설정되면 run_stream은 partial을 호출하지 않습니다.
+        # When forced_lang is set, run_stream does not call partial.
         return ""
 
-    # --- 본 전사 ----------------------------------------------------------
+    # --- The transcription proper -------------------------------------------
     def _family(self, prompt: str | None):
-        """Whisper 계열 손잡이. 아무것도 정하지 않았으면 None(런타임 기본)."""
+        """Whisper-family knobs. None (the runtime defaults) if nothing is set."""
         opts = dict(self.whisper_opts)
         if prompt:
             opts["initial_prompt"] = prompt
@@ -207,12 +216,13 @@ class TranscribeCppASR:
                    speech_s: float | None = None,
                    live: bool = True, prompt: str | None = None,
                    segments: bool = False) -> dict:
-        """`segments`는 결과 안의 구간 시각(t0/t1)을 함께 달라는 뜻입니다.
+        """`segments` means "give me the segment timestamps (t0/t1) in the result too".
 
-        긴 조각을 한 번에 해독하고 나서 자막 줄로 되쪼갤 때 씁니다 -- 25초를
-        한 줄로 내보내면 글자는 좋아져도 자막으로 못 씁니다. 기본은 꺼 둡니다:
-        시각을 달라고 하면 런타임이 다른 해독 경로를 타므로, 라이브의 짧은
-        조각까지 그 값을 치를 이유가 없습니다.
+        It is used when a long slice is decoded in one go and then re-split into
+        subtitle lines -- sending 25 seconds out as one line may read better as
+        text but is unusable as a subtitle. It is off by default: asking for the
+        timestamps takes the runtime down a different decode path, and there is
+        no reason to pay that for the short slices of a live stream too.
         """
         import time
 
@@ -221,7 +231,7 @@ class TranscribeCppASR:
 
         pcm = np.ascontiguousarray(samples, dtype=np.float32)
         t0 = time.perf_counter()
-        models.touch(self._key)          # 유휴 언로드가 켜져 있으면 "쓰는 중"이라고
+        models.touch(self._key)          # says "in use" when idle unloading is on
         family = self._family(prompt)
         try:
             kw = {"family": family} if family is not None else {}
@@ -230,10 +240,11 @@ class TranscribeCppASR:
             with self._lock:
                 result = self._session.run(pcm, language=self.forced_lang, **kw)
         except OutputTruncated:
-            # 생성 상한에 닿았다는 것은 몇 초짜리 조각에서 256토큰을 뽑아
-            # 냈다는 뜻이고, 그런 조각은 사람의 발화가 아니라 같은 말을
-            # 반복하는 폭주입니다. 아래 다양도 검사가 잡아낼 것과 같은
-            # 현상이 예외로 먼저 튀어나온 것이므로 같게 처리합니다.
+            # Hitting the generation cap means 256 tokens came out of a slice a
+            # few seconds long, and such a slice is not a person speaking but a
+            # runaway repeating the same words. It is the same phenomenon the
+            # diversity check below would catch, surfacing as an exception
+            # first, so it is handled the same way.
             self.hallucinations += 1
             print(f"[환각 차단] {self.label} 생성 상한 초과 "
                   f"({len(samples) / sample_rate:.1f}초 조각)", flush=True)
@@ -250,18 +261,22 @@ class TranscribeCppASR:
                   f"{ngram_diversity(text):.2f}: {text[:50]}", flush=True)
             text = ""
 
-        # 언어를 못 박지 않았으면 런타임이 알아낸 것을 그대로 씁니다.
+        # When the language is not nailed down, whatever the runtime worked out
+        # is used as it is.
         #
-        # 여기서 self.forced_lang만 돌려주던 것이 「자동 판별」로 켠 라이브가
-        # 한 줄도 번역되지 않던 원인이었습니다. 빈 문자열이 자막에 실려 가고,
-        # LiveSession._translate 는 원본 언어를 모르면 그냥 돌아섭니다 --
-        # 전사는 멀쩡히 나오는데 번역만 조용히 빠지므로 알아채기 어렵습니다.
+        # Returning only self.forced_lang here was why a live session turned on
+        # with "automatic detection" got not one line translated. The empty
+        # string rides along on the subtitle, and LiveSession._translate simply
+        # turns back when it does not know the source language -- the
+        # transcription comes out fine and only the translation quietly goes
+        # missing, which makes it hard to notice.
         got = {"text": text, "lang": self.forced_lang or (result.language or ""),
                "tier": self.label,
                "lid_ms": 0.0, "decode_ms": decode_ms, "probe_ms": 0.0}
         if segments:
-            # 환각으로 지워진 줄에는 구간도 딸려 보내지 않습니다 -- 시각만
-            # 남으면 부르는 쪽이 빈 자막을 만듭니다.
+            # A line wiped as a hallucination does not carry its segments along
+            # either -- timestamps left on their own make the caller create
+            # empty subtitles.
             got["segments"] = [] if not text else [
                 {"start": sg.t0_ms / 1000.0, "end": sg.t1_ms / 1000.0,
                  "text": (sg.text or "").strip()}
@@ -269,23 +284,27 @@ class TranscribeCppASR:
         return got
 
 
-# 언어별 기본 배치.
+# The per-language default arrangement.
 #
-# whisper-large-v3-turbo 하나로 전부 처리합니다. 다국어 모델이라 언어를
-# 골라 넣을 수도, 비워 두고 스스로 판별하게 할 수도 있습니다.
+# whisper-large-v3-turbo handles all of it on its own. It is a multilingual
+# model, so the language can be picked and given to it, or left empty for it to
+# detect by itself.
 #
-# 언어별 전문 모델을 붙이는 안은 실측으로 접었습니다. 일본어에서 Fun-ASR는
-# 솔로 방송을 7% 더 받아 적었지만, 합방에서 -l ja 고정을 무시하고
-# 베트남어·인도네시아어를 뱉고 내부 토큰(!sil)까지 흘렸습니다. 한국어에서
-# SenseVoice는 `데이터독`을 `데이터`로 줄였고, 양자화를 F32까지 올려도
-# 그대로였습니다. 한 종류의 방송만 잘 보는 모델보다 전부 견디는 모델이
-# 낫습니다. 근거는 measurements/RESULTS.md 11~14장에 있습니다.
+# The plan of attaching a specialist model per language was dropped on the
+# measurements. In Japanese, Fun-ASR wrote down 7% more of a solo stream, but on
+# a collab it ignored the fixed -l ja, spat out Vietnamese and Indonesian, and
+# leaked even an internal token (!sil). In Korean, SenseVoice shortened
+# `데이터독` to `데이터`, and it stayed that way even with the quantisation
+# raised to F32. A model that holds up on everything beats one that only sees
+# one kind of stream well. The grounds are in measurements/RESULTS.md
+# sections 11-14.
 #
-# 파일 이름만 둡니다. 어디에 있는지는 `stream.model_dir()`이 정합니다 --
-# 예전에는 여기서 `~/.local/share/...`를 따로 계산했는데, 그 계산에는
-# 윈도우의 `%LOCALAPPDATA%` 분기가 없었습니다. install.ps1은 거기에 받아
-# 두므로, `MIMIWATCH_MODEL_DIR`을 따로 주지 않은 윈도우에서는 기본 전사기
-# 파일을 찾지 못했습니다. 모델 위치를 아는 곳은 한 군데여야 합니다.
+# Only the file name is kept here. Where it lives is decided by
+# `stream.model_dir()` -- this used to compute `~/.local/share/...` on its own,
+# and that computation had no branch for Windows' `%LOCALAPPDATA%`. install.ps1
+# fetches it there, so on Windows without `MIMIWATCH_MODEL_DIR` given separately
+# the default transcriber's file was not found. There has to be one place that
+# knows where the models are.
 WHISPER_FILE = "whisper-large-v3-turbo-Q8_0.gguf"
 
 
@@ -294,16 +313,17 @@ def default_whisper() -> str:
 
 
 def resolve_asr(spec: dict | None, lang: str | None) -> dict:
-    """설정 한 덩어리에서 실제로 쓸 모델·장치·스레드를 뽑아냅니다.
+    """Pulls the model, device and threads actually to be used out of one config blob.
 
-    새로 만들 때와 돌아가는 세션에서 갈아 끼울 때(`LiveASR.swap`)가 같은
-    규칙을 써야 하므로 떼어 두었습니다.
+    It is kept apart because making a new one and swapping one in a running
+    session (`LiveASR.swap`) have to use the same rules.
     """
     spec = spec or {}
     path = ((spec.get("models") or {}).get(lang or "") or spec.get("model")
             or default_whisper())
-    # 설정에는 파일 이름만 적을 수 있게 합니다. 전체 경로를 적으라고 하면
-    # 윈도우·맥의 모델 위치가 달라 예시를 그대로 쓸 수 없습니다.
+    # The config is allowed to carry just a file name. Demanding a full path
+    # would mean the example cannot be used as it is, because the model location
+    # differs on Windows and macOS.
     if not os.path.isabs(path) and not os.path.exists(path):
         path = os.path.join(stream.model_dir(), path)
     if not os.path.exists(path):
@@ -311,8 +331,8 @@ def resolve_asr(spec: dict | None, lang: str | None) -> dict:
             f"전사 모델이 없습니다: {path}\n"
             "「엔진 관리 › 모델·도구」에서 받거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
     device = resolve_device(spec.get("device", "auto"))
-    # 설정에 스레드 수가 적혀 있으면 그것이 우선입니다. 없으면 어디서
-    # 도는지에 맞춰 정합니다.
+    # A thread count written in the config wins. Without one, it is decided to
+    # match where we are running.
     return {"path": path, "device": device,
             "threads": int(spec.get("threads") or stream.default_threads(device)),
             "label": os.path.basename(path).replace(".gguf", ""),
@@ -321,10 +341,11 @@ def resolve_asr(spec: dict | None, lang: str | None) -> dict:
 
 
 def build_engine(spec: dict | None, lang: str | None, threads: int = 4):
-    """설정 한 덩어리를 실제 인식기로.
+    """One config blob into an actual recogniser.
 
-    `backend: openai`면 원격(발화 조각마다 요청), 아니면 로컬 GGUF입니다. 둘은
-    같은 표면(`transcribe(samples, sr, …)`, `forced_lang`, `label`)을 내놓습니다.
+    `backend: openai` means remote (a request per utterance slice), otherwise a
+    local GGUF. Both put out the same surface (`transcribe(samples, sr, …)`,
+    `forced_lang`, `label`).
     """
     spec = spec or {}
     if spec.get("backend") == "openai":
@@ -337,21 +358,24 @@ def build_engine(spec: dict | None, lang: str | None, threads: int = 4):
 
 
 class LiveASR:
-    """세션이 쥐는 인식기. 속(로컬 GGUF 또는 원격)을 갈아 끼울 수 있습니다.
+    """The recogniser a session holds. Its inside (local GGUF or remote) can be swapped.
 
-    **객체를 바꾸지 않고 속만 바꿉니다.** `run_stream`은 asr을 지역 변수로
-    받아 들고 있고 `Refiner`도 따로 참조를 쥐고 있어서, 세션의 `_asr`을 새
-    객체로 갈아 끼워 봐야 돌고 있는 루프는 옛 것을 계속 씁니다. 이 껍데기가
-    그 참조들의 대상이고, 속이 바뀌면 다음 해독부터 새 엔진으로 갑니다.
+    **The object is not replaced, only its inside.** `run_stream` takes asr into
+    a local variable and holds it, and `Refiner` keeps a reference of its own, so
+    swapping the session's `_asr` for a new object leaves the running loop still
+    using the old one. This shell is what those references point at, and when the
+    inside changes the next decode goes to the new engine.
 
-    예전에는 갈아 끼우려면 세션을 통째로 다시 시작해야 했습니다. 그러면 세션
-    id가 바뀌고, 자막은 세션 id로 저장되므로 그때까지의 자막 내역이 화면에서
-    사라졌습니다. 한 영상 안에서 자막은 이어져야 합니다.
+    Swapping used to mean restarting the whole session. That changed the session
+    id, and because subtitles are stored by session id, the subtitle history up
+    to then disappeared from the screen. Within one video the subtitles have to
+    carry on.
 
-    새 엔진을 다 세우고 나서 바꿉니다. 언어를 지원하지 않거나 모델 파일이
-    없거나 원격 설정이 비어 있으면 예외가 나고 쓰던 것이 그대로 남습니다 --
-    바꾸려다 방송을 잃는 것이 가장 나쁩니다. 진행 중인 해독은 옛 엔진에서
-    끝나고, 그 뒤의 것부터 새 엔진입니다.
+    The new engine is built completely before the switch. If it does not support
+    the language, or the model file is missing, or the remote config is empty, an
+    exception is raised and what was in use stays -- losing the stream while
+    trying to switch is the worst of all. A decode in flight finishes on the old
+    engine, and everything after it is on the new one.
     """
 
     def __init__(self, spec: dict | None, lang: str | None, threads: int = 4):
@@ -365,7 +389,7 @@ class LiveASR:
               file=sys.stderr, flush=True)
         return {"label": new.label, "device": new.device, "threads": new.threads}
 
-    # 세션·정제기가 보는 표면. 전부 지금의 속으로 넘깁니다.
+    # The surface the session and the refiner see. All of it goes to the current inside.
     @property
     def label(self):
         return self._inner.label
@@ -430,10 +454,10 @@ class LiveASR:
 
 
 def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4) -> LiveASR:
-    """세션이 쓸 인식기를 만듭니다.
+    """Builds the recogniser a session will use.
 
-    lang이 비어 있으면 모델이 스스로 판별합니다. 다만 방송 언어를 알고
-    있다면 지정하는 편이 낫습니다 -- 판별이 흔들리면 문장 하나가 통째로
-    다른 언어로 나옵니다.
+    An empty lang means the model detects by itself. Still, if the stream's
+    language is known, naming it is better -- when detection wobbles, a whole
+    sentence comes out in another language.
     """
     return LiveASR(spec, lang, threads)

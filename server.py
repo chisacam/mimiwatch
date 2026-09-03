@@ -1,14 +1,16 @@
-"""mimiwatch 서버: 화면(web/)과 API를 냅니다.
+"""The mimiwatch server: it serves the screen (web/) and the API.
 
-일부러 표준 라이브러리의 HTTP 서버만 씁니다. 녹화본 흐름에는 스트리밍이
-없고(재생 전에 전사가 끝납니다), 라이브 자막은 SSE 한 줄기라 프레임워크가
-의존을 정당화할 만한 일이 여기 없습니다.
+Deliberately nothing but the standard library's HTTP server. The VOD flow has
+no streaming (transcription finishes before playback) and live subtitles are a
+single SSE stream, so there is nothing here that would justify a framework
+dependency.
 
-**라우팅은 표입니다.** 예전에는 `do_GET`/`do_POST`가 if 사슬이었고, 새 끝점을
-하나 넣을 때마다 그 사슬의 어디에 끼울지(`/api/ingest/`는 JSON을 읽기 **전**에
-갈라야 합니다 같은) 순서를 따져야 했습니다. 이제 정확히 맞는 경로는 사전에서,
-`/api/video/<id>`처럼 뒤가 붙는 경로는 접두 목록에서 찾습니다. 쓰기 요청의
-출처 검사와 JSON 읽기는 표에 들어가기 전에 한 번만 합니다.
+**Routing is a table.** `do_GET`/`do_POST` used to be if-chains, and every time
+a new endpoint went in, where in the chain it belonged had to be worked out
+(`/api/ingest/` has to branch off **before** the JSON is read, for one). Now an
+exactly matching path is found in a dict, and a path with a tail like
+`/api/video/<id>` in a prefix list. The origin check on write requests and
+reading the JSON happen once, before entering the table.
 """
 from __future__ import annotations
 
@@ -35,27 +37,30 @@ import stream
 import translate
 import update as mw_update
 
-# 화면 파일은 프로그램과 함께 다닙니다 -- 저장소 안, 또는 PyInstaller 묶음 안.
+# The screen's files travel with the program -- inside the repo, or inside
+# the PyInstaller bundle.
 BASE = paths.BASE
 WEB = os.path.join(BASE, "web")
 
-# 화면에 보내는 API 키 자리표시. 진짜 키는 backends.json 밖으로 나가지 않습니다.
+# Placeholder for the API key sent to the screen. The real key never leaves
+# backends.json.
 KEY_MASK = "••••••••"
-# SSE 한 연결의 수명. MV3 서비스 워커의 "단일 요청 5분" 규칙보다 짧게 잡습니다.
-# 시험은 환경 변수로 몇 초로 줄여 회전 뒤 소켓이 정말 닫히는지 봅니다.
+# The lifetime of one SSE connection. Kept shorter than the MV3 service
+# worker's "5 minutes per request" rule. Tests cut it down to a few seconds with
+# the environment variable to see that the socket really closes after a rotation.
 SSE_ROTATE_S = float(os.environ.get("MIMIWATCH_SSE_ROTATE_S") or 270.0)
-# JSON 몸통 상한. 자막 한 줄 고치기·엔진 설정이 전부라 1MB 면 넉넉합니다. 오디오(ingest)는
-# 따로 갑니다.
+# Upper bound on a JSON body. Editing one subtitle line and the engine settings
+# is all there is, so 1MB is plenty. Audio (ingest) goes its own way.
 JSON_MAX = 1 << 20
 
-# 미디어 타입. 화면의 파일은 몇 종류뿐입니다.
+# Media types. The screen has only a few kinds of file.
 CTYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
           ".html": "text/html; charset=utf-8", ".json": "application/json; charset=utf-8",
           ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
 
 
 class Handler(BaseHTTPRequestHandler):
-    # ---- 공통 ---------------------------------------------------------------
+    # ---- Common -------------------------------------------------------------
 
     def _send(self, body: bytes, ctype: str, code: int = 200, headers: dict | None = None):
         self.send_response(code)
@@ -68,7 +73,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.wfile.write(body)
         except ConnectionError:
-            pass            # 답을 기다리지 않고 떠난 브라우저. 흔하고 무해합니다.
+            pass            # The browser left without waiting for the answer. Common, harmless.
 
     def _json(self, obj, code: int = 200):
         self._send(json.dumps(obj, ensure_ascii=False).encode("utf-8"),
@@ -79,8 +84,9 @@ class Handler(BaseHTTPRequestHandler):
         return {k: v[0] for k, v in q.items() if v}
 
     def _serve_file(self, path: str):
-        # web/ 아래만 냅니다. normpath 뒤에도 그 안에 있는지 한 번 더 봅니다 --
-        # `..`은 normpath가 접지만, 접힌 결과가 밖을 가리키면 안 됩니다.
+        # Only what is under web/ is served. After normpath it is checked once
+        # more that the result is still inside -- normpath folds `..` away, but
+        # the folded result must not point outside.
         full = os.path.normpath(os.path.join(WEB, path))
         if not full.startswith(WEB + os.sep) and full != WEB:
             return self._send(b"not found", "text/plain", 404)
@@ -91,11 +97,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(f.read(), ctype)
 
     def log_message(self, fmt, *args):
-        pass  # 우리 진행 로그가 볼 것이고, 요청 한 줄씩은 소음입니다
+        pass  # Our own progress log is what gets read; a line per request is noise
 
     def handle(self):
-        # 크롬은 미리 이어 둔 소켓을 요청 없이 끊기도 합니다. 그때 나는
-        # ConnectionResetError 는 정상이라 스택을 로그에 남길 일이 아닙니다.
+        # Chrome also drops a socket it opened ahead of time without ever
+        # sending a request. The ConnectionResetError that comes of it is
+        # normal, not something to leave a stack trace in the log for.
         try:
             super().handle()
         except ConnectionError:
@@ -104,17 +111,19 @@ class Handler(BaseHTTPRequestHandler):
     # ---- GET ----------------------------------------------------------------
 
     def _host_ok(self) -> bool:
-        """`Host`가 우리 자신인가. 모든 요청에 적용합니다.
+        """Is `Host` us. Applied to every request.
 
-        서버는 127.0.0.1에만 묶여 있지만 DNS 리바인딩은 그 제약을 우회합니다: 공격자
-        도메인이 잠깐 127.0.0.1을 가리키게 하면 그 페이지의 스크립트가 **같은 출처**로
-        여기에 GET을 보내 답을 읽습니다 -- `/api/backends`에는 API 키가 들어 있습니다.
-        쓰기는 Origin 검사가 막지만 읽기는 열려 있었습니다. 브라우저는 Host를 요청한
-        도메인으로 보내므로 그것이 localhost·127.0.0.1이 아니면 우리 화면이 아닙니다.
+        The server is bound to 127.0.0.1 only, but DNS rebinding walks around
+        that restriction: make an attacker's domain point at 127.0.0.1 for a
+        moment and that page's script sends a GET here as the **same origin**
+        and reads the answer -- `/api/backends` holds the API keys. The Origin
+        check stops writes, but reads were wide open. A browser sends Host as
+        the domain that was asked for, so if that is not localhost or
+        127.0.0.1 it is not our screen.
         """
         host = (self.headers.get("Host") or "").strip().lower()
         if not host:
-            return True                   # HTTP/1.0 도구(curl 옛 판 등). 브라우저는 늘 보냅니다
+            return True                   # HTTP/1.0 tools (an old curl). Browsers always send it
         name, _, port = host.rpartition(":") if host.count(":") == 1 else (host, "", "")
         if host.startswith("["):          # [::1]:8900
             name, _, port = host.partition("]")
@@ -139,13 +148,13 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_file("index.html")
 
     def get_static(self, rest: str):
-        # `/static/app/live.js`처럼 한 단계 아래도 냅니다. 화면을 파일 여럿으로
-        # 나눈 뒤부터입니다.
+        # One level down like `/static/app/live.js` is served too. Ever since
+        # the screen was split into several files.
         self._serve_file(rest)
 
     def get_videos(self):
-        # 최근에 손댄 것부터. 방금 기다린 영상이 맨 위에 있어야지, id가
-        # 어디에 정렬되느냐에 달릴 일이 아닙니다.
+        # Most recently touched first. The video just waited on should be at
+        # the top; it should not depend on where its id happens to sort.
         items = []
         for vid in store.doc_ids():
             d = store.doc(vid) or {}
@@ -165,14 +174,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def get_backends(self):
         cfg = config.load()
-        # API 키는 화면에 보낼 이유가 없습니다. 있다는 표시만 남기고 가립니다 -- 편집
-        # 폼이 가린 값을 그대로 돌려보내면 upsert가 기존 키를 지킵니다(post_backends).
+        # There is no reason to send API keys to the screen. Only the mark that
+        # one exists is left and the value is masked -- if the edit form sends
+        # the masked value straight back, upsert keeps the stored key
+        # (post_backends).
         for key, _ in config.KINDS.values():
             cfg[key] = [{**b, "api_key": KEY_MASK if b.get("api_key") else ""}
                         for b in cfg.get(key, [])]
         cfg["live_profiles"] = [{"id": k, **v} for k, v in live.PROFILES.items()]
-        # 장르는 프롬프트만 바꾸므로 라이브·녹화본 양쪽에 씁니다. 프롬프트
-        # 본문은 보내지 않습니다 -- 화면에 쓸 것은 이름과 한 줄 설명뿐입니다.
+        # A genre changes nothing but the prompt, so it is used for both live
+        # and VOD. The prompt body is not sent -- all the screen needs is the
+        # name and the one-line description.
         cfg["genres"] = [{"id": k, "label_en": v["label_en"], "label_ko": v["label_ko"],
                           "hint_en": v["hint_en"], "hint_ko": v["hint_ko"]}
                          for k, v in translate.GENRE_PROMPTS.items()]
@@ -202,7 +214,8 @@ class Handler(BaseHTTPRequestHandler):
         value = q.get("id", "")
         fmt = q.get("fmt", "srt")
         view = q.get("view", "both")
-        # 어느 엔진의 번역을 담을지. 화면이 지금 보고 있는 것을 넘깁니다.
+        # Which engine's translation to put in. The screen passes what it is
+        # looking at right now.
         backend = q.get("backend", "")
         try:
             meta, rows = export.collect(value, backend)
@@ -211,11 +224,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(b"not found", "text/plain", 404)
         except ValueError as exc:
             return self._json({"error": str(exc)}, 400)
-        # 제목에 한글과 일본어가 들어갑니다. filename= 은 ASCII 만 담을 수
-        # 있으므로 RFC 5987 의 filename* 을 같이 보냅니다 -- 브라우저는 둘 중
-        # 읽을 수 있는 쪽을 씁니다. 앞의 filename= 은 filename* 을 못 읽는
-        # 도구를 위한 자리라 ASCII 여야 합니다. 세션 값을 그대로 쓰면
-        # `live:xxx.srt` 가 되어 윈도우에서 만들 수 없는 이름이 됩니다.
+        # Titles carry Korean and Japanese. filename= can only hold ASCII, so
+        # RFC 5987's filename* goes along with it -- the browser uses whichever
+        # of the two it can read. The leading filename= is the slot for tools
+        # that cannot read filename*, so it has to be ASCII. Using the session
+        # value as it is gives `live:xxx.srt`, a name Windows cannot create.
         name = export.filename(meta, fmt)
         quoted = urllib.parse.quote(name, safe="")
         plain = "".join(c for c in (value or "mimiwatch")
@@ -225,14 +238,16 @@ class Handler(BaseHTTPRequestHandler):
                                    f"filename*=UTF-8''{quoted}"})
 
     def get_models(self):
-        # 모델·도구의 목록과 상태. 첫 실행 화면이 이것으로 무엇이 없는지 압니다.
+        # The list and state of the models and tools. The first-run screen
+        # learns from this what is missing.
         self._json(modelhub.overview())
 
-    # ---- 로컬 파일 ---------------------------------------------------------
-    # 로컬 영상·음성도 전사 대상입니다. 원본은 옮기지 않고 그 자리에서 읽으며,
-    # 재생은 이 끝점이 원본을 그대로 내주어 <video> 가 틉니다. Range 를 받는
-    # 이유: 브라우저는 Range 없는 미디어에서 탐색(seek)을 포기합니다 -- 자막
-    # 줄을 눌러 그 지점으로 가는 것이 이 화면의 기본 동작인데요.
+    # ---- Local files ---------------------------------------------------------
+    # Local video and audio are transcription targets too. The original is not
+    # moved, it is read where it lies, and for playback this endpoint hands the
+    # original out as it is for <video> to play. Why Range is accepted: a
+    # browser gives up seeking on media without Range -- and pressing a
+    # subtitle line to go to that point is this screen's basic move.
 
     def get_media(self, vid: str):
         d = store.doc(os.path.basename(vid))
@@ -266,21 +281,24 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(buf)
                     left -= len(buf)
         except ConnectionError:
-            pass                    # 탐색할 때마다 브라우저가 이전 요청을 끊습니다. 정상입니다.
+            pass                    # On every seek the browser drops the previous request. Normal.
 
     def post_upload(self, length: int):
-        """파일 선택기로 고른 원본을 받습니다. 몸통은 파일 그대로입니다 --
-        multipart 도 base64 도 아닙니다. 이름은 쿼리로 옵니다.
+        """Take in an original picked with the file chooser. The body is the
+        file as it is -- neither multipart nor base64. The name comes in the
+        query.
 
-        경로를 아는 파일은 이 길을 탈 필요가 없습니다(주소 칸에 경로를 그대로).
-        선택기는 브라우저가 경로를 알려 주지 않으므로 사본이 불가피합니다.
-        받은 것은 data/uploads/ 에 남습니다 -- 전사를 지워도 원본은 지우지
-        않는 규칙 그대로입니다.
+        A file whose path is known does not need this route (the path goes
+        straight into the address box). With the chooser the browser does not
+        tell us the path, so a copy is unavoidable. What comes in stays in
+        data/uploads/ -- the same rule as ever: deleting a transcription does
+        not delete the original.
         """
         if length <= 0:
             return self._json({"error": "빈 파일입니다"}, 400)
         name = os.path.basename(self._query().get("name") or "upload")
-        # 확장자는 ffmpeg 의 힌트라 남기고, 나머지는 파일시스템에 안전한 글자만.
+        # The extension is ffmpeg's hint so it is kept; the rest is reduced to
+        # characters the filesystem is safe with.
         stem, ext = os.path.splitext(name)
         stem = re.sub(r"[^\w.\-\u00a0-\uffff]+", "_", stem).strip("._") or "upload"
         ext = re.sub(r"[^A-Za-z0-9.]", "", ext)[:8]
@@ -309,10 +327,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(exc)[:200]}, 400)
         self._json({"path": dest, "name": os.path.basename(dest)})
 
-    # ---- 유튜브 쿠키 -------------------------------------------------------
-    # 확장이 브라우저의 로그인 쿠키를 읽어 넘겨 줍니다(사용자가 그때그때 누를 때만). 멤버십
-    # 전용 방송을 「주소로」 받는 유일한 길입니다. 계정의 열쇠라서: 파일은 0600, 내용은 어디에도
-    # 적지 않고, 있음/없음과 받은 시각만 화면에 보이며, 언제든 지울 수 있습니다.
+    # ---- YouTube cookies -----------------------------------------------------
+    # The extension reads the browser's login cookies and hands them over (only
+    # when the user presses it each time). It is the only way to take a
+    # members-only stream in "by address". Because they are the keys to an
+    # account: the file is 0600, the contents are written down nowhere, only
+    # present/absent and the time they arrived show on the screen, and they can
+    # be deleted at any time.
 
     def get_cookies(self):
         self._json(_cookies_status())
@@ -336,8 +357,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             os.chmod(path, 0o600)
         except OSError:
-            pass                        # 윈도우는 모드가 없습니다
-        stream.reset_tool_cache()       # 다음 yt-dlp 호출부터 --cookies 가 붙습니다
+            pass                        # Windows has no modes
+        stream.reset_tool_cache()       # --cookies goes on from the next yt-dlp call
         print(f"[cookies] 유튜브 쿠키 {len(lines)}개를 받았습니다", file=sys.stderr, flush=True)
         self._json(_cookies_status())
 
@@ -351,12 +372,14 @@ class Handler(BaseHTTPRequestHandler):
         self._json(_cookies_status())
 
     def get_setup(self):
-        # 초기 설정 화면의 선택지: 엔진마다 필요한 모델과 그 크기·유무.
+        # The choices on the initial setup screen: which models each engine
+        # needs, their size and whether they are there.
         self._json(modelhub.setup_options())
 
     def get_bus(self):
-        """전역 변화 알림(bus.py)을 SSE로. 화면이 하나 붙여 두고 목록·작업
-        상자를 그때그때 고칩니다. 첫 프레임은 붙었다는 표시입니다."""
+        """The global change feed (bus.py) over SSE. The screen keeps one
+        attached and fixes up the lists and the job box as they change. The
+        first frame is the mark that it is attached."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -368,17 +391,19 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
             started = time.time()
             while True:
-                # 회전 시각까지 남은 시간만큼만 기다립니다. 예전에는 15초 단위로만
-                # 깨어나서 회전이 최대 15초 늦었습니다.
+                # Wait only as long as is left until the rotation time. It used
+                # to wake in 15 second steps only, so a rotation was up to
+                # 15 seconds late.
                 left = SSE_ROTATE_S - (time.time() - started)
                 if left <= 0:
                     self.wfile.write(b'data: {"type": "rotate"}\n\n')
                     self.wfile.flush()
-                    # 여기서 소켓을 **정말로** 닫아야 합니다. SSE 헤더의
-                    # `Connection: keep-alive` 가 close_connection 을 False 로
-                    # 돌려 놓아서, 그냥 돌아가면 handle() 이 같은 소켓에서 다음
-                    # 요청을 기다리고 브라우저는 본문이 더 오길 기다립니다 --
-                    # onerror 도 재접속도 없이 4.5분마다 자막이 조용히 멎었습니다.
+                    # The socket has to be **really** closed here. The SSE
+                    # header's `Connection: keep-alive` puts close_connection
+                    # back to False, so on simply returning, handle() waits for
+                    # the next request on the same socket while the browser
+                    # waits for more body -- with neither an onerror nor a
+                    # reconnect, subtitles quietly stopped every 4.5 minutes.
                     self.close_connection = True
                     return
                 try:
@@ -413,12 +438,14 @@ class Handler(BaseHTTPRequestHandler):
         in between, and a line arriving twice is harmless because the browser
         keys cues by id and updates in place.
 
-        **다시 붙는 클라이언트는 빠진 것만 받습니다.** 보내는 프레임마다
-        `id:`를 붙이고, 브라우저(EventSource)나 확장이 `Last-Event-ID`를 들고
-        오면 세션이 들고 있는 최근 이벤트 기록에서 그 뒤만 다시 보냅니다.
-        예전에는 끊길 때마다 두 시간치 백로그를 통째로 다시 보냈습니다 --
-        확장은 서버가 잠깐 멎을 때마다 3초마다 다시 붙으므로 그때마다였습니다.
-        기록 밖(너무 오래 끊겼거나 서버가 재시작됨)이면 전부 다시 보냅니다.
+        **A client that reattaches gets only what it missed.** Every frame
+        that goes out carries an `id:`, and when the browser (EventSource) or
+        the extension arrives holding a `Last-Event-ID`, only what follows it
+        in the recent event record the session keeps is sent again. Previously
+        every disconnect resent two hours of backlog whole -- and the extension
+        reattaches every 3 seconds whenever the server stalls for a moment, so
+        it was on every one of those. Outside the record (disconnected too
+        long, or the server restarted) everything is sent again.
         """
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -433,37 +460,42 @@ class Handler(BaseHTTPRequestHandler):
                 for seq, data in replay:
                     self.wfile.write(f"id: {seq}\ndata: {data}\n\n".encode())
             else:
-                # 첫 프레임에 type이 없어서 브라우저가 그냥 흘려보내고 있었습니다.
-                # 재시작으로 끊긴 세션은 이 한 번이 "왜 멈췄는지"를 말할 유일한
-                # 기회이므로, 나머지 상태 알림과 같은 모양으로 맞춥니다.
+                # The first frame had no type, so the browser was letting it
+                # slide past. For a session cut off by a restart this one frame
+                # is the only chance to say "why it stopped", so it is shaped
+                # like the rest of the status notifications.
                 status = sess.status() if sess is not None else live.status_of(sid)
                 for event in [{"type": "status", **status}, *live.backlog(sid)]:
                     self.wfile.write(
                         f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode())
             self.wfile.flush()
             if q is None:
-                # 끝난 세션은 보낼 것을 다 보냈습니다. Content-Length가 없는
-                # 응답이라 소켓을 닫아 주지 않으면 클라이언트는 끝을 알 수
-                # 없습니다 -- 위의 keep-alive 헤더가 그 소켓을 살려 두므로
-                # 여기서 되돌립니다.
+                # A finished session has sent everything it had to send. The
+                # response has no Content-Length, so unless the socket is
+                # closed the client cannot tell it is over -- the keep-alive
+                # header above keeps that socket alive, so it is undone here.
                 self.close_connection = True
                 return
             started = time.time()
             while True:
-                # 회전 시각까지 남은 시간만큼만 기다립니다. 예전에는 15초 단위로만
-                # 깨어나서 회전이 최대 15초 늦었습니다.
+                # Wait only as long as is left until the rotation time. It used
+                # to wake in 15 second steps only, so a rotation was up to
+                # 15 seconds late.
                 left = SSE_ROTATE_S - (time.time() - started)
                 if left <= 0:
-                    # 스트림을 일부러 끊습니다. 확장의 서비스 워커는 한 요청이 5분을 넘으면
-                    # 크롬이 내리므로, 그 전에 우리가 닫고 클라이언트가 Last-Event-ID 로
-                    # 곧 다시 붙게 합니다. 화면(EventSource)도 같은 규칙으로 되붙습니다.
+                    # The stream is cut on purpose. Chrome takes the
+                    # extension's service worker down once a single request
+                    # goes past 5 minutes, so we close before that and let the
+                    # client reattach right away with Last-Event-ID. The screen
+                    # (EventSource) reattaches by the same rule.
                     self.wfile.write(b'data: {"type": "rotate"}\n\n')
                     self.wfile.flush()
-                    # 여기서 소켓을 **정말로** 닫아야 합니다. SSE 헤더의
-                    # `Connection: keep-alive` 가 close_connection 을 False 로
-                    # 돌려 놓아서, 그냥 돌아가면 handle() 이 같은 소켓에서 다음
-                    # 요청을 기다리고 브라우저는 본문이 더 오길 기다립니다 --
-                    # onerror 도 재접속도 없이 4.5분마다 자막이 조용히 멎었습니다.
+                    # The socket has to be **really** closed here. The SSE
+                    # header's `Connection: keep-alive` puts close_connection
+                    # back to False, so on simply returning, handle() waits for
+                    # the next request on the same socket while the browser
+                    # waits for more body -- with neither an onerror nor a
+                    # reconnect, subtitles quietly stopped every 4.5 minutes.
                     self.close_connection = True
                     return
                 try:
@@ -475,10 +507,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f"id: {seq}\ndata: {data}\n\n".encode())
                 self.wfile.flush()
         except ConnectionError:
-            # 시청자가 탭을 닫으면 끝나는 정상 경로입니다. 운영체제마다
-            # 다른 예외를 냅니다 -- 리눅스/맥은 BrokenPipe나 ConnectionReset,
-            # 윈도우는 ConnectionAborted(WinError 10053). 셋 다 ConnectionError
-            # 아래에 있으므로 부모로 받습니다.
+            # The normal path, which ends when a viewer closes the tab. Each
+            # operating system raises a different exception -- BrokenPipe or
+            # ConnectionReset on Linux and macOS, ConnectionAborted
+            # (WinError 10053) on Windows. All three sit under ConnectionError,
+            # so the parent is what is caught.
             pass
         finally:
             if q is not None:
@@ -487,26 +520,29 @@ class Handler(BaseHTTPRequestHandler):
     # ---- POST ---------------------------------------------------------------
 
     def _same_origin_write(self) -> bool:
-        """쓰기 요청이 우리 화면이나 우리 확장에서 왔는가.
+        """Did the write request come from our screen or our extension.
 
-        서버는 127.0.0.1에만 묶여 있지만, 그것이 곧 우리 화면만 부를 수 있다는
-        뜻은 아닙니다. 사용자가 열어 둔 **아무 웹사이트**나 `fetch(..., {mode:
-        "no-cors"})`로 여기에 POST를 던질 수 있고, 답은 못 읽어도 요청은
-        닿습니다 -- `/api/shutdown`, `/api/video/delete`, 번역 엔진의 주소를
-        남의 서버로 바꿔 자막 본문을 내보내게 하는 `/api/backends` 같은 것들.
-        크롬은 공용 페이지가 사설망을 부르는 것을 막아 주지만(PNA) 파이어폭스는
-        그렇지 않습니다.
+        The server is bound to 127.0.0.1 only, but that does not mean our
+        screen is the only thing that can call it. **Any website** the user has
+        open can throw a POST here with `fetch(..., {mode: "no-cors"})`, and
+        even though it cannot read the answer the request lands --
+        `/api/shutdown`, `/api/video/delete`, or `/api/backends`, which points
+        the translation engine's address at someone else's server and has the
+        subtitle text sent out. Chrome stops a public page from calling a
+        private network (PNA); Firefox does not.
 
-        규칙은 단순합니다. `Origin`이 없으면(curl, 시험, 같은 창의 폼) 통과.
-        있으면 우리 자신(Host와 같은 곳)이나 브라우저 확장만 통과. 확장의
-        서비스 워커는 `chrome-extension://…` 출처로 오므로 그것이 우리
-        확장인지까지는 가리지 않습니다 -- 확장 id는 설치마다 다르고, 확장을
-        깐 것은 사용자 자신입니다.
+        The rule is simple. No `Origin` (curl, the tests, a form in the same
+        window) passes. With one, only ourselves (the same place as Host) or a
+        browser extension passes. The extension's service worker arrives with a
+        `chrome-extension://…` origin, so it is not told apart down to whether
+        it is our extension -- an extension id differs per installation, and it
+        was the user who installed it.
         """
         origin = (self.headers.get("Origin") or "").strip()
         if not origin or origin == "null":
-            # `Sec-Fetch-Site`가 있으면 그것이 더 정직한 답입니다. cross-site인데
-            # Origin을 비운 요청(no-cors 일부)이 여기로 옵니다.
+            # If `Sec-Fetch-Site` is there it is the more honest answer.
+            # Requests that are cross-site but leave Origin empty (some no-cors
+            # ones) come through here.
             return (self.headers.get("Sec-Fetch-Site") or "same-origin") in (
                 "same-origin", "none")
         if origin.startswith(("chrome-extension://", "moz-extension://",
@@ -531,13 +567,15 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self._json({"error": "bad Content-Length"}, 400)
 
-        # 오디오만 JSON이 아닙니다. 몸통은 16kHz 모노 int16 PCM 날것입니다 --
-        # base64로 감싸면 3분의 4가 되고, 초당 32KB짜리를 그럴 이유가 없습니다.
+        # Audio alone is not JSON. The body is raw 16kHz mono int16 PCM --
+        # wrapping it in base64 makes it four thirds, and there is no reason to
+        # do that to something that runs at 32KB a second.
         if path.startswith("/api/ingest/"):
             raw = self.rfile.read(length) if length else b""
             return self._json(live.feed(posixpath.basename(path), raw))
 
-        # 업로드도 JSON 이 아닙니다. 몸통이 미디어 파일 그대로라 상한도 다릅니다.
+        # An upload is not JSON either. The body is the media file as it is, so
+        # its upper bound is different too.
         if path == "/api/upload":
             return self.post_upload(length)
 
@@ -555,22 +593,24 @@ class Handler(BaseHTTPRequestHandler):
         return handler(self, body)
 
     def post_translate(self, body):
-        # 전체 번역은 「전부 고른 재번역」과 같은 길입니다. 예전에는 따로 짠
-        # 루프가 자막을 통째로 다시 써서 손편집을 지웠습니다.
+        # Translating everything is the same route as "retranslate with all
+        # selected". A separately written loop used to rewrite the subtitles
+        # whole and wipe out the hand edits.
         vid, backend = body.get("video"), body.get("backend")
         if not vid or not backend:
             return self._json({"error": "video and backend are required"}, 400)
         self._json(jobs.start_retranslate(vid, backend, None, body.get("genre")))
 
     def post_probe(self, body):
-        # 주소가 라이브인지 녹화본인지는 서버가 정합니다. 두 흐름은 기다리는
-        # 방식부터 다르므로 화면이 시작하기 전에 알아야 합니다.
+        # Whether an address is live or a VOD is decided by the server. The
+        # two flows differ from the way they are waited on onward, so the
+        # screen has to know before it starts.
         import subprocess as sp
 
         import transcribe_vod as vod
         url = (body.get("url") or "").strip()
-        # 로컬 파일 경로는 yt-dlp 를 거치지 않습니다. 붙여 넣은 경로가 없거나
-        # 읽을 수 없으면 여기서 바로 말합니다.
+        # A local file path does not go through yt-dlp. If the pasted path is
+        # not there or cannot be read, that is said right here.
         if vod.is_local_source(url):
             try:
                 meta = vod.probe_local(url)
@@ -582,8 +622,8 @@ class Handler(BaseHTTPRequestHandler):
                          capture_output=True, text=True,
                          timeout=stream.YTDLP_TIMEOUT_S)
         except sp.TimeoutExpired:
-            # 상한이 없으면 이 요청 스레드가 영영 기다립니다. 브라우저도
-            # 함께 기다리므로 「추가」 대화상자가 멈춘 것처럼 보입니다.
+            # Without an upper bound this request thread waits forever. The
+            # browser waits along with it, so the "Add" dialog looks stuck.
             return self._json({"error": f"yt-dlp가 {stream.YTDLP_TIMEOUT_S:.0f}초 "
                                         "안에 답하지 않았습니다"}, 504)
         if out.returncode != 0:
@@ -592,14 +632,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             d = json.loads(out.stdout)
         except json.JSONDecodeError:
-            # 재생목록·채널 주소는 영상마다 한 줄씩 냅니다. 영상 하나를 가리키십시오.
+            # A playlist or channel address prints one line per video. Point
+            # at a single video.
             return self._json({"error": "영상 하나의 주소를 넣어 주십시오 "
                                         "(재생목록·채널 주소가 아니라)"}, 400)
         info = live.site_of(d, url)
         is_live = d.get("is_live")
         if is_live is None and info["site"] == "other" and live.looks_like_m3u8(url):
-            # 생 m3u8 은 범용 추출기가 라이브인지 모릅니다. 이 입력은 라이브의 대체
-            # 경로(R1.2)이므로 모르면 라이브로 봅니다.
+            # For a bare m3u8 the generic extractor does not know whether it
+            # is live. This input is live's fallback route (R1.2), so when it
+            # is unknown it is taken as live.
             is_live = True
         self._json({"id": d.get("id"), "title": d.get("title"),
                     "is_live": bool(is_live),
@@ -620,8 +662,9 @@ class Handler(BaseHTTPRequestHandler):
             genre=body.get("genre")))
 
     def post_live_capture(self, body):
-        # 브라우저가 자기 탭에서 들리는 소리를 올려 주는 세션입니다. 주소를
-        # 풀 것도, 받아 올 것도 없으므로 제목만 받습니다.
+        # A session where the browser uploads the sound heard in its own tab.
+        # There is no address to resolve and nothing to fetch, so only the
+        # title is taken.
         self._json(live.start(
             "", body.get("lang") or None,
             body.get("viewer_lang") or "ko",
@@ -633,9 +676,10 @@ class Handler(BaseHTTPRequestHandler):
             source="tab",
             title=(body.get("title") or "").strip() or "탭 오디오"))
 
-    # ---- 멀티뷰 ----------------------------------------------------------
-    # 여러 방송을 한 화면에. 묶음·초점의 규칙은 live.py 멀티뷰 절에 있고, 여기는
-    # JSON 을 풀어 넘길 뿐입니다. 라이브 시작 인자는 /api/live/start 와 같습니다.
+    # ---- Multiview -----------------------------------------------------------
+    # Several streams on one screen. The rules for groups and focus are in
+    # live.py's multiview section; here the JSON is only unpacked and passed
+    # on. The live start arguments are the same as /api/live/start.
 
     def _live_args(self, body) -> dict:
         return dict(lang=body.get("lang") or None,
@@ -647,8 +691,9 @@ class Handler(BaseHTTPRequestHandler):
                     genre=body.get("genre"))
 
     def post_multiview(self, body):
-        """묶음 만들기. `sessions` 는 지금 받는 중인 세션 id(편입), `sources` 는 새 소스
-        (`{url}` 또는 `{source:"tab", title}`). 합쳐서 1~MULTIVIEW_MAX 개."""
+        """Make a group. `sessions` is the ids of sessions being received now
+        (they are folded in), `sources` is new sources (`{url}` or
+        `{source:"tab", title}`). 1~MULTIVIEW_MAX of them together."""
         sources = [{"session": sid} for sid in (body.get("sessions") or []) if sid]
         extra = body.get("sources") or []
         if not isinstance(extra, list) or not all(isinstance(s, dict) for s in extra):
@@ -682,15 +727,16 @@ class Handler(BaseHTTPRequestHandler):
         self._json(st)
 
     def post_retranslate(self, body):
-        # 고른 자막만 다시 번역합니다. cues 를 빼면 전부입니다.
+        # Retranslate only the selected subtitles. Leave cues out and it is
+        # all of them.
         cues = body.get("cues")
         self._json(jobs.start_retranslate(
             (body.get("id") or "").strip(), body.get("backend") or "",
             cue_ids=cues if cues else None, genre=body.get("genre")))
 
     def post_cue(self, body):
-        # 자막 한 줄을 사람이 고칩니다. 녹화본이든 라이브든 같은 길입니다 --
-        # 저장소를 하나로 모은 값이 여기서 돌아옵니다.
+        # A person fixes one subtitle line. VOD or live, it is the same route
+        # -- what gathering the storage into one bought comes back here.
         owner = store.owner_of((body.get("id") or "").strip())
         cue_id = body.get("cue")
         if not owner or cue_id is None:
@@ -706,8 +752,9 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True, "cue": got})
 
     def post_cue_add(self, body):
-        # 사람이 자막 한 줄을 새로 써 넣습니다. 시각과 원문은 필수, 번역은
-        # 선택입니다. 번호는 저장소가 짓습니다(insert_cue).
+        # A person writes a new subtitle line in. The time and the source text
+        # are required, the translation is optional. The number is made by the
+        # storage (insert_cue).
         owner = store.owner_of((body.get("id") or "").strip())
         text = (body.get("text") or "").strip()
         try:
@@ -724,8 +771,9 @@ class Handler(BaseHTTPRequestHandler):
         got = store.insert_cue(owner, start, text, lang=lang,
                                tr=(body.get("tr") or "").strip(),
                                backend=body.get("backend") or "")
-        # 받는 중인 세션이면 대본 창과 다른 창에도 닿습니다. 고칠 때와 같은
-        # 통로입니다 -- 브라우저는 id 로 줄을 찾으므로 새 id 는 새 줄이 됩니다.
+        # If the session is being received it reaches the script panel and the
+        # other windows too. The same channel as an edit -- the browser finds
+        # lines by id, so a new id becomes a new line.
         live.notify_edit(owner, got, body.get("backend") or "")
         self._json({"ok": True, "cue": got})
 
@@ -752,18 +800,21 @@ class Handler(BaseHTTPRequestHandler):
         self._json(live.stop(body.get("id", "")))
 
     def post_live_resume(self, body):
-        # 이어받을 때 엔진을 바꿔 줄 수 있습니다. 예전에는 저장된 세션의 엔진을 그대로 써서,
-        # 「관리」에서 바꿔 놓고 이어받아도 옛 엔진으로 돌았습니다.
+        # The engine can be changed on resume. It used to take the stored
+        # session's engine as it was, so changing it in "Manage" and then
+        # resuming still ran on the old engine.
         self._json(live.resume(body.get("id", ""), asr_backend_id=body.get("asr") or "",
                                backend_id=body.get("backend") or "",
                                source=body.get("source") or "", url=body.get("url") or ""))
 
     def post_active(self, body):
-        """기본 전사·번역 엔진을 바꿉니다. 화면의 「관리」 선택기가 부릅니다.
+        """Change the default transcription and translation engines. Called by
+        the screen's "Manage" picker.
 
-        예전에는 그 선택이 브라우저(localStorage)에만 남았습니다. 확장은 서버의 `active`를
-        읽어 세션을 시작하므로, 화면에서 무엇을 골랐든 확장은 늘 기본(경량) 엔진으로
-        시작했습니다. 이제 선택기가 곧 서버의 기본값입니다.
+        That choice used to stay in the browser (localStorage) only. The
+        extension reads the server's `active` to start a session, so whatever
+        was picked on the screen, the extension always started on the default
+        (light) engines. Now the picker is the server's default.
         """
         kind = body.get("kind")
         if kind not in config.KINDS:
@@ -777,13 +828,15 @@ class Handler(BaseHTTPRequestHandler):
         self._json(live.delete((body.get("id") or "").strip()))
 
     def post_shutdown(self, body):
-        # 라이브 세션을 먼저 제대로 닫습니다. 그래야 기록에 "종료됨"으로
-        # 남습니다 -- 그냥 죽이면 `running`인 채 남아, 다음 기동의 복구
-        # 스윕이 서버가 죽은 것과 똑같이 "중단됨"으로 적습니다.
+        # Live sessions are closed properly first. That is what leaves them
+        # in the record as "ended" -- just killing the process leaves them
+        # `running`, and the next start's recovery sweep writes them as
+        # "interrupted", exactly as if the server had died.
         stopped = _wind_down()
         self._json({"ok": True, "sessions_stopped": stopped})
-        # 응답을 다 흘려보낸 뒤에 멈춥니다. 핸들러 안에서 곧바로
-        # shutdown()을 부르면 브라우저는 답 대신 끊어진 연결을 봅니다.
+        # It stops after the response has been flushed all the way out.
+        # Calling shutdown() straight away inside the handler makes the browser
+        # see a broken connection instead of an answer.
         threading.Thread(target=_stop_server, daemon=True).start()
 
     def post_video_delete(self, body):
@@ -803,8 +856,9 @@ class Handler(BaseHTTPRequestHandler):
             bool(body.get("refine", True))))
 
     def _keep_masked_key(self, kind: str, entry: dict) -> dict:
-        """화면이 가린 키(KEY_MASK)를 그대로 돌려보냈으면 저장된 키를 지킵니다.
-        빈 문자열은 "키를 지운다"는 뜻으로 그대로 둡니다."""
+        """If the screen sent the masked key (KEY_MASK) straight back, the
+        stored key is kept. An empty string means "delete the key" and is left
+        as it is."""
         if entry.get("api_key") == KEY_MASK:
             old = config.find(kind, entry["id"]) or {}
             entry["api_key"] = old.get("api_key", "")
@@ -820,8 +874,8 @@ class Handler(BaseHTTPRequestHandler):
         self.get_backends()
 
     def post_backends(self, body):
-        # 화면에서 고친 엔드포인트를 여기서 남겨 두면 재시작해도 파일을 손으로
-        # 고칠 일이 없습니다.
+        # Leaving the endpoint edited on the screen here means there is no
+        # fixing the file by hand across a restart.
         entry = {k: body.get(k, "") for k in
                  ("id", "label", "backend", "base_url", "model", "api_key")}
         entry["min_chars"] = int(body.get("min_chars") or 0)
@@ -840,8 +894,9 @@ class Handler(BaseHTTPRequestHandler):
     def post_job_cancel(self, body):
         self._json(jobs.cancel(body.get("id", "")))
 
-    # ---- 모델·도구 ---------------------------------------------------------
-    # 내려받기는 배경 스레드에서 돌고 진행은 /api/events 로 밀려 나갑니다.
+    # ---- Models and tools ----------------------------------------------------
+    # Downloads run on a background thread and the progress is pushed out over
+    # /api/events.
 
     def post_models_download(self, body):
         ids = body.get("ids")
@@ -865,8 +920,9 @@ class Handler(BaseHTTPRequestHandler):
         self._json(config.set_ui_lang(str(body.get("lang") or "")))
 
     def post_setup(self, body):
-        # 기본 엔진 둘을 정하고 그 조합에 필요한 것을 받기 시작합니다. 사양이 다양한
-        # 기계에 기본값 하나가 맞을 수 없어, 첫 실행에서 고르게 합니다.
+        # Settle the two default engines and start fetching what that
+        # combination needs. One default cannot fit machines of every spec, so
+        # the choice is made on the first run.
         self._json(modelhub.apply_setup(str(body.get("asr") or ""), str(body.get("tr") or ""),
                                         start_download=bool(body.get("download", True))))
 
@@ -876,12 +932,14 @@ class Handler(BaseHTTPRequestHandler):
             label=body.get("label", ""), engine_id=body.get("id", ""),
             device=body.get("device") or "auto", token=body.get("token") or None))
 
-    # ---- 판올림 -------------------------------------------------------------
-    # 깃허브 릴리스에서 새 판을 확인하고, 묶음이면 받아서 갈아 끼웁니다.
-    # 확인·내려받기·적용의 규칙은 전부 update.py 에 있습니다.
+    # ---- Updates -------------------------------------------------------------
+    # Check GitHub releases for a new version and, in a bundle, fetch it and
+    # swap it in. The rules for checking, downloading and applying are all in
+    # update.py.
 
     def get_update(self):
-        # 상태만 답합니다. 네트워크에 나가지 않으므로 화면이 부담 없이 부릅니다.
+        # It answers with the state only. It does not go out to the network,
+        # so the screen calls it freely.
         self._json(mw_update.status())
 
     def post_update_check(self, body):
@@ -894,8 +952,9 @@ class Handler(BaseHTTPRequestHandler):
         res = mw_update.apply()
         if "error" in res:
             return self._json(res, 400)
-        # 종료 단추와 같은 규칙입니다: 받는 중인 방송을 제대로 닫고, 응답을
-        # 흘려보낸 뒤에 멈춥니다. 교체 스크립트가 이 프로세스의 끝을 기다립니다.
+        # The same rule as the shutdown button: close the streams being
+        # received properly, then stop after the response has been flushed
+        # out. The swap script waits for this process to end.
         _wind_down()
         self._json(res)
         threading.Thread(target=_stop_server, daemon=True).start()
@@ -913,8 +972,9 @@ GET_ROUTES = {
     "/api/cookies": Handler.get_cookies,
     "/api/update": Handler.get_update,
 }
-# 뒤가 붙는 경로. 긴 접두가 먼저여야 `/api/video/`가 `/api/videos`를 삼키지
-# 않습니다 -- 정확한 경로는 위 사전에서 먼저 찾으므로 여기서는 순서만 지킵니다.
+# Paths with a tail. The longer prefix has to come first so that `/api/video/`
+# does not swallow `/api/videos` -- an exact path is looked up in the dict above
+# first, so all that is kept here is the order.
 GET_PREFIX = [
     ("/api/video/", Handler.get_video),
     ("/api/live/events/", Handler.get_events),
@@ -968,10 +1028,12 @@ POST_ROUTES = {
 
 
 def parse_range(header: str | None, size: int) -> tuple[int | None, int | None]:
-    """`Range: bytes=a-b` 를 (시작, 끝)으로. 없으면 (None, None), 못 읽으면 (None, -1).
+    """`Range: bytes=a-b` into (start, end). (None, None) when absent,
+    (None, -1) when it cannot be read.
 
-    브라우저가 미디어에 보내는 꼴만 받습니다 -- 한 구간, bytes 단위.
-    `bytes=a-`(끝까지)와 `bytes=-n`(마지막 n바이트)도 그 일부입니다.
+    Only the shape a browser sends for media is accepted -- one range, in
+    bytes. `bytes=a-` (to the end) and `bytes=-n` (the last n bytes) are part
+    of that.
     """
     if not header:
         return None, None
@@ -998,7 +1060,8 @@ def _is_cookie_line(ln: str) -> bool:
 
 
 def _cookies_status() -> dict:
-    """쿠키 파일의 있음/없음과 받은 시각. 내용은 절대 내보내지 않습니다."""
+    """Whether the cookie file is there and when it arrived. The contents are
+    never sent out."""
     path = paths.cookies_path()
     env = (os.environ.get("MIMIWATCH_YTDLP_COOKIES") or "").strip()
     if not os.path.isfile(path):
@@ -1011,52 +1074,60 @@ def _cookies_status() -> dict:
     return {"present": True, "count": n, "updated": os.path.getmtime(path), "env": bool(env)}
 
 
-# serve_forever()를 멈추려면 서버 객체가 있어야 하는데, 핸들러는 클래스라
-# 인스턴스를 알 방법이 없습니다. 모듈에 하나 둡니다.
+# Stopping serve_forever() needs the server object, but the handler is a class
+# and has no way to know the instance. One is kept on the module.
 _srv: ThreadingHTTPServer | None = None
 
 
 def _stop_server():
-    time.sleep(0.3)          # 응답이 소켓을 빠져나갈 틈
+    time.sleep(0.3)          # room for the response to get out of the socket
     if _srv is not None:
         _srv.shutdown()
 
 
 def _wind_down(timeout: float = 8.0):
-    """종료 전에 배경 일을 멈춥니다: 라이브 세션을 닫고 작업을 취소하고 기다립니다.
+    """Stop the background work before exit: close the live sessions, cancel
+    the jobs, and wait.
 
-    종료 단추와 Ctrl-C 와 판올림 적용이 같은 자리를 지나야 기록이 같게 남습니다.
-    작업을 취소하지 않던 동안, 전사가 도는 채로 끄면 그 스레드가 모델을 붙들고
-    있어 인터프리터 종료가 모델을 놓지 못했고, ggml-metal 의 종료 소멸자가
-    abort 했습니다(`jobs.cancel_all` 참고). 기다림에는 상한이 있습니다 -- 멎지
-    않는 스레드 때문에 종료가 영영 안 되는 것이 더 나쁩니다.
+    The shutdown button, Ctrl-C and applying an update have to pass the same
+    place for the record to come out the same. While the jobs were not being
+    cancelled, quitting with a transcription running left that thread holding
+    the model, so interpreter shutdown could not let the model go and
+    ggml-metal's exit destructor aborted (see `jobs.cancel_all`). The wait has
+    an upper bound -- an exit that never comes because of a thread that will
+    not stop is worse.
     """
     deadline = time.time() + timeout
-    # 취소 표시를 먼저 해 두어야 세션을 기다리는 동안 작업도 함께 멎습니다. 순서대로
-    # 기다리면 최악에 두 배가 걸립니다.
+    # The cancel marks have to go up first so that the jobs stop alongside
+    # while the sessions are waited on. Waiting on them in order takes twice as
+    # long in the worst case.
     cancelled = jobs.cancel_all()
     if cancelled:
         print(f"mimiwatch: 작업 {len(cancelled)}건을 취소합니다", flush=True)
     stopped = live.shutdown(timeout)
     jobs.wait_idle(max(0.0, deadline - time.time()))
-    # 라이브 세션은 DB 상태가 `stopped` 가 된 것까지만 기다립니다. 그 뒤 `_run` 의
-    # finally(번역기·정제기 닫기, 최대 20초)가 아직 모델을 쓰고 있을 수 있는데, 그것이
-    # 무해한 것은 `hard_exit` 가 소멸자를 건너뛰기 때문입니다. 보통 종료(SystemExit)로
-    # 되돌리면 라이브 쪽에서 같은 abort 가 돌아옵니다.
+    # For live sessions the wait goes only as far as the DB state becoming
+    # `stopped`. After that, `_run`'s finally (closing the translator and the
+    # refiner, up to 20 seconds) may still be using the model, and what makes
+    # that harmless is that `hard_exit` skips the destructors. Going back to an
+    # ordinary exit (SystemExit) brings the same abort back on the live side.
     return stopped
 
 
 def hard_exit(code: int = 0):
-    """출력을 비우고 `os._exit` 로 끝냅니다. C 소멸자도, 파이널라이즈도 건너뜁니다.
+    """Flush the output and end with `os._exit`. Both the C destructors and
+    finalization are skipped.
 
-    이 프로세스에는 ggml 이 두 벌(transcribe.cpp 와 llama_cpp) 올라와 있고 둘
-    다 exit 시 소멸자에서 Metal 장치를 해제합니다. 그때 아직 GPU 버퍼를 쥔 모델이
-    있으면 `GGML_ASSERT([rsets->data count] == 0)` 로 abort 하고, 스레드가 그
-    모델로 계산 중이면 해제된 장치 밑에서 멎을 수도 있습니다 -- 「서버는 죽었는데
-    메모리와 GPU 가 남는다」가 그 모양입니다. 위에서 할 일을 다 멈춘 뒤라면 남은
-    정리는 운영체제에 맡기는 편이 안전합니다. SQLite 는 쓰기마다 commit 하므로
-    잃는 것이 없습니다. `main()` 은 돌려주는 값으로 남겨 시험이 부를 수 있게 하고,
-    프로세스로 뜬 진입점(`__main__`, app.py)만 이것을 부릅니다.
+    This process has two copies of ggml loaded (transcribe.cpp and llama_cpp)
+    and both release the Metal device from a destructor at exit. If a model is
+    still holding GPU buffers then, it aborts with
+    `GGML_ASSERT([rsets->data count] == 0)`, and if a thread is computing with
+    that model it can even stall under a released device -- "the server is dead
+    but the memory and the GPU are still there" is that shape. Once everything
+    above has been stopped, leaving the rest of the cleanup to the operating
+    system is the safer way. SQLite commits on every write, so nothing is lost.
+    `main()` is left returning a value so the tests can call it, and only the
+    entry points that come up as a process (`__main__`, app.py) call this.
     """
     for f in (sys.stdout, sys.stderr):
         try:
@@ -1067,10 +1138,12 @@ def hard_exit(code: int = 0):
 
 
 def main(argv: list[str] | None = None):
-    """서버를 띄웁니다. `argv`는 시험과 묶음의 진입점(app.py)이 넘겨 줍니다.
+    """Bring the server up. `argv` is handed over by the tests and by the
+    bundle's entry point (app.py).
 
-    `--open`은 붙자마자 기본 브라우저로 화면을 엽니다. 묶음을 두 번 눌러 띄운
-    사람에게는 터미널이 없어 주소를 볼 곳이 없기 때문입니다.
+    `--open` opens the screen in the default browser as soon as it is up.
+    Someone who started the bundle with a double click has no terminal and so
+    nowhere to see the address.
     """
     import argparse
     ap = argparse.ArgumentParser()
@@ -1078,12 +1151,15 @@ def main(argv: list[str] | None = None):
     ap.add_argument("--open", action="store_true", help="브라우저로 화면을 엽니다")
     args = ap.parse_args(argv)
 
-    # 스키마 생성과 복구를 요청을 받기 전에 끝냅니다. 재시작 전에 돌던 작업과
-    # 세션은 이어질 수 없으므로, 계속 도는 척하지 않고 중단됨으로 적습니다.
+    # Schema creation and recovery are finished before any request is taken.
+    # The jobs and sessions that were running before the restart cannot be
+    # carried on, so rather than pretending they still run they are written as
+    # interrupted.
     store.init()
-    # 예전 판이 남긴 `data/<영상id>.json` 을 표로 옮깁니다. 옮길 것이 없으면
-    # 아무것도 하지 않으므로 매번 불러도 됩니다. 원본은 지우지 않고
-    # data/legacy/ 로 옮깁니다.
+    # The `data/<video id>.json` files an older version left behind are moved
+    # into the table. With nothing to move it does nothing, so calling it every
+    # time is fine. The originals are not deleted, they are moved to
+    # data/legacy/.
     store.import_legacy_docs()
     stale_jobs, stale_live = jobs.restore(), live.restore()
     if stale_jobs or stale_live:
@@ -1094,8 +1170,9 @@ def main(argv: list[str] | None = None):
     try:
         _srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     except OSError as exc:
-        # 이미 떠 있는 서버(또는 다른 프로그램)가 그 포트를 쥐고 있습니다. 묶음을
-        # 두 번 눌렀을 때가 대개 이 경우이니, 그 화면을 열어 주고 물러납니다.
+        # A server that is already up (or another program) holds that port.
+        # Double-clicking the bundle is mostly this case, so its screen is
+        # opened and we step back.
         print(f"mimiwatch: {args.port} 포트를 열 수 없습니다 ({exc}). "
               "이미 떠 있으면 그 화면을 씁니다.", file=sys.stderr, flush=True)
         if args.open:
@@ -1108,14 +1185,17 @@ def main(argv: list[str] | None = None):
     if args.open:
         import webbrowser
         threading.Timer(0.5, lambda: webbrowser.open(f"http://localhost:{args.port}/")).start()
-    # 새 판 확인은 하루 한 번, 배경에서. backends.json 의 "update_check": false 나
-    # 환경변수로 끌 수 있습니다 -- 밖으로 나가는 요청은 릴리스 목록 조회 하나입니다.
+    # The check for a new version is once a day, in the background. It can be
+    # turned off with `"update_check": false` in backends.json or with the
+    # environment variable -- the one request that goes out is the release list
+    # lookup.
     mw_update.start_auto_check()
     try:
         _srv.serve_forever()
     except KeyboardInterrupt:
-        # Ctrl-C도 화면의 종료 단추와 같은 자리로 모읍니다. 어느 쪽으로 끄든
-        # 세션은 "종료됨"으로 남아야 합니다.
+        # Ctrl-C is gathered into the same place as the screen's shutdown
+        # button. Whichever way it is stopped, the sessions have to be left as
+        # "ended".
         print("\nmimiwatch: 종료합니다", flush=True)
         _wind_down()
     _srv.server_close()

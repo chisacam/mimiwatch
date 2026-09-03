@@ -1,13 +1,13 @@
-"""쌓인 자막을 파일로 내보냅니다.
+"""Export the accumulated subtitles to a file.
 
-녹화본과 라이브가 같은 표에 있으므로 읽는 길은 하나입니다. 다만 담고 있는
-것이 다릅니다 -- 녹화본은 구간을 실제로 재어 `end` 가 있고, 라이브는 시작
-시각뿐입니다.
+VOD and live sit in the same table, so there is one path for reading them.
+What they hold differs, though -- a VOD's ranges were actually measured and it
+has `end`, while live has only the start time.
 
-라이브에 끝 시각이 없는 것은 구조상 그렇습니다 -- 발화가 끝나는 순간을
-아는 것은 VAD 이고, 자막은 그보다 늦게 확정되어 시작 시각만 달고 나옵니다.
-SRT/VTT 는 끝 시각을 요구하므로 여기서 지어 줍니다. 규칙은 아래 END_* 에
-있습니다.
+Live having no end time is structural -- what knows the moment an utterance
+ends is the VAD, and the subtitle is finalised later than that and comes out
+carrying only a start time. SRT/VTT demand an end time, so it is synthesized
+here. The rules are in END_* below.
 """
 from __future__ import annotations
 
@@ -15,15 +15,16 @@ import json
 
 import store
 
-# 라이브 자막의 끝 시각을 짓는 규칙.
+# The rules for synthesizing a live subtitle's end time.
 #
-# 다음 줄이 시작할 때까지 띄워 둡니다. 그러면 빈틈이 없고, 말이 뜸한 구간에서
-# 직전 자막이 남아 있어 읽을 시간이 생깁니다. 다만 한없이 남기면 몇 분째 같은
-# 줄이 붙어 있게 되므로 위를 막습니다 -- 혼자 하는 방송에도 말이 비는 구간은
-# 늘 있습니다.
+# It is held up until the next line starts. That leaves no gaps, and where
+# speech is sparse the previous subtitle stays up long enough to read. Held
+# without limit, though, the same line would sit there for minutes, so the top
+# is capped -- even a solo broadcast always has stretches with no speech.
 END_MAX_S = 6.0
-# 다음 줄이 바로 뒤따라오면 0.2초짜리 자막이 나옵니다. 읽을 수 없고 도구에
-# 따라서는 아예 버립니다. 겹치더라도 이만큼은 띄웁니다.
+# When the next line follows immediately, the result is a 0.2-second subtitle.
+# It cannot be read, and some tools discard it outright. Even overlapping, it
+# is held at least this long.
 END_MIN_S = 0.8
 
 FORMATS = ("srt", "vtt", "txt", "json")
@@ -55,16 +56,17 @@ def _pick(translations: dict, backend: str) -> str:
 
 
 def collect(value: str, backend: str = "") -> tuple[dict, list[dict]]:
-    """`value` 는 화면의 목록이 쓰는 것과 같습니다: 라이브는 `live:<세션>`,
-    녹화본은 영상 id.
+    """`value` is the same thing the on-screen list uses: `live:<session>` for
+    live, a video id for a VOD.
 
-    `backend`는 어느 엔진의 번역을 담을지입니다. 비우면 라이브는 그 세션이
-    쓴 엔진, 녹화본은 번역이 있는 엔진 중 하나입니다 -- 예전에는 녹화본에서
-    이 선택이 `backends_done`의 **알파벳 마지막**이었고, Gemma와 M2M-100이
-    둘 다 있으면 `local-m2m100`이 뽑혔습니다. 화면에서 보고 있던 것과 다른
-    번역이 파일로 나갔습니다.
+    `backend` is whose translation to put in. Left empty, live takes the engine
+    that session used and a VOD takes one of the engines that has a
+    translation -- for a VOD this choice used to be the **alphabetically last**
+    entry in `backends_done`, so with both Gemma and M2M-100 present
+    `local-m2m100` was picked. A translation other than the one being looked at
+    on screen went out to the file.
 
-    돌려주는 줄은 `{start, end, text, tr, speaker, kind}` 입니다.
+    The rows returned are `{start, end, text, tr, speaker, kind}`.
     """
     meta, rows = (_collect_live(value[5:], backend) if value.startswith("live:")
                   else _collect_video(value, backend))
@@ -73,17 +75,18 @@ def collect(value: str, backend: str = "") -> tuple[dict, list[dict]]:
 
 
 def _fill_ends(rows: list[dict]):
-    """끝 시각이 없거나 시작보다 앞선 줄을 손봅니다.
+    """Fix up the lines with no end time, or with an end before the start.
 
-    라이브 자막에는 애초에 끝 시각이 없고, 녹화본이라도 사람이 시작 시각을
-    앞으로 당기면 옛 끝 시각이 뒤에 남아 거꾸로 된 구간이 됩니다. SRT/VTT 에
-    그런 줄이 들어가면 도구가 그 자막을 버리거나 파일 전체를 거부합니다.
+    A live subtitle has no end time to begin with, and even in a VOD, pulling
+    the start time earlier by hand leaves the old end time behind it and makes
+    the range run backwards. With such a line in it, a tool either discards
+    that subtitle or rejects the whole SRT/VTT file.
 
-    규칙은 하나입니다 -- 다음 줄이 시작할 때까지, 위아래를 막아서.
+    There is one rule -- until the next line starts, capped top and bottom.
     """
     for i, r in enumerate(rows):
         if r["end"] > r["start"]:
-            continue                      # 실제로 잰 구간입니다. 그대로 둡니다.
+            continue                      # an actually measured range. Left alone.
         nxt = rows[i + 1]["start"] if i + 1 < len(rows) else None
         span = (nxt - r["start"]) if nxt is not None else END_MAX_S
         r["end"] = r["start"] + max(END_MIN_S, min(END_MAX_S, span))
@@ -95,8 +98,9 @@ def _collect_live(session_id: str, backend: str = "") -> tuple[dict, list[dict]]
         raise KeyError("no such session")
     backend = backend or st.get("backend") or ""
     cues = store.cues(session_id)
-    # 끝 시각은 _fill_ends 가 채웁니다. 라이브에는 잰 구간이 없으므로 전부
-    # 그 규칙을 타지만, 짓는 자리는 한 군데여야 합니다.
+    # _fill_ends fills the end times. Live has no measured ranges, so every
+    # line goes through that rule, but there must be only one place that
+    # synthesizes them.
     rows = [{
         "start": float(c.get("t") or 0.0), "end": float(c.get("end") or 0.0),
         "text": (c.get("text") or "").strip(),
@@ -116,10 +120,11 @@ def _collect_video(video_id: str, backend: str = "") -> tuple[dict, list[dict]]:
     if meta_doc is None:
         raise KeyError("no such video")
     cues = store.cues(video_id)
-    # 녹화본은 구간을 실제로 재어 두었으므로 그대로 씁니다.
+    # A VOD's ranges were actually measured, so they are used as they are.
     have = sorted({b for c in cues for b in c["translations"]})
     if backend not in have:
-        # 고른 엔진의 번역이 없으면(또는 고르지 않았으면) 있는 것 중에서.
+        # No translation from the chosen engine (or none chosen) -- one of
+        # the ones there are.
         backend = (have or [""])[-1]
     rows = [{
         "start": float(c["t"] or 0.0),
@@ -137,20 +142,22 @@ def _collect_video(video_id: str, backend: str = "") -> tuple[dict, list[dict]]:
 
 
 def _lines(row: dict, view: str) -> list[str]:
-    """이 줄에 무엇을 적을지. 화면의 「둘 다 / 번역만 / 원문만」과 같은 축입니다."""
+    """What to write on this line. The same axis as "Both / Translation only /
+    Source only" on screen."""
     src, tr = row["text"], row["tr"]
     if view == "src":
         return [src] if src else []
     if view == "tr":
-        # 번역이 없는 줄은 원문을 냅니다. 빼 버리면 그 발화가 아예 없었던
-        # 것이 되는데, 화면에서도 그렇게 하지 않습니다.
+        # A line with no translation emits the source. Leaving it out would
+        # make it as if that utterance had never happened, and the screen does
+        # not do that either.
         return [tr or src] if (tr or src) else []
     out = [x for x in (src, tr) if x]
     return out
 
 
 def render(meta: dict, rows: list[dict], fmt: str, view: str) -> tuple[bytes, str]:
-    """(내용, MIME) 을 돌려줍니다."""
+    """Returns (body, MIME)."""
     if fmt not in FORMATS:
         raise ValueError(f"모르는 형식입니다: {fmt}")
     if view not in VIEWS:
@@ -177,9 +184,10 @@ def render(meta: dict, rows: list[dict], fmt: str, view: str) -> tuple[bytes, st
             out.extend(pad + b for b in body[1:])
         return ("\n".join(out) + "\n").encode("utf-8"), "text/plain; charset=utf-8"
 
-    # SRT/VTT 는 자막 트랙입니다. 우리가 적은 안내(「⋯ 못 받았습니다 ⋯」)는
-    # 발화가 아니므로 여기서는 뺍니다. txt/json 에는 남습니다 -- 그쪽은
-    # 읽는 기록이라 무엇을 놓쳤는지가 정보입니다.
+    # SRT/VTT are subtitle tracks. A note we wrote ourselves
+    # (「⋯ 못 받았습니다 ⋯」) is not an utterance, so it is left out here. It
+    # stays in txt/json -- those are a record to read, and what was missed is
+    # information there.
     speech = [r for r in rows if r["kind"] != "note"]
     comma = fmt == "srt"
     out = [] if comma else ["WEBVTT", ""]
@@ -200,7 +208,8 @@ def render(meta: dict, rows: list[dict], fmt: str, view: str) -> tuple[bytes, st
 
 
 def filename(meta: dict, fmt: str) -> str:
-    """파일 이름. 제목을 쓰되 파일 이름이 될 수 없는 글자는 걸러 냅니다."""
+    """The file name. Uses the title, filtering out the characters a file name
+    cannot hold."""
     base = "".join(c for c in (meta.get("title") or "mimiwatch")
                    if c not in '\\/:*?"<>|\n\r\t').strip()
     base = " ".join(base.split())[:80] or "mimiwatch"

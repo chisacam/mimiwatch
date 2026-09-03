@@ -1,19 +1,22 @@
-"""녹화본 한 편을 시각이 붙은 자막으로 만드는 조각들과, 그것을 명령줄에서
-돌리는 껍데기.
+"""The pieces that turn one VOD into timestamped subtitles, and the shell that
+runs them from the command line.
 
-녹화본 흐름에는 시계를 맞출 일이 없습니다. 재생보다 먼저 전부 전사하고,
-자막마다 미디어 기준 시각이 붙어 있으니 브라우저는 유튜브 플레이어의
-`getCurrentTime()`에 맞춰 찾기만 합니다. 2026-08-27 라이브 실측이 이 경로를
-먼저 만든 이유입니다 -- 정제는 빠른 화자에게 최대 20초 뒤처지는데, 다 만든
-뒤에 재생하는 녹화본에서는 그것이 문제가 되지 않습니다.
+Nothing in the VOD flow has to match a clock. Everything is transcribed before
+playback, and every subtitle carries a media-relative timestamp, so the browser
+only has to look it up against the YouTube player's `getCurrentTime()`. The live
+measurement of 2026-08-27 is why this path was built first -- refinement falls
+as much as 20 seconds behind a fast speaker, and in a VOD that is played back
+after it has all been made, that is not a problem.
 
     python transcribe_vod.py --url https://youtu.be/... --viewer-lang ko
 
-**명령줄은 서버와 같은 길을 씁니다.** 예전에는 여기 번역 루프가 한 벌 더
-있었고 결과를 옛 모양(`data/<영상id>.json`)으로 썼습니다 -- 서버는 그 파일을
-다음 기동에서 표로 옮겨야 알아봤습니다. 이제 `jobs.start_transcribe`를 그대로
-부르고 진행률만 터미널에 찍습니다. 결과는 서버와 같은 `data/mimiwatch.db`에
-들어가고, 서버를 켜면 목록에 바로 보입니다.
+**The command line uses the same path as the server.** There used to be one
+more translate loop here, and it wrote the result in the old shape
+(`data/<video id>.json`) -- the server only recognised that file once the next
+startup had moved it into the table. Now `jobs.start_transcribe` is called
+directly and only the progress is printed in the terminal. The result goes into
+the same `data/mimiwatch.db` the server uses, and turning the server on shows it
+in the list right away.
 """
 from __future__ import annotations
 
@@ -37,30 +40,33 @@ SAMPLE_RATE = 16000
 CHUNK = 1600  # 0.1s per VAD feed
 
 
-# 실패는 RuntimeError로 냅니다. 예전에는 SystemExit이었는데, 이 함수들은
-# 서버의 작업 스레드(jobs._run_transcribe)에서도 불립니다. SystemExit은
-# Exception이 아니라 그쪽의 `except Exception`이 잡지 못하고, 스레드의
-# 기본 excepthook은 SystemExit을 조용히 무시합니다 -- 그러면 작업이
-# `running`인 채로 영원히 남고 「중단」도 듣지 않습니다. 다운로드 도중
-# 네트워크가 끊기면 정확히 이 경로였습니다. CLI 쪽(main)이 종료 코드로
-# 바꿉니다.
+# Failures are raised as RuntimeError. They used to be SystemExit, but these
+# functions are also called from the server's job thread
+# (jobs._run_transcribe). SystemExit is not an Exception, so that side's
+# `except Exception` does not catch it, and a thread's default excepthook
+# quietly ignores SystemExit -- the job then stays `running` forever and does
+# not listen to "stop" either. A network drop mid-download was exactly this
+# path. The CLI side (main) turns it into an exit code.
 class VodError(RuntimeError):
-    """yt-dlp나 ffmpeg가 실패했습니다."""
+    """yt-dlp or ffmpeg failed."""
 
 
-# ---- 로컬 파일 ---------------------------------------------------------------
+# ---- Local files -------------------------------------------------------------
 #
-# 전사 대상이 꼭 주소일 이유가 없습니다. 녹화해 둔 mp4, 뽑아 둔 mp3 도 같은
-# 파이프라인을 지납니다 -- 내려받기 대신 ffmpeg 변환이 한 단계 들어갈 뿐입니다.
-# 서버와 브라우저가 같은 기계라 경로를 그대로 받아도 되고, 파일 선택기로 올린
-# 것은 서버가 data/uploads/ 에 두고 그 경로를 여기로 넘깁니다.
+# There is no reason for the transcription target to be a URL. An mp4 that was
+# recorded, an mp3 that was extracted, go through the same pipeline -- one
+# ffmpeg conversion step takes the place of the download. The server and the
+# browser are on the same machine, so a path can be taken as it is, and what
+# was uploaded through the file picker is put in data/uploads/ by the server,
+# which hands that path over to here.
 
 def is_local_source(url: str) -> bool:
-    """주소 칸에 들어온 것이 이 기계의 파일 경로인가.
+    """Is what came in the URL field a file path on this machine?
 
-    file:// 와 절대 경로(맥·리눅스의 /, 윈도우의 드라이브 문자 꼴), ~ 만 봅니다.
-    상대 경로는 받지 않습니다 -- 서버의 작업 디렉터리는 사용자가 아는 곳이
-    아니라서, 붙는다 해도 어느 파일인지 말할 수 없습니다.
+    Only file://, absolute paths (/ on macOS and Linux, the drive-letter shape
+    on Windows) and ~ count. Relative paths are not taken -- the server's
+    working directory is not somewhere the user knows about, so even if one
+    resolved, there would be no saying which file it is.
     """
     u = (url or "").strip()
     return bool(u) and (u.startswith("file://") or u.startswith("/")
@@ -77,12 +83,13 @@ def local_path(url: str) -> str:
 
 
 def probe_local(url: str) -> dict:
-    """로컬 파일의 메타. yt-dlp 를 거치지 않습니다.
+    """Metadata for a local file. It does not go through yt-dlp.
 
-    id 는 경로의 해시입니다. 같은 파일을 다시 넣으면 같은 id 가 되어, 다른
-    엔진으로 만든 번역과 손편집을 물려받는 재전사 규칙이 그대로 성립합니다.
-    길이는 여기서 재지 않습니다 -- ffprobe 는 준비물이 아니고(정적 ffmpeg 한
-    파일에는 없습니다), 어차피 변환이 끝나면 wav 에서 정확히 압니다.
+    The id is a hash of the path. Putting the same file in again gives the same
+    id, so the re-transcription rule that inherits translations made by another
+    engine and hand edits holds exactly as it is. The duration is not measured
+    here -- ffprobe is not a prerequisite (a single static ffmpeg file does not
+    have it), and once the conversion is done the wav says it exactly anyway.
     """
     import hashlib
     path = local_path(url)
@@ -97,10 +104,11 @@ def probe_local(url: str) -> dict:
 
 
 def convert_local(src: str, dest: str, should_stop=None) -> str:
-    """로컬 미디어를 16kHz 모노 wav 로. 내려받기 단계의 자리에 들어갑니다.
+    """Local media to 16kHz mono wav. It takes the place of the download stage.
 
-    캐시 규칙이 주소와 다릅니다: 원본이 wav 보다 새로우면 다시 변환합니다.
-    같은 경로에 다른 내용이 놓이는 일이 로컬 파일에서는 흔합니다.
+    The cache rule differs from the URL one: if the source is newer than the
+    wav, it is converted again. Different content landing at the same path is
+    common with local files.
     """
     if os.path.exists(dest) and os.path.getmtime(dest) >= os.path.getmtime(src):
         print(f"[vod] reusing cached audio {dest}", file=sys.stderr)
@@ -159,9 +167,10 @@ def probe(url: str) -> dict:
 def fetch_audio(url: str, dest: str, should_stop=None) -> str:
     """Download the audio-only rendition and decode it to 16kHz mono wav.
 
-    `should_stop`이 참을 돌려주면 내려받기를 죽이고 `stream.Cancelled`를
-    냅니다. 두 시간짜리 방송은 내려받기만 몇 분인데, 예전에는 그 사이에
-    「중단」을 눌러도 다 받은 뒤에야 멈췄습니다.
+    When `should_stop` returns true, the download is killed and
+    `stream.Cancelled` is raised. A two-hour stream takes minutes just to
+    download, and pressing "stop" during that used to stop only once the
+    download had finished.
     """
     if is_local_source(url):
         return convert_local(local_path(url), dest, should_stop)
@@ -181,7 +190,7 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
             if should_stop and should_stop():
                 proc.kill()
                 proc.wait()
-                # yt-dlp는 받는 동안 `.part` 같은 조각 파일을 남깁니다.
+                # While downloading, yt-dlp leaves piece files like `.part`.
                 for leftover in glob.glob(glob.escape(tmp) + "*"):
                     try:
                         os.remove(leftover)
@@ -197,21 +206,23 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
     except subprocess.CalledProcessError as exc:
         raise VodError(f"ffmpeg failed: {exc}") from exc
     except FileNotFoundError as exc:
-        # ffmpeg가 없습니다. 내려받은 원본은 남겨 둡니다 -- 도구를 받은 뒤
-        # 다시 넣으면 `dest`가 없으니 여기부터 다시 하고, 원본은 yt-dlp가
-        # 같은 이름으로 덮어씁니다.
+        # ffmpeg is not there. The downloaded source is left in place -- put it
+        # in again after getting the tool and, since `dest` does not exist, it
+        # starts again from here, and yt-dlp overwrites the source under the
+        # same name.
         raise VodError(str(exc)) from exc
     os.remove(tmp)
     return dest
 
 
 def _pcm_span(path: str) -> tuple[int, int]:
-    """wav 의 표본 덩어리가 파일 어디서 시작해 몇 바이트인지.
+    """Where in the file the wav's sample chunk starts and how many bytes it is.
 
-    `wave` 모듈은 이것을 내주지 않습니다(`_data_chunk` 는 비공개입니다).
-    RIFF 는 「이름 4바이트 + 길이 4바이트 + 내용」의 되풀이라 직접 걸어가는
-    편이 짧습니다. 길이는 파일 크기로 한 번 조입니다 -- 헤더에 적힌 길이를
-    그대로 믿으면, 쓰다 만 wav 에서 메모리 대응이 파일 끝을 넘어갑니다.
+    The `wave` module does not hand this out (`_data_chunk` is private). RIFF is
+    a repetition of "4 bytes of name + 4 bytes of length + content", so walking
+    it directly is shorter. The length is clamped once by the file size --
+    trusting the length written in the header as it stands lets the memory
+    mapping run past the end of the file on a half-written wav.
     """
     with open(path, "rb") as f:
         head = f.read(12)
@@ -226,21 +237,23 @@ def _pcm_span(path: str) -> tuple[int, int]:
             if name == b"data":
                 start = f.tell()
                 return start, min(size, os.path.getsize(path) - start)
-            f.seek(size + (size & 1), 1)      # 덩어리는 짝수 바이트로 채워집니다
+            f.seek(size + (size & 1), 1)      # Chunks are padded to an even byte count
 
 
 class WavSamples:
-    """wav 를 통째로 올리지 않고, 달라는 조각만 float32 로 꺼내 줍니다.
+    """Does not load the wav whole; hands out only the slice asked for, as float32.
 
-    예전에는 `np.frombuffer(w.readframes(전부))` 였습니다. 116분짜리 방송이면
-    int16 원본 222MB 와 float32 사본 445MB 가 한때 같이 살아 있어 봉우리가
-    670MB 였습니다. 전사가 이 배열을 쓰는 방식은 `len()` 과 앞에서부터
-    잘라 가는 것뿐이고(원격 전사기도 창 단위로 자릅니다), 그 조각은 어차피
-    사본이 됩니다. 그러니 파일을 메모리에 대응해 두고 자를 때 바꿉니다 --
-    상주하는 것은 운영체제가 알아서 버리는 페이지 캐시뿐입니다.
+    It used to be `np.frombuffer(w.readframes(everything))`. On a 116-minute
+    stream the 222MB int16 original and the 445MB float32 copy were alive at the
+    same time for a while, so the peak was 670MB. The way transcription uses
+    this array is only `len()` and slicing from the front (the remote
+    transcriber slices by window too), and that slice becomes a copy anyway. So
+    the file is mapped into memory and converted at the moment it is sliced --
+    what stays resident is only page cache the OS discards on its own.
 
-    33절이 말하는 「내장 그래픽이 버거운 기계」가 이 도구의 대상이고,
-    그런 기계에서 445MB 는 전사 모델(SenseVoice Small 241MB)보다 큽니다.
+    The "machine where integrated graphics is a struggle" that section 33 talks
+    about is what this tool is for, and on such a machine 445MB is larger than
+    the transcription model (SenseVoice Small, 241MB).
     """
 
     def __init__(self, path: str):
@@ -260,25 +273,29 @@ class WavSamples:
 
 
 def read_wav(path: str) -> WavSamples:
-    """전사가 훑을 표본. 배열처럼 굴지만 파일을 물고 있습니다(WavSamples)."""
+    """The samples transcription will sweep. It acts like an array but holds a file
+    (WavSamples)."""
     return WavSamples(path)
 
 
-# 전체 전사 시간에서 정제 패스가 차지하는 몫. 49절 실측에서 정제를 붙이면
-# 30~50% 길어졌습니다. 진행률을 두 몫으로 나누는 데만 씁니다 -- 빠른 패스가
-# 100%에 닿고 나서 한참 더 도는 것처럼 보이면 멈춘 것으로 읽힙니다.
+# The refinement pass's share of the whole transcription time. In the section 49
+# measurement, adding refinement made it 30-50% longer. It is used only to split
+# the progress into two shares -- appearing to run on for a long while after the
+# fast pass has reached 100% reads as having stalled.
 REFINE_SHARE = 0.35
 
 
 def refine_groups(spans: list[tuple[int, int]]) -> list[list[int]]:
-    """확정 구간을 정제 단위로 묶습니다. 값은 각 무리의 인덱스 목록.
+    """Groups the final segments into refinement units. The value is a list of
+    indices per group.
 
-    무리를 닫는 규칙은 라이브(`stream.Refiner.maybe_refine`)와 같습니다.
-    라이브는 「마지막 발화 뒤로 2초가 조용하면 끝」을 흘러가는 시계로
-    판정하는데, 다 받아 둔 오디오에서는 그것이 「다음 발화가 2초 뒤에 온다」가
-    됩니다. 쉬지 않고 말해도 25초에서 끊는 것은 같습니다. 상수를 여기 베끼지
-    않고 `stream`에서 읽는 이유는, 그쪽이 움직이면 이쪽도 함께 움직여야
-    하기 때문입니다.
+    The rule for closing a group is the same as live's
+    (`stream.Refiner.maybe_refine`). Live judges "2 seconds of quiet after the
+    last utterance ends it" against a running clock, and on audio that has all
+    been fetched already that becomes "the next utterance comes 2 seconds
+    later". Cutting at 25 seconds even when someone does not stop talking is the
+    same. The reason the constants are read from `stream` instead of being
+    copied here is that if that side moves, this side has to move with it.
     """
     gap = int(stream.GROUP_GAP_S * SAMPLE_RATE)
     mx = int(stream.GROUP_MAX_S * SAMPLE_RATE)
@@ -296,12 +313,14 @@ def refine_groups(spans: list[tuple[int, int]]) -> list[list[int]]:
 
 
 def _speaker_for(cues: list[dict], idx: list[int], start: float, end: float) -> str:
-    """새 자막 줄에 붙일 화자. 확정본이 이미 받아 둔 딱지를 물려받습니다.
+    """The speaker to attach to a new subtitle line. It inherits the label the final
+    already took.
 
-    되쪼갠 줄마다 CAM++를 다시 돌릴 수도 있지만, 확정본은 이미 구간마다
-    딱지를 달았고 그때 쓴 조각이 더 깁니다 -- 33절이 말한 「구간에 목소리가
-    충분해야 한다」는 조건은 그쪽이 낫습니다. 시간이 가장 많이 겹치는
-    확정 줄의 딱지를 씁니다.
+    CAM++ could be run again for each re-split line, but the finals already put
+    a label on every segment and the piece used then is longer -- the condition
+    section 33 stated, "a segment must have enough voice in it", is better met
+    on that side. The label of the final line that overlaps the most in time is
+    used.
     """
     best, best_overlap = "", 0.0
     for i in idx:
@@ -314,21 +333,25 @@ def _speaker_for(cues: list[dict], idx: list[int], start: float, end: float) -> 
 
 def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
                 on_progress=None, should_stop=None) -> list[dict]:
-    """발화 무리를 통째로 다시 해독하고, 구간 시각으로 도로 쪼갭니다.
+    """Decodes an utterance group whole again and re-splits it by segment timestamps.
 
-    확정본은 구간을 따로따로 해독한 것이라 앞뒤 문맥이 없습니다. 무리를
-    합쳐 다시 넘기면 그만큼 좋아집니다(48절: 전체 오류율 57.8 → 55.9).
+    The finals are segments decoded one by one, so they have no surrounding
+    context. Joining a group and passing it again is better by that much
+    (section 48: overall error rate 57.8 → 55.9).
 
-    **되쪼개는 것이 이 함수의 핵심입니다.** 라이브의 정제는 무리 하나를 한
-    줄로 내보내고 그것으로 충분한데 -- 그 줄은 곧 지나갑니다 -- 녹화본 자막은
-    남아서 플레이어가 시각으로 찾아가는 대상입니다. 무리를 한 줄로 두면
-    자막 줄이 4.8초에서 11.7초로 늘고 끝단 품질이 오히려 떨어졌습니다
-    (49절: chrF 29.3 → 27.7, 전체 이어붙이기는 39.6으로 동일 -- 글자가 아니라
-    시각을 뭉갠 것입니다). 런타임에 구간 시각을 물어 도로 나누면 같은 표본에서
-    32.4로, 재 본 설정 가운데 가장 높습니다.
+    **The re-split is the heart of this function.** Live's refinement sends one
+    group out as one line and that is enough -- that line passes by soon --
+    whereas a VOD subtitle stays, and is what the player looks up by timestamp.
+    Leaving a group as one line stretched the subtitle line from 4.8 s to 11.7 s
+    and the tail quality actually dropped (section 49: chrF 29.3 → 27.7, while
+    the whole-text concatenation stayed the same at 39.6 -- what was mangled was
+    the timing, not the characters). Asking the runtime for segment timestamps
+    and dividing it back up gives 32.4 on the same sample, the highest of the
+    settings measured.
 
-    시각을 받지 못하는 전사기나 되돌림에 걸린 무리는 확정본을 그대로 둡니다.
-    좋아지지 않는 자리에서 나빠지지는 않아야 합니다.
+    A transcriber that cannot give timestamps, and a group caught by the
+    rollback, keep their finals as they are. Where it does not get better, it
+    must at least not get worse.
     """
     if not getattr(asr, "supports_segments", False):
         return cues
@@ -349,17 +372,19 @@ def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
                                  live=False, segments=True)
             text = got["text"].strip()
             segs = got.get("segments") or []
-            # 되돌림은 라이브와 같은 문턱입니다. 다시 해독한 것이 확정본을 이어
-            # 붙인 것보다 눈에 띄게 짧으면 말을 삼킨 것이고, 말을 삼킨 해독으로
-            # 멀쩡한 자막을 바꿔치기하는 것이 가장 나쁩니다.
+            # The rollback uses the same threshold as live. If the re-decode is
+            # noticeably shorter than the finals concatenated, it swallowed
+            # words, and swapping perfectly good subtitles for a decode that
+            # swallowed words is the worst outcome.
             if segs and len(text) >= stream.REFINE_MIN_KEEP * len(joined):
                 lang = got.get("lang") or keep[0]["lang"]
                 keep = []
                 for sg in segs:
                     start = min(max(base / SAMPLE_RATE + sg["start"], lo), hi)
                     end = min(max(base / SAMPLE_RATE + sg["end"], lo), hi)
-                    # 선행 1초 안에서만 나온 줄은 앞 무리의 꼬리이고, 시각이
-                    # 뭉개진 조각은 자막이 될 수 없습니다. 둘 다 버립니다.
+                    # A line that came out only within the 1 s preroll is the
+                    # tail of the previous group, and a piece whose timing is
+                    # mangled cannot be a subtitle. Both are thrown away.
                     if end - start < 0.05:
                         continue
                     cue = {"start": round(start, 3), "end": round(end, 3),
@@ -368,7 +393,7 @@ def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
                     if who:
                         cue["speaker"] = who
                     keep.append(cue)
-                if not keep:                       # 전부 걸러졌으면 확정본을 되돌립니다
+                if not keep:                       # All filtered out: put the finals back
                     keep = [cues[i] for i in g]
         out.extend(keep)
         if on_progress:
@@ -385,13 +410,14 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
     player needs -- the realtime pipeline throws this away because it only
     ever cared about "now".
 
-    `samples`에서 쓰는 것은 `len()`과 잘라 내는 것뿐입니다. 그래서 `read_wav`가
-    주는 파일 대응 창(WavSamples)도 그대로 받습니다 -- 두 시간짜리 방송을
-    배열로 만들지 않으려고 그렇게 두었습니다.
+    All that is used from `samples` is `len()` and slicing. That is why the
+    file-mapped window `read_wav` gives (WavSamples) is taken as it is -- it was
+    left that way so as not to turn a two-hour stream into an array.
 
-    `refine`이면 확정본을 낸 뒤에 무리째 다시 해독합니다(`refine_cues`).
-    녹화본에는 지연 제약이 없으니 기본으로 켭니다. 대신 전사 시간이 30~50%
-    깁니다 -- 그것이 아까운 자리를 위해 끌 수 있게 두었습니다.
+    With `refine`, the group is decoded again after the finals have been
+    produced (`refine_cues`). A VOD has no latency constraint, so it is on by
+    default. The cost is that transcription takes 30-50% longer -- it can be
+    turned off for the places where that is not worth it.
     """
     if asr is None:
         asr = build_live_asr(None, lang, threads=4)
@@ -404,13 +430,16 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
         from speaker_id import SpeakerLabeler
         labeler = SpeakerLabeler()
     cues: list[dict] = []
-    # 자막 줄과 짝이 되는 표본 구간. 정제가 무리를 묶는 데 씁니다.
+    # The sample spans paired with the subtitle lines. Refinement uses them to
+    # group utterances.
     spans: list[tuple[int, int]] = []
     total = len(samples)
-    # 정제는 되쪼개기까지가 한 벌입니다. 구간 시각을 못 내는 모델
-    # (SenseVoice Small, moonshine -- 경량 기본입니다)에서는 무리를 한 줄로
-    # 뭉치는 것밖에 할 수 없고 그것은 49절에서 진 쪽이므로, 하지 않습니다.
-    # 여기서 미리 정해 두는 것은 진행률을 몇 몫으로 나눌지가 걸려 있어서입니다.
+    # Refinement is one set of moves only as far as the re-split. On a model
+    # that cannot give segment timestamps (SenseVoice Small, moonshine -- the
+    # light defaults) all it could do is lump a group into one line, and that is
+    # the side that lost in section 49, so it is not done. It is settled here
+    # ahead of time because how many shares to split the progress into hangs
+    # on it.
     if refine and not getattr(asr, "supports_segments", False):
         print(f"[vod] {getattr(asr, 'label', '이 전사기')} 는 구간 시각을 내지 못해 "
               "정제를 건너뜁니다", file=sys.stderr, flush=True)
@@ -419,8 +448,9 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
 
     def drain():
         while not vad.empty():
-            # 구간 하나마다 확인합니다. 청크 루프에서만 보면 해독이 뒤처진
-            # 만큼 늦게 멈춥니다 -- 느린 기계일수록 그 차이가 큽니다.
+            # Checked once per segment. Looking only in the chunk loop stops as
+            # late as the decode has fallen behind -- the slower the machine,
+            # the bigger that gap.
             if should_stop and should_stop():
                 raise stream.Cancelled()
             seg = vad.front
@@ -456,7 +486,7 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
     return cues
 
 
-# ---- 명령줄 ------------------------------------------------------------------
+# ---- Command line ------------------------------------------------------------
 
 PHASE_LABEL = {"probe": "영상 정보 확인", "download": "오디오 내려받는 중",
                "convert": "오디오 변환 중",
@@ -464,9 +494,10 @@ PHASE_LABEL = {"probe": "영상 정보 확인", "download": "오디오 내려받
 
 
 def main():
-    # 윈도우 콘솔의 기본 인코딩이 cp949라 한글 제목이 깨집니다. 예전에는 이 줄이
-    # 모듈 맨 위에 있어서 서버가 이 모듈을 import 하는 순간 서버의 stdout까지
-    # 바꿔 놓았습니다. 명령줄에서만 합니다.
+    # The Windows console's default encoding is cp949, which mangles Korean
+    # titles. This line used to sit at the very top of the module, so the moment
+    # the server imported this module it changed the server's stdout too. It is
+    # done only on the command line.
     sys.stdout.reconfigure(encoding="utf-8")
     import translate as mw_translate
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -518,6 +549,7 @@ if __name__ == "__main__":
     try:
         main()
     except VodError as exc:
-        # 명령줄에서는 종료 코드로 말합니다. 서버 스레드에서는 예외로 남겨야
-        # 하므로 함수 안에서는 SystemExit을 쓰지 않습니다.
+        # On the command line we speak in exit codes. It has to stay an
+        # exception on the server thread, so SystemExit is not used inside the
+        # functions.
         raise SystemExit(str(exc))

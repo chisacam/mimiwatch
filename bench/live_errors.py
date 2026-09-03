@@ -31,26 +31,24 @@ def check(cond, what):
 
 
 def make_session():
-    """모델을 올리지 않고 _run 만 돌릴 수 있는 최소한의 세션."""
-    s = live.LiveSession.__new__(live.LiveSession)
-    for k, v in dict(
-            id="t", url="https://example.invalid/x", lang="ja", viewer_lang="ko",
-            backend_id="local-gemma", asr_backend_id="tcpp-best", genre="general",
-            refine=True, state="starting", error=None, title="", video_id="",
-            media_base=0.0, window_s=0.0, audio_s=0.0, started=0.0, lines=0,
-            translated=0, profile="broadcast", max_speech=4.0, min_silence=0.3,
-            asr_label="", _ff=None, _asr=None, _tr=None, _recent=[], _subs=[],
-            _seq=0, source="hls", resume_from=0.0, gap_s=0.0,
-            dropped_s=0.0, stopped_by="", _recv_base=0.0, _recv_s=0.0,
-            _ended=False, _rx=None).items():
-        setattr(s, k, v)
-    s._ring = live.Ring(live.RING_S)
-    s._focus = __import__("threading").Event()
-    s._focus.set()
-    s._pub_lock = __import__("threading").RLock()
+    """모델을 올리지 않고 _run 만 돌릴 수 있는 최소한의 세션.
+
+    **실제 생성자를 씁니다.** 예전에는 `__new__` 로 빈 객체를 만들고 속성 이름을
+    손으로 나열했는데, 멀티뷰가 `__init__` 에 `group`·`site`·`channel` 을 더한 뒤로
+    그 목록이 낡아 `status()` 가 AttributeError 로 죽었습니다 -- 라이브 코드가 멀쩡한데
+    검사만 깨진 것이고, 그 자리에서는 「엔진 갈아 끼우기가 고장났다」로 읽힙니다.
+    `__init__` 은 속성 대입뿐이라(스레드를 띄우지도, 모델을 올리지도, 저장소에 쓰지도
+    않습니다) 그대로 불러도 안전하고, 앞으로 속성이 늘어도 이 검사는 따라옵니다.
+
+    바깥으로 나가는 두 길만 막습니다: 상태 저장(저장소)과 이벤트 발행(SSE).
+    """
+    s = live.LiveSession(
+        url="https://example.invalid/x", lang="ja", viewer_lang="ko",
+        backend_id="local-gemma", asr_backend_id="tcpp-best",
+        profile="broadcast", genre="general", refine=True, source="hls")
+    s.id = "t"                  # 검사 출력이 실행마다 달라지지 않도록 고정합니다
     s._persist = lambda: None
     s.emit = lambda e: None
-    s._subs = []
     return s
 
 

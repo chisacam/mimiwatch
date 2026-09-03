@@ -108,8 +108,14 @@ def main():
         ids = [c["id"] for c in store.cues(OWNER)]
         check(store.cue_count(OWNER) == n0 - 1, f"한 줄 줄었다 ({n0} -> {n0-1})")
         check(2 not in ids, "그 줄이 없다")
-        check(ids == sorted(ids) and 1 in ids and 3 in ids,
-              f"남은 번호는 다시 매기지 않는다 ({ids})")
+        check(1 in ids and 3 in ids, f"남은 번호는 다시 매기지 않는다 ({ids})")
+        # 남은 줄의 순서는 번호순이 아니라 **시각순**입니다. 예전에는 이 자리에서
+        # `ids == sorted(ids)` 를 함께 봤는데, 바로 위 [6]이 1번 줄의 시작을 50초로
+        # 밀어 놓으므로 그 요구는 store.cues() 의 약속을 거스릅니다 -- 사람이 써 넣은
+        # 줄(insert_cue)은 번호가 늘 마지막이면서 시각은 빈 자리 어딘가라, 번호순으로
+        # 내면 내보내기 순서와 번역 문맥이 어긋납니다(store.cues 도크스트링).
+        ts = [c["t"] for c in store.cues(OWNER)]
+        check(ts == sorted(ts), f"남은 줄은 시각순이다 ({ts})")
         check(not store.delete_cue(OWNER, 2), "이미 없는 줄은 False")
 
         print("\n[8] 기계 번역은 「원문과 다름」을 걷는다")

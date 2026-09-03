@@ -110,9 +110,12 @@ session's reading of the same row.
   "ended".
 - **Switching engines keeps the session id** on purpose (cues are stored by session id);
   a "history was wiped" report means that invariant broke.
-- **`bench/edit_check.py` and `bench/live_errors.py` already fail** on main (renumbering
-  after delete; `LiveSession.group`). Do not attribute those to your change — and do not
-  quietly fix them inside an unrelated task.
+- **A red check is not automatically your change.** Before blaming a diff, check whether
+  it touches any `.py` at all. `bench/live_errors.py` now builds its session through the
+  real `LiveSession.__init__` because a hand-listed attribute set went stale when
+  multiview added `group`, and the failure surfaced at "engine swap keeps the session" —
+  reading exactly like a broken feature. Equally: do not quietly fix an unrelated check
+  inside another task.
 - **A session left over from a previous run** can serve cues that look like your change
   working. Start a fresh session when the result matters.
 

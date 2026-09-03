@@ -205,20 +205,76 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
     return dest
 
 
-def read_wav(path: str) -> np.ndarray:
-    with wave.open(path, "rb") as w:
-        assert w.getframerate() == SAMPLE_RATE and w.getnchannels() == 1
-        raw = w.readframes(w.getnframes())
-    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+def _pcm_span(path: str) -> tuple[int, int]:
+    """wav 의 표본 덩어리가 파일 어디서 시작해 몇 바이트인지.
+
+    `wave` 모듈은 이것을 내주지 않습니다(`_data_chunk` 는 비공개입니다).
+    RIFF 는 「이름 4바이트 + 길이 4바이트 + 내용」의 되풀이라 직접 걸어가는
+    편이 짧습니다. 길이는 파일 크기로 한 번 조입니다 -- 헤더에 적힌 길이를
+    그대로 믿으면, 쓰다 만 wav 에서 메모리 대응이 파일 끝을 넘어갑니다.
+    """
+    with open(path, "rb") as f:
+        head = f.read(12)
+        if head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+            raise VodError(f"wav 가 아닙니다: {os.path.basename(path)}")
+        while True:
+            hdr = f.read(8)
+            if len(hdr) < 8:
+                raise VodError(f"wav 에 표본 덩어리가 없습니다: {os.path.basename(path)}")
+            name = hdr[:4]
+            size = int.from_bytes(hdr[4:8], "little")
+            if name == b"data":
+                start = f.tell()
+                return start, min(size, os.path.getsize(path) - start)
+            f.seek(size + (size & 1), 1)      # 덩어리는 짝수 바이트로 채워집니다
 
 
-def transcribe(samples: np.ndarray, lang: str | None, on_progress=None,
+class WavSamples:
+    """wav 를 통째로 올리지 않고, 달라는 조각만 float32 로 꺼내 줍니다.
+
+    예전에는 `np.frombuffer(w.readframes(전부))` 였습니다. 116분짜리 방송이면
+    int16 원본 222MB 와 float32 사본 445MB 가 한때 같이 살아 있어 봉우리가
+    670MB 였습니다. 전사가 이 배열을 쓰는 방식은 `len()` 과 앞에서부터
+    잘라 가는 것뿐이고(원격 전사기도 창 단위로 자릅니다), 그 조각은 어차피
+    사본이 됩니다. 그러니 파일을 메모리에 대응해 두고 자를 때 바꿉니다 --
+    상주하는 것은 운영체제가 알아서 버리는 페이지 캐시뿐입니다.
+
+    33절이 말하는 「내장 그래픽이 버거운 기계」가 이 도구의 대상이고,
+    그런 기계에서 445MB 는 전사 모델(SenseVoice Small 241MB)보다 큽니다.
+    """
+
+    def __init__(self, path: str):
+        with wave.open(path, "rb") as w:
+            if not (w.getframerate() == SAMPLE_RATE and w.getnchannels() == 1
+                    and w.getsampwidth() == 2):
+                raise VodError(f"16kHz 모노 16비트 wav 가 아닙니다: {os.path.basename(path)}")
+        start, size = _pcm_span(path)
+        self._mm = np.memmap(path, dtype="<i2", mode="r", offset=start,
+                             shape=(size // 2,))
+
+    def __len__(self) -> int:
+        return int(self._mm.shape[0])
+
+    def __getitem__(self, key) -> np.ndarray:
+        return self._mm[key].astype(np.float32) / 32768.0
+
+
+def read_wav(path: str) -> WavSamples:
+    """전사가 훑을 표본. 배열처럼 굴지만 파일을 물고 있습니다(WavSamples)."""
+    return WavSamples(path)
+
+
+def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress=None,
                speakers: bool = False, asr=None, should_stop=None) -> list[dict]:
     """VAD-segment the whole file and decode each segment.
 
     Segment.start is a sample index, which is exactly the media timestamp the
     player needs -- the realtime pipeline throws this away because it only
     ever cared about "now".
+
+    `samples`에서 쓰는 것은 `len()`과 앞에서부터 자르는 것뿐입니다. 그래서
+    `read_wav`가 주는 파일 대응 창(WavSamples)도 그대로 받습니다 -- 두 시간
+    짜리 방송을 배열로 만들지 않으려고 그렇게 두었습니다.
     """
     if asr is None:
         asr = build_live_asr(None, lang, threads=4)

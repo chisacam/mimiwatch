@@ -474,6 +474,11 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             except mw_stream.Cancelled:
                 note(state="cancelled"); return
         note(asr_used=engine.name)
+        # 오디오를 여기서 놓습니다. 116분짜리 wav 는 float32 로 445MB 인데,
+        # 이 이름이 함수 프레임에 남아 있으면 그 다음의 번역 단계 -- 천 줄이면
+        # 몇 분입니다 -- 내내 붙들려 있었습니다. 전사가 끝난 뒤로는 아무도
+        # 쓰지 않습니다(audio_s 는 이미 숫자로 떠 두었습니다).
+        del samples
         if cancelled():
             note(state="cancelled"); return
 

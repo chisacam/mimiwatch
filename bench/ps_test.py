@@ -44,7 +44,7 @@ def slice_script():
     py_e = find(lambda l: l.startswith("if (-not $PythonExe)")) - 1
     v_s = find(lambda l: l.startswith("$verify = @'"))
     v_e = find(lambda l: l.startswith("$check.Lines"))
-    b_s = find(lambda l: l.startswith("Say '백엔드'"))
+    b_s = find(lambda l: l.startswith("Say 'Backend'"))
     b_e = next(i for i, l in enumerate(src, 1) if i > b_s and l == "}")
     fn_s = find(lambda l: l.startswith("function Say"))
     # 헬퍼 블록은 Invoke-PyFile 의 닫는 괄호까지입니다. 예전에는 Get-Model 이 그 뒤에

@@ -246,13 +246,13 @@ def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
                                  timeout=stream.YTDLP_TIMEOUT_S,
                                  **stream.child_io(stderr=False))
         except TimeoutExpired:
-            why.append(f"{fmt}: {stream.YTDLP_TIMEOUT_S:.0f}초 안에 답하지 않음")
+            why.append(f"{fmt}: no answer within {stream.YTDLP_TIMEOUT_S:.0f} s")
             continue
         lines = out.stdout.strip().splitlines()
         if out.returncode == 0 and lines:
             return lines[0], manifest_info(lines[0])
         why.append(f"{fmt}: {(out.stderr or '').strip().splitlines()[-1]}"
-                   if (out.stderr or "").strip() else f"{fmt}: 빈 결과")
+                   if (out.stderr or "").strip() else f"{fmt}: empty result")
     # Carry what yt-dlp said verbatim. "Could not resolve" on its own does not
     # tell you where to look -- whether an update is needed, whether a login is
     # needed, or whether it was never live in the first place is written in
@@ -263,12 +263,13 @@ def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
         # If all three are missing, it is not that one format is absent but
         # that the whole list did not come back. Almost always because yt-dlp
         # is old.
-        hint = (f" — 포맷을 하나도 받지 못했습니다. yt-dlp({ver or '판 미상'})가 "
-                f"낡았을 수 있습니다"
-                + (" (45일 넘음)" if ytdlp_stale(ver) else "")
-                + ". 「엔진 관리 › 모델·도구」에서 yt-dlp 독립 실행 파일을 (다시) 받거나 "
-                  "`yt-dlp --update-to nightly` 로 올린 뒤 다시 해 보십시오.")
-    raise RuntimeError("yt-dlp가 이 주소에서 오디오를 찾지 못했습니다."
+        hint = (f" — not a single format came back. yt-dlp "
+                f"({ver or 'version unknown'}) may be stale"
+                + (" (over 45 days old)" if ytdlp_stale(ver) else "")
+                + ". Download the yt-dlp standalone executable again from "
+                  '"Engines › Models & Tools", or bring it up with '
+                  "`yt-dlp --update-to nightly`, then try again.")
+    raise RuntimeError("yt-dlp could not find any audio at this URL."
                        + hint + " [" + " / ".join(why) + "]")
 
 
@@ -718,7 +719,7 @@ class LiveSession:
         during the wait remain. Filtering by time handles both cases with one rule.
         """
         # A notice we wrote ourselves (kind=note) is not speech. Putting it in the
-        # context makes the translator read "서버가 멈춘 사이 …" as the preceding
+        # context makes the translator read "⋯ went unreceived ⋯" as the preceding
         # sentence and translate it.
         older = [c["text"] for c in self._recent
                  if c["t"] < cue["t"] and c.get("kind") != "note"]
@@ -764,7 +765,7 @@ class LiveSession:
             try:
                 self._translate(cue, ctx)
             except Exception as exc:              # one line's failure must not block the rest
-                print(f"[live] 번역 루프 오류: {exc}", file=sys.stderr, flush=True)
+                print(f"[live] translate loop error: {exc}", file=sys.stderr, flush=True)
 
     def _superseded(self, cue: dict) -> bool:
         """Has this line been absorbed by a refined line, or its text changed, in the
@@ -795,7 +796,7 @@ class LiveSession:
             # utterance look to the viewer as if it never happened. The source text
             # goes in that slot so the fact that it could not be translated remains,
             # and why it failed goes into the log.
-            print(f"[live] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
+            print(f"[live] translation failed, keeping the source text: {exc}", file=sys.stderr)
             out = cue["text"]
         if not (out or "").strip():
             return
@@ -832,9 +833,9 @@ class LiveSession:
             self._focus.set()
         else:
             self._focus.clear()
-        print(f"[live] 세션 {self.id} 초점 {'켬' if on else '끔'} "
-              f"(링 {self._ring.seconds():.1f}초, 받은 {self._recv_s:.0f}초, "
-              f"받아 적은 {self.audio_s:.0f}초)",
+        print(f"[live] session {self.id} focus {'on' if on else 'off'} "
+              f"(ring {self._ring.seconds():.1f}s, received {self._recv_s:.0f}s, "
+              f"transcribed {self.audio_s:.0f}s)",
               flush=True)
         if self.source == "tab":
             # The browser cannot slow tab audio down, so while focused a long
@@ -871,9 +872,9 @@ class LiveSession:
         dropped is returned.
         """
         if self.source != "tab":
-            return {"error": "이 세션은 탭 오디오를 받지 않습니다"}
+            return {"error": "This session does not take tab audio"}
         if self._stop.is_set() or self.state in ("stopped", "error"):
-            return {"error": "세션이 끝났습니다", "state": self.state}
+            return {"error": "The session has ended", "state": self.state}
         need = CHUNK * 2
         for off in range(0, len(raw) - need + 1, need):
             block = np.frombuffer(raw, dtype=np.int16, count=CHUNK,
@@ -1086,8 +1087,8 @@ class LiveSession:
             if not self._stop.is_set() and self.stopped_by != "ended":
                 self.stopped_by = "stream"
                 self.state = "error"
-                self.error = (f"수신이 끊겼고 {HLS_RECONNECT_TRIES}번 다시 붙어 보았지만 "
-                              "되지 않았습니다. 「이어받기」로 다시 시도할 수 있습니다.")
+                self.error = (f"Reception was cut off and {HLS_RECONNECT_TRIES} attempts to "
+                              "reattach failed. You can try again with “Resume”.")
             break
 
     def _consume(self):
@@ -1157,19 +1158,19 @@ class LiveSession:
         try:
             src, start_index = self._resolve_hls(reconnect=True)
         except Exception as exc:
-            print(f"[live] 세션 {self.id} 다시 붙기 {attempt}회 실패: {exc}",
+            print(f"[live] session {self.id} reattach attempt {attempt} failed: {exc}",
                   file=sys.stderr, flush=True)
             return "retry"
         if src is None:
             return "ended"
         self._recv_s = 0.0
-        print(f"[live] 세션 {self.id} 다시 붙음 ({attempt}회, 빠진 구간 {self.gap_s:.0f}초)",
-              flush=True)
+        print(f"[live] session {self.id} reattached (attempt {attempt}, "
+              f"missing stretch {self.gap_s:.0f}s)", flush=True)
         # The new time base and the notice about the missing stretch go **through**
         # the ring. Publishing them directly here would make them arrive ahead of the
         # old chunks still in the ring, and those chunks would be stamped with the
         # new base.
-        note = (f"⋯ 수신이 끊겨 약 {int(self.gap_s)}초를 받지 못했습니다 ⋯"
+        note = (f"⋯ about {int(self.gap_s)} s went unreceived while reception was cut ⋯"
                 if self.gap_s >= 1.0 else "")
         self._ring.push(("rebase", self._recv_base, note))
         self._spawn_ffmpeg(src, start_index)
@@ -1212,7 +1213,7 @@ class LiveSession:
             self.error = f"{type(exc).__name__}: {exc}"[:300]
             # Only one line goes to the screen. Where it came from has to stay
             # in the log for the next report to be diagnosable.
-            print(f"[live] 세션 {self.id} 실패:", file=sys.stderr)
+            print(f"[live] session {self.id} failed:", file=sys.stderr)
             traceback.print_exc()
             self._persist()
             self.emit({"type": "status", **self.status()})
@@ -1238,7 +1239,7 @@ class LiveSession:
             # Even if the metadata does not come back, resolve_audio below tries
             # once more. If that fails too it raises with the reason attached.
             meta = subprocess.CompletedProcess(args=[], returncode=-1,
-                                               stdout="", stderr="시간 초과")
+                                               stdout="", stderr="timed out")
         if meta.returncode == 0:
             try:
                 d = json.loads(meta.stdout)
@@ -1266,9 +1267,9 @@ class LiveSession:
                 self.state = "error"
                 # A broadcast that has just ended comes here too -- it was live
                 # when /api/probe looked and ended in the meantime.
-                self.error = ("라이브가 아닙니다. 방송이 방금 끝났거나 "
-                              "녹화본 주소일 수 있습니다. 녹화본은 "
-                              "「＋ 영상 추가」로 처리하십시오.")
+                self.error = ("This is not live. The stream may have just ended, "
+                              "or it may be a recording URL. Handle a "
+                              "recording with “＋ Add”.")
                 self._persist()
                 self.emit({"type": "status", **self.status()})
                 return None, None
@@ -1297,7 +1298,7 @@ class LiveSession:
             self.gap_s = max(0.0, self._recv_base - self.resume_from) if self._recv_base else 0.0
         print(f"[live] playlist: {info.get('segments')} segments / "
               f"{self.window_s:.0f}s window, media_base={self._recv_base:.0f}s"
-              + (f", 이어받기 index={start_index} 빠진 구간={self.gap_s:.0f}s"
+              + (f", resume index={start_index} missing={self.gap_s:.0f}s"
                  if self.resume_from else ""),
               flush=True)
         return src, start_index
@@ -1325,14 +1326,14 @@ class LiveSession:
             # and not having been able to transcribe are two different stories.
             self.publish_line(
                 "note",
-                f"⋯ 서버가 멈춘 사이 약 {int(self.gap_s)}초를 받지 "
-                f"못했습니다 ⋯", self.lang or "", "")
+                f"⋯ about {int(self.gap_s)} s went unreceived while the "
+                f"server was down ⋯", self.lang or "", "")
         if self.source == "tab" and self.resume_from:
             # Tab audio cannot be rewound. The sound from while the share was
             # cut is nowhere, so not even how many seconds it was is known.
             self.publish_line(
-                "note", "⋯ 여기서부터 탭 소리를 다시 받습니다. 공유가 "
-                "끊긴 사이는 받지 못했습니다 ⋯", self.lang or "", "")
+                "note", "⋯ tab audio is received again from here. Nothing "
+                "was received while the share was cut ⋯", self.lang or "", "")
         while not self._stop.is_set() and not self._ended:
             if not self._focus.wait(0.5):
                 continue                 # a standby session: only the ring is filling
@@ -1394,8 +1395,8 @@ class LiveSession:
             sink = Sink(self)
             history = AudioHistory(SAMPLE_RATE)
             refiner = Refiner(asr, history, sink) if self.refine else None
-            print(f"[live] 세션 {self.id} 받아 적기 시작 (링 {self._ring.seconds():.1f}초)",
-                  flush=True)
+            print(f"[live] session {self.id} transcription start "
+                  f"(ring {self._ring.seconds():.1f}s)", flush=True)
             run_stream(self._consume(), vad, asr, sink, history, refiner)
             if refiner is not None:
                 # Wait for the last group's refinement to finish. A refined line
@@ -1417,12 +1418,13 @@ class LiveSession:
                     th.join(1.0)
                     waited += 1.0
                 if th is not None and th.is_alive():
-                    print(f"[live] 세션 {self.id} 정제 스레드가 {waited:.0f}초 뒤에도 살아 있음",
+                    print(f"[live] session {self.id} refinement thread still "
+                          f"alive after {waited:.0f}s",
                           file=sys.stderr, flush=True)
             del vad, history, refiner
-            focus = "있음" if self._focus.is_set() else "없음"
-            print(f"[live] 세션 {self.id} 받아 적기 끝 (초점 {focus}, "
-                  f"멈춤 {self._stop.is_set()}, 읽기 끝 {self._ended})", flush=True)
+            focus = "held" if self._focus.is_set() else "none"
+            print(f"[live] session {self.id} transcription end (focus {focus}, "
+                  f"stop {self._stop.is_set()}, read end {self._ended})", flush=True)
             _transcriber.release()
 
 RUNNING_STATES = ("starting", "loading", "running")
@@ -1548,7 +1550,7 @@ def _source_ok(src: dict) -> str:
     if src.get("source") == "tab":
         return ""
     if not (src.get("url") or "").strip():
-        return "주소가 없는 소스가 있습니다"
+        return "One of the sources has no URL"
     return ""
 
 
@@ -1585,9 +1587,9 @@ def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
     member if there is none. Every session outside the bundle is stopped."""
     sources = list(sources or [])
     if not sources:
-        return {"error": "소스가 없습니다"}
+        return {"error": "There are no sources"}
     if len(sources) > MULTIVIEW_MAX:
-        return {"error": f"멀티뷰는 최대 {MULTIVIEW_MAX}개까지입니다"}
+        return {"error": f"Multiview holds at most {MULTIVIEW_MAX}"}
     for src in sources:
         why = _source_ok(src)
         if why:
@@ -1628,7 +1630,7 @@ def multiview_focus(gid: str, sid: str) -> dict:
     if g is None:
         return {"error": "no such group"}
     if sid not in g.members:
-        return {"error": "그 세션은 이 묶음에 없습니다"}
+        return {"error": "That session is not in this bundle"}
     prev = g.focus
     if prev != sid:
         _apply_focus(g, sid)
@@ -1644,7 +1646,7 @@ def multiview_add(gid: str, src: dict, lang: str | None, viewer_lang: str,
     if g is None:
         return {"error": "no such group"}
     if len(g.members) >= MULTIVIEW_MAX:
-        return {"error": f"멀티뷰는 최대 {MULTIVIEW_MAX}개까지입니다"}
+        return {"error": f"Multiview holds at most {MULTIVIEW_MAX}"}
     why = _source_ok(src)
     if why:
         return {"error": why}
@@ -1667,7 +1669,7 @@ def multiview_remove(gid: str, sid: str) -> dict:
     if g is None:
         return {"error": "no such group"}
     if sid not in g.members:
-        return {"error": "그 세션은 이 묶음에 없습니다"}
+        return {"error": "That session is not in this bundle"}
     s = get(sid)
     if s is not None:
         s.stop()                     # once it ends _retire → _leave_group tidies up, but
@@ -1715,7 +1717,7 @@ def set_title(session_id: str, title: str) -> dict:
     """
     title = (title or "").strip()[:200]
     if not title:
-        return {"error": "이름을 입력해 주세요"}
+        return {"error": "Enter a name"}
     s = get(session_id)
     if s is not None:
         s.title = title
@@ -1872,7 +1874,8 @@ def delete(session_id: str) -> dict:
     receiving -- deleting it from the table mid-reception makes the next line
     create it again right away, leaving a ghost session."""
     if get(session_id) is not None:
-        return {"error": "받는 중인 세션은 지울 수 없습니다. 먼저 「중단」하십시오."}
+        return {"error": "A session that is being received cannot be deleted. "
+                          "Press “Stop” first."}
     if not store.delete_session(session_id):
         return {"error": "no such session"}
     bus.publish({"type": "session", "id": session_id, "deleted": True})
@@ -1912,7 +1915,8 @@ def restore() -> int:
     for session_id in store.running_session_ids():
         st = store.session(session_id) or {}
         st["state"] = "interrupted"
-        st["error"] = "서버가 재시작되어 수신이 끊겼습니다. 여기까지 받아 적은 자막입니다."
+        st["error"] = ("The server restarted and reception was cut. These are the "
+                       "subtitles transcribed up to that point.")
         store.save_session(st, st.get("video_id", ""))
         hit += 1
     return hit
@@ -1926,7 +1930,7 @@ def set_backend(session_id: str, backend_id: str) -> dict:
         return {"error": "no such session"}
     spec = config.find_backend(backend_id)
     if spec is None:
-        return {"error": f"'{backend_id}' 백엔드가 없습니다"}
+        return {"error": f"no such backend '{backend_id}'"}
     # The genre is a property of the video being watched, so it stays across a
     # backend change.
     s._tr = mw_translate.build(spec, s.genre)
@@ -1962,13 +1966,14 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     if not st:
         return {"error": "no such session"}
     if st.get("state") in ("starting", "loading", "running"):
-        return {"error": "이미 받는 중입니다"}
+        return {"error": "It is already being received"}
     if get(session_id) is not None:
         # The stored status says finished, but the old session's threads are still
         # tidying up (wrapping up refinement and translation, up to 20 seconds).
         # Laying a new session on top of that lets the old finally push the new one
         # out.
-        return {"error": "앞선 수신을 정리하는 중입니다. 몇 초 뒤 다시 누르십시오."}
+        return {"error": "The previous reception is still being tidied up. "
+                          "Press again in a few seconds."}
     # The audio source can be changed on resume. A broadcast received by address
     # that turns members-only partway through goes to tab audio; one received as tab
     # audio that you want to carry on after closing the browser goes to the address.
@@ -1977,7 +1982,8 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     tab = (source or st.get("source")) == "tab"
     live_url = (url or "").strip() or (st.get("url") or "")
     if not tab and not live_url:
-        return {"error": "주소가 남아 있지 않아 이어받을 수 없습니다. 탭 소리로 이어받으십시오."}
+        return {"error": "No URL is left, so it cannot be resumed. "
+                          "Resume with tab audio."}
 
     # Only one broadcast is received at a time. The same rule as start() -- there
     # is no reason to keep two copies of the model loaded. If it is going into a
@@ -2060,7 +2066,7 @@ def set_asr(session_id: str, asr_backend_id: str) -> dict:
         return {"error": "no such session"}
     spec = config.find_asr(asr_backend_id)
     if spec is None:
-        return {"error": f"'{asr_backend_id}' 전사 엔진이 없습니다"}
+        return {"error": f"no such transcription engine '{asr_backend_id}'"}
     if s._asr is None:
         # It has never had focus, so no engine was built (a multiview standby
         # session). It is built with this id at the first focus.
@@ -2068,7 +2074,7 @@ def set_asr(session_id: str, asr_backend_id: str) -> dict:
         s._persist()
         return {"asr": asr_backend_id, "label": "", "device": "", "threads": 0}
     if not hasattr(s._asr, "swap"):
-        return {"error": "이 세션의 전사기는 갈아 끼울 수 없습니다"}
+        return {"error": "This session's transcriber cannot be swapped"}
     try:
         info = s._asr.swap(spec)
     except Exception as exc:

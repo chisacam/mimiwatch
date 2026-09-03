@@ -159,7 +159,7 @@ def _lines(row: dict, view: str) -> list[str]:
 def render(meta: dict, rows: list[dict], fmt: str, view: str) -> tuple[bytes, str]:
     """Returns (body, MIME)."""
     if fmt not in FORMATS:
-        raise ValueError(f"모르는 형식입니다: {fmt}")
+        raise ValueError(f"unknown format: {fmt}")
     if view not in VIEWS:
         view = "both"
 

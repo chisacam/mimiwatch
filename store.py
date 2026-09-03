@@ -550,7 +550,7 @@ def import_legacy_docs() -> int:
             with open(path, encoding="utf-8") as f:
                 old = json.load(f)
         except Exception as exc:
-            print(f"[store] {name} 을 읽지 못해 그대로 둡니다: {exc}")
+            print(f"[store] cannot read {name}, leaving it as it is: {exc}")
             continue
         if not isinstance(old, dict) or "cues" not in old:
             continue                # not ours
@@ -567,8 +567,8 @@ def import_legacy_docs() -> int:
         os.makedirs(LEGACY, exist_ok=True)
         os.replace(path, os.path.join(LEGACY, name))
         moved += 1
-        print(f"[store] 옮김: {name} ({len(rows)}줄)")
+        print(f"[store] moved: {name} ({len(rows)} lines)")
     if moved:
-        print(f"[store] 녹화본 {moved}개를 표로 옮겼습니다. "
-              f"원본은 {LEGACY} 에 있습니다.")
+        print(f"[store] moved {moved} VOD(s) into the table. "
+              f"The originals are in {LEGACY}.")
     return moved

@@ -274,7 +274,7 @@ class OpenAIStreamASR:
 
     def __init__(self, spec: dict, lang: str | None):
         if not spec.get("base_url") or not spec.get("model"):
-            raise ValueError("OpenAI 호환 전사 엔진에는 base_url 과 model 이 필요합니다")
+            raise ValueError("An OpenAI-compatible transcription engine needs base_url and model")
         self.base_url = spec["base_url"].rstrip("/")
         self.model = spec["model"]
         self.api_key = spec.get("api_key", "")
@@ -325,7 +325,7 @@ class OpenAIStreamASR:
         empty-handed is better than raising an exception here.
         """
         if sample_rate != SAMPLE_RATE:
-            raise ValueError(f"16kHz만 지원합니다 (받은 값 {sample_rate})")
+            raise ValueError(f"Only 16kHz is supported (got {sample_rate})")
         from tcpp_asr import looks_hallucinated
         t0 = time.perf_counter()
         data = post_transcription(self.base_url, self.model, self.api_key,
@@ -337,7 +337,7 @@ class OpenAIStreamASR:
             text = " ".join((sg.get("text") or "").strip() for sg in data["segments"]).strip()
         if looks_hallucinated(text):
             self.hallucinations += 1
-            print(f"[환각 차단] {self.label}: {text[:50]}", flush=True)
+            print(f"[hallucination guard] {self.label}: {text[:50]}", flush=True)
             text = ""
         return {"text": text, "lang": self.forced_lang or lang_code(data.get("language")),
                 "tier": self.label, "lid_ms": 0.0, "decode_ms": decode_ms, "probe_ms": 0.0}

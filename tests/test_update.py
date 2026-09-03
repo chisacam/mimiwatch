@@ -93,7 +93,7 @@ def test_check_failure_is_reported_not_raised(monkeypatch):
 
     monkeypatch.setattr(update, "_get_json", boom)
     st = update.check(force=True)
-    assert st["available"] is False and "확인 실패" in st["error"]
+    assert st["available"] is False and "check failed" in st["error"]
 
 
 def test_apply_refuses_repo_run():

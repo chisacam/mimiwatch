@@ -32,8 +32,8 @@ class SpeakerLabeler:
         model = _model_path()
         if not os.path.exists(model):
             raise FileNotFoundError(
-                f"campplus_sv.onnx가 없습니다: {model}\n"
-                "./install.sh 를 실행하거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+                f"no campplus_sv.onnx: {model}\n"
+                "Run ./install.sh, or check MIMIWATCH_MODEL_DIR.")
         self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
             sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=model,
                                                         num_threads=threads))

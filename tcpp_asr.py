@@ -67,7 +67,7 @@ def resolve_device(want: str) -> str:
             return want
     except Exception:
         pass
-    print(f"[asr] '{want}' 백엔드를 쓸 수 없어 auto로 돌아갑니다",
+    print(f"[asr] the '{want}' backend is not available, falling back to auto",
           file=sys.stderr)
     return "auto"
 
@@ -120,7 +120,7 @@ class TranscribeCppASR:
         self._model = _shared_model(model_path, self.device)
         self._session = self._model.session(n_threads=threads)
         self._check_language()
-        print(f"[asr] {self.label} · {self.device} · {threads}스레드",
+        print(f"[asr] {self.label} · {self.device} · {threads} threads",
               file=sys.stderr, flush=True)
         # The binding's session makes no promise about concurrent calls. On the
         # live path the fast pass and the refinement pass come in on different
@@ -158,9 +158,9 @@ class TranscribeCppASR:
                         language=self.forced_lang)
         except UnsupportedRequest as exc:
             raise RuntimeError(
-                f"{label} 모델은 '{self.forced_lang}' 언어를 "
-                f"지원하지 않습니다. 원본 언어를 바꾸거나 다른 전사 엔진을 "
-                f"고르십시오. ({exc})") from exc
+                f"The {label} model does not support the '{self.forced_lang}' "
+                f"language. Change the source language, or pick a different "
+                f"transcription engine. ({exc})") from exc
         except Exception:
             # Other failures are not judged here. One slice of silence is no
             # grounds for a verdict on the whole model.
@@ -208,7 +208,7 @@ class TranscribeCppASR:
         try:
             return tc.WhisperRunOptions(**opts)
         except TypeError as exc:
-            print(f"[asr] whisper 손잡이를 무시합니다: {exc}", file=sys.stderr, flush=True)
+            print(f"[asr] ignoring the whisper knobs: {exc}", file=sys.stderr, flush=True)
             return None
 
     def transcribe(self, samples: np.ndarray, sample_rate: int,
@@ -227,7 +227,7 @@ class TranscribeCppASR:
         import time
 
         if sample_rate != 16000:
-            raise ValueError(f"16kHz만 지원합니다 (받은 값 {sample_rate})")
+            raise ValueError(f"Only 16kHz is supported (got {sample_rate})")
 
         pcm = np.ascontiguousarray(samples, dtype=np.float32)
         t0 = time.perf_counter()
@@ -246,8 +246,8 @@ class TranscribeCppASR:
             # diversity check below would catch, surfacing as an exception
             # first, so it is handled the same way.
             self.hallucinations += 1
-            print(f"[환각 차단] {self.label} 생성 상한 초과 "
-                  f"({len(samples) / sample_rate:.1f}초 조각)", flush=True)
+            print(f"[hallucination guard] {self.label} hit the generation cap "
+                  f"({len(samples) / sample_rate:.1f}s slice)", flush=True)
             return {"text": "", "lang": self.forced_lang, "tier": self.label,
                     "lid_ms": 0.0,
                     "decode_ms": (time.perf_counter() - t0) * 1000,
@@ -257,7 +257,7 @@ class TranscribeCppASR:
         text = (result.text or "").strip()
         if looks_hallucinated(text):
             self.hallucinations += 1
-            print(f"[환각 차단] {self.label} 다양도 "
+            print(f"[hallucination guard] {self.label} diversity "
                   f"{ngram_diversity(text):.2f}: {text[:50]}", flush=True)
             text = ""
 
@@ -328,8 +328,8 @@ def resolve_asr(spec: dict | None, lang: str | None) -> dict:
         path = os.path.join(stream.model_dir(), path)
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"전사 모델이 없습니다: {path}\n"
-            "「엔진 관리 › 모델·도구」에서 받거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+            f"There is no transcription model: {path}\n"
+            'Download it in "Engines › Models & Tools", or check MIMIWATCH_MODEL_DIR.')
     device = resolve_device(spec.get("device", "auto"))
     # A thread count written in the config wins. Without one, it is decided to
     # match where we are running.
@@ -385,7 +385,7 @@ class LiveASR:
     def swap(self, spec: dict | None) -> dict:
         new = build_engine(spec, self.forced_lang)
         self._inner = new
-        print(f"[asr] 갈아 끼움 -> {new.label} · {new.device} · {new.threads}스레드",
+        print(f"[asr] swapped -> {new.label} · {new.device} · {new.threads} threads",
               file=sys.stderr, flush=True)
         return {"label": new.label, "device": new.device, "threads": new.threads}
 

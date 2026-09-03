@@ -37,7 +37,7 @@ def test_ffmpeg_cmd_prefers_path_then_tools_dir(monkeypatch, tmp_path):
         stream.ffmpeg_cmd()
         raise AssertionError("없는데 예외가 나지 않았습니다")
     except FileNotFoundError as exc:
-        assert "모델·도구" in str(exc)          # 어디서 받으면 되는지 말해 줍니다
+        assert "Models & Tools" in str(exc)          # 어디서 받으면 되는지 말해 줍니다
     exe = tmp_path / "ffmpeg"
     exe.write_text("#!/bin/sh\n")
     exe.chmod(exe.stat().st_mode | stat.S_IXUSR)

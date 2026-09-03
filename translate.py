@@ -296,12 +296,12 @@ class LocalM2M(Translator):
             # This language pair is unknown. Returning the source text
             # would have the caller mistake it for a translated line, so a
             # failure is reported instead.
-            raise TranslationFailed(f"M2M-100이 {src}→{tgt}를 지원하지 않습니다")
+            raise TranslationFailed(f"M2M-100 does not support {src}→{tgt}")
         models.touch(self._key)
         try:
             pieces = self._sp.encode(stripped, out_type=str)
             if not pieces:
-                raise TranslationFailed("토큰이 나오지 않았습니다")
+                raise TranslationFailed("no tokens came out")
             # Cap the decode length against the source: a degenerate
             # hypothesis otherwise runs to the model's maximum and stalls the
             # whole queue on one bad line.
@@ -405,10 +405,11 @@ class _LlamaHolder:
                 return self.llm
             if not os.path.exists(self.model_path):
                 raise FileNotFoundError(
-                    f"Gemma 모델이 없습니다: {self.model_path}\n"
-                    "「엔진 관리 › 모델·도구」에서 받거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+                    f"no Gemma model: {self.model_path}\n"
+                    'Download it in "Engines › Models & Tools", or check '
+                    "MIMIWATCH_MODEL_DIR.")
             from llama_cpp import Llama
-            print(f"[translate] Gemma · {self.device} · {self.threads}스레드",
+            print(f"[translate] Gemma · {self.device} · {self.threads} threads",
                   file=sys.stderr, flush=True)
             self.llm = Llama(model_path=self.model_path, n_ctx=self.n_ctx,
                              n_threads=self.threads,

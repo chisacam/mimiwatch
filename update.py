@@ -202,7 +202,7 @@ def check(force: bool = False) -> dict:
             _publish()           # Stands the banner up on any open screen
     except Exception as exc:
         with _lock:
-            _state.update(checked=time.time(), error=f"확인 실패: {str(exc)[:200]}")
+            _state.update(checked=time.time(), error=f"check failed: {str(exc)[:200]}")
     return status()
 
 
@@ -221,7 +221,7 @@ def download() -> dict:
         if _state["state"] in ("downloading", "applying"):
             pass
         elif not _state["available"] or not (_state["latest"] or {}).get("asset"):
-            return {"error": "받을 새 판이 없습니다. 먼저 확인하십시오."}
+            return {"error": "no new version to download. Check first."}
         else:
             _state.update(state="downloading", error=None, progress={"done": 0, "total": 0})
             asset = _state["latest"]["asset"]
@@ -260,8 +260,8 @@ def _download(asset: dict):
                             _state["progress"] = {"done": done, "total": total}
                         _publish()
         if total and done < total:
-            raise RuntimeError(f"받다 끊겼습니다 ({done}/{total} 바이트). "
-                               "다시 누르면 이어 받습니다.")
+            raise RuntimeError(f"download cut short ({done}/{total} bytes). "
+                               "Press it again and it resumes.")
         os.replace(part, dest)
         with _lock:
             _state.update(state="ready", file=dest,
@@ -277,12 +277,12 @@ def _download(asset: dict):
 def apply() -> dict:
     """Launches the swap script. The caller (server) sends the response and shuts down."""
     if not paths.frozen():
-        return {"error": "저장소에서 돌고 있습니다. `git pull` 로 받으십시오 -- "
-                         "갈아 끼울 묶음이 없습니다."}
+        return {"error": "running from the repository. Update with `git pull` -- "
+                         "there is no bundle to swap."}
     with _lock:
         file = _state.get("file")
         if _state["state"] != "ready" or not file or not os.path.isfile(file):
-            return {"error": "먼저 새 판을 받아야 합니다."}
+            return {"error": "the new version has to be downloaded first."}
         _state["state"] = "applying"
     try:
         script = _stage_and_script(file)
@@ -322,18 +322,18 @@ def _stage_and_script(zip_path: str) -> str:
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         new_app = os.path.join(stage, "mimiwatch.app")
         if not os.path.isdir(new_app):
-            raise RuntimeError("받은 zip 안에 mimiwatch.app 이 없습니다")
+            raise RuntimeError("no mimiwatch.app inside the downloaded zip")
         app = os.path.dirname(os.path.dirname(os.path.dirname(exe)))   # .../mimiwatch.app
         if os.path.basename(app) != "mimiwatch.app":
-            raise RuntimeError(f".app 묶음이 아닙니다: {exe}")
+            raise RuntimeError(f"not an .app bundle: {exe}")
         parent = os.path.dirname(app)
         if not os.access(parent, os.W_OK):
-            raise RuntimeError(f"{parent} 에 쓸 수 없어 갈아 끼우지 못합니다. "
-                               "앱을 직접 바꿔 넣으십시오.")
+            raise RuntimeError(f"cannot write to {parent}, so the swap cannot be done. "
+                               "Put the new app in place yourself.")
         old = app + ".old"
         open_args = " --args " + shlex.join(args) if args else ""
         body = f"""#!/bin/bash
-# mimiwatch 판올림 교체 스크립트. apply.log 로 남습니다.
+# mimiwatch update swap script. What it does is left in apply.log.
 echo "== apply $(date) pid={os.getpid()}"
 while kill -0 {os.getpid()} 2>/dev/null; do sleep 0.3; done
 sleep 0.5
@@ -353,14 +353,14 @@ open -n {shlex.quote(app)}{open_args}
             z.extractall(stage)
         new_dir = os.path.join(stage, "mimiwatch")
         if not os.path.isdir(new_dir):
-            raise RuntimeError("받은 zip 안에 mimiwatch 폴더가 없습니다")
+            raise RuntimeError("no mimiwatch folder inside the downloaded zip")
         root = os.path.dirname(exe)                                    # ...\mimiwatch
         old = root + ".old"
         q = lambda p: "'" + p.replace("'", "''") + "'"
         arg_list = (", ".join(q(a) for a in args)) or ""
         start = (f"Start-Process -FilePath {q(os.path.join(root, 'mimiwatch.exe'))}"
                  + (f" -ArgumentList {arg_list}" if arg_list else ""))
-        body = f"""# mimiwatch 판올림 교체 스크립트. apply.log 로 남습니다.
+        body = f"""# mimiwatch update swap script. What it does is left in apply.log.
 Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 700
 Remove-Item -Recurse -Force {q(old)} -ErrorAction SilentlyContinue
@@ -378,7 +378,7 @@ try {{
         subprocess.run(["tar", "-xzf", zip_path, "-C", stage], check=True)
         new_dir = os.path.join(stage, "mimiwatch")
         if not os.path.isdir(new_dir):
-            raise RuntimeError("받은 것 안에 mimiwatch 폴더가 없습니다")
+            raise RuntimeError("no mimiwatch folder inside the download")
         root = os.path.dirname(exe)
         old = root + ".old"
         run_args = " " + shlex.join(args) if args else ""

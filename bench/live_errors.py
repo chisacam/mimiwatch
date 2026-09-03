@@ -92,7 +92,7 @@ def main():
     s, escaped, released, retired = run_failing(vod)
     check(escaped is None, f"예외가 밖으로 새지 않는다 ({escaped})")
     check(s.state == "error", f"상태가 error 다 ({s.state})")
-    check("라이브" in (s.error or ""), f"안내가 남는다 ({s.error})")
+    check("not live" in (s.error or ""), f"안내가 남는다 ({s.error})")
     check(bool(released) and retired == ["t"], "정리가 돈다")
 
     print("\n[3] resolve_audio 가 yt-dlp 의 말을 실어 보내는가")

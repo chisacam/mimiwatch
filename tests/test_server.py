@@ -328,7 +328,7 @@ def test_upload_and_probe_local(server):
 
     # 없는 경로는 무엇이 없는지 바로 말합니다 -- yt-dlp 를 기다리지 않습니다.
     code, body = req(base, "/api/probe", body={"url": "/no/such/파일.mp4"})
-    assert code == 400 and "파일이 없습니다" in json.loads(body)["error"]
+    assert code == 400 and "No such file" in json.loads(body)["error"]
 
     # 전사 전에는 내줄 미디어가 없습니다.
     assert req(base, "/api/media/file-doesnotexist")[0] == 404

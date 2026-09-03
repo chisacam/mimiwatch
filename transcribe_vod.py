@@ -94,9 +94,9 @@ def probe_local(url: str) -> dict:
     import hashlib
     path = local_path(url)
     if not os.path.isfile(path):
-        raise VodError(f"파일이 없습니다: {path}")
+        raise VodError(f"No such file: {path}")
     if not os.access(path, os.R_OK):
-        raise VodError(f"파일을 읽을 수 없습니다: {path}")
+        raise VodError(f"The file cannot be read: {path}")
     vid = "file-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:12]
     return {"id": vid, "title": os.path.splitext(os.path.basename(path))[0],
             "duration": None, "uploader": "", "is_live": False,
@@ -137,7 +137,7 @@ def convert_local(src: str, dest: str, should_stop=None) -> str:
                     pass
                 raise stream.Cancelled()
     if proc.returncode != 0:
-        raise VodError("ffmpeg가 이 파일을 열지 못했습니다: "
+        raise VodError("ffmpeg could not open this file: "
                        f"{(err or '').strip()[:300] or os.path.basename(src)}")
     os.replace(tmp, dest)
     return dest
@@ -152,13 +152,13 @@ def probe(url: str) -> dict:
                              timeout=stream.YTDLP_TIMEOUT_S,
                              **stream.child_io(stderr=False))
     except subprocess.TimeoutExpired:
-        raise VodError(f"yt-dlp가 {stream.YTDLP_TIMEOUT_S:.0f}초 안에 답하지 않았습니다")
+        raise VodError(f"yt-dlp did not answer within {stream.YTDLP_TIMEOUT_S:.0f} seconds")
     if out.returncode != 0:
         raise VodError(f"yt-dlp failed: {out.stderr.strip()[:300]}")
     try:
         d = json.loads(out.stdout)
     except json.JSONDecodeError:
-        raise VodError("영상 하나의 주소를 넣어 주십시오 (재생목록·채널 주소가 아니라)")
+        raise VodError("Give the URL of a single video (not a playlist or channel URL)")
     return {"id": d.get("id"), "title": d.get("title"),
             "duration": d.get("duration"), "uploader": d.get("uploader"),
             "is_live": bool(d.get("is_live")), "url": url}
@@ -227,11 +227,11 @@ def _pcm_span(path: str) -> tuple[int, int]:
     with open(path, "rb") as f:
         head = f.read(12)
         if head[:4] != b"RIFF" or head[8:12] != b"WAVE":
-            raise VodError(f"wav 가 아닙니다: {os.path.basename(path)}")
+            raise VodError(f"Not a wav: {os.path.basename(path)}")
         while True:
             hdr = f.read(8)
             if len(hdr) < 8:
-                raise VodError(f"wav 에 표본 덩어리가 없습니다: {os.path.basename(path)}")
+                raise VodError(f"The wav has no data chunk: {os.path.basename(path)}")
             name = hdr[:4]
             size = int.from_bytes(hdr[4:8], "little")
             if name == b"data":
@@ -260,7 +260,7 @@ class WavSamples:
         with wave.open(path, "rb") as w:
             if not (w.getframerate() == SAMPLE_RATE and w.getnchannels() == 1
                     and w.getsampwidth() == 2):
-                raise VodError(f"16kHz 모노 16비트 wav 가 아닙니다: {os.path.basename(path)}")
+                raise VodError(f"Not a 16kHz mono 16-bit wav: {os.path.basename(path)}")
         start, size = _pcm_span(path)
         self._mm = np.memmap(path, dtype="<i2", mode="r", offset=start,
                              shape=(size // 2,))
@@ -441,8 +441,8 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
     # ahead of time because how many shares to split the progress into hangs
     # on it.
     if refine and not getattr(asr, "supports_segments", False):
-        print(f"[vod] {getattr(asr, 'label', '이 전사기')} 는 구간 시각을 내지 못해 "
-              "정제를 건너뜁니다", file=sys.stderr, flush=True)
+        print(f"[vod] {getattr(asr, 'label', 'this transcriber')} cannot give segment "
+              "timestamps, so the refinement pass is skipped", file=sys.stderr, flush=True)
         refine = False
     fast_share = (1.0 - REFINE_SHARE) if refine else 1.0
 
@@ -488,9 +488,9 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
 
 # ---- Command line ------------------------------------------------------------
 
-PHASE_LABEL = {"probe": "영상 정보 확인", "download": "오디오 내려받는 중",
-               "convert": "오디오 변환 중",
-               "transcribe": "전사 중", "translate": "번역 중", "done": "완료"}
+PHASE_LABEL = {"probe": "Checking the video", "download": "Taking the audio",
+               "convert": "Converting the audio",
+               "transcribe": "Transcribing", "translate": "Translating", "done": "Done"}
 
 
 def main():
@@ -502,18 +502,21 @@ def main():
     import translate as mw_translate
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--url", required=True)
-    ap.add_argument("--lang", help="원본 언어를 고정합니다 (비우면 자동 판별)")
+    ap.add_argument("--lang", help="Pins the source language (left empty, it is detected)")
     ap.add_argument("--viewer-lang", default="ko",
-                    help="내 언어. 원본과 같으면 번역하지 않습니다")
+                    help="My language. Nothing is translated when it matches the source")
     ap.add_argument("--genre", default=mw_translate.DEFAULT_GENRE,
                     choices=sorted(mw_translate.GENRE_PROMPTS),
-                    help="발화의 성격에 맞는 번역 프롬프트를 고릅니다")
-    ap.add_argument("--asr", default="", help="전사 엔진 id (비우면 설정의 기본)")
-    ap.add_argument("--backend", default="", help="번역 엔진 id (비우면 설정의 기본)")
+                    help="Picks the translation prompt that fits how people are speaking")
+    ap.add_argument("--asr", default="",
+                    help="Transcription engine ID (left empty, the config default)")
+    ap.add_argument("--backend", default="",
+                    help="Translation engine ID (left empty, the config default)")
     ap.add_argument("--speakers", action="store_true",
-                    help="화자 딱지를 붙입니다 (S1, S2, ...)")
+                    help="Attaches speaker labels (S1, S2, ...)")
     ap.add_argument("--no-refine", action="store_true",
-                    help="정제 패스를 건너뜁니다 (전사가 30~50%% 짧아지는 대신 품질이 내려갑니다)")
+                    help="Skips the refinement pass (transcription 30~50%% shorter, "
+                         "quality goes down)")
     args = ap.parse_args()
 
     import jobs
@@ -540,9 +543,9 @@ def main():
         time.sleep(0.5)
     print(file=sys.stderr)
     if st.get("state") != "done":
-        raise VodError(st.get("error") or st.get("state") or "실패")
-    print(f"[vod] 끝났습니다 ({st.get('elapsed', 0)}초). 영상 {st.get('video')} -- "
-          f"서버를 켜면 목록에 보입니다.", file=sys.stderr)
+        raise VodError(st.get("error") or st.get("state") or "failed")
+    print(f"[vod] done ({st.get('elapsed', 0)}s). Video {st.get('video')} -- "
+          f"start the server and it shows up in the list.", file=sys.stderr)
 
 
 if __name__ == "__main__":

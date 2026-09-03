@@ -134,7 +134,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not self._host_ok():
-            return self._json({"error": "이 서버는 localhost 로만 부를 수 있습니다"}, 421)
+            return self._json({"error": "This server can only be called from localhost"}, 421)
         path = posixpath.normpath(self.path.split("?")[0])
         exact = GET_ROUTES.get(path)
         if exact is not None:
@@ -295,7 +295,7 @@ class Handler(BaseHTTPRequestHandler):
         not delete the original.
         """
         if length <= 0:
-            return self._json({"error": "빈 파일입니다"}, 400)
+            return self._json({"error": "The file is empty"}, 400)
         name = os.path.basename(self._query().get("name") or "upload")
         # The extension is ffmpeg's hint so it is kept; the rest is reduced to
         # characters the filesystem is safe with.
@@ -315,7 +315,7 @@ class Handler(BaseHTTPRequestHandler):
                 while left > 0:
                     buf = self.rfile.read(min(1 << 20, left))
                     if not buf:
-                        raise ConnectionError("업로드가 중간에 끊겼습니다")
+                        raise ConnectionError("The upload was cut off partway")
                     f.write(buf)
                     left -= len(buf)
             os.replace(dest + ".part", dest)
@@ -341,17 +341,18 @@ class Handler(BaseHTTPRequestHandler):
     def post_cookies_youtube(self, body):
         text = body.get("cookies")
         if not isinstance(text, str) or "\t" not in text:
-            return self._json({"error": "Netscape 형식의 쿠키 텍스트가 필요합니다"}, 400)
+            return self._json({"error": "Cookie text in Netscape format is required"}, 400)
         lines = [ln for ln in text.splitlines() if _is_cookie_line(ln)]
         if not lines:
-            return self._json({"error": "쿠키가 비어 있습니다 -- 유튜브에 로그인되어 있습니까?"},
+            return self._json({"error": "The cookies are empty -- are you logged in to YouTube?"},
                               400)
         path = paths.cookies_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("# Netscape HTTP Cookie File\n"
-                    "# mimiwatch 확장이 넘긴 유튜브 로그인 쿠키. 계정의 열쇠입니다.\n")
+                    "# YouTube login cookies handed over by the mimiwatch extension.\n"
+                    "# They are the key to the account.\n")
             f.write(text if text.endswith("\n") else text + "\n")
         os.replace(path + ".tmp", path)
         try:
@@ -359,7 +360,7 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass                        # Windows has no modes
         stream.reset_tool_cache()       # --cookies goes on from the next yt-dlp call
-        print(f"[cookies] 유튜브 쿠키 {len(lines)}개를 받았습니다", file=sys.stderr, flush=True)
+        print(f"[cookies] took in {len(lines)} YouTube cookies", file=sys.stderr, flush=True)
         self._json(_cookies_status())
 
     def post_cookies_delete(self, body):
@@ -558,10 +559,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._host_ok():
-            return self._json({"error": "이 서버는 localhost 로만 부를 수 있습니다"}, 421)
+            return self._json({"error": "This server can only be called from localhost"}, 421)
         path = posixpath.normpath(self.path.split("?")[0])
         if not self._same_origin_write():
-            return self._json({"error": "다른 출처에서 온 쓰기 요청은 받지 않습니다"}, 403)
+            return self._json({"error": "A write request from another origin is not accepted"}, 403)
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -583,7 +584,7 @@ class Handler(BaseHTTPRequestHandler):
         if handler is None:
             return self._json({"error": "not found"}, 404)
         if length > JSON_MAX:
-            return self._json({"error": "요청이 너무 큽니다"}, 413)
+            return self._json({"error": "The request is too large"}, 413)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except Exception:
@@ -624,18 +625,18 @@ class Handler(BaseHTTPRequestHandler):
         except sp.TimeoutExpired:
             # Without an upper bound this request thread waits forever. The
             # browser waits along with it, so the "Add" dialog looks stuck.
-            return self._json({"error": f"yt-dlp가 {stream.YTDLP_TIMEOUT_S:.0f}초 "
-                                        "안에 답하지 않았습니다"}, 504)
+            return self._json({"error": f"yt-dlp did not answer within "
+                                        f"{stream.YTDLP_TIMEOUT_S:.0f} seconds"}, 504)
         if out.returncode != 0:
             return self._json({"error": out.stderr.strip()[:200]
-                                        or "주소를 해석할 수 없습니다"}, 400)
+                                        or "Could not resolve the URL"}, 400)
         try:
             d = json.loads(out.stdout)
         except json.JSONDecodeError:
             # A playlist or channel address prints one line per video. Point
             # at a single video.
-            return self._json({"error": "영상 하나의 주소를 넣어 주십시오 "
-                                        "(재생목록·채널 주소가 아니라)"}, 400)
+            return self._json({"error": "Give the URL of a single video "
+                                        "(not a playlist or channel URL)"}, 400)
         info = live.site_of(d, url)
         is_live = d.get("is_live")
         if is_live is None and info["site"] == "other" and live.looks_like_m3u8(url):
@@ -651,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
     def post_live_start(self, body):
         url = (body.get("url") or "").strip()
         if not url:
-            return self._json({"error": "주소를 입력해 주세요"}, 400)
+            return self._json({"error": "Enter a URL"}, 400)
         self._json(live.start(
             url, body.get("lang") or None,
             body.get("viewer_lang") or "ko",
@@ -674,7 +675,7 @@ class Handler(BaseHTTPRequestHandler):
             refine=bool(body.get("refine", True)),
             genre=body.get("genre"),
             source="tab",
-            title=(body.get("title") or "").strip() or "탭 오디오"))
+            title=(body.get("title") or "").strip() or "Tab audio"))
 
     # ---- Multiview -----------------------------------------------------------
     # Several streams on one screen. The rules for groups and focus are in
@@ -697,12 +698,12 @@ class Handler(BaseHTTPRequestHandler):
         sources = [{"session": sid} for sid in (body.get("sessions") or []) if sid]
         extra = body.get("sources") or []
         if not isinstance(extra, list) or not all(isinstance(s, dict) for s in extra):
-            return self._json({"error": "sources 는 객체의 목록이어야 합니다"}, 400)
+            return self._json({"error": "sources has to be a list of objects"}, 400)
         sources += extra
         if not sources:
-            return self._json({"error": "소스가 없습니다"}, 400)
+            return self._json({"error": "There are no sources"}, 400)
         if len(sources) > live.MULTIVIEW_MAX:
-            return self._json({"error": f"멀티뷰는 최대 {live.MULTIVIEW_MAX}개까지입니다"}, 400)
+            return self._json({"error": f"Multiview holds at most {live.MULTIVIEW_MAX}"}, 400)
         res = live.multiview_start(sources, focus=body.get("focus") or None,
                                    **self._live_args(body))
         self._json(res, 400 if "error" in res else 200)
@@ -740,7 +741,7 @@ class Handler(BaseHTTPRequestHandler):
         owner = store.owner_of((body.get("id") or "").strip())
         cue_id = body.get("cue")
         if not owner or cue_id is None:
-            return self._json({"error": "id 와 cue 가 필요합니다"}, 400)
+            return self._json({"error": "id and cue are required"}, 400)
         got = store.edit_cue(
             owner, int(cue_id),
             text=body.get("text"), tr=body.get("tr"),
@@ -760,9 +761,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             start = max(0.0, float(body.get("start")))
         except (TypeError, ValueError):
-            return self._json({"error": "start(초)가 필요합니다"}, 400)
+            return self._json({"error": "start (seconds) is required"}, 400)
         if not owner or not text:
-            return self._json({"error": "id 와 text 가 필요합니다"}, 400)
+            return self._json({"error": "id and text are required"}, 400)
         meta = store.doc(owner) or store.session(owner)
         if not meta:
             return self._json({"error": "no such video or session"}, 404)
@@ -781,7 +782,7 @@ class Handler(BaseHTTPRequestHandler):
         owner = store.owner_of((body.get("id") or "").strip())
         cue_id = body.get("cue")
         if not owner or cue_id is None:
-            return self._json({"error": "id 와 cue 가 필요합니다"}, 400)
+            return self._json({"error": "id and cue are required"}, 400)
         if not store.delete_cue(owner, int(cue_id)):
             return self._json({"error": "no such cue"}, 404)
         live.notify_drop(owner, int(cue_id))
@@ -818,7 +819,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         kind = body.get("kind")
         if kind not in config.KINDS:
-            return self._json({"error": "kind 는 asr 또는 tr"}, 400)
+            return self._json({"error": "kind is asr or tr"}, 400)
         got = config.set_active(kind, str(body.get("id") or ""))
         if "error" in got:
             return self._json(got, 400)
@@ -845,7 +846,7 @@ class Handler(BaseHTTPRequestHandler):
     def post_transcribe(self, body):
         url = (body.get("url") or "").strip()
         if not url:
-            return self._json({"error": "주소를 입력해 주세요"}, 400)
+            return self._json({"error": "Enter a URL"}, 400)
         self._json(jobs.start_transcribe(
             url, body.get("lang") or None,
             body.get("viewer_lang") or "ko",
@@ -903,7 +904,7 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(ids, str):
             ids = modelhub.default_ids() if ids == "default" else [ids]
         if not isinstance(ids, list) or not ids:
-            return self._json({"error": "ids 가 필요합니다"}, 400)
+            return self._json({"error": "ids is required"}, 400)
         self._json(modelhub.download([str(i) for i in ids], body.get("token") or None))
 
     def post_models_cancel(self, body):
@@ -1103,7 +1104,7 @@ def _wind_down(timeout: float = 8.0):
     # long in the worst case.
     cancelled = jobs.cancel_all()
     if cancelled:
-        print(f"mimiwatch: 작업 {len(cancelled)}건을 취소합니다", flush=True)
+        print(f"mimiwatch: cancelling {len(cancelled)} jobs", flush=True)
     stopped = live.shutdown(timeout)
     jobs.wait_idle(max(0.0, deadline - time.time()))
     # For live sessions the wait goes only as far as the DB state becoming
@@ -1148,7 +1149,7 @@ def main(argv: list[str] | None = None):
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8900)
-    ap.add_argument("--open", action="store_true", help="브라우저로 화면을 엽니다")
+    ap.add_argument("--open", action="store_true", help="opens the screen in a browser")
     args = ap.parse_args(argv)
 
     # Schema creation and recovery are finished before any request is taken.
@@ -1163,8 +1164,8 @@ def main(argv: list[str] | None = None):
     store.import_legacy_docs()
     stale_jobs, stale_live = jobs.restore(), live.restore()
     if stale_jobs or stale_live:
-        print(f"mimiwatch: 재시작 전 작업 {stale_jobs}건, 라이브 세션 "
-              f"{stale_live}건을 중단됨으로 표시했습니다", flush=True)
+        print(f"mimiwatch: marked {stale_jobs} jobs and {stale_live} live "
+              "sessions from before the restart as interrupted", flush=True)
 
     global _srv
     try:
@@ -1173,14 +1174,14 @@ def main(argv: list[str] | None = None):
         # A server that is already up (or another program) holds that port.
         # Double-clicking the bundle is mostly this case, so its screen is
         # opened and we step back.
-        print(f"mimiwatch: {args.port} 포트를 열 수 없습니다 ({exc}). "
-              "이미 떠 있으면 그 화면을 씁니다.", file=sys.stderr, flush=True)
+        print(f"mimiwatch: cannot open port {args.port} ({exc}). "
+              "If one is already up, its screen is used.", file=sys.stderr, flush=True)
         if args.open:
             import webbrowser
             webbrowser.open(f"http://localhost:{args.port}/")
         return 1
     print(f"mimiwatch: http://localhost:{args.port}/", flush=True)
-    print(f"mimiwatch: 모델 {paths.model_dir()} · 저장소 {store.DATA} · 설정 {config.CONFIG}",
+    print(f"mimiwatch: models {paths.model_dir()} · data {store.DATA} · config {config.CONFIG}",
           flush=True)
     if args.open:
         import webbrowser
@@ -1196,10 +1197,10 @@ def main(argv: list[str] | None = None):
         # Ctrl-C is gathered into the same place as the screen's shutdown
         # button. Whichever way it is stopped, the sessions have to be left as
         # "ended".
-        print("\nmimiwatch: 종료합니다", flush=True)
+        print("\nmimiwatch: shutting down", flush=True)
         _wind_down()
     _srv.server_close()
-    print("mimiwatch: 종료되었습니다", flush=True)
+    print("mimiwatch: shut down", flush=True)
     return 0
 
 

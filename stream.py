@@ -189,7 +189,7 @@ def child_io(*, stderr: bool = True) -> dict:
     separately, `Popen` duplicates the parent's (DuplicateHandle) to hand them
     down, and if that handle of the parent's is not valid it falls over with
 
-        OSError: [WinError 6] 핸들이 잘못되었습니다
+        OSError: [WinError 6] The handle is invalid
 
     before the child is even born. A Windows user on 0.3.1 died exactly this
     way in a live session's `_spawn_ffmpeg` -- a process that came up with an
@@ -234,9 +234,9 @@ def ffmpeg_cmd() -> str:
         found = paths.which("ffmpeg")
         if not found:
             raise FileNotFoundError(
-                "ffmpeg가 없습니다. 「엔진 관리 › 모델·도구」에서 받거나 "
-                "(macOS) brew install ffmpeg / (윈도우) winget install Gyan.FFmpeg 로 "
-                "설치하십시오.")
+                'There is no ffmpeg. Download it in "Engines › Models & Tools", or '
+                "install it with (macOS) brew install ffmpeg / "
+                "(Windows) winget install Gyan.FFmpeg.")
         _FFMPEG = found
     return _FFMPEG
 
@@ -328,8 +328,8 @@ def build_vad(min_silence: float = 0.35,
     vad_model = os.path.join(model_dir(), model_file or VAD_FILE)
     if not os.path.exists(vad_model):
         raise FileNotFoundError(
-            f"{os.path.basename(vad_model)}가 없습니다: {vad_model}\n"
-            "「엔진 관리 › 모델·도구」에서 받거나 MIMIWATCH_MODEL_DIR을 확인하십시오.")
+            f"There is no {os.path.basename(vad_model)}: {vad_model}\n"
+            'Download it in "Engines › Models & Tools", or check MIMIWATCH_MODEL_DIR.')
     cfg = sherpa_onnx.VadModelConfig(
         silero_vad=sherpa_onnx.SileroVadModelConfig(
             model=vad_model,
@@ -409,7 +409,7 @@ class Refiner:
             try:
                 task()
             except Exception as exc:                      # one group failing
-                print(f"[refine] 실패: {exc}", flush=True)  # must not kill the session
+                print(f"[refine] failed: {exc}", flush=True)  # must not kill the session
             finally:
                 self._tasks.task_done()
 
@@ -550,7 +550,7 @@ def _drain(vad, asr, sink, history, refiner, speaker_labeler, sample_rate,
             # exception used to go out through run_stream and end the session
             # whole.
             fails += 1
-            print(f"[전사 실패 {fails}/{DECODE_FAIL_LIMIT}] "
+            print(f"[transcribe failed {fails}/{DECODE_FAIL_LIMIT}] "
                   f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             if fails >= DECODE_FAIL_LIMIT:
                 raise

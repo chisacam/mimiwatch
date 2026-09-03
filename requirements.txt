@@ -1,23 +1,26 @@
-# 전사 구간 분할과 화자 임베딩 (Silero VAD, CAM++)
+# Speech segmentation and speaker embeddings (Silero VAD, CAM++)
 sherpa-onnx>=1.13
-# 로컬 번역 (Gemma 4 E4B, 대체용 M2M-100)
-# 윈도우에는 PyPI 휠이 없습니다. install.ps1 이 만든 쪽의 인덱스
-# (https://abetlen.github.io/llama-cpp-python/whl/{cpu,vulkan})를 함께
-# 봅니다. 맥/리눅스는 PyPI에서 그냥 받습니다.
+# Local translation (Gemma 4 E4B, with M2M-100 as the fallback)
+# There is no PyPI wheel for Windows. install.ps1 also looks at the index the
+# author publishes (https://abetlen.github.io/llama-cpp-python/whl/{cpu,vulkan}).
+# macOS and Linux just take it from PyPI.
 llama-cpp-python>=0.3.30
 ctranslate2>=4.8
 sentencepiece>=0.2
 numpy>=2.0
-# 모델 내려받기는 modelhub.py 가 표준 라이브러리로 합니다. 예전에 여러 파일짜리
-# 모델(M2M-100)을 받으려고 두었던 huggingface_hub 는 더 쓰지 않습니다.
-# 영상 주소에서 오디오 스트림을 풀어냅니다. `[default]` 가 yt-dlp-ejs(유튜브 JS 챌린지
-# 풀이 스크립트)를 함께 넣습니다 -- 2025.11부터 유튜브는 외부 JS 런타임(deno)이
-# 필요하고, 스크립트가 없으면 VOD·쿠키(멤버십) 경로의 포맷이 사라집니다. 런타임은
-# 모델·도구에서 받습니다(modelhub 의 deno).
+# Model downloads are modelhub.py's job, done with the standard library. The
+# huggingface_hub that used to be here for a multi-file model (M2M-100) is no
+# longer used.
+# Resolves the audio stream out of a video URL. `[default]` brings in yt-dlp-ejs
+# (the script that solves YouTube's JS challenge) -- since 2025.11 YouTube needs
+# an external JS runtime (deno), and without the script the formats disappear on
+# the VOD and cookie (members-only) paths. The runtime comes from Models & Tools
+# (deno, in modelhub).
 #
-# 시스템에 깔린 것을 쓰지 않고 여기 두는 이유가 있습니다. 유튜브가 추출
-# 경로를 자주 바꾸고 yt-dlp가 그때마다 따라가는데, winget이나 brew로 깐
-# 것은 스스로 갱신되지 않습니다. 몇 달 지나면 포맷 목록을 통째로 받지
-# 못해 "오디오를 찾지 못했습니다"가 됩니다(이슈 #1). 가상환경에 두면
-# 설치 스크립트를 다시 돌리는 것으로 판올림이 됩니다.
+# There is a reason this is here rather than whatever the system has. YouTube
+# changes its extraction path often and yt-dlp follows each time, but a copy
+# installed by winget or brew does not update itself. After a few months it
+# fails to read the format list at all and live becomes "yt-dlp could not find
+# any audio at this URL." (issue #1). Kept in the virtualenv, running the
+# install script again is the update.
 yt-dlp[default]>=2025.1

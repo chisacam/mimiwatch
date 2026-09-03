@@ -104,7 +104,7 @@ def restore() -> int:
         for job in store.all_jobs():
             if job.get("state") == "running":
                 job["state"] = "interrupted"
-                job["error"] = "서버가 재시작되어 중단되었습니다"
+                job["error"] = "interrupted because the server restarted"
                 hit += 1
             _jobs[job["id"]] = job
     for job in list(_jobs.values()):
@@ -162,7 +162,7 @@ def delete_video(vid: str, keep_audio: bool = False) -> dict:
     but it is also what makes a re-transcribe fast, so the caller chooses.
     """
     if not has_video(vid):
-        return {"error": f"'{vid}' 영상이 없습니다"}
+        return {"error": f"no such video '{vid}'"}
     store.delete_doc(vid)
     freed = 0
     wav = os.path.join(DATA, f"{vid}.wav")
@@ -234,7 +234,7 @@ def wait_idle(timeout: float) -> bool:
     Returning on seeing the state turn `cancelled` is too early -- `_note`
     updates memory first and writes to SQLite after, so an `os._exit` landing
     in between makes the next startup wrongly record that job as
-    "서버가 재시작되어 중단되었습니다". That save is the thread's last piece of
+    "interrupted because the server restarted". That save is the thread's last piece of
     work, so waiting for the thread to end means the save has finished too.
 
     Jobs that arrive while waiting are cancelled along with the rest. The
@@ -329,7 +329,8 @@ def _translate_rows(job_id: str, owner: str, spec: dict, meta: dict,
                 # Dropping the line because it failed makes it look as if
                 # that utterance never happened. The source text is kept and
                 # only the reason for the failure is recorded.
-                print(f"[jobs] 번역 실패, 원문을 남깁니다: {exc}", file=sys.stderr)
+                print(f"[jobs] translation failed, keeping the source text: {exc}",
+                      file=sys.stderr)
                 out = c["text"]
             # A line the fallback backend produced is filed under that
             # backend's name. Recording it as if an endpoint that was never
@@ -374,23 +375,23 @@ def start_retranslate(value: str, backend_id: str, cue_ids=None,
     spec = find_backend(backend_id)
     if spec is None:
         known = ", ".join(b["id"] for b in config.entries("tr"))
-        return {"error": f"'{backend_id}' 백엔드가 없습니다. 사용 가능: {known}"}
+        return {"error": f"no such backend '{backend_id}'. Available: {known}"}
     owner = store.owner_of(value)
     meta = store.doc(owner) or store.session(owner)
     if not meta:
         return {"error": "no such video or session"}
     cues = store.cues(owner)
     if not cues:
-        return {"error": "번역할 자막이 없습니다"}
+        return {"error": "no subtitles to translate"}
     want = None if cue_ids is None else {int(i) for i in cue_ids}
     picked = [c for c in cues if want is None or c["id"] in want]
     if not picked:
-        return {"error": "고른 자막이 없습니다"}
+        return {"error": "no subtitles selected"}
 
     kept = [c for c in picked if _hand_translated(c)]
     todo = [c for c in picked if not _hand_translated(c)]
     if not todo and want is not None:
-        return {"error": f"고른 {len(picked)}줄이 모두 손으로 고친 번역입니다"}
+        return {"error": f"all {len(picked)} selected lines are hand-edited translations"}
 
     # With no genre chosen, the one chosen when this video was transcribed is
     # used. This is so as not to ask again on every re-translation.
@@ -461,7 +462,8 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         note(title=meta["title"], video=meta["id"])
         if meta["is_live"]:
             note(state="error",
-                 error="진행 중인 라이브입니다. 녹화본 흐름은 종료된 영상만 다룹니다.")
+                 error="this live stream is still running. The VOD flow only takes "
+                       "videos that have ended.")
             return
 
         # A local file is not downloaded but converted. Name it honestly.

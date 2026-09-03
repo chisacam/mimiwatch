@@ -511,7 +511,8 @@ def _fetch_file(entry_id: str, url: str, dest: str, headers: dict, gz: bool = Fa
                                                "current": os.path.basename(dest)}
                     _publish(entry_id)
     if total and not gz and done < total:
-        raise RuntimeError(f"받다 끊겼습니다 ({done}/{total} 바이트). 다시 시작하면 이어 받습니다.")
+        raise RuntimeError(f"The download was cut off ({done}/{total} bytes). "
+                           "Starting again resumes it.")
     os.replace(part, dest)
 
 
@@ -555,7 +556,7 @@ def _download_one(entry: dict, token: str | None):
             with zipfile.ZipFile(zpath) as z:
                 names = [n for n in z.namelist() if os.path.basename(n) == want]
                 if not names:
-                    raise RuntimeError(f"zip 안에 {want} 가 없습니다: {z.namelist()[:5]}")
+                    raise RuntimeError(f"{want} is not in the zip: {z.namelist()[:5]}")
                 with z.open(names[0]) as src, open(dest + ".part", "wb") as out:
                     shutil.copyfileobj(src, out)
             os.remove(zpath)
@@ -573,7 +574,7 @@ def _download_one(entry: dict, token: str | None):
         open(marker, "w").close()
         files = _hf_files(entry["repo"], headers)
         if not files:
-            raise RuntimeError(f"{entry['repo']}에 파일이 없습니다")
+            raise RuntimeError(f"{entry['repo']} has no files")
         sizes = {}
         for name in files:
             try:
@@ -638,17 +639,17 @@ def _loop():
             _after_download(entry)
             with _lock:
                 _progress.pop(eid, None)
-            print(f"[models] 받았습니다: {entry['label']}", file=sys.stderr, flush=True)
+            print(f"[models] downloaded: {entry['label']}", file=sys.stderr, flush=True)
         except _Cancelled:
             with _lock:
                 _progress.pop(eid, None)
                 _cancel.discard(eid)
-            print(f"[models] 중단: {entry['label']} (받은 만큼은 .part로 남습니다)",
+            print(f"[models] cancelled: {entry['label']} (what was fetched stays as .part)",
                   file=sys.stderr, flush=True)
         except Exception as exc:
             with _lock:
                 _progress[eid] = {"state": "error", "error": f"{type(exc).__name__}: {exc}"[:300]}
-            print(f"[models] 실패: {entry['label']}: {exc}", file=sys.stderr, flush=True)
+            print(f"[models] failed: {entry['label']}: {exc}", file=sys.stderr, flush=True)
         _publish(eid)
 
 
@@ -719,7 +720,7 @@ def cancel(model_id: str) -> dict:
         elif (_progress.get(model_id) or {}).get("state") == "downloading":
             _cancel.add(model_id)
         else:
-            return {"error": "받는 중이 아닙니다"}
+            return {"error": "It is not being downloaded"}
     _publish(model_id)
     return {"cancelled": model_id}
 
@@ -764,10 +765,10 @@ def delete(model_id: str) -> dict:
     if model_id.startswith("file:"):
         name = _safe_name(model_id[5:])
         if name is None or name in _catalog_names():
-            return {"error": "지울 수 없는 이름입니다"}
+            return {"error": "That name cannot be deleted"}
         p = os.path.join(paths.model_dir(), name)
         if not os.path.lexists(p):
-            return {"error": "그런 파일이 없습니다"}
+            return {"error": "No such file"}
         if os.path.islink(p):
             os.remove(p)                    # for a link, only the link. Where it points stays
         else:
@@ -775,10 +776,10 @@ def delete(model_id: str) -> dict:
         return {"deleted": model_id}
     e = find(model_id)
     if e is None:
-        return {"error": f"'{model_id}' 항목이 없습니다"}
+        return {"error": f"There is no '{model_id}' entry"}
     st = status(e)
     if st["state"] in ("downloading", "queued"):
-        return {"error": "받는 중입니다. 먼저 중단하십시오."}
+        return {"error": "It is being downloaded. Cancel that first."}
     path = target_path(e)
     freed = 0
     for p in (path, path + ".part"):
@@ -789,8 +790,8 @@ def delete(model_id: str) -> dict:
             except OSError as exc:
                 # Windows cannot delete a file that is in use -- a model that is loaded
                 # is one. We tell them to delete it after starting the server again.
-                return {"error": f"지우지 못했습니다: {exc}. 이 모델이 올라와 있으면 "
-                                 "서버를 다시 켠 뒤 지우십시오."}
+                return {"error": f"Could not delete it: {exc}. If this model is loaded, "
+                                 "start the server again and then delete it."}
     if e.get("custom"):
         rest = [c for c in custom_entries() if c["id"] != model_id]
         _save_custom(rest)
@@ -824,33 +825,33 @@ def add_custom(kind: str, repo: str, file: str, label: str = "", engine_id: str 
     file = (file or "").strip()
     kind = (kind or "").strip()
     if kind not in ("asr", "tr"):
-        return {"error": "종류는 asr(전사) 또는 tr(번역)이어야 합니다"}
+        return {"error": "The kind has to be asr (transcription) or tr (translation)"}
     if repo.count("/") != 1 or _safe_name(file) is None:
-        return {"error": "저장소는 `소유자/이름`, 파일은 그 저장소 안의 파일 이름이어야 합니다"}
+        return {"error": "The repository has to be `owner/name`, the file a name inside it"}
     if not file.lower().endswith(".gguf"):
-        return {"error": "GGUF 파일만 받습니다 (.gguf)"}
+        return {"error": "Only GGUF files are downloaded (.gguf)"}
     if file in _catalog_names():
         # Fetching under the same name as a catalogue model overwrites that file, and
         # deleting this entry later makes the catalogue model disappear with it.
-        return {"error": f"'{file}'은 기본 목록의 모델과 이름이 같습니다. 그쪽 항목을 쓰십시오."}
+        return {"error": f"'{file}' has the same name as a model in the catalogue. Use that entry."}
     base = os.path.splitext(file)[0]
     engine_id = (engine_id or "").strip() or ("hf-" + "".join(
         c if c.isalnum() else "-" for c in base.lower()).strip("-"))[:40]
     if config.find(kind, engine_id):
-        return {"error": f"'{engine_id}' 엔진 id가 이미 있습니다. 다른 id를 적으십시오."}
+        return {"error": f"The engine ID '{engine_id}' already exists. Write a different one."}
     model_id = "custom:" + engine_id
     if find(model_id):
-        return {"error": f"'{model_id}' 항목이 이미 있습니다"}
+        return {"error": f"The '{model_id}' entry already exists"}
     headers = _hf_headers(token)
     try:
         size = _hf_size(repo, file, headers)
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
-            return {"error": f"접근이 막혔습니다 (HTTP {exc.code}). 라이선스 동의가 필요한 "
-                             "저장소라면 HF_TOKEN을 주십시오."}
-        return {"error": f"파일을 찾지 못했습니다 (HTTP {exc.code}): {repo}/{file}"}
+            return {"error": f"Access was refused (HTTP {exc.code}). If the repository "
+                             "needs a licence agreement, give HF_TOKEN."}
+        return {"error": f"The file was not found (HTTP {exc.code}): {repo}/{file}"}
     except Exception as exc:
-        return {"error": f"허깅페이스에 묻지 못했습니다: {exc}"}
+        return {"error": f"Could not ask Hugging Face: {exc}"}
     entry = {"id": model_id, "kind": kind, "label": label or base,
              "purpose_en": f"{'Transcription' if kind == 'asr' else 'Translation'}"
                            f" · Hugging Face {repo}",
@@ -870,17 +871,19 @@ def add_custom(kind: str, repo: str, file: str, label: str = "", engine_id: str 
 
 def _cli(argv: list[str]) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="모델·도구를 내려받고 상태를 봅니다.")
+    ap = argparse.ArgumentParser(description="Downloads models and tools and shows their state.")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list", help="목록과 상태")
-    d = sub.add_parser("download", help="받습니다. 'default' 는 기본 세트, 'all' 은 전부")
+    sub.add_parser("list", help="The catalogue and its state")
+    d = sub.add_parser("download",
+                       help="Downloads. 'default' is the default set, 'all' is everything")
     d.add_argument("ids", nargs="+")
-    d.add_argument("--with-gemma", action="store_true", help="기본 세트에 Gemma(4.9GB)를 넣습니다")
+    d.add_argument("--with-gemma", action="store_true",
+                   help="Puts Gemma (4.9GB) into the default set")
     d.add_argument("--skip-gemma", action="store_true",
-                   help="(예전 옵션, 지금은 기본이 그렇습니다)")
+                   help="(an old option; that is the default now)")
     d.add_argument("--with-tools", action="store_true",
-                   help="ffmpeg·yt-dlp 독립 실행 파일도 받습니다 (시스템에 없을 때)")
-    x = sub.add_parser("delete", help="지웁니다")
+                   help="Also downloads standalone ffmpeg and yt-dlp (when the system has none)")
+    x = sub.add_parser("delete", help="Deletes one")
     x.add_argument("id")
     args = ap.parse_args(argv)
 
@@ -888,7 +891,7 @@ def _cli(argv: list[str]) -> int:
         for it in overview()["items"]:
             marks = {"ready": "✓", "system": "✓", "missing": "·", "partial": "…"}
             mark = marks.get(it["state"], "?")
-            extra = f"  (시스템: {it['system']})" if it.get("system") else ""
+            extra = f"  (system: {it['system']})" if it.get("system") else ""
             print(f"  {mark} {it['id']:<26} {it['state']:<8} {it['label']}{extra}")
         return 0
     if args.cmd == "delete":
@@ -930,9 +933,9 @@ def _cli(argv: list[str]) -> int:
     q = bus.subscribe()
     got = download(ids)
     for mid in got["skipped"]:
-        print(f"  · {find(mid)['label']} 있음", file=sys.stderr)
+        print(f"  · {find(mid)['label']} already there", file=sys.stderr)
     for mid in got["unknown"]:
-        print(f"  ? 모르는 항목: {mid}", file=sys.stderr)
+        print(f"  ? unknown entry: {mid}", file=sys.stderr)
     pending = set(got["queued"])
     failed = []
     while pending:

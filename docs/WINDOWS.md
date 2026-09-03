@@ -62,9 +62,9 @@ graphics drivers.
 When the install finishes it prints what was actually detected.
 
 ```
-> 전사 런타임 (transcribe.cpp)
-  [OK] 설치
-  쓸 수 있는 백엔드: cpu, vulkan
+> Transcription runtime (transcribe.cpp)
+  [OK] installed
+  Available backends: cpu, vulkan
 ```
 
 If `vulkan` is missing, update the graphics driver. Transcription also runs on
@@ -198,8 +198,8 @@ server will not find the models.
 | The download breaks off | — | Just run it again. A partial download stays as `.part` and resumes. It also works from 「Models · Tools」 on the screen |
 | It stops midway with `NativeCommandError` | A defect in 0.1 (issue #1) | Get the latest version. This was Windows PowerShell 5.1 turning a single stderr line from a command into a terminating error |
 | Transcription fails right after it starts | The model may have failed to load onto the GPU | Check with `bench/doctor.py`, and if only `device=auto` fails, write `"device": "cpu"` into `backends.json` |
-| A live session fails with `OSError: [WinError 6] 핸들이 잘못되었습니다` | A defect in 0.3.1 | Get the latest version. This was a failure to start ffmpeg in a process launched with a broken standard-error handle (a bundle started without a console, Task Scheduler, a service). To stay on 0.3.1, launch it yourself from a console window |
-| "오디오를 찾지 못했습니다" in live | **yt-dlp is stale** | Run `.\install.ps1` again. The yt-dlp inside the virtual environment is raised to the latest |
+| A live session fails with `OSError: [WinError 6] 핸들이 잘못되었습니다` ("The handle is invalid") | A defect in 0.3.1 | Get the latest version. This was a failure to start ffmpeg in a process launched with a broken standard-error handle (a bundle started without a console, Task Scheduler, a service). To stay on 0.3.1, launch it yourself from a console window |
+| "could not find any audio" in live (older versions: "오디오를 찾지 못했습니다") | **yt-dlp is stale** | Run `.\install.ps1` again. The yt-dlp inside the virtual environment is raised to the latest |
 
 ## What has been verified and what has not
 

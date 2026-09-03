@@ -42,7 +42,8 @@ def test_short_final_needs_exact_containment():
 
 def test_notes_are_not_translation_context(session):
     s = session
-    s.publish_line("note", "⋯ 서버가 멈춘 사이 약 10초를 받지 못했습니다 ⋯", "ja", "")
+    s.publish_line("note", "⋯ about 10 s went unreceived while the server was down ⋯",
+                   "ja", "")
     s.audio_s = 1.0
     s.publish_line("final", "a", "ja", "")
     assert s._context_for({"t": 5.0}) == ["a"]
@@ -102,7 +103,7 @@ def test_hls_reconnects_inside_the_session(session, fake_ffmpeg):
     assert resolves[0] == 100.3                  # 끊긴 자리 = base + 받은 0.3초
     assert abs(resolves[1] - 200.2) < 1e-6       # 새 base 에서 0.2초 뒤에 끝남
     notes = [c for c in store.cues(session.id) if c["kind"] == "note"]
-    assert len(notes) == 1 and "7초" in notes[0]["text"]
+    assert len(notes) == 1 and "7 s" in notes[0]["text"]
     # 안내는 링을 거쳐 새 시간 기준이 적용된 **뒤에** 발행됩니다. 옛 조각들 사이에
     # 끼어 200초대 시각을 달면 스크립트에서 자리가 뒤바뀝니다.
     assert notes[0]["t"] == 200.0
@@ -114,7 +115,7 @@ def test_hls_gives_up_after_retries(session, fake_ffmpeg):
     seq, _ = _scenario(session, fake_ffmpeg, ["fail", "fail", "fail"], tries=3)
     assert seq == "SSSN"
     assert session.stopped_by == "stream" and session.state == "error"
-    assert "이어받기" in session.error
+    assert "Resume" in session.error
 
 
 def test_user_stop_does_not_reconnect(session, fake_ffmpeg):

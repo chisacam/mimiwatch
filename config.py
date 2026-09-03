@@ -146,7 +146,7 @@ def _seed(cfg: dict) -> dict:
         cfg["seeded"] = sorted(seen)
         save(cfg)
     if added:
-        print(f"[설정] 새 엔진을 들여왔습니다: {', '.join(added)}",
+        print(f"[config] new engines brought in: {', '.join(added)}",
               file=sys.stderr, flush=True)
     return cfg
 
@@ -184,7 +184,7 @@ def set_active(kind: str, engine_id: str) -> dict:
     with _lock:
         cfg = load()
         if not any(b["id"] == engine_id for b in cfg.get(key, [])):
-            return {"error": f"'{engine_id}' 엔진이 없습니다"}
+            return {"error": f"no such engine '{engine_id}'"}
         cfg[active_key] = engine_id
         save(cfg)
         return cfg
@@ -256,13 +256,13 @@ def delete(kind: str, engine_id: str) -> dict:
     key, active_key = KINDS[kind]
     protected = PROTECTED[kind]
     if engine_id == protected:
-        return {"error": "기본 로컬 엔진은 삭제할 수 없습니다"}
+        return {"error": "the default local engine cannot be deleted"}
     with _lock:
         cfg = load()
         before = cfg.get(key, [])
         kept = [b for b in before if b["id"] != engine_id]
         if len(kept) == len(before):
-            return {"error": f"'{engine_id}' 엔진이 없습니다"}
+            return {"error": f"no such engine '{engine_id}'"}
         cfg[key] = kept
         if cfg.get(active_key) == engine_id:
             want = example_default(kind)

@@ -58,13 +58,17 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\install.ps1 -Backend cuda      # NVIDIA 전용 (아래 절)
 ```
 
-설치가 끝나면 실제로 무엇이 잡혔는지 찍어 줍니다.
+설치가 끝나면 실제로 무엇이 잡혔는지 찍어 줍니다. 스크립트의 출력은
+영어입니다 -- 진단은 알려 주는 쪽과 받는 쪽이 같은 글을 봐야 하기 때문입니다.
 
 ```
-> 전사 런타임 (transcribe.cpp)
-  [OK] 설치
-  쓸 수 있는 백엔드: cpu, vulkan
+> Transcription runtime (transcribe.cpp)
+  [OK] installed
+  Available backends: cpu, vulkan
 ```
+
+`Transcription runtime`은 전사 런타임, 마지막 줄 `Available backends`가
+「쓸 수 있는 백엔드」입니다.
 
 `vulkan`이 없으면 그래픽 드라이버를 갱신하십시오. 전사는 CPU로도 돕니다 —
 느릴 뿐입니다.
@@ -192,7 +196,7 @@ $env:MIMIWATCH_YTDLP_COOKIES = "C:\Users\USERNAME\cookies.txt"
 | `NativeCommandError`로 중간에 멈춤 | 0.1의 결함 (이슈 #1) | 최신 판을 받으십시오. Windows PowerShell 5.1이 명령의 stderr 한 줄을 종료 오류로 바꾸던 문제입니다 |
 | 전사가 시작되자마자 실패 | GPU에 모델을 못 올렸을 수 있습니다 | `bench/doctor.py`로 확인하고, `device=auto`만 실패하면 `backends.json`에 `"device": "cpu"`를 적으십시오 |
 | 라이브 세션이 `OSError: [WinError 6] 핸들이 잘못되었습니다`로 실패 | 0.3.1의 결함 | 최신 판을 받으십시오. 표준 오류 핸들이 성치 않은 채로 뜬 프로세스(콘솔 없이 띄운 묶음, 작업 스케줄러·서비스)에서 ffmpeg을 세우지 못하던 문제입니다. 0.3.1을 그대로 쓰려면 콘솔 창에서 직접 띄우십시오 |
-| 라이브에서 "오디오를 찾지 못했습니다" | **yt-dlp가 낡았습니다** | `.\install.ps1` 을 다시 돌리십시오. 가상환경 안의 yt-dlp가 최신으로 올라갑니다 |
+| 라이브에서 "could not find any audio"(예전 판은 「오디오를 찾지 못했습니다」) | **yt-dlp가 낡았습니다** | `.\install.ps1` 을 다시 돌리십시오. 가상환경 안의 yt-dlp가 최신으로 올라갑니다 |
 
 ## 무엇을 확인했고 무엇을 확인하지 못했는가
 

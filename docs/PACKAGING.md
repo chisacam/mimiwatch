@@ -63,7 +63,7 @@ Keeping yt-dlp in the virtualenv is what made "re-run the install script and it
 updates" hold (README, "yt-dlp lives in the virtualenv"), and the bundle takes
 that back. The yt-dlp inside the bundle has its version baked in, so a few
 months later, when YouTube changes its extraction path, it becomes "could not
-find the audio".
+find any audio".
 
 That is why "Models and tools" has the **yt-dlp standalone executable**. That
 file, the one yt-dlp itself distributes, updates itself with `-U`, and when it

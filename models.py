@@ -92,7 +92,7 @@ def reap(now: float | None = None, idle_s: float | None = None) -> list[Hashable
             _cache.pop(k, None)
             _last.pop(k, None)
     for k in gone:
-        print(f"[models] {idle:.0f}초 놀려서 놓아줍니다: {' · '.join(str(p) for p in k)}",
+        print(f"[models] idle for {idle:.0f}s, letting go: {' · '.join(str(p) for p in k)}",
               file=sys.stderr, flush=True)
     return gone
 

@@ -2,6 +2,8 @@
 
 네트워크에 나가지 않습니다 -- 깃허브 조회(`_get_json`)는 가짜로 바꿉니다.
 """
+import platform as _platform
+
 import pytest
 
 import update
@@ -51,6 +53,13 @@ def test_pick_asset():
 
 
 def test_check_caches_across_restart(monkeypatch):
+    # 자산 고르기는 **지금 기계의** 플랫폼을 봅니다(`pick_asset` 의 기본값). 이 시험이
+    # 보려는 것은 「고른 자산이 하루짜리 캐시를 거쳐 그대로 나오는가」이므로 플랫폼을
+    # 못박습니다 -- 리눅스에는 붙는 자산이 없어서(바로 위 test_pick_asset) CI 에서만
+    # asset 이 None 이 되고, 캐시와 아무 상관 없는 이유로 이 시험이 깨져 있었습니다.
+    monkeypatch.setattr(update.sys, "platform", "darwin")
+    monkeypatch.setattr(_platform, "machine", lambda: "arm64")
+
     calls = []
 
     def fake(url):

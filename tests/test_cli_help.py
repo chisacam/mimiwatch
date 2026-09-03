@@ -19,9 +19,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # app.py 는 argparse 를 쓰지 않습니다(argv 를 직접 봅니다). 여기서 부르면
 # 서버를 띄우려 드는 자리라 넣지 않습니다.
 @pytest.mark.parametrize("script", ["transcribe_vod.py", "modelhub.py"])
-def test_the_command_line_still_builds_its_parser(script):
+def test_the_command_line_still_builds_its_parser(script, native_stub_path):
+    # 자식 프로세스라 conftest 가 sys.modules 에 끼운 가짜를 물려받지 못합니다. 런타임이
+    # 없는 기계(CI)에서는 파일로 적힌 가짜를 PYTHONPATH 로 건네줍니다 -- 그러지 않으면
+    # `import sherpa_onnx` 에서 죽고, 파서가 멀쩡한데도 이 시험이 실패로 나옵니다.
+    env = {**os.environ, "MIMIWATCH_NO_UPDATE_CHECK": "1"}
+    if native_stub_path is not None:
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(native_stub_path)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     out = subprocess.run([sys.executable, os.path.join(ROOT, script), "--help"],
                          capture_output=True, text=True, timeout=120,
-                         cwd=ROOT, env={**os.environ, "MIMIWATCH_NO_UPDATE_CHECK": "1"})
+                         cwd=ROOT, env=env)
     assert out.returncode == 0, out.stderr[-800:]
     assert "usage" in out.stdout.lower()

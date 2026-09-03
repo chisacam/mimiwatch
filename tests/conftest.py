@@ -20,6 +20,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 
+# 가짜를 끼운 이름. 나중에 `importlib.util.find_spec` 으로 다시 찾으면 안 됩니다 --
+# 아래에서 sys.modules 에 넣는 것은 __spec__ 이 없는 맨 모듈이라 그 자리에서
+# ValueError 가 납니다. 끼운 쪽이 적어 두는 것이 유일하게 정확한 기록입니다.
+_STUBBED: set[str] = set()
+
+
 def _stub_native():
     try:
         import transcribe_cpp  # noqa: F401
@@ -42,13 +48,56 @@ def _stub_native():
         tc.backend_available = lambda name: False
         sys.modules["transcribe_cpp"] = tc
         sys.modules["transcribe_cpp.errors"] = err
+        _STUBBED.add("transcribe_cpp")
     try:
         import sherpa_onnx  # noqa: F401
     except ImportError:
         sys.modules["sherpa_onnx"] = types.ModuleType("sherpa_onnx")
+        _STUBBED.add("sherpa_onnx")
 
 
 _stub_native()
+
+
+# 위 가짜는 **이 프로세스의** sys.modules 에만 들어갑니다. 자식 프로세스로 명령줄을
+# 돌려 보는 시험(test_cli_help)은 그것을 물려받지 못해, 런타임이 없는 기계에서는
+# `import sherpa_onnx` 에서 죽었습니다 -- 파서가 멀쩡한데도 「명령줄이 깨졌다」로 읽힙니다.
+# 그쪽에는 같은 내용을 **파일로** 적어 PYTHONPATH 로 건네줍니다. 없는 것만 적으므로
+# 런타임이 깔린 기계에서는 진짜가 그대로 쓰입니다.
+_SHERPA_STUB = '"""시험용 가짜. 이름만 있으면 됩니다 -- 쓰는 자리는 모두 함수 안입니다."""\n'
+
+_TCPP_STUB = '''"""시험용 가짜 전사 런타임. import 만 되게 하고, 실제로 부르면 죽습니다."""
+from .errors import OutputTruncated, UnsupportedRequest   # noqa: F401
+
+
+class Model:
+    def __init__(self, *a, **k):
+        raise RuntimeError("시험은 전사 모델을 올리지 않습니다")
+
+
+def backend_available(name):
+    return False
+'''
+
+_TCPP_ERRORS_STUB = '''class OutputTruncated(Exception):
+    pass
+
+
+class UnsupportedRequest(Exception):
+    pass
+'''
+
+
+def _write_native_stubs(d):
+    """가짜로 때운 런타임만 파일로 적고 그 경로를 냅니다. 하나도 없으면 None."""
+    if "sherpa_onnx" in _STUBBED:
+        (d / "sherpa_onnx.py").write_text(_SHERPA_STUB, encoding="utf-8")
+    if "transcribe_cpp" in _STUBBED:
+        pkg = d / "transcribe_cpp"
+        pkg.mkdir(exist_ok=True)
+        (pkg / "__init__.py").write_text(_TCPP_STUB, encoding="utf-8")
+        (pkg / "errors.py").write_text(_TCPP_ERRORS_STUB, encoding="utf-8")
+    return d if _STUBBED else None
 
 import pytest  # noqa: E402
 
@@ -58,6 +107,12 @@ import live  # noqa: E402
 import models  # noqa: E402
 import store  # noqa: E402
 import translate  # noqa: E402
+
+
+@pytest.fixture(scope="session")
+def native_stub_path(tmp_path_factory):
+    """자식 프로세스에 건넬 가짜 런타임 경로. 이 기계에 다 깔려 있으면 None."""
+    return _write_native_stubs(tmp_path_factory.mktemp("native_stubs"))
 
 
 @pytest.fixture(autouse=True)

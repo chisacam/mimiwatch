@@ -327,9 +327,11 @@ def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
     시각을 뭉갠 것입니다). 런타임에 구간 시각을 물어 도로 나누면 같은 표본에서
     32.4로, 재 본 설정 가운데 가장 높습니다.
 
-    시각을 받지 못하는 전사기(원격)나 되돌림에 걸린 무리는 확정본을 그대로
-    둡니다. 좋아지지 않는 자리에서 나빠지지는 않아야 합니다.
+    시각을 받지 못하는 전사기나 되돌림에 걸린 무리는 확정본을 그대로 둡니다.
+    좋아지지 않는 자리에서 나빠지지는 않아야 합니다.
     """
+    if not getattr(asr, "supports_segments", False):
+        return cues
     groups = refine_groups(spans)
     pre = int(stream.PREROLL_S * SAMPLE_RATE)
     out: list[dict] = []
@@ -405,6 +407,14 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
     # 자막 줄과 짝이 되는 표본 구간. 정제가 무리를 묶는 데 씁니다.
     spans: list[tuple[int, int]] = []
     total = len(samples)
+    # 정제는 되쪼개기까지가 한 벌입니다. 구간 시각을 못 내는 모델
+    # (SenseVoice Small, moonshine -- 경량 기본입니다)에서는 무리를 한 줄로
+    # 뭉치는 것밖에 할 수 없고 그것은 49절에서 진 쪽이므로, 하지 않습니다.
+    # 여기서 미리 정해 두는 것은 진행률을 몇 몫으로 나눌지가 걸려 있어서입니다.
+    if refine and not getattr(asr, "supports_segments", False):
+        print(f"[vod] {getattr(asr, 'label', '이 전사기')} 는 구간 시각을 내지 못해 "
+              "정제를 건너뜁니다", file=sys.stderr, flush=True)
+        refine = False
     fast_share = (1.0 - REFINE_SHARE) if refine else 1.0
 
     def drain():
@@ -472,7 +482,7 @@ def main():
     ap.add_argument("--speakers", action="store_true",
                     help="화자 딱지를 붙입니다 (S1, S2, ...)")
     ap.add_argument("--no-refine", action="store_true",
-                    help="정제 패스를 건너뜁니다 (전사가 30~50% 짧아지는 대신 품질이 내려갑니다)")
+                    help="정제 패스를 건너뜁니다 (전사가 30~50%% 짧아지는 대신 품질이 내려갑니다)")
     args = ap.parse_args()
 
     import jobs

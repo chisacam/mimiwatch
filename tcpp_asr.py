@@ -120,6 +120,13 @@ class TranscribeCppASR:
         # 빠른 패스와 정제 패스가 서로 다른 스레드에서 들어오므로
         # 직렬화합니다.
         self._lock = threading.Lock()
+        # 이 모델이 구간 시각을 낼 수 있는가. 녹화본 정제는 다시 해독한 결과를
+        # 그 시각으로 되쪼개는 것이 전부라(49절), 못 내는 모델에서는 정제를
+        # 아예 걸지 않습니다 -- 물어 보면 UnsupportedRequest 가 나고, 그것을
+        # 무리마다 맞으면 해독 값만 치르고 자막은 그대로입니다. 기본 경량
+        # 전사기(SenseVoice Small)와 moonshine 이 `none` 입니다.
+        self.supports_segments = self._model.capabilities.max_timestamp_kind in (
+            "segment", "word", "token")
 
     def _check_language(self):
         """이 모델이 이 언어를 아는지 시작할 때 물어봅니다.
@@ -408,6 +415,10 @@ class LiveASR:
     @property
     def refine_prompt(self):
         return getattr(self._inner, "refine_prompt", False)
+
+    @property
+    def supports_segments(self):
+        return getattr(self._inner, "supports_segments", False)
 
     def transcribe(self, samples, sample_rate, known_lang=None, speech_s=None,
                    live=True, prompt=None, segments=False):

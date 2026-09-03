@@ -302,6 +302,10 @@ class OpenAIStreamASR:
     def partial(self, samples, sample_rate, lang_hint=None) -> str:
         return ""
 
+    # 구간 시각을 내지 못합니다. 이 표면은 발화 한 조각을 통째로 보내고
+    # 글자만 돌려받습니다 -- 녹화본 정제(되쪼개기)가 성립하지 않습니다.
+    supports_segments = False
+
     def transcribe(self, samples: np.ndarray, sample_rate: int,
                    known_lang: str | None = None, speech_s: float | None = None,
                    live: bool = True, segments: bool = False) -> dict:

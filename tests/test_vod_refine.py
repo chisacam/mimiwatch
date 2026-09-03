@@ -26,10 +26,13 @@ class FakeASR:
     비우면 구간 글자를 이어 붙인 것이 됩니다.
     """
 
-    def __init__(self, segments=None, text="확정", refined=None):
+    def __init__(self, segments=None, text="확정", refined=None,
+                 supports_segments=True, label="fake"):
         self.segments = segments if segments is not None else []
         self.text = text
         self.refined = refined
+        self.supports_segments = supports_segments
+        self.label = label
         self.calls = []
 
     def transcribe(self, samples, sample_rate, speech_s=None, live=True, segments=False):
@@ -91,14 +94,32 @@ def test_a_swallowed_refine_keeps_the_fast_lines():
     assert out == cues
 
 
-def test_an_engine_without_timestamps_keeps_the_fast_lines():
-    """구간 시각을 못 주는 전사기(원격)에서는 아무것도 바꾸지 않습니다."""
+def test_an_engine_that_promises_timestamps_but_sends_none_keeps_the_fast_lines():
+    """물어봤는데 빈손으로 오는 경우 -- 원격 서버가 verbose_json 을 안 줄 수 있습니다."""
     samples = np.zeros(10 * SR, dtype=np.float32)
     cues = [{"start": 1.0, "end": 3.0, "lang": "ja", "text": "그대로"}]
     asr = FakeASR([], refined="아주 길게 다시 받아 적었습니다만 시각이 없습니다")
 
     out = vod.refine_cues(samples, cues, [span(1, 3)], asr)
     assert out == cues
+
+
+def test_an_engine_that_cannot_do_timestamps_is_never_asked():
+    """구간 시각을 못 내는 모델에는 정제를 걸지 않습니다.
+
+    경량 기본(SenseVoice Small)과 moonshine 이 그렇습니다 -- 물어보면
+    `UnsupportedRequest` 가 나고, 무리마다 그것을 맞으면 해독 값만 치르고
+    자막은 그대로입니다. 되쪼개기 없는 정제는 49절에서 진 쪽이라 대안도
+    아닙니다.
+    """
+    samples = np.zeros(10 * SR, dtype=np.float32)
+    cues = [{"start": 1.0, "end": 3.0, "lang": "ja", "text": "그대로"}]
+    asr = FakeASR([{"start": 0.0, "end": 2.0, "text": "정제된 긴 문장"}],
+                  supports_segments=False)
+
+    out = vod.refine_cues(samples, cues, [span(1, 3)], asr)
+    assert out == cues
+    assert asr.calls == []                 # 해독을 아예 부르지 않습니다
 
 
 class FakeVAD:
@@ -151,13 +172,29 @@ def test_transcribe_runs_the_refine_pass_only_when_asked(monkeypatch):
     assert on.calls == pytest.approx([2.0, 1.5, 5.0])   # 구간 둘 + 무리 하나(선행 1초)
 
 
-def test_progress_never_goes_backwards_when_refining(monkeypatch):
-    """빠른 패스가 100%에 닿고 한참 더 도는 것처럼 보이면 멈춘 것으로 읽힙니다."""
-    spans = [span(1, 3)]
-    samples = np.zeros(6 * SR, dtype=np.float32)
-    monkeypatch.setattr(vod, "build_vad", lambda **kw: FakeVAD(spans))
+def _progress(monkeypatch, asr, seconds=60):
+    """진행률 값만 뽑습니다. 콜백은 30초마다 한 번이라 표본이 길어야 합니다."""
+    monkeypatch.setattr(vod, "build_vad", lambda **kw: FakeVAD([span(1, 3)]))
     seen = []
-    vod.transcribe(samples, "ja", asr=FakeASR([{"start": 1.0, "end": 2.0, "text": "가"}]),
+    vod.transcribe(np.zeros(seconds * SR, dtype=np.float32), "ja", asr=asr,
                    on_progress=seen.append, refine=True)
-    assert seen == sorted(seen) and max(seen) == pytest.approx(1.0)
-    assert max(p for p in seen if p < 1.0) <= 1.0 - vod.REFINE_SHARE + 1e-9
+    return seen
+
+
+def test_refining_reserves_the_tail_of_the_progress_bar(monkeypatch):
+    """빠른 패스가 100%에 닿고 한참 더 도는 것처럼 보이면 멈춘 것으로 읽힙니다."""
+    asr = FakeASR([{"start": 1.0, "end": 2.0, "text": "정제된 문장"}])
+    seen = _progress(monkeypatch, asr)
+    assert seen == sorted(seen)                       # 되돌아가지 않습니다
+    assert seen[-1] == pytest.approx(1.0)             # 정제가 끝나면 채웁니다
+    # 30초 지점(절반)은 빠른 패스 몫 안에 들어와 있어야 합니다.
+    assert seen[1] == pytest.approx(0.5 * (1.0 - vod.REFINE_SHARE))
+
+
+def test_skipping_the_refine_gives_the_whole_bar_to_the_fast_pass(monkeypatch):
+    """돌지 않을 패스에 진행률을 떼어 두면 막대가 65%에서 멎습니다."""
+    asr = FakeASR([{"start": 1.0, "end": 2.0, "text": "정제된 문장"}],
+                  supports_segments=False)
+    seen = _progress(monkeypatch, asr)
+    assert seen[1] == pytest.approx(0.5)
+    assert asr.calls == pytest.approx([2.0])          # 확정 한 번, 정제는 없습니다

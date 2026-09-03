@@ -98,7 +98,7 @@ function renderGenrePicker() {
   state.genres.forEach(g => {
     const o = document.createElement("option");
     o.value = g.id;
-    o.textContent = g.label;
+    o.textContent = MW_I18N.pick(g, "label");
     sel.appendChild(o);
   });
   const saved = loadPrefs().genre;
@@ -111,7 +111,18 @@ function showGenreHint() {
   const sel = document.querySelector('#add-form select[name="genre"]');
   const hint = $("genre-hint");
   const g = state.genres.find(x => x.id === (sel || {}).value);
-  if (hint && g) hint.textContent = g.hint;
+  if (hint && g) hint.textContent = MW_I18N.pick(g, "hint");
+}
+
+/* A language change has to relabel the genre options, but renderGenrePicker
+ * puts the remembered preference back into the select -- redrawing on its own
+ * would silently move the genre of the video that is open. Keep the selection. */
+function redrawGenrePicker() {
+  const sel = document.querySelector('#add-form select[name="genre"]');
+  const keep = sel && sel.value;
+  renderGenrePicker();
+  if (sel && keep && state.genres.some(g => g.id === keep)) sel.value = keep;
+  showGenreHint();
 }
 
 function currentGenre() {
@@ -137,7 +148,8 @@ function renderProfilePicker() {
   state.liveProfiles.forEach(p => {
     const o = document.createElement("option");
     o.value = p.id;
-    o.textContent = t("engines.profile.option", { label: p.label, n: p.max_speech });
+    o.textContent = t("engines.profile.option",
+                      { label: MW_I18N.pick(p, "label"), n: p.max_speech });
     sel.appendChild(o);
   });
   const saved = loadPrefs().profile;
@@ -533,7 +545,8 @@ function modelRow(it) {
   const bits = [stateLabel(it)];
   if (["ready", "system"].includes(it.state)) bits.push(fmtBytes(it.have || it.size));
   else if (it.size && it.state !== "downloading") bits.push(fmtBytes(it.size));
-  if (it.purpose) bits.push(it.purpose);
+  const purpose = MW_I18N.pick(it, "purpose");
+  if (purpose) bits.push(purpose);
   if (it.state === "system" && it.system) bits.push(it.system);
   if (it.state === "error" && it.error) bits.push(it.error);
   meta.textContent = bits.join(" · ");
@@ -772,6 +785,7 @@ async function deleteCookies() {
  * have arrived yet, and drawing an empty list would empty a filled picker. */
 MW_I18N.onChange(() => {
   if ((state.liveProfiles || []).length) renderProfilePicker();
+  if ((state.genres || []).length) redrawGenrePicker();
   if ((state.backends || []).length) renderBackendPicker();
   if ((state.backends || []).length && (state.asrBackends || []).length) {
     renderEngineList("asr");

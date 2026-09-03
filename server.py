@@ -173,7 +173,8 @@ class Handler(BaseHTTPRequestHandler):
         cfg["live_profiles"] = [{"id": k, **v} for k, v in live.PROFILES.items()]
         # 장르는 프롬프트만 바꾸므로 라이브·녹화본 양쪽에 씁니다. 프롬프트
         # 본문은 보내지 않습니다 -- 화면에 쓸 것은 이름과 한 줄 설명뿐입니다.
-        cfg["genres"] = [{"id": k, "label": v["label"], "hint": v["hint"]}
+        cfg["genres"] = [{"id": k, "label_en": v["label_en"], "label_ko": v["label_ko"],
+                          "hint_en": v["hint_en"], "hint_ko": v["hint_ko"]}
                          for k, v in translate.GENRE_PROMPTS.items()]
         self._json(cfg)
 

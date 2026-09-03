@@ -63,52 +63,69 @@ PROGRESS_EVERY_S = 0.4
 # 크기는 표시용 어림값(바이트)입니다. 실제 크기는 받을 때 Content-Length로 압니다.
 CATALOG: list[dict] = [
     {"id": "silero-vad", "kind": "aux", "label": "Silero VAD",
-     "purpose": "발화 구간 분할 · 전사에 반드시 필요", "file": "silero_vad.onnx",
+     "purpose_en": "Speech segmentation · required for transcription",
+     "purpose_ko": "발화 구간 분할 · 전사에 반드시 필요", "file": "silero_vad.onnx",
      "url": f"{GH_SHERPA}/asr-models/silero_vad.onnx", "size": 643_854,
      "required": True, "default": True},
     {"id": "silero-vad-v5", "kind": "aux", "label": "Silero VAD v5",
-     "purpose": "발화 구간 분할 · 잡음에 강한 새 판 (MIMIWATCH_VAD_MODEL=silero_vad_v5.onnx 로 씀)",
+     "purpose_en": "Speech segmentation · newer build, robust to noise "
+                   "(used with MIMIWATCH_VAD_MODEL=silero_vad_v5.onnx)",
+     "purpose_ko": "발화 구간 분할 · 잡음에 강한 새 판 "
+                   "(MIMIWATCH_VAD_MODEL=silero_vad_v5.onnx 로 씀)",
      "file": "silero_vad_v5.onnx", "url": f"{GH_SHERPA}/asr-models/silero_vad_v5.onnx",
      "size": 2_313_101, "required": False, "default": False},
     {"id": "whisper-large-v3-turbo", "kind": "asr", "label": "Whisper large-v3-turbo Q8_0",
-     "purpose": "전사 (모든 언어) · 품질 · GPU 권장", "file": "whisper-large-v3-turbo-Q8_0.gguf",
+     "purpose_en": "Transcription (all languages) · quality · GPU recommended",
+     "purpose_ko": "전사 (모든 언어) · 품질 · GPU 권장",
+     "file": "whisper-large-v3-turbo-Q8_0.gguf",
      "repo": "handy-computer/whisper-large-v3-turbo-gguf", "size": 886_381_760,
      "required": True, "default": True},
     {"id": "sensevoice-small", "kind": "asr", "label": "SenseVoice Small Q8_0",
-     "purpose": "전사 · 기본 (가벼움 · CPU, whisper의 8배 빠름)",
+     "purpose_en": "Transcription · default (light · CPU, 8x faster than whisper)",
+     "purpose_ko": "전사 · 기본 (가벼움 · CPU, whisper의 8배 빠름)",
      "file": "SenseVoiceSmall-Q8_0.gguf",
      "repo": "handy-computer/SenseVoiceSmall-gguf", "size": 252_684_608,
      "required": False, "default": True},
     {"id": "moonshine-base", "kind": "asr", "label": "Moonshine base Q8_0",
-     "purpose": "가벼운 전사 · 영어 전용 (74MB, 품질은 whisper와 같음)",
+     "purpose_en": "Light transcription · English only (74MB, same quality as whisper)",
+     "purpose_ko": "가벼운 전사 · 영어 전용 (74MB, 품질은 whisper와 같음)",
      "file": "moonshine-base-Q8_0.gguf",
      "repo": "handy-computer/moonshine-base-gguf", "size": 77_476_480,
      "required": False, "default": True},
     {"id": "gemma-4-e4b", "kind": "tr", "label": "Gemma 4 E4B q4_0",
-     "purpose": "번역 · 품질 · GPU 권장 (4.9GB, M2M-100과 품질 차이가 큼)",
+     "purpose_en": "Translation · quality · GPU recommended "
+                   "(4.9GB, a wide quality gap over M2M-100)",
+     "purpose_ko": "번역 · 품질 · GPU 권장 (4.9GB, M2M-100과 품질 차이가 큼)",
      "file": "gemma-4-E4B_q4_0-it.gguf",
      "repo": "google/gemma-4-E4B-it-qat-q4_0-gguf", "size": 5_154_941_280,
      "required": False, "default": True},
     {"id": "m2m100", "kind": "tr", "label": "M2M-100 (CTranslate2)",
-     "purpose": "번역 · 기본 (가벼움 · CPU) · Gemma의 대체용도 겸함", "dir": "mojicast-m2m100-ct2",
+     "purpose_en": "Translation · default (light · CPU) · also serves as Gemma's fallback",
+     "purpose_ko": "번역 · 기본 (가벼움 · CPU) · Gemma의 대체용도 겸함",
+     "dir": "mojicast-m2m100-ct2",
      "repo": "ishiki-emo/mojicast-m2m100-ct2", "size": 473_000_000,
      "required": True, "default": True},
     {"id": "campplus", "kind": "aux", "label": "CAM++",
-     "purpose": "녹화본 화자 태그 (선택)", "file": "campplus_sv.onnx",
+     "purpose_en": "Speaker tags for VODs (optional)",
+     "purpose_ko": "녹화본 화자 태그 (선택)", "file": "campplus_sv.onnx",
      "url": f"{GH_SHERPA}/speaker-recongition-models/"
             "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
      "size": 28_281_164, "required": False, "default": True},
     # 도구. 시스템에 있으면 받을 필요가 없습니다 -- 상태에 그렇게 적습니다.
     {"id": "ffmpeg", "kind": "tool", "label": "ffmpeg",
-     "purpose": "오디오 풀기 · 시스템에 없을 때만 필요", "tool": "ffmpeg",
+     "purpose_en": "Audio extraction · needed only when the system has none",
+     "purpose_ko": "오디오 풀기 · 시스템에 없을 때만 필요", "tool": "ffmpeg",
      "size": 45_000_000, "required": True, "default": False},
-    {"id": "yt-dlp", "kind": "tool", "label": "yt-dlp (독립 실행 파일)",
-     "purpose": "영상 주소 해석 · 스스로 판올림하는 판. 묶음으로 쓸 때 권장",
+    {"id": "yt-dlp", "kind": "tool", "label": "yt-dlp",
+     "purpose_en": "Video URL resolution · the self-updating build. Recommended for the bundle",
+     "purpose_ko": "영상 주소 해석 · 스스로 판올림하는 판. 묶음으로 쓸 때 권장",
      "tool": "yt-dlp", "size": 37_000_000, "required": False, "default": False},
     # 유튜브가 2025.11부터 요구하는 JS 런타임. 공개 라이브(HLS)는 없어도 되지만 녹화본과
     # 쿠키(멤버십) 경로는 이것이 없으면 포맷이 사라집니다. 시스템에 deno 가 있으면 그것.
-    {"id": "deno", "kind": "tool", "label": "deno (유튜브 JS 런타임)",
-     "purpose": "유튜브 추출에 필요한 JS 런타임 · 녹화본·멤버십 방송에 권장",
+    {"id": "deno", "kind": "tool", "label": "deno",
+     "purpose_en": "JS runtime YouTube extraction needs · recommended for VODs "
+                   "and members-only streams",
+     "purpose_ko": "유튜브 추출에 필요한 JS 런타임 · 녹화본·멤버십 방송에 권장",
      "tool": "deno", "size": 45_000_000, "required": False, "default": False},
 ]
 
@@ -217,8 +234,11 @@ def _dir_size(path: str) -> int:
 def status(entry: dict) -> dict:
     """항목 하나의 지금 상태."""
     path = target_path(entry)
-    out = {k: entry.get(k) for k in ("id", "kind", "label", "purpose", "size", "required",
-                                      "default", "repo", "file", "dir", "tool", "custom")}
+    # `purpose` stays in the list next to the pair: a custom.json written before
+    # the split carries only the plain key, and the screen falls back to it.
+    out = {k: entry.get(k) for k in ("id", "kind", "label", "purpose_en", "purpose_ko",
+                                     "purpose", "size", "required",
+                                     "default", "repo", "file", "dir", "tool", "custom")}
     out["path"] = path
     with _lock:
         prog = dict(_progress.get(entry["id"]) or {})
@@ -278,7 +298,8 @@ def other_files() -> list[dict]:
         p = os.path.join(mdir, name)
         size = _dir_size(p) if os.path.isdir(p) else os.path.getsize(p)
         out.append({"id": "file:" + name, "kind": "other", "label": name,
-                    "purpose": "목록에 없는 파일", "path": p, "have": size, "size": size,
+                    "purpose_en": "File not in the catalogue",
+                    "purpose_ko": "목록에 없는 파일", "path": p, "have": size, "size": size,
                     "state": "ready", "file": name})
     return out
 
@@ -362,7 +383,10 @@ def setup_options() -> dict:
         if e:
             st = status(e)
             out["model"] = {"id": e["id"], "label": e["label"], "size": e.get("size"),
-                            "state": st["state"], "purpose": e.get("purpose")}
+                            "state": st["state"],
+                            "purpose_en": e.get("purpose_en"),
+                            "purpose_ko": e.get("purpose_ko"),
+                            "purpose": e.get("purpose")}
         return out
 
     return {"asr": [describe("asr", b) for b in config.entries("asr", cfg)],
@@ -793,7 +817,9 @@ def add_custom(kind: str, repo: str, file: str, label: str = "", engine_id: str 
     except Exception as exc:
         return {"error": f"허깅페이스에 묻지 못했습니다: {exc}"}
     entry = {"id": model_id, "kind": kind, "label": label or base,
-             "purpose": f"{'전사' if kind == 'asr' else '번역'} · 허깅페이스 {repo}",
+             "purpose_en": f"{'Transcription' if kind == 'asr' else 'Translation'}"
+                           f" · Hugging Face {repo}",
+             "purpose_ko": f"{'전사' if kind == 'asr' else '번역'} · 허깅페이스 {repo}",
              "file": file, "repo": repo, "size": size, "required": False, "default": False,
              "register": {"kind": kind, "id": engine_id, "label": label or base,
                           "device": device or "auto"}}

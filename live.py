@@ -68,13 +68,17 @@ LIVE_MIN_SILENCE = 0.30
 # from splitting a sentence in half, so it keeps the longer cap.
 PROFILES = {
     "talk":      {"max_speech": 12.0, "min_silence": 0.35,
-                  "label": "발표·강연 (한 사람이 문장 사이에 쉼)"},
+                  "label_en": "Talk · lecture (one person pausing between sentences)",
+                  "label_ko": "발표·강연 (한 사람이 문장 사이에 쉼)"},
     "interview": {"max_speech": 6.0,  "min_silence": 0.35,
-                  "label": "대담·인터뷰 (번갈아 말하고 쉼이 있음)"},
+                  "label_en": "Panel · interview (taking turns, with pauses)",
+                  "label_ko": "대담·인터뷰 (번갈아 말하고 쉼이 있음)"},
     "broadcast": {"max_speech": 4.0,  "min_silence": 0.30,
-                  "label": "일반 방송 (한두 사람, 쉼이 짧음)"},
+                  "label_en": "General stream (one or two people, short pauses)",
+                  "label_ko": "일반 방송 (한두 사람, 쉼이 짧음)"},
     "collab":    {"max_speech": 3.0,  "min_silence": 0.25,
-                  "label": "합방·다인 대화 (발화가 겹침)"},
+                  "label_en": "Collab · group conversation (speech overlaps)",
+                  "label_ko": "합방·다인 대화 (발화가 겹침)"},
 }
 
 # HLS 수신이 끊겼을 때 같은 세션 안에서 다시 붙어 보는 횟수. 사이의 기다림은

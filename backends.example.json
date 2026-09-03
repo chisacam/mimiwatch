@@ -3,7 +3,7 @@
  "backends": [
   {
    "id": "local-m2m100",
-   "label": "M2M-100 (가벼움 · CPU · 기본)",
+   "label": "M2M-100",
    "backend": "local",
    "min_chars": 0
   },
@@ -18,7 +18,7 @@
   },
   {
    "id": "local-gemma",
-   "label": "Gemma 4 E4B (품질 · GPU 권장 · 4.9GB)",
+   "label": "Gemma 4 E4B (local)",
    "backend": "gemma",
    "min_chars": 0,
    "device": "auto"
@@ -28,20 +28,20 @@
  "asr_backends": [
   {
    "id": "tcpp-best",
-   "label": "Whisper large-v3-turbo (품질 · GPU 권장)",
+   "label": "Whisper large-v3-turbo",
    "backend": "tcpp",
    "device": "auto"
   },
   {
    "id": "tcpp-lite",
-   "label": "SenseVoice Small (가벼움 · CPU · 기본)",
+   "label": "SenseVoice Small",
    "backend": "tcpp",
    "model": "SenseVoiceSmall-Q8_0.gguf",
    "device": "cpu"
   },
   {
    "id": "tcpp-lite-en",
-   "label": "Moonshine base (가벼움 · 영어 전용)",
+   "label": "Moonshine base",
    "backend": "tcpp",
    "model": "moonshine-base-Q8_0.gguf",
    "device": "cpu"

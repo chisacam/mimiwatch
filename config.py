@@ -80,6 +80,33 @@ def _example() -> dict:
         return {}
 
 
+# Labels we shipped before engine names were made language-neutral. A config
+# copied from the example carries one of these verbatim, and _seed() only ever
+# adds an engine -- it never renames one -- so an existing install would keep
+# showing Korean names beside an English UI. Renaming only a label that still
+# matches what we shipped leaves a label the user edited themselves alone.
+_SHIPPED_LABELS_BEFORE_EN = {
+    "local-m2m100": "M2M-100 (가벼움 · CPU · 기본)",
+    "local-gemma": "Gemma 4 E4B (품질 · GPU 권장 · 4.9GB)",
+    "tcpp-best": "Whisper large-v3-turbo (품질 · GPU 권장)",
+    "tcpp-lite": "SenseVoice Small (가벼움 · CPU · 기본)",
+    "tcpp-lite-en": "Moonshine base (가벼움 · 영어 전용)",
+}
+
+
+def _relabel(cfg: dict, example: dict) -> list[str]:
+    """Give a shipped engine the name the example now uses. Returns the ids fixed."""
+    fixed = []
+    for key, _active in KINDS.values():
+        want = {e["id"]: e.get("label") or "" for e in example.get(key, [])}
+        for b in cfg.get(key, []):
+            was = _SHIPPED_LABELS_BEFORE_EN.get(b.get("id"))
+            if was and b.get("label") == was and want.get(b["id"]):
+                b["label"] = want[b["id"]]
+                fixed.append(b["id"])
+    return fixed
+
+
 def _seed(cfg: dict) -> dict:
     """예시에 새로 생긴 엔진을 사용자 설정에 들여옵니다.
 
@@ -108,7 +135,8 @@ def _seed(cfg: dict) -> dict:
             cfg.setdefault(key, []).append(dict(entry))
             seen.add(entry["id"])
             added.append(entry["id"])
-    if added or set(cfg.get("seeded") or []) != seen:
+    renamed = _relabel(cfg, example)
+    if added or renamed or set(cfg.get("seeded") or []) != seen:
         cfg["seeded"] = sorted(seen)
         save(cfg)
     if added:

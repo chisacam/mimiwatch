@@ -186,13 +186,17 @@ async function fillChoices() {
   if (!r || !r.ok) return;
   const g = $("genre");
   g.length = 0;                             // 주소를 바꿔 다시 읽을 때 겹치지 않게
-  for (const x of (r.data.genres || [])) g.append(new Option(x.label || x.id, x.id));
+  for (const x of (r.data.genres || [])) {
+    g.append(new Option(MW_I18N.pick(x, "label") || x.id, x.id));
+  }
   if (!g.length) g.append(new Option(t("popup.genreGeneral"), "general"));
 
   profiles = r.data.live_profiles || [];
   const p = $("profile");
   p.length = 0;
-  for (const x of profiles) p.append(new Option(x.label || x.id, x.id));
+  for (const x of profiles) {
+    p.append(new Option(MW_I18N.pick(x, "label") || x.id, x.id));
+  }
   if (!p.length) p.append(new Option(t("popup.profileBroadcast"), "broadcast"));
 }
 

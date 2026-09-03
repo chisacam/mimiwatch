@@ -110,9 +110,25 @@
     }
   }
 
+  /* Pick a language-specific field off a record the server sent.
+   *
+   * Genre names, live profile names and model descriptions are data, not UI
+   * strings -- they live in the server's own tables, so they arrive as
+   * `label_en` / `label_ko` pairs rather than as keys. Engines a user added by
+   * hand carry a plain `label` and no pair at all, which is why the plain field
+   * is the last fallback rather than an error: their label is whatever they
+   * typed, in whatever language they typed it. */
+  function pick(rec, base) {
+    if (!rec) return "";
+    var v = rec[base + "_" + lang];
+    if (v == null) v = rec[base + "_en"];
+    if (v == null) v = rec[base];
+    return v == null ? "" : v;
+  }
+
   g.MW_I18N = { add: add, t: t, setLang: setLang, current: current, langs: langs,
                 onChange: onChange, applyStatic: applyStatic,
-                fromNavigator: fromNavigator };
+                fromNavigator: fromNavigator, pick: pick };
   /* The app modules are plain scripts sharing one global scope, so the short
    * name is the one they actually call. */
   g.t = t;

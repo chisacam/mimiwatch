@@ -83,14 +83,20 @@ _PROMPT_TAIL = ("Output only the translation, with no quotes, notes, or "
 
 GENRE_PROMPTS = {
     "general": {
-        "label": "일반",
-        "hint": "장르를 모르거나 섞여 있을 때. 지금까지 쓰던 프롬프트입니다.",
+        "label_en": "General",
+        "label_ko": "일반",
+        "hint_en": ("When you do not know the genre, or it is mixed. This is "
+                    "the prompt used so far."),
+        "hint_ko": "장르를 모르거나 섞여 있을 때. 지금까지 쓰던 프롬프트입니다.",
         "prompt": ("Translate the {src} subtitle line below into {tgt}. "
                    "Keep proper nouns as they are written. " + _PROMPT_TAIL),
     },
     "tech": {
-        "label": "기술 발표·세미나",
-        "hint": "전사기가 뭉갠 제품·서비스 이름을 문맥에 맞게 되살리고 문어체로 옮깁니다.",
+        "label_en": "Tech talk · seminar",
+        "label_ko": "기술 발표·세미나",
+        "hint_en": ("Restores product and service names the transcriber mangled "
+                    "to fit the context, and translates in written style."),
+        "hint_ko": "전사기가 뭉갠 제품·서비스 이름을 문맥에 맞게 되살리고 문어체로 옮깁니다.",
         "prompt": ("Translate the {src} subtitle line below into {tgt}. "
                    "This is a software or cloud engineering talk. "
                    "Product, service and API names are frequently garbled by "
@@ -100,8 +106,11 @@ GENRE_PROMPTS = {
                    "Use written, declarative Korean. " + _PROMPT_TAIL),
     },
     "gaming": {
-        "label": "게임 방송",
-        "hint": "끝나지 않은 말을 대신 끝내지 않습니다. 감탄사는 감탄사로 둡니다.",
+        "label_en": "Game stream",
+        "label_ko": "게임 방송",
+        "hint_en": ("Does not finish sentences that were left unfinished. "
+                    "Leaves interjections as interjections."),
+        "hint_ko": "끝나지 않은 말을 대신 끝내지 않습니다. 감탄사는 감탄사로 둡니다.",
         "prompt": ("Translate the {src} subtitle line below into {tgt}. "
                    "This is a live game stream: the speaker is reacting in "
                    "real time, so lines are short, unfinished, and often just "
@@ -113,8 +122,10 @@ GENRE_PROMPTS = {
                    "ordinary words are always translated. " + _PROMPT_TAIL),
     },
     "chat": {
-        "label": "잡담·버라이어티",
-        "hint": "은어와 줄임말은 뜻을 지어내지 않고 음차합니다.",
+        "label_en": "Chat · variety",
+        "label_ko": "잡담·버라이어티",
+        "hint_en": "Transliterates slang and abbreviations instead of inventing a meaning.",
+        "hint_ko": "은어와 줄임말은 뜻을 지어내지 않고 음차합니다.",
         "prompt": ("Translate the {src} subtitle line below into {tgt}. "
                    "This is a streamer chatting with viewers: casual speech, "
                    "slang, in-jokes and clipped abbreviations. If a coined "
@@ -124,8 +135,11 @@ GENRE_PROMPTS = {
                    "Korean. " + _PROMPT_TAIL),
     },
     "music": {
-        "label": "노래·가사",
-        "hint": "가사의 이미지와 어순을 지키고 없는 주어를 넣지 않습니다.",
+        "label_en": "Song · lyrics",
+        "label_ko": "노래·가사",
+        "hint_en": ("Keeps the lyric's imagery and word order, and does not "
+                    "insert a subject that is not there."),
+        "hint_ko": "가사의 이미지와 어순을 지키고 없는 주어를 넣지 않습니다.",
         "prompt": ("Translate the {src} song lyric line below into {tgt}. "
                    "Lyrics are fragmentary by design: keep the line's imagery "
                    "and its word order where {tgt} allows, and do not supply "

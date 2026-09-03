@@ -1,279 +1,283 @@
-# 요구사항 정의서 (v0.4)
+# Requirements (v0.4)
 
-**프로젝트 가칭**: mimiwatch
-**목적**: YouTube 및 m3u8 스트림을 대상으로, 원본 영상 위에 실시간 전사와 번역 자막을 얹어 사용자가 자신의 언어로 이해할 수 있게 돕는 웹 도구
-**관계**: hayamimi를 전사 엔진으로 사용하는 별도 프로젝트입니다. hayamimi 저장소를 수정하지 않고 라이브러리와 네트워크 인터페이스로만 연결합니다.
-**작성일**: 2026-08-27 (v0.4에서 구현 완료 상태와 구현하며 확인된 사실을 반영했습니다. 실측 근거는 `measurements/RESULTS.md`입니다.)
+*[한국어](REQUIREMENTS.ko.md)*
 
----
-
-## 1. 목표와 비목표
-
-### 1-1. 목표
-
-외국어로 진행되는 발표나 실시간 방송을, **사용자가 자신의 언어로 따라갈 수 있게** 만드는 것이 유일한 목표입니다. 자막 품질과 동기화 정확도가 이 목표를 직접 좌우하므로 다른 기능보다 우선합니다.
-
-### 1-2. 비목표
-
-다음은 이 프로젝트에서 다루지 않습니다.
-
-- 영상 다운로드와 보관을 목적으로 하는 기능
-- 자막 파일의 배포나 공유 기능
-- 다중 사용자 서비스로의 확장. **1인 로컬 실행을 전제로 설계합니다.**
-- hayamimi 본체의 인식 정확도 개선. 그것은 hayamimi 저장소에서 다룹니다.
+**Working project name**: mimiwatch
+**Purpose**: a web tool that targets YouTube and m3u8 streams, lays real-time transcription and translated subtitles over the original video, and so lets the user follow it in their own language
+**Relationship**: a separate project that uses hayamimi as its transcription engine. It does not modify the hayamimi repository; it connects only through the library and a network interface.
+**Written**: 2026-08-27 (v0.4 reflects what is finished and what was learned while implementing it. The measured evidence is in `measurements/RESULTS.md`.)
 
 ---
 
-## 2. 사용자 흐름
+## 1. Goals and non-goals
 
-입력의 성격에 따라 흐름이 완전히 갈라집니다. 이 분기가 설계의 뼈대입니다.
+### 1-1. Goals
 
-### 2-1. 녹화본 흐름 (자동 동기화)
+The only goal is to make a talk or a live stream held in a foreign language **something the user can follow in their own language**. Subtitle quality and synchronisation accuracy directly decide that goal, so they come before every other feature.
 
-1. 사용자가 YouTube 주소를 붙여 넣습니다.
-2. 서버가 오디오만 추출하여 **실시간보다 빠른 속도로 전체를 전사**합니다. hayamimi의 오프라인 벤치마크 기준 RTF가 0.05 내외이므로, 한 시간짜리 영상은 수 분 안에 완료됩니다.
-3. 전사가 끝나면 각 발화에 **미디어 기준 타임스탬프**가 붙은 자막 목록이 만들어집니다.
-4. 사용자가 재생을 시작하면 YouTube iframe의 `getCurrentTime()`과 자막 타임스탬프를 맞추어 **자동으로 동기화**됩니다.
-5. 2패스 정제와 화자 구분을 전부 적용할 수 있습니다. 실시간 제약이 없기 때문입니다.
+### 1-2. Non-goals
 
-**이 흐름에서는 수동 오프셋이 필요하지 않습니다.**
+The following are out of scope for this project.
 
-### 2-2. 라이브 흐름 (수동 오프셋)
-
-1. 사용자가 진행 중인 방송 주소 또는 m3u8 주소를 입력합니다.
-2. 서버가 스트림에서 오디오를 받아 실시간으로 전사하고 번역합니다.
-3. 브라우저는 YouTube 임베드 플레이어로 영상을 재생합니다.
-4. 서버의 처리 지연과 브라우저의 재생 위치가 서로 독립적이므로, **사용자가 슬라이더로 자막 표시 시점을 보정**합니다.
-5. 보정값은 세션 동안 유지되며, 재생을 일시정지하거나 버퍼링이 발생하면 다시 조정할 수 있습니다.
+- Features whose purpose is downloading and archiving video
+- Distributing or sharing subtitle files
+- Growing into a multi-user service. **The design assumes a single person running it locally.**
+- Improving hayamimi's own recognition accuracy. That belongs in the hayamimi repository.
 
 ---
 
-## 3. 시스템 구성
+## 2. User flows
+
+The flow splits completely according to the nature of the input. That branch is the skeleton of the design.
+
+### 2-1. VOD flow (automatic synchronisation)
+
+1. The user pastes a YouTube address.
+2. The server extracts audio only and **transcribes the whole thing faster than realtime**. hayamimi's offline benchmark puts the RTF around 0.05, so an hour-long video finishes within a few minutes.
+3. When transcription ends, a subtitle list is produced with a **media-relative timestamp** on every utterance.
+4. When the user starts playback, the YouTube iframe's `getCurrentTime()` is matched against the subtitle timestamps, so it **synchronises automatically**.
+5. The two-pass refinement pass and speaker separation can both be applied in full, because there is no realtime constraint.
+
+**This flow needs no manual offset.**
+
+### 2-2. Live flow (manual offset)
+
+1. The user enters the address of a stream in progress, or an m3u8 address.
+2. The server takes audio from the stream and transcribes and translates it in realtime.
+3. The browser plays the video in the YouTube embed player.
+4. The server's processing delay and the browser's playback position are independent of each other, so **the user corrects the subtitle display timing with a slider**.
+5. The correction is kept for the session, and can be adjusted again when playback is paused or buffering happens.
+
+---
+
+## 3. System layout
 
 ```
-[입력]                [서버]                          [브라우저]
-YouTube URL   ──> URL 해석 (yt-dlp)
-m3u8 URL      ──> 오디오 추출 (ffmpeg)
+[input]               [server]                        [browser]
+YouTube URL   ──> URL resolution (yt-dlp)
+m3u8 URL      ──> audio extraction (ffmpeg)
                         │
-                        ├─ 16kHz mono PCM ──> hayamimi 인제스트
+                        ├─ 16kHz mono PCM ──> hayamimi ingest
                         │                        │
-                        │                    전사 (RoutedASR)
+                        │                    transcription (RoutedASR)
                         │                        │
-                        │                    번역 계층 (신규)
+                        │                    translation layer (new)
                         │                        │
-                        └─────────────────> 이벤트 스트림 (SSE)
+                        └─────────────────> event stream (SSE)
                                                  │
                                                  v
-                                      YouTube iframe 위에 자막 레이어
-                                      + 오버레이 설정 패널
+                                      subtitle layer over the YouTube iframe
+                                      + overlay settings panel
 ```
 
 ---
 
-## 4. 기능 요구사항
+## 4. Functional requirements
 
-### 4-1. 입력
+### 4-1. Input
 
-| ID | 요구사항 | 우선순위 |
+| ID | Requirement | Priority |
 |---|---|---|
-| **R1.1** | YouTube 주소를 입력하면 영상 여부와 라이브 여부를 판별하고 해당 흐름으로 분기해야 합니다. | 필수 |
-| **R1.2** | m3u8 주소를 직접 입력할 수 있어야 합니다. YouTube 경로가 막히거나 깨졌을 때의 대체 경로이므로 1급 입력으로 취급합니다. | 필수 |
-| **R1.3** | 로컬 영상 파일 입력을 지원합니다. | 선택 |
-| **R1.4** | 입력 해석에 실패하면 원인을 사용자에게 알려야 합니다. 특히 yt-dlp가 실패한 경우 m3u8 직접 입력을 안내합니다. | 필수 |
-| **R1.5** | Twitch 채널 주소를 라이브로 받아야 합니다. 오디오는 yt-dlp 경로, 화면은 공식 임베드 플레이어입니다. | 권장 |
-| **R1.6** | **멀티뷰**: 라이브 여럿(넷까지)을 한 화면에 나눠 보되 소리와 자막은 초점 하나만 냅니다. 초점이 아닌 방송은 소리만 받아 두고(최근 30초) 초점이 오면 거기서부터 받아 적습니다 -- 전사 모델은 한 번에 한 세션만 돌립니다. | 권장 |
+| **R1.1** | Given a YouTube address, it must decide whether it is a video and whether it is live, and branch into the matching flow. | required |
+| **R1.2** | An m3u8 address must be enterable directly. It is the fallback path for when the YouTube route is blocked or broken, so it is treated as a first-class input. | required |
+| **R1.3** | Local video file input is supported. | optional |
+| **R1.4** | When input resolution fails, the cause must be told to the user. When yt-dlp is what failed in particular, point them at entering m3u8 directly. | required |
+| **R1.5** | A Twitch channel address must be accepted as live. Audio goes through the yt-dlp path, the picture through the official embed player. | recommended |
+| **R1.6** | **Multiview**: show several live streams (up to four) split across one screen, but emit sound and subtitles for the focused one only. A stream that does not have focus only has its sound kept (the last 30 seconds), and when focus arrives transcription starts from there -- the transcription model runs one session at a time. | recommended |
 
-### 4-2. 전사
+### 4-2. Transcription
 
-| ID | 요구사항 | 우선순위 |
+| ID | Requirement | Priority |
 |---|---|---|
-| **R2.1** | 기본 엔진은 hayamimi이며, 로컬에서 동작하고 외부 전송이 없어야 합니다. | 필수 |
-| **R2.2** | **모든 발화에 미디어 기준 타임스탬프를 부여해야 합니다.** hayamimi 현재 구현에는 없는 기능이므로 인제스트 계층에서 추가합니다. | 필수 |
-| **R2.3** | 원본 언어를 사용자가 고정할 수 있어야 합니다. 단일 언어 방송에서 언어 판별이 고착되는 문제를 2026-08-27 세미나 캡처에서 실제로 겪었으며, hayamimi의 `--mode single --lang` 옵션으로 해결됩니다. | 필수 |
-| **R2.4** | 자동 언어 판별도 선택할 수 있어야 합니다. | 필수 |
-| **R2.5** | 전사 엔진을 외부 HTTP 엔드포인트로 교체할 수 있어야 합니다. | 선택 |
-| **R2.6** | 녹화본 흐름에서는 2패스 정제와 화자 구분을 적용합니다. | 권장 |
+| **R2.1** | The default engine is hayamimi; it must run locally with no outbound transmission. | required |
+| **R2.2** | **Every utterance must get a media-relative timestamp.** hayamimi's current implementation does not have this, so the ingest layer adds it. | required |
+| **R2.3** | The user must be able to pin the source language. We actually hit the problem of language detection getting stuck on a single-language stream in the 2026-08-27 seminar capture, and hayamimi's `--mode single --lang` option solves it. | required |
+| **R2.4** | Automatic language detection must also be selectable. | required |
+| **R2.5** | The transcription engine must be replaceable with an external HTTP endpoint. | optional |
+| **R2.6** | In the VOD flow, the two-pass refinement pass and speaker separation are applied. | recommended |
 
-### 4-3. 번역
+### 4-3. Translation
 
-| ID | 요구사항 | 우선순위 |
+| ID | Requirement | Priority |
 |---|---|---|
-| **R3.1** | **임의의 원본 언어에서 사용자 지정 언어로 번역해야 합니다.** hayamimi의 현재 번역 경로는 일본어 원문에만 동작하므로(`realtime_transcribe.py`의 `if self.translators and lang == "ja"`), 이 계층은 새로 설계합니다. | 필수 |
-| **R3.2** | 기본 번역기는 로컬 M2M-100을 사용합니다. 약 100개 언어를 지원하지만 품질이 측정된 조합은 일부입니다. | 필수 |
-| **R3.3** | 번역기를 **OpenAI 호환 HTTP 엔드포인트**로 교체할 수 있어야 합니다. LM Studio, Ollama, Claude API, 사내 게이트웨이를 하나의 어댑터로 흡수합니다. | 필수 |
-| **R3.4** | 엔드포인트 설정은 주소와 모델명, API 키, 프롬프트 템플릿으로 구성합니다. | 필수 |
-| **R3.5** | 외부 엔드포인트가 실패하면 로컬 번역기로 자동 대체하고 사용자에게 알려야 합니다. | 권장 |
-| **R3.6** | 번역 대상 언어를 재생 중에 변경할 수 있어야 합니다. | 권장 |
-| **R3.7** | **시청자 언어를 전역 설정으로 미리 지정합니다.** 매번 번역 여부를 고르게 하지 않기 위해서입니다. | 필수 |
-| **R3.8** | **원본 언어와 시청자 언어가 일치하면 번역을 수행하지 않습니다.** 불필요한 지연과 비용, 그리고 오역으로 인한 품질 저하를 만들지 않기 위해서입니다. | 필수 |
-| **R3.9** | 두 언어가 불일치할 때만 번역 옵션을 화면에 제시합니다. 사용자가 개별 영상에서 이 판단을 뒤집을 수 있어야 합니다. | 필수 |
-| **R3.10** | 원본 언어는 자동 판별을 기본으로 하되, 판별 결과를 사용자에게 보여 주고 수정할 수 있어야 합니다. 2026-08-27 실측에서 언어 판별이 고착되는 문제를 확인했기 때문입니다. | 필수 |
-| **R3.11** | **번역 프롬프트를 발화의 성격에 맞게 고를 수 있어야 합니다.** 2026-08-28 실측(19~26절)에서, 번역 품질을 가른 것은 모델 용량이 아니라 발화의 성격이었습니다. 기술 발표에서는 전사기가 제품명을 뭉개고, 게임 방송에서는 화자가 문장을 끝내지 않습니다. 한 벌의 프롬프트로 둘 다 잘할 수 없습니다. | 필수 |
-| **R3.12** | **직전 자막 몇 줄을 번역기에 참고로 넘깁니다.** 자막 한 줄은 그 자체로는 뜻이 정해지지 않는 경우가 많습니다(`って。`, `束縛強め。`). 다만 참고 줄과 번역 대상의 경계를 프롬프트에서 분명히 해야 합니다 — 느슨하게 두면 모델이 참고 줄을 번역합니다. | 필수 |
+| **R3.1** | **It must translate from an arbitrary source language into a user-specified language.** hayamimi's current translation path only works on Japanese source text (`realtime_transcribe.py`'s `if self.translators and lang == "ja"`), so this layer is designed anew. | required |
+| **R3.2** | The default translator uses local M2M-100. It supports about 100 languages, but only some combinations have measured quality. | required |
+| **R3.3** | The translator must be replaceable with an **OpenAI-compatible HTTP endpoint**. LM Studio, Ollama, the Claude API and an in-house gateway are all absorbed by one adapter. | required |
+| **R3.4** | An endpoint configuration consists of an address, a model name, an API key and a prompt template. | required |
+| **R3.5** | When an external endpoint fails, it must fall back to the local translator automatically and tell the user. | recommended |
+| **R3.6** | The target language must be changeable during playback. | recommended |
+| **R3.7** | **The viewer's language is set in advance as a global setting.** This is so the user is not made to choose whether to translate every single time. | required |
+| **R3.8** | **When the source language and the viewer's language match, no translation is performed.** This is so as not to create needless delay and cost, and quality loss from mistranslation. | required |
+| **R3.9** | Translation options are offered on screen only when the two languages differ. The user must be able to overturn that judgement for an individual video. | required |
+| **R3.10** | The source language defaults to automatic detection, but the detection result must be shown to the user and be correctable. This is because the 2026-08-27 measurement confirmed the problem of language detection getting stuck. | required |
+| **R3.11** | **The translation prompt must be selectable to match the nature of the speech.** In the 2026-08-28 measurement (sections 19~26), what decided translation quality was not model capacity but the nature of the speech. In a technical talk the transcriber mangles product names; in a game stream the speaker does not finish sentences. One set of prompts cannot do both well. | required |
+| **R3.12** | **A few of the preceding subtitle lines are passed to the translator as reference.** A single subtitle line often does not have a settled meaning on its own (`って。`, `束縛強め。`). But the boundary between the reference lines and the text to translate has to be made clear in the prompt — left loose, the model translates the reference lines. | required |
 
-### 4-4. 자막 표시
+### 4-4. Subtitle display
 
-| ID | 요구사항 | 우선순위 |
+| ID | Requirement | Priority |
 |---|---|---|
-| **R4.1** | YouTube iframe 위에 자막 레이어를 겹쳐 표시합니다. | 필수 |
-| **R4.2** | **표시 모드를 재생 중에 전환할 수 있어야 합니다.** 원문만, 번역문만, 둘 다 세 가지입니다. | 필수 |
-| **R4.3** | 둘 다 표시할 때는 번역문을 주역으로, 원문을 보조로 배치합니다. 번역이 이상할 때 원문을 대조할 수 있어야 합니다. | 필수 |
-| **R4.4** | 진행 중 발화(partial)와 확정 발화(final)를 시각적으로 구분합니다. hayamimi가 이미 두 이벤트를 구분해서 내보냅니다. | 권장 |
-| **R4.5** | 라이브 흐름에서 자막 표시 시점을 조정하는 오프셋 슬라이더를 제공합니다. | 필수 |
-| **R4.6** | 글꼴 크기, 색상, 배경 불투명도, 표시 위치, 최대 줄 수를 조정할 수 있어야 합니다. | 필수 |
-| **R4.7** | 설정은 브라우저에 저장되어 다음 실행에서도 유지되어야 합니다. | 권장 |
-| **R4.8** | **확정 자막을 먼저 표시하고 정제본이 도착하면 교체해야 합니다.** 정제 지연이 최대 20초까지 발생하므로, 정제본만 기다리면 화면이 오래 비어 있게 됩니다. | 필수 |
-| **R4.9** | **원본 오디오의 인식 상태를 사용자가 확인할 수 있어야 합니다.** 같은 설정에서도 방송에 따라 인식 품질이 크게 달랐으므로, 문제의 원인이 설정인지 원본인지 구분할 수 있어야 합니다. | 권장 |
+| **R4.1** | The subtitle layer is overlaid on top of the YouTube iframe. | required |
+| **R4.2** | **The display mode must be switchable during playback.** The three modes are source only, translation only, and both. | required |
+| **R4.3** | When both are shown, the translation is placed as the lead and the source text as support. When a translation looks wrong, the source has to be available for comparison. | required |
+| **R4.4** | Utterances in progress (partial) and settled utterances (final) are distinguished visually. hayamimi already emits the two events separately. | recommended |
+| **R4.5** | The live flow provides an offset slider that adjusts the subtitle display timing. | required |
+| **R4.6** | Font size, colour, background opacity, display position and maximum line count must be adjustable. | required |
+| **R4.7** | Settings must be saved in the browser and survive into the next run. | recommended |
+| **R4.8** | **The final subtitle must be displayed first and replaced when the refined line arrives.** Refinement delay reaches up to 20 seconds, so waiting for the refined line alone leaves the screen empty for a long time. | required |
+| **R4.9** | **The user must be able to check the recognition state of the source audio.** Recognition quality differed greatly from stream to stream even at the same settings, so it has to be possible to tell whether the cause of a problem is the settings or the source. | recommended |
 
-### 4-5. 기록
+### 4-5. Records
 
-| ID | 요구사항 | 우선순위 |
+| ID | Requirement | Priority |
 |---|---|---|
-| **R5.1** | 세션이 끝나면 전사와 번역을 파일로 저장할 수 있어야 합니다. | 권장 |
-| **R5.2** | 저장 형식은 타임스탬프가 포함된 마크다운과 SRT를 지원합니다. | 권장 |
-| **R5.3** | 저장된 전사를 외부 도구에 넘겨 요약이나 정리를 생성하는 경로를 열어 둡니다. | 선택 |
+| **R5.1** | When a session ends, it must be possible to save the transcription and the translation to a file. | recommended |
+| **R5.2** | The save formats supported are Markdown with timestamps, and SRT. | recommended |
+| **R5.3** | Leave open a path for handing a saved transcription to an external tool to produce a summary or a write-up. | optional |
 
 ---
 
-## 5. 비기능 요구사항
+## 5. Non-functional requirements
 
-| ID | 요구사항 |
+| ID | Requirement |
 |---|---|
-| **N1** | **1인 로컬 실행이 기본입니다.** 인증과 다중 사용자 처리를 구현하지 않습니다. |
-| **N2** | 라이브 흐름에서 발화 종료부터 자막 표시까지의 지연은 번역을 포함하여 3초 이내를 목표로 합니다. |
-| **N3** | CPU만으로 동작해야 합니다. hayamimi의 설계 전제를 그대로 따릅니다. |
-| **N4** | **yt-dlp 경로는 언제든 깨질 수 있다고 가정합니다.** 실패해도 도구 전체가 멈추지 않고 m3u8 직접 입력으로 이어갈 수 있어야 합니다. |
-| **N5** | 외부 엔드포인트로 전송되는 내용은 인식된 텍스트뿐이며, 오디오를 전송하지 않습니다. 전송 여부를 사용자가 화면에서 확인할 수 있어야 합니다. |
+| **N1** | **A single person running it locally is the baseline.** Authentication and multi-user handling are not implemented. |
+| **N2** | In the live flow, the delay from the end of an utterance to the subtitle being displayed targets 3 seconds or less, translation included. |
+| **N3** | It must run on CPU alone. This follows hayamimi's design premise as it is. |
+| **N4** | **Assume the yt-dlp path can break at any time.** Even when it fails, the whole tool must not stop; it must be possible to carry on by entering an m3u8 directly. |
+| **N5** | What is sent to an external endpoint is the recognised text only; audio is not sent. The user must be able to check on screen whether anything is being sent. |
 
 ---
 
-## 6. 기존 자산 재사용 계획
+## 6. Plan for reusing existing assets
 
-| hayamimi 자산 | 활용 방식 |
+| hayamimi asset | How it is used |
 |---|---|
-| `ws_ingest.py`의 `IngestServer` (오디오 수신) | **그대로 사용합니다.** ffmpeg 출력을 수정 없이 연결하는 데 성공했습니다. |
-| `ws_ingest.py`의 `_forward_events` (자막 되돌림) | **사용하지 않습니다.** 이벤트를 유실합니다. 자막은 SSE로 받습니다. |
-| `subtitle_server.py`의 SSE `/events` | **자막 수신의 기본 경로입니다.** 실측에서 SSE가 92건을 전달하는 동안 WebSocket 되돌림은 15건만 전달했습니다. 화면은 새로 만들되 이 경로로 받습니다. |
-| `RoutedASR` | 라이브러리로 불러 사용합니다. `--mode single --lang`에 해당하는 설정을 노출합니다. |
-| `translate_m2m.py` | 번역기 구현체 중 하나로 감쌉니다. 다만 일본어 고정 호출 경로는 사용하지 않고 새 계층에서 직접 호출합니다. |
-| `OVERLAY_HTML` | 참고만 합니다. OBS 브라우저 소스 전용 독립 페이지이므로, 영상 위에 얹는 컴포넌트로는 새로 작성합니다. |
+| `ws_ingest.py`'s `IngestServer` (audio reception) | **Used as it is.** We succeeded in connecting ffmpeg's output without modification. |
+| `ws_ingest.py`'s `_forward_events` (subtitles sent back) | **Not used.** It loses events. Subtitles are received over SSE. |
+| `subtitle_server.py`'s SSE `/events` | **The default path for receiving subtitles.** In measurement, SSE delivered 92 items while the WebSocket return path delivered only 15. The screen is written anew, but it receives over this path. |
+| `RoutedASR` | Loaded and used as a library. The settings corresponding to `--mode single --lang` are exposed. |
+| `translate_m2m.py` | Wrapped as one of the translator implementations. The Japanese-pinned call path is not used; the new layer calls it directly. |
+| `OVERLAY_HTML` | Reference only. It is a standalone page meant for an OBS browser source, so the component that lays over the video is written anew. |
 
-**신규 의존성**: `yt-dlp`, `ffmpeg`. 두 도구 모두 현재 시스템에 설치되어 있지 않습니다.
-
----
-
-## 7. 미해결 쟁점
-
-아직 결정하지 않았거나 확인이 필요한 사항입니다.
-
-**7-1. 라이브 스트림의 미디어 타임스탬프 — 해결되었습니다**
-YouTube 라이브 HLS는 `EXT-X-PROGRAM-DATE-TIME`을 2초 세그먼트마다 제공합니다. 라이브에서도 자동 정렬의 근거가 있으므로, 수동 오프셋은 이 태그가 없는 스트림을 위한 보조 수단으로 격하합니다. 다만 YouTube iframe 플레이어가 이 값을 직접 노출하지는 않으므로, 플레이어 재생 위치와 연결하는 방법은 데모에서 확인합니다.
-
-**7-2. 번역 단위 — 정제본으로 확정했습니다**
-정제 단계에서 실제로 품질이 회복됩니다. 확정 자막의 `ちいかはね`가 정제본에서 `ちいかわが今はやってます`로 복원된 사례를 확인했습니다.
-
-**다만 새로운 문제가 파생됩니다.** 2패스 정제는 2초 이상의 침묵을 기다렸다가 동작하는데, 쉬지 않고 말하는 화자에게는 침묵이 오지 않습니다. 두 방송 모두에서 정제가 최대 20초까지 밀렸고, 5초를 넘긴 비율이 각각 40퍼센트와 50퍼센트였습니다. 서로 다른 화자에게서 재현되었으므로 구조적 문제입니다.
-
-**대응 방침**: 확정 자막을 먼저 번역해서 표시하고, 정제본이 도착하면 조용히 교체합니다. hayamimi를 수정하지 않아도 되고, 화면에 항상 무언가가 떠 있게 되며, 직전 문장을 작게 남기는 표시 방식과도 맞물립니다.
-
-**7-3. 외부 엔드포인트의 지연 흡수**
-로컬 M2M-100의 번역 지연은 중앙값 0.2초 안팎으로 병목이 아니라는 점이 확인되었습니다. 따라서 **외부 엔드포인트 연동은 속도가 아니라 품질을 위한 선택지**입니다. 실측에서 `社長`(사장)을 대통령으로, `ホロメン`을 호르몬으로 오역하는 사례가 나왔습니다. 원격 API의 응답 지연을 어떻게 처리할지는 여전히 결정이 필요합니다.
-
-**7-4. 프로젝트 이름**
-`mimiwatch`는 임시로 붙인 이름입니다. hayamimi와의 관계를 드러내면서 목적을 나타내는 이름이 필요합니다.
-
-**7-5. 기술 스택**
-서버는 Python으로 두는 것이 hayamimi 재사용에 유리합니다. 프런트엔드를 정적 HTML로 갈지 프레임워크를 쓸지 결정하지 않았습니다. 오버레이 설정과 표시 모드 전환 정도의 상태 관리라면 정적 HTML로도 충분합니다.
+**New dependencies**: `yt-dlp`, `ffmpeg`. Neither tool is currently installed on this system.
 
 ---
 
-## 8. 구현 현황 (2026-08-28 기준)
+## 7. Open issues
 
-### 8-1. 완료
+Matters not yet decided, or needing confirmation.
 
-| 요구사항 | 상태 | 비고 |
+**7-1. Media timestamps for live streams — resolved**
+YouTube live HLS provides `EXT-X-PROGRAM-DATE-TIME` on every 2-second segment. There is a basis for automatic alignment in live too, so the manual offset is demoted to a fallback for streams that lack that tag. The YouTube iframe player does not expose the value directly, though, so how to connect it to the player's playback position is confirmed in the demo.
+
+**7-2. Unit of translation — settled on the refined line**
+Quality actually recovers at the refinement stage. We confirmed a case where a final subtitle's `ちいかはね` was restored to `ちいかわが今はやってます` in the refined line.
+
+**But a new problem follows from it.** The two-pass refinement pass waits for 2 seconds or more of silence before it runs, and silence never comes for a speaker who talks without a break. In both streams refinement was pushed back by up to 20 seconds, and the share of lines over 5 seconds was 40 percent and 50 percent respectively. It reproduced with two different speakers, so it is structural.
+
+**Response**: translate and display the final subtitle first, and quietly replace it when the refined line arrives. It requires no modification to hayamimi, it keeps something on screen at all times, and it fits the display style that leaves the previous sentence in small type.
+
+**7-3. Absorbing the delay of an external endpoint**
+Local M2M-100's translation delay was confirmed to sit around a median of 0.2 seconds, so it is not the bottleneck. Therefore **wiring up an external endpoint is an option for quality, not for speed**. In measurement, cases came up of `社長` (company president) mistranslated as a national president, and `ホロメン` as a hormone. How to handle the response latency of a remote API still needs a decision.
+
+**7-4. The project name**
+`mimiwatch` is a name attached provisionally. We need a name that shows the relationship with hayamimi while also stating the purpose.
+
+**7-5. The technology stack**
+Keeping the server in Python is favourable for reusing hayamimi. Whether the front end goes static HTML or uses a framework is not decided. For state management no bigger than overlay settings and switching the display mode, static HTML is enough.
+
+---
+
+## 8. Implementation status (as of 2026-08-28)
+
+### 8-1. Done
+
+| Requirement | Status | Notes |
 |---|---|---|
-| R1.1 YouTube 주소 입력과 흐름 분기 | ✅ | 서버가 라이브 여부를 판별해 자동으로 갈라집니다 |
-| R1.2 m3u8 직접 입력 | ✅ | 화면 재생도 hls.js 로 (2026-08-30) |
-| R1.5 Twitch 라이브 | ✅ | 2026-08-30. 공식 Embed JS, `parent=localhost\|127.0.0.1` |
-| R1.6 멀티뷰 | ✅ | 2026-08-30. 읽기 스레드 + 30초 링 + 초점 에피소드(`live.py`), 타일·어댑터(`web/app/tiles.js`, `adapters.js`) |
-| R1.4 실패 원인 안내 | ✅ | |
-| R2.1 hayamimi 로컬 전사 | ✅ | 녹화본 38~88배속 |
-| R2.2 미디어 타임스탬프 부여 | ✅ | VAD 세그먼트의 샘플 위치를 그대로 사용합니다 |
-| R2.3 원본 언어 고정 | ✅ | `--mode single` 상당 |
-| R2.5 외부 전사 엔진 | ✅ | 녹화본과 라이브 양쪽. OpenAI 호환 HTTP와 transcribe.cpp 로컬 GGUF 두 갈래입니다 |
-| R3.1 임의 원본 언어 번역 | ✅ | `translate.py`에서 원본 언어를 매개변수로 받습니다 |
-| R3.3 OpenAI 호환 엔드포인트 | ✅ | Backend.AI GO에서 Gemma 4 E4B로 검증 |
-| R3.5 실패 시 로컬 대체 | ✅ | 연속 3회 실패 시 차단기 작동 |
-| R3.7~R3.10 언어 일치 판단 | ✅ | 같은 언어면 번역과 자막을 모두 생략합니다 |
-| R3.11 장르별 번역 프롬프트 | ✅ | 일반·기술·게임·잡담·노래 다섯 가지. 라이브와 녹화본 양쪽 |
-| R3.12 직전 자막 문맥 | ✅ | 3줄. 경계를 조여 오염 4/63건을 0건으로 |
-| 영상 관리 UI | ✅ | 왼쪽 패널에 목록·추가·삭제. 위쪽은 제목·처리상태·관리만 |
-| 등록 시점 엔진 선택 | ✅ | 추가 대화상자와 「관리」가 같은 값을 가리킵니다 |
-| 전사 엔진 실시간 교체 | ✅ | 어댑터의 속을 바꿔 세션과 자막을 유지합니다 |
-| 끊긴 세션 이어받기 | ✅ | 같은 세션 id. DVR 창 안이면 무손실, 밖이면 못 메운 초를 자막에 적습니다 |
-| 서버 명시적 종료 | ✅ | ⚙ 창의 「서버 · 종료」와 `Ctrl-C`가 같은 경로. 라이브 세션을 닫고 멈춥니다 |
-| R4.1~R4.9 자막 표시 | ✅ | 끄기·둘 다·번역만·원문만, 오프셋, 스크립트 접기 |
+| R1.1 YouTube address input and flow branching | ✅ | the server decides whether it is live and splits automatically |
+| R1.2 direct m3u8 input | ✅ | on-screen playback through hls.js too (2026-08-30) |
+| R1.5 Twitch live | ✅ | 2026-08-30. Official Embed JS, `parent=localhost\|127.0.0.1` |
+| R1.6 multiview | ✅ | 2026-08-30. Reader thread + 30-second ring + focus episodes (`live.py`), tiles and adapters (`web/app/tiles.js`, `adapters.js`) |
+| R1.4 telling the user why it failed | ✅ | |
+| R2.1 hayamimi local transcription | ✅ | VOD at 38~88x |
+| R2.2 assigning media timestamps | ✅ | uses the sample position of the VAD segment as it is |
+| R2.3 pinning the source language | ✅ | equivalent to `--mode single` |
+| R2.5 external transcription engine | ✅ | both VOD and live. Two branches: OpenAI-compatible HTTP, and transcribe.cpp local GGUF |
+| R3.1 translation from an arbitrary source language | ✅ | `translate.py` takes the source language as a parameter |
+| R3.3 OpenAI-compatible endpoint | ✅ | verified on Backend.AI GO with Gemma 4 E4B |
+| R3.5 local fallback on failure | ✅ | the breaker trips after 3 consecutive failures |
+| R3.7~R3.10 language match judgement | ✅ | when the languages are the same, both translation and subtitles are skipped |
+| R3.11 per-genre translation prompts | ✅ | five of them: general, technical, game, chat, song. Both live and VOD |
+| R3.12 context from preceding subtitles | ✅ | 3 lines. Tightening the boundary took contamination from 4/63 cases to 0 |
+| video management UI | ✅ | list, add and delete in the left panel. The top holds only title, processing status and manage |
+| engine choice at registration time | ✅ | the add dialog and "manage" point at the same value |
+| swapping the transcription engine live | ✅ | the adapter's insides are changed, keeping the session and the subtitles |
+| resuming a broken session | ✅ | same session id. Lossless inside the DVR window; outside it, the seconds that could not be filled are written into the subtitles |
+| explicit server shutdown | ✅ | "Server · Shut down" in the ⚙ panel and `Ctrl-C` take the same path. Live sessions are closed and it stops |
+| R4.1~R4.9 subtitle display | ✅ | off, both, translation only, source only; offset; collapsing the script |
 
-### 8-2. 구현하며 확인된 사실
+### 8-2. Facts learned while implementing
 
-**라이브 미디어 위치는 시퀀스 번호로 계산할 수 없습니다.** `EXT-X-MEDIA-SEQUENCE × 세그먼트 길이`가 어떤 방송에서는 맞고 어떤 방송에서는 0을 내놓습니다. YouTube가 저지연 스트림에는 전체 DVR 플레이리스트를 0번부터 제공하기 때문입니다. `PROGRAM-DATE-TIME`에서 `release_timestamp`를 빼는 방식으로 바꿨습니다.
+**The live media position cannot be computed from the sequence number.** `EXT-X-MEDIA-SEQUENCE × segment length` is right on some streams and yields 0 on others. That is because YouTube serves low-latency streams the whole DVR playlist starting from 0. We changed it to subtracting `release_timestamp` from `PROGRAM-DATE-TIME`.
 
-**ffmpeg은 기본적으로 플레이리스트 처음부터 읽습니다.** 전체 DVR을 제공하는 방송에서는 42분 전 내용을 전사하게 됩니다. `-live_start_index -2`로 라이브 끝에서 시작합니다.
+**ffmpeg reads from the start of the playlist by default.** On a stream that serves the whole DVR, that means transcribing content from 42 minutes ago. `-live_start_index -2` starts at the live edge.
 
-**라이브 자막은 미디어 시각으로 조회하면 안 됩니다.** 정제본이 여러 확정 줄을 흡수하면서 그룹의 시작 시각을 갖기 때문에, 방금 도착한 자막이 30초 전 항목으로 취급됩니다. 도착 순서로 표시합니다.
+**Live subtitles must not be looked up by media time.** Because a refined line absorbs several final lines and takes the group's start time, a subtitle that has just arrived is treated as an item from 30 seconds ago. They are displayed in arrival order.
 
-**VAD 강제 분할 간격이 다중 화자 인식률을 좌우합니다.** 12초 기본값에서 4인 합방의 44%가 상한에 걸려 분당 5.0줄에 그쳤습니다(같은 채널 녹화본은 8.2줄). 6초에서 7.9줄, 4초에서 13.8줄로 회복했습니다. 콘텐츠 유형 프로필로 선택합니다.
+**The VAD forced-split interval decides the recognition rate with multiple speakers.** At the 12-second default, 44% of a four-person collab hit the cap and stopped at 5.0 lines per minute (a VOD from the same channel gives 8.2). It recovered to 7.9 lines at 6 seconds and 13.8 at 4 seconds. It is selected through a content-type profile.
 
-**화자 태그는 조건이 맞아야 값을 합니다.** 발화가 겹치는 합방에서는 CAM++가 전부 `S1`으로 묶습니다. 서로 다른 화자가 둘 이상 확인되기 전에는 태그를 감춥니다.
+**Speaker tags are only worth anything when the conditions are right.** In a collab where utterances overlap, CAM++ groups everything as `S1`. The tags are hidden until two or more distinct speakers have been confirmed.
 
-**전사 라우팅 확인**: 일본어는 ReazonSpeech(`rz`)로 갑니다. whisper-tiny는 언어 판별 전용이며 언어를 고정하면 호출되지 않습니다.
+**Transcription routing confirmed**: Japanese goes to ReazonSpeech (`rz`). whisper-tiny is for language detection only, and is not called when the language is pinned.
 
-### 8-3. 전사 엔진 (2026-08-28 완료)
+### 8-3. Transcription engine (finished 2026-08-28)
 
-transcribe.cpp의 GGUF 모델을 파이썬 바인딩으로 붙였습니다. CLI를 구간마다
-부르면 매번 모델을 다시 읽어야 하므로 라이브에 쓸 수 없어, 모델을 한 번만
-올리고 재사용하는 방식을 택했습니다.
+We attached transcribe.cpp's GGUF models through Python bindings. Calling the
+CLI once per segment means reloading the model every time, which cannot be used
+for live, so we took the approach of loading the model once and reusing it.
 
-`tcpp_asr.TranscribeCppASR`가 hayamimi `RoutedASR`의 표면을 흉내 내므로
-`run_stream`과 `Refiner`를 그대로 쓸 수 있습니다. 언어를 고정하면 정제
-단계의 언어 재판정 분기가 스스로 닫히는 점을 이용했습니다.
+`tcpp_asr.TranscribeCppASR` imitates the surface of hayamimi's `RoutedASR`, so
+`run_stream` and `Refiner` can be used as they are. We made use of the fact that
+pinning the language closes the refinement pass's language re-detection branch
+by itself.
 
-- **일본어·한국어**: whisper-large-v3-turbo Q8_0
-- **그 외**: hayamimi RoutedASR로 자동 복귀
-- 근거와 탈락한 후보(Fun-ASR, SenseVoice, Voxtral, Moonshine, Qwen3, Cohere)의
-  실측은 `measurements/RESULTS.md` 11~14장에 있습니다
+- **Japanese and Korean**: whisper-large-v3-turbo Q8_0
+- **Everything else**: automatic fallback to hayamimi RoutedASR
+- The reasoning and the measurements for the candidates that dropped out
+  (Fun-ASR, SenseVoice, Voxtral, Moonshine, Qwen3, Cohere) are in
+  `measurements/RESULTS.md` chapters 11~14
 
-### 8-4. 작업 상태의 영속화 — 완료 (2026-08-28)
+### 8-4. Persisting work state — done (2026-08-28)
 
-**문제**: 전사 작업 레코드는 `jobs.py`의 모듈 딕셔너리에, 라이브 세션과 그 자막은 `live.py`의 `_sessions`/`_finished`와 브라우저 메모리에만 있었습니다. 서버를 한 번 재시작하면 진행 중이던 작업은 폴링에 404를 돌려주었고, 두 시간짜리 방송을 받아 적던 자막은 통째로 사라졌습니다. 탭을 새로고침해도 마찬가지였습니다 — 라이브에는 큐 파일이 없었기 때문입니다.
+**The problem**: transcription job records lived in a module dictionary in `jobs.py`, and live sessions and their subtitles only in `live.py`'s `_sessions`/`_finished` and in browser memory. One server restart and a job in progress answered polling with a 404, and the subtitles taken down from a two-hour stream vanished wholesale. Refreshing the tab did the same — because live had no cue file.
 
-**한 일**: `data/mimiwatch.db` 하나에 작업·세션·라이브 자막을 담습니다(`store.py`). 표준 라이브러리 `sqlite3`만 쓰고, 시작할 때 `CREATE TABLE IF NOT EXISTS`로 스키마를 만들므로 사용자가 돌릴 마이그레이션 단계는 없습니다. 전사 결과(`data/<id>.json`)와 엔진 설정(`backends.json`)은 이미 파일로 남으므로 그대로 둡니다.
+**What we did**: a single `data/mimiwatch.db` holds jobs, sessions and live subtitles (`store.py`). It uses only the standard-library `sqlite3`, and builds the schema at startup with `CREATE TABLE IF NOT EXISTS`, so there is no migration step for the user to run. Transcription results (`data/<id>.json`) and engine settings (`backends.json`) already survive as files, so they are left as they are.
 
-- **연결은 하나를 락으로 감쌉니다.** 서버가 `ThreadingHTTPServer`이고 라이브가 자막 한 줄마다 번역 스레드를 띄우므로, 스레드별 연결은 1초짜리 스레드마다 연결을 여는 꼴이 됩니다. 트랜잭션을 오래 붙들고 있는 경로가 없어서(SSE 핸들러도 접속 순간에 한 번 읽고 끝) 락 대기가 문제가 되지 않습니다. WAL과 `synchronous=NORMAL`을 켭니다.
-- **작업과 세션 레코드는 JSON 한 열**, **자막은 정식 테이블**입니다. 앞의 둘은 그대로 HTTP 응답 본문이 되고 조회 조건이 id뿐이라 열로 펼칠 이유가 없지만, 자막은 정제본이 확정 줄을 흡수하며 지우고 번역이 나중에 붙으므로 줄 단위로 갱신할 수 있어야 합니다.
-- **끊긴 것은 끊겼다고 적습니다.** ffmpeg 자식 프로세스가 프로세스와 함께 죽었으므로 수신은 이어질 수 없습니다. 시작할 때 `running`으로 남아 있던 작업과 세션을 `interrupted`로 바꾸고, 쌓인 자막은 그대로 읽게 둡니다. 수신 재개는 구현하지 않았습니다.
-- **쌓인 자막은 SSE 접속 직후에 되돌려 줍니다.** 새 이벤트 종류를 만들지 않고 저장된 큐와 번역을 브라우저가 원래 받던 모양 그대로 다시 보냅니다. 그래서 탭 새로고침은 보던 방송으로 그대로 돌아가고, 끝난 세션은 백로그를 다 보낸 뒤 스트림을 닫습니다. 목록(`GET /api/live/sessions`)에서 지난 방송을 다시 열 수 있습니다.
+- **One connection, wrapped in a lock.** The server is a `ThreadingHTTPServer` and live spins up a translation thread for every subtitle line, so a per-thread connection amounts to opening a connection for every one-second thread. No path holds a transaction for long (even the SSE handler reads once at connection time and is done), so lock waiting is not a problem. WAL and `synchronous=NORMAL` are turned on.
+- **Job and session records are one JSON column**, **subtitles are a real table**. The first two become the HTTP response body as they are and are only ever looked up by id, so there is no reason to spread them into columns; but subtitles have to be updatable row by row, because a refined line absorbs and erases final lines and the translation is attached later.
+- **What was cut off is written down as cut off.** The ffmpeg child process died along with the process, so reception cannot carry on. At startup, jobs and sessions left as `running` are turned into `interrupted`, and the subtitles already accumulated are left readable. Resuming reception is not implemented.
+- **Accumulated subtitles are sent back right after the SSE connects.** Without inventing a new event type, the stored cues and translations are resent in exactly the shape the browser was already receiving. So a tab refresh comes straight back to the stream you were watching, and a finished session closes the stream once it has sent the whole backlog. Past streams can be reopened from the list (`GET /api/live/sessions`).
 
-**이때 드러난 것 둘**: SSE의 첫 상태 프레임에 `type`이 없어서 브라우저가 줄곧 무시하고 있었습니다(끊긴 이유를 말할 유일한 프레임이라 고쳤습니다). 그리고 `.live-badge`의 `display:flex`가 `[hidden]`을 이겨서 LIVE 배지가 항상 떠 있었습니다.
+**Two things this exposed**: the first status frame of the SSE had no `type`, so the browser had been ignoring it all along (it is the only frame that can say why something was cut off, so it was fixed). And `.live-badge`'s `display:flex` beat `[hidden]`, so the LIVE badge was always up.
 
-### 8-5. 남은 과제
+### 8-5. Remaining work
 
-- 라이브 자막과 영상의 정렬 정확도 실사용 검증 (현재 수동 오프셋 제공)
-- 겹친 발화 분리 (화자 태그로는 해결되지 않음)
-- 끊긴 라이브 세션의 수신 재개. 지금은 중단됨으로 표시하고 쌓인 자막을 읽게만 해 줍니다 (8-4 참고)
-- 직접 중단한 세션이 다음 새로고침 전까지 목록에서 사라집니다. 기록은 남아 있으므로 표시만의 문제입니다
+- Real-use verification of the alignment accuracy between live subtitles and the video (a manual offset is provided for now)
+- Separating overlapping utterances (speaker tags do not solve it)
+- Resuming reception on a broken live session. For now it is marked as interrupted and only lets you read the accumulated subtitles (see 8-4)
+- A session stopped by hand disappears from the list until the next refresh. The record is still there, so it is a display-only problem
 
-
----
-
-## 9. 다음 단계 제안
-
-1. **가장 불확실한 것부터 실측합니다.** yt-dlp로 YouTube 오디오를 받아 hayamimi에 넣는 경로가 실제로 동작하는지, 라이브 스트림에서 얼마나 지연되는지를 먼저 확인합니다. 이것이 되지 않으면 나머지 설계가 무의미합니다.
-2. 녹화본 흐름을 먼저 완성합니다. 동기화 문제가 없어서 번역 계층과 UI에 집중할 수 있습니다.
-3. 라이브 흐름과 오프셋 보정을 추가합니다.
-4. 외부 엔드포인트 어댑터를 추가합니다.
 
 ---
 
-*이 문서는 초안이며 논의에 따라 갱신됩니다.*
+## 9. Proposed next steps
+
+1. **Measure the most uncertain thing first.** Confirm first whether the path of taking YouTube audio with yt-dlp and feeding it to hayamimi actually works, and how much delay there is on a live stream. If that does not work, the rest of the design is meaningless.
+2. Finish the VOD flow first. There is no synchronisation problem there, so we can concentrate on the translation layer and the UI.
+3. Add the live flow and offset correction.
+4. Add the external endpoint adapter.
+
+---
+
+*This document is a draft and is updated as discussion goes on.*

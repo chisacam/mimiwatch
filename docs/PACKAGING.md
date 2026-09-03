@@ -1,187 +1,224 @@
-# 묶음으로 배포하기
+# Shipping as a bundle
 
-저장소를 받아 `./install.sh`를 돌리는 대신, **실행 파일 하나짜리 묶음**을 받아
-두 번 눌러 띄우는 길입니다. 맥(Apple Silicon)과 윈도우(x64)를 만듭니다.
+*[한국어](PACKAGING.ko.md)*
+
+Instead of cloning the repository and running `./install.sh`, this is the path
+where you get a **single-executable bundle** and double-click it. We build for
+macOS (Apple Silicon) and Windows (x64).
 
 ```
-mimiwatch.app            macOS -- Finder에서 두 번 누르면 브라우저에 화면이 열립니다
-mimiwatch\mimiwatch.exe  Windows -- 두 번 누르면 콘솔 창이 하나 뜨고 브라우저가 열립니다
+mimiwatch.app            macOS -- double-click it in Finder and the screen opens in your browser
+mimiwatch\mimiwatch.exe  Windows -- double-click it and one console window appears, then the browser opens
 ```
 
-윈도우 묶음은 Vulkan 하나입니다(NVIDIA 포함). CUDA 판은 RTX 50 을 담지 못해 릴리스에서
-뺐습니다 -- 사정과 직접 만드는 법은 [WINDOWS.md](WINDOWS.md)의 NVIDIA 절에 있습니다.
+The Windows bundle is Vulkan only (NVIDIA included). The CUDA build could not
+carry RTX 50, so it was dropped from the releases -- the circumstances and how
+to build it yourself are in the NVIDIA section of [WINDOWS.md](WINDOWS.md).
 
-## 묶음에 무엇이 들고 무엇이 들지 않는가
+## What goes into the bundle and what does not
 
-**듭니다**: 파이썬, 서버와 화면, 네 런타임(transcribe.cpp·llama.cpp·sherpa-onnx·
-CTranslate2), yt-dlp, CA 인증서 묶음. 맥은 Metal, 윈도우는 Vulkan(+CPU)이 들어
-있습니다. 약 110MB(맥), zip으로 45MB 남짓입니다.
+**Included**: Python, the server and the screen, the four runtimes
+(transcribe.cpp, llama.cpp, sherpa-onnx, CTranslate2), yt-dlp, the CA
+certificate bundle. macOS carries Metal, Windows carries Vulkan (+CPU). About
+110MB (macOS), a little over 45MB as a zip.
 
-**들지 않습니다**: 모델(6.3GB)과 ffmpeg. 모델은 어차피 프로그램 밖
-(`~/.local/share/mimiwatch/models`, 윈도우 `%LOCALAPPDATA%\mimiwatch\models`)에
-두는 것이 원칙이라, 판을 바꿔도 다시 받지 않습니다. 저장소에서 돌리던 사람의
-모델도 그대로 씁니다. **첫 실행 때 화면 위쪽에 「전사에 필요한 것이 아직
-없습니다」 띠와 함께 「초기 설정」이 떠서 전사·번역 엔진을 고르게 하고, 그 조합에
-필요한 모델만 받습니다.** 기본은 가벼운 CPU 엔진(SenseVoice Small + M2M-100,
-약 730MB)입니다. 더 고르려면
-「관리 › ⚙ 엔진 관리 › 모델·도구」입니다.
+**Not included**: the models (6.3GB) and ffmpeg. The models are meant to live
+outside the program anyway (`~/.local/share/mimiwatch/models`, on Windows
+`%LOCALAPPDATA%\mimiwatch\models`), so changing the version does not download
+them again. Someone who was running from the repository keeps using the same
+models. **On the first run, a banner at the top of the screen says "nothing
+needed for transcription is here yet" and "First-time setup" appears, which lets
+you pick the transcription and translation engines and downloads only the models
+that combination needs.** The
+default is the light CPU engines (SenseVoice Small + M2M-100, about 730MB). To
+pick more, it is "Manage › ⚙ Engine management › Models and tools".
 
-ffmpeg는 시스템에 있으면 그것을 쓰고(홈브루 자리도 봅니다), 없으면 같은
-화면에서 정적 빌드 한 파일을 받습니다. 묶음에 넣지 않는 것은 GPL 배포 문제를
-피하기 위해서입니다 -- 우리가 배포하는 것이 아니라 사용자가 받는 것입니다.
+As for ffmpeg, if the system has it that is what is used (the Homebrew location
+is checked too), and if not, a single static build is downloaded from the same
+screen. It is kept out of the bundle to avoid the GPL distribution problem --
+we are not the ones distributing it, the user downloads it.
 
-## 파일이 어디에 놓이는가
+## Where the files land
 
-저장소에서 돌 때와 묶음으로 돌 때가 다릅니다. 묶음 안은 읽기 전용이라 설정과
-저장소가 사용자 영역으로 나옵니다. 규칙은 `paths.py` 한 곳에 있습니다.
+Running from the repository and running as a bundle differ. The inside of a
+bundle is read-only, so the settings and the store come out into the user area.
+The rules live in one place, `paths.py`.
 
-| | 저장소에서 (`./run.sh`) | 묶음으로 |
+| | From the repository (`./run.sh`) | As a bundle |
 |---|---|---|
-| 모델 | `~/.local/share/mimiwatch/models` | 같음 |
-| 도구(ffmpeg·yt-dlp) | `~/.local/share/mimiwatch/tools` | 같음 |
-| 설정 `backends.json` | 저장소 안 | `~/.local/share/mimiwatch/backends.json` |
-| 자막 DB·오디오 `data/` | 저장소 안 | `~/.local/share/mimiwatch/data` |
-| 로그 | 터미널 | `~/.local/share/mimiwatch/mimiwatch.log` (맥 .app은 창이 없으므로) |
+| Models | `~/.local/share/mimiwatch/models` | same |
+| Tools (ffmpeg, yt-dlp) | `~/.local/share/mimiwatch/tools` | same |
+| Settings `backends.json` | inside the repository | `~/.local/share/mimiwatch/backends.json` |
+| Subtitle DB and audio `data/` | inside the repository | `~/.local/share/mimiwatch/data` |
+| Log | the terminal | `~/.local/share/mimiwatch/mimiwatch.log` (the macOS .app has no window) |
 
-윈도우는 `~/.local/share/mimiwatch` 자리에 `%LOCALAPPDATA%\mimiwatch`입니다.
-`MIMIWATCH_HOME`으로 뿌리를 통째로, `MIMIWATCH_MODEL_DIR`·`MIMIWATCH_DATA_DIR`·
-`MIMIWATCH_CONFIG`로 하나씩 바꿀 수 있습니다.
+On Windows, `%LOCALAPPDATA%\mimiwatch` takes the place of
+`~/.local/share/mimiwatch`. `MIMIWATCH_HOME` moves the whole root, and
+`MIMIWATCH_MODEL_DIR`, `MIMIWATCH_DATA_DIR` and `MIMIWATCH_CONFIG` move them one
+at a time.
 
-## yt-dlp는 낡습니다 -- 그래서 독립 실행 파일을 권합니다
+## yt-dlp goes stale -- which is why we recommend the standalone executable
 
-가상환경에 yt-dlp를 두어 "설치 스크립트를 다시 돌리면 판올림"을 성립시켰던
-것이(README 「yt-dlp는 가상환경 안에 있습니다」) 묶음에서는 되돌아옵니다. 묶음
-안의 yt-dlp는 판이 박혀 있어 몇 달 뒤 유튜브가 추출 경로를 바꾸면 「오디오를
-찾지 못했습니다」가 됩니다.
+Keeping yt-dlp in the virtualenv is what made "re-run the install script and it
+updates" hold (README, "yt-dlp lives in the virtualenv"), and the bundle takes
+that back. The yt-dlp inside the bundle has its version baked in, so a few
+months later, when YouTube changes its extraction path, it becomes "could not
+find the audio".
 
-그래서 「모델·도구」에 **yt-dlp 독립 실행 파일**이 있습니다. yt-dlp가 배포하는
-그 파일은 `-U`로 스스로 판올림하고, 도구 디렉터리에 있으면 묶음 안의 것보다
-먼저 쓰입니다. 라이브가 "포맷을 하나도 받지 못했습니다"라고 하면 그것을
-받거나(있으면 다시 받아 최신으로) 하면 됩니다. 묶음을 새로 만들 필요가 없습니다.
+That is why "Models and tools" has the **yt-dlp standalone executable**. That
+file, the one yt-dlp itself distributes, updates itself with `-U`, and when it
+sits in the tools directory it is used ahead of the one inside the bundle. When
+live says "got no formats at all", downloading it (or downloading it again, if
+it is already there, to get the latest) is all it takes. There is no need to
+build a new bundle.
 
-**유튜브는 JS 런타임(deno)도 요구합니다**(2025.11~). 녹화본·멤버십 방송에 필요하고 공개
-라이브 HLS 는 없어도 됩니다. 「모델·도구」에서 받으면 서버가 `--js-runtimes deno:<경로>`로
-직접 알려 주므로 Finder 에서 띄운 .app(PATH 짧음)에서도 됩니다. 풀이 스크립트(yt-dlp-ejs)는
-묶음에 들어 있습니다.
+**YouTube also requires a JS runtime (deno)** (since 2025.11). It is needed for
+VODs and membership streams; public live HLS does without it. If you download it
+from "Models and tools", the server tells yt-dlp directly with
+`--js-runtimes deno:<path>`, so it works even in an .app launched from Finder
+(where PATH is short). The solver script (yt-dlp-ejs) is inside the bundle.
 
-묶음 안의 yt-dlp는 `mimiwatch --ytdlp …`로 부릅니다 -- 묶음에는 `python -m
-yt_dlp`를 부를 파이썬이 없어 서버가 자기 자신을 다시 띄우는 것입니다. 자식
-프로세스로 두는 이유는 그대로입니다(시간 상한, 죽일 수 있어야 함).
+The yt-dlp inside the bundle is called as `mimiwatch --ytdlp …` -- the bundle
+has no Python to call `python -m yt_dlp` with, so the server launches itself
+again. The reason for keeping it as a child process is unchanged (a time limit,
+and being able to kill it).
 
-## 만들기
+## Building
 
 ```sh
-packaging/build.sh                 # 맥·리눅스 → dist/mimiwatch-<판>-macos-arm64.zip
-.\packaging\build.ps1              # 윈도우   → dist\mimiwatch-<판>-windows-x64.zip
+packaging/build.sh                 # macOS/Linux → dist/mimiwatch-<version>-macos-arm64.zip
+.\packaging\build.ps1              # Windows     → dist\mimiwatch-<version>-windows-x64.zip
 ```
 
-빌드 전용 가상환경(`.venv-build`)을 따로 만듭니다. 개발용 `.venv`에는 pytest·ruff
-같은 것이 섞여 있고, 묶음에는 실행에 필요한 것만 들어가야 합니다.
+A build-only virtualenv (`.venv-build`) is created separately. The development
+`.venv` has things like pytest and ruff mixed in, and the bundle should contain
+only what is needed to run.
 
-- **맥**: `llama-cpp-python`은 PyPI에 맥 휠이 없어 소스에서 빌드됩니다(cmake
-  필요, `brew install cmake`). Apple Silicon에서는 Metal이 기본으로 켜집니다.
-  처음 한 번 5~10분, 그 뒤로는 pip이 만든 휠을 기억해 1분 남짓입니다.
-- **윈도우**: 아무것도 빌드하지 않습니다. `llama-cpp-python`은 만든 쪽 인덱스의
-  Vulkan 휠(GPU가 없으면 CPU로 내려갑니다), `transcribe-cpp`는 PyPI 휠입니다.
-  `-Backend cuda`(릴리스에는 안 넣음)는 cu124 휠을 받고, 휠에 없는 런타임 DLL(cudart·
-  cuBLAS)을 `nvidia-*-cu12` 패키지에서 꺼내 `llama_cpp\lib`에 넣습니다 -- 726MB 남짓입니다.
-- **깃허브 액션**(`.github/workflows/build.yml`): `v*` 태그를 밀면 두 플랫폼을
-  만들어 릴리스에 붙입니다. 수동으로도(`workflow_dispatch`) 돌릴 수 있습니다.
+- **macOS**: `llama-cpp-python` has no macOS wheel on PyPI, so it is built from
+  source (cmake needed, `brew install cmake`). On Apple Silicon, Metal is on by
+  default. The first time takes 5-10 minutes; after that pip remembers the wheel
+  it built and it takes a little over a minute.
+- **Windows**: nothing is built. `llama-cpp-python` comes from the builder's own
+  index as a Vulkan wheel (it falls back to CPU when there is no GPU), and
+  `transcribe-cpp` is a PyPI wheel. `-Backend cuda` (not included in the
+  releases) downloads the cu124 wheel and pulls the runtime DLLs that the wheel
+  lacks (cudart, cuBLAS) out of the `nvidia-*-cu12` packages into
+  `llama_cpp\lib` -- a little over 726MB.
+- **GitHub Actions** (`.github/workflows/build.yml`): pushing a `v*` tag builds
+  both platforms and attaches them to the release. It can also be run by hand
+  (`workflow_dispatch`).
 
-명세는 `packaging/mimiwatch.spec`입니다. 네 런타임은 `collect_all`로 패키지
-디렉터리 구조를 그대로 옮기므로 `@loader_path`로 서로를 찾는 규칙이 묶음
-안에서도 성립합니다. **transcribe_cpp는 네이티브 제공자를 패키지 메타데이터의
-entry point로 찾으므로** dist-info를 같이 넣습니다(`copy_metadata`) -- 이것이
-빠지면 시작조차 못 합니다.
+The spec is `packaging/mimiwatch.spec`. The four runtimes are moved with
+`collect_all`, which keeps the package directory structure as it is, so the rule
+by which they find each other through `@loader_path` holds inside the bundle
+too. **transcribe_cpp finds its native provider through the package metadata's
+entry point**, so the dist-info goes in with it (`copy_metadata`) -- without
+that it cannot even start.
 
-## 처음 열 때 걸리는 것
+## What gets in the way the first time you open it
 
-**맥 — 왜 막히나.** 앱은 ad-hoc 서명이 되어 있고 그 서명은 유효합니다(`codesign
---verify --deep --strict` 통과). 다만 Apple 의 **공증(notarization)** 이 없어
- Gatekeeper 가 격리(quarantine) 표시된 파일을 막습니다. 공증은 유료 Developer
-ID($99/년)를 요구하므로 이 배포에는 없습니다. **한 번만 격리를 벗기면 그 뒤로는
-경고 없이 열립니다** — 유효하게 ad-hoc 서명된 앱은 격리만 없으면 Gatekeeper 가
-건드리지 않기 때문입니다.
+**macOS -- why it is blocked.** The app is ad-hoc signed and that signature is
+valid (it passes `codesign --verify --deep --strict`). What it lacks is Apple's
+**notarization**, so Gatekeeper blocks files marked with quarantine.
+Notarization requires a paid Developer ID ($99/year), which this distribution
+does not have. **Strip the quarantine once and it opens without a warning from
+then on** — because Gatekeeper leaves a validly ad-hoc-signed app alone as long
+as the quarantine is gone.
 
-**매번 뜨는 이유.** Downloads 같은 곳에서 바로 실행하면 macOS 가 앱을 무작위
-읽기 전용 경로로 옮겨 실행합니다(App Translocation). 그래서 「그래도 열기」 승인이
-그 경로에 묶여 다음 실행에 남지 않습니다. **`/Applications`(또는 아무 폴더)로 한 번
-옮기면** translocation 이 멈추고 승인이 남습니다.
+**Why it appears every time.** If you run it straight out of somewhere like
+Downloads, macOS moves the app to a random read-only path and runs it there (App
+Translocation). So the "Open Anyway" approval is tied to that path and does not
+survive into the next run. **Move it once into `/Applications` (or
+any folder)** and translocation stops, and the approval stays.
 
-권하는 순서:
+The recommended order:
 
-1. **터미널로 받으면 처음부터 격리가 없어 바로 열립니다.** `curl` 로 받은 파일에는
-   격리 속성이 붙지 않습니다.
+1. **If you download it with the terminal there is no quarantine to begin with,
+   so it opens right away.** A file fetched with `curl` gets no quarantine
+   attribute.
    ```sh
-   curl -L -o mimiwatch.zip https://github.com/chisacam/mimiwatch/releases/latest/download/mimiwatch-<판>-macos-arm64.zip
-   ditto -x -k mimiwatch.zip ~/Applications/    # 심볼릭 링크를 지켜 풀고, 옮겨 둡니다
+   curl -L -o mimiwatch.zip https://github.com/chisacam/mimiwatch/releases/latest/download/mimiwatch-<version>-macos-arm64.zip
+   ditto -x -k mimiwatch.zip ~/Applications/    # extracts with the symlinks preserved, and puts it in place
    open ~/Applications/mimiwatch.app
    ```
-2. 브라우저로 받았으면: **먼저 응용 프로그램 폴더로 옮기고**, 두 번 눌러 차단 창을
-   닫은 뒤 **1시간 안에** 시스템 설정 › 개인정보 보호 및 보안 맨 아래 「그래도
-   열기」. 옮겨 두었으므로 이후에는 다시 묻지 않습니다.
-3. 한 줄로 끝내려면 — 옮긴 뒤 격리를 벗깁니다. 그 뒤로는 경고가 없습니다.
+2. If you downloaded it with a browser: **move it into the Applications folder
+   first**, double-click it, close the blocking dialog, and then **within an
+   hour** go to System Settings › Privacy & Security, at the very bottom, and
+   "Open Anyway". Since you moved it, it will not ask again after that.
+3. To be done with it in one line — strip the quarantine after moving it. There
+   is no warning after that.
    ```sh
    xattr -dr com.apple.quarantine ~/Applications/mimiwatch.app
    ```
 
-「손상되어 열 수 없습니다」가 뜨면 서명이 깨진 것입니다 — zip을 **Finder(Archive
-Utility)나 `ditto`로** 풀어야 합니다. 다른 압축 도구는 묶음 안의 심볼릭 링크를 실제
-파일로 풀어 서명 해시가 어긋납니다(PyInstaller 6의 .app은 Frameworks와 Resources를
-링크로 잇습니다).
+If "is damaged and can't be opened" appears, the signature is broken — the zip
+has to be extracted **with Finder (Archive Utility) or `ditto`**. Other archive
+tools expand the symlinks inside the bundle into real files, and the signature
+hashes then do not match (the .app from PyInstaller 6 joins Frameworks and
+Resources with links).
 
-**공증까지 하려면** Apple Developer Program($99/년)에 가입해 Developer ID 인증서를
-받고, 빌드 때 `MIMIWATCH_CODESIGN="Developer ID Application: 이름 (팀ID)"` 로 서명한 뒤
-`xcrun notarytool submit` 으로 공증·스테이플하면 첫 실행 경고까지 사라집니다. 지금
-`packaging/build.sh` 는 그 환경변수가 있으면 ad-hoc 대신 그 인증서로 서명합니다.
+**To go all the way to notarization**, join the Apple Developer Program
+($99/year), get a Developer ID certificate, sign at build time with
+`MIMIWATCH_CODESIGN="Developer ID Application: Name (TeamID)"`, then notarize
+and staple with `xcrun notarytool submit`, and even the first-run warning
+disappears. As it stands, `packaging/build.sh` signs with that certificate
+instead of ad-hoc when that environment variable is present.
 
-**윈도우**: SmartScreen이 「알 수 없는 게시자」로 막습니다. 「추가 정보 › 실행」.
+**Windows**: SmartScreen blocks it as "unknown publisher". "More info › Run
+anyway".
 
-두 경고 다 서명 인증서(연 99달러 / 코드 서명 인증서)가 없어서 뜨는 것입니다.
-1인 취미 프로젝트라 사지 않았습니다.
+Both warnings appear because there is no signing certificate ($99 a year / a
+code signing certificate). This is a solo hobby project, so it was not bought.
 
-## 진단
+## Diagnostics
 
 ```sh
-mimiwatch --doctor                 # 준비물·백엔드·모델 적재를 한 번에 찍습니다
+mimiwatch --doctor                 # prints the prerequisites, the backends and a model load in one go
 mimiwatch --doctor "https://www.youtube.com/live/..."
 mimiwatch --port 8951 --no-browser
 ```
 
-`bench/doctor.py`를 묶음에 넣어 둔 것입니다. 무엇이 안 되면 그 출력을 붙여
-주시면 됩니다.
+This is `bench/doctor.py`, put into the bundle. If something does not work,
+pasting that output is enough.
 
-## 확인한 것과 확인하지 못한 것 (2026-08-29)
+## What was checked and what was not (2026-08-29)
 
-확인: 맥(M5 Pro, macOS 26)에서 묶음을 만들어 `--doctor`로 Metal·CPU 두 장치에
-whisper를 올렸고, 묶음 안의 yt-dlp로 유튜브 주소를 풀었고, 설정·저장소·로그가
-사용자 영역에 생기는 것을 보았습니다. 모델·도구 내려받기는 깃허브 릴리스·
-허깅페이스·gzip 정적 ffmpeg·yt-dlp 독립 실행 파일 네 종류를 실제로 받아
-실행했습니다.
+Checked: on macOS (M5 Pro, macOS 26) the bundle was built, `--doctor` loaded
+whisper onto both devices, Metal and CPU, the yt-dlp inside the bundle resolved
+a YouTube address, and the settings, the store and the log were seen appearing
+in the user area. Model and tool downloads were actually fetched and run for all
+four kinds: GitHub releases, Hugging Face, the gzip static ffmpeg and the yt-dlp
+standalone executable.
 
-확인하지 못한 것: **윈도우 빌드는 아직 윈도우에서 돌려 본 적이 없습니다.**
-`build.ps1`은 `install.ps1`과 같은 헬퍼 규칙을 따르고 액션 러너에서 돌아갈
-것을 전제로 썼습니다. 첫 태그 빌드에서 확인하십시오. Finder에서 .app을 두 번
-눌러 띄우는 경로(PATH가 짧은 환경에서 홈브루 ffmpeg을 찾는지)도 터미널이
-아닌 실제 클릭으로는 보지 않았습니다.
+What was not checked: **the Windows build has never been run on Windows.**
+`build.ps1` follows the same helper rules as `install.ps1` and was written on
+the assumption that it will run on the Actions runner. Check it on the first tag
+build. The path of double-clicking the .app in Finder (whether it finds Homebrew
+ffmpeg in an environment where PATH is short) has also not been seen by an
+actual click rather than from a terminal.
 
-## 판올림 (자동 업데이트)
+## Update (automatic updates)
 
-묶음은 자기 판을 압니다 -- 빌드가 `MIMIWATCH_VERSION`(태그)을 `_version.txt`
-로 구워 넣습니다(mimiwatch.spec). 서버는 하루 한 번 깃허브 releases/latest 를
-확인해 태그가 더 새로우면 화면에 알리고, 「받기 → 다시 시작하며 적용」이면:
+The bundle knows its own version -- the build bakes `MIMIWATCH_VERSION` (the
+tag) into `_version.txt` (mimiwatch.spec). Once a day the server checks GitHub
+releases/latest, and if the tag is newer it tells you on screen; on "Download →
+restart and apply":
 
-1. 이 플랫폼의 자산(`mimiwatch-<판>-macos-arm64.zip` / `-windows-x64.zip`)을
-   사용자 영역 `updates/` 에 받습니다. `.part` 이어 받기는 모델과 같습니다.
-   윈도우의 `-cuda`/`-cpu` 변형은 자동 판올림 대상이 아닙니다.
-2. 교체 스크립트(`updates/apply.sh`·`apply.ps1`)를 띄우고 서버가 스스로
-   꺼집니다. 스크립트는 프로세스가 끝나기를 기다렸다가 옛 묶음을 `.old` 로
-   물리고 새 것을 그 자리에 놓은 뒤 **같은 인자로** 다시 띄웁니다. 맥은
-   압축을 `ditto` 로 풀어(.app 의 심볼릭 링크·서명 보존) `xattr -cr` 까지
-   해 주므로 게이트키퍼 안내를 다시 거치지 않습니다.
-3. 실패하면 옛 묶음을 되돌립니다. 무슨 일이 있었는지는 `updates/apply.log`.
+1. The asset for this platform (`mimiwatch-<version>-macos-arm64.zip` /
+   `-windows-x64.zip`) is downloaded into `updates/` in the user area. `.part`
+   resume is the same as for models. The Windows `-cuda`/`-cpu` variants are not
+   subject to automatic updates.
+2. The swap script (`updates/apply.sh`, `apply.ps1`) is launched and the server
+   shuts itself down. The script waits for the process to end, moves the old
+   bundle aside as `.old`, puts the new one in its place, and launches it again
+   **with the same arguments**. On macOS it extracts with `ditto` (preserving
+   the .app's symlinks and signature) and even does `xattr -cr`, so you do not
+   go through the Gatekeeper business again.
+3. On failure the old bundle is put back. What happened is in
+   `updates/apply.log`.
 
-모델·설정·자막 DB 는 묶음 밖(사용자 영역)이라 판을 갈아도 그대로입니다.
-확인을 끄려면 `backends.json` 의 `"update_check": false` 또는
-`MIMIWATCH_NO_UPDATE_CHECK=1`. 저장소에서 돌 때는 알림만 하고 적용은
-거절합니다(`git pull` 안내).
+The models, the settings and the subtitle DB are outside the bundle (in the user
+area), so they stay as they are across a version change. To turn the check off,
+`"update_check": false` in `backends.json` or `MIMIWATCH_NO_UPDATE_CHECK=1`.
+When running from the repository it only notifies and refuses to apply (it
+points you at `git pull`).

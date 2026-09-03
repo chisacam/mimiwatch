@@ -1,144 +1,168 @@
 # mimiwatch
 
-YouTube 영상과 라이브 방송을 **자신의 언어로 이해하기 위한 로컬 도구**입니다.
-원본 영상 위에 전사 자막과 번역 자막을 얹어 보여 줍니다.
+*[한국어](README.ko.md)*
 
-모델은 전부 이 기계에서 돕니다. 외부로 나가는 것은 영상 오디오를 받아 오는
-요청과, 하루 한 번 깃허브 릴리스에서 새 판이 있는지 묻는 조회뿐입니다
-(끄려면 [사용 안내 › 판올림](docs/GUIDE.md#판올림) 참고).
+A **local tool for understanding YouTube videos and live streams in your own
+language**. It lays transcription subtitles and translation subtitles over the
+original video.
 
-## 무엇을 하는가
+Every model runs on this machine. The only things that leave it are the
+requests that fetch a video's audio, and a once-a-day query asking GitHub
+Releases whether a new version exists (to turn that off, see
+[Guide › Updates](docs/GUIDE.md#updates)).
 
-**녹화본** — 주소를 넣으면 오디오를 받아 전사하고 번역합니다. 각 발화에
-미디어 타임스탬프가 붙으므로 플레이어의 재생 위치와 **자동으로 정렬**됩니다.
+## What it does
 
-**라이브** — 진행 중인 방송을 받아 적습니다. 짧게 끊은 확정 자막이 먼저
-나가고, 발화 한 무리가 끝나면 합쳐서 다시 해독한 정제본이 그 자리를
-대신합니다.
+**VOD** — give it a URL and it fetches the audio, transcribes it and
+translates it. Each utterance carries a media timestamp, so the subtitles
+**line up automatically** with the player's playback position.
 
-**로컬 파일** — 이 기계의 영상·음성 파일(mp3, wav, mp4, mkv 등 ffmpeg가
-여는 것)도 같은 길로 전사·번역합니다.
+**Live** — it writes down a stream while it is running. Short finals go out
+first, and when one utterance group ends, the group is joined, decoded again,
+and the refined line takes their place.
 
-**멀티뷰** — 라이브 넷까지 나란히 놓고, 초점 타일의 소리와 자막만 냅니다.
+**Local files** — video and audio files on this machine (mp3, wav, mp4, mkv
+and whatever else ffmpeg opens) go through the same path for transcription and
+translation.
 
-**브라우저 확장** — 임베드가 막힌 방송은 유튜브 페이지 자체에 자막을 얹습니다.
+**Multiview** — up to four live streams side by side, with only the focused
+tile's sound and subtitles coming out.
 
-**언어가 같으면 아무것도 하지 않습니다.** 한국어 사용자가 한국어 영상을 볼
-때는 번역도 자막도 켜지 않습니다.
+**Browser extension** — for streams where embedding is blocked, subtitles go
+onto the YouTube page itself.
 
-## 요구 사항
+**When the languages are the same, it does nothing.** A Korean user watching a
+Korean video gets neither translation nor subtitles.
 
-- macOS(Apple Silicon·Intel), Linux, 또는 Windows 10 1803 이상
-- 디스크 약 7GB (모델 6.3GB — 가벼운 기본 조합만 쓰면 약 730MB)
-- 저장소에서 돌리려면 Python 3.10 이상. 묶음으로 받으면 파이썬도 필요 없습니다
+## Requirements
 
-**아무것도 빌드하지 않습니다.** 전사 런타임(transcribe.cpp)은 맥·리눅스·
-윈도우 모두 미리 만들어진 휠을 쓰고, 맥 휠에는 Metal이 들어 있습니다.
+- macOS (Apple Silicon or Intel), Linux, or Windows 10 1803 or later
+- About 7GB of disk (6.3GB of models — about 730MB if you use only the light default pair)
+- Python 3.10 or later to run from the repository. With the bundle you do not even need Python
 
-`ffmpeg`는 권장이지 필수는 아닙니다. 시스템에 있으면 그것을 쓰고, 없으면
-화면의 「엔진 관리 › 모델·도구」에서 정적 빌드 한 파일을 받을 수 있습니다.
+**Nothing is built.** The transcription runtime (transcribe.cpp) uses prebuilt
+wheels on mac, Linux and Windows alike, and the mac wheel has Metal in it.
+
+`ffmpeg` is recommended, not required. If the system has it, that one is used;
+if not, you can download a single static build from "Engines › Models & Tools"
+in the UI.
 
 ```sh
-brew install ffmpeg        # 윈도우: winget install --id Gyan.FFmpeg
+brew install ffmpeg        # Windows: winget install --id Gyan.FFmpeg
 ```
 
-`yt-dlp`는 준비물이 아닙니다. 설치 스크립트가 가상환경 안에 최신으로 넣습니다.
+`yt-dlp` is not a prerequisite. The install script puts the latest one inside
+the virtualenv.
 
-## 두 가지 길
+## Two paths
 
-**묶음으로.** 릴리스에서 `mimiwatch-*-macos-arm64.zip` 또는
-`mimiwatch-*-windows-x64.zip`을 받아 풀고 두 번 누릅니다. 브라우저에 화면이
-열리고, 첫 실행이면 「초기 설정」이 떠서 엔진을 고르고 그에 맞는 모델을
-받습니다. 처음 열 때 걸리는 게이트키퍼·SmartScreen 안내와 파일이 어디에
-놓이는지는 [docs/PACKAGING.md](docs/PACKAGING.md)에 있습니다.
+**As a bundle.** Download `mimiwatch-*-macos-arm64.zip` or
+`mimiwatch-*-windows-x64.zip` from the releases, unpack it and double-click.
+The UI opens in the browser, and on a first run "Initial setup" comes up, where
+you pick engines and download the models that go with them. The Gatekeeper and
+SmartScreen prompts that catch you on the first open, and where the files are
+put, are in [docs/PACKAGING.md](docs/PACKAGING.md).
 
-**저장소에서.** 아래처럼 설치합니다. 코드를 고치거나 실측 스크립트를
-돌리려면 이쪽입니다.
+**From the repository.** Install as below. This is the side you want if you are
+going to change the code or run the measurement scripts.
 
-## 설치
+## Installation
 
 ```sh
 git clone https://github.com/chisacam/mimiwatch.git
 cd mimiwatch
-./install.sh               # 윈도우: .\install.ps1
+./install.sh               # Windows: .\install.ps1
 ```
 
-스크립트는 가상환경을 만들고 의존성을 넣고, 기본 조합의 모델을 받고,
-`backends.example.json`을 복사해 `backends.json`을 만듭니다. **이미 끝난
-단계는 건너뛰므로** 내려받기가 끊기면 그냥 다시 실행하십시오.
+The script creates a virtualenv, installs the dependencies, downloads the
+models of the default pair, and copies `backends.example.json` to
+`backends.json`. **It skips steps that are already done**, so if a download
+breaks off, just run it again.
 
-**기본은 가벼운 CPU 엔진입니다** (전사 SenseVoice Small, 번역 M2M-100).
-품질은 무거운 쪽(whisper-large-v3-turbo, Gemma 4)이 훨씬 낫습니다 — GPU가
-있고 메모리가 넉넉하면 첫 실행의 「초기 설정」이나 「관리 › ⚙ 엔진 관리」에서
-올리십시오. 설치할 때부터 Gemma까지 받아 두려면:
+**The default is the light CPU engines** (SenseVoice Small for transcription,
+M2M-100 for translation). Quality is far better on the heavy side
+(whisper-large-v3-turbo, Gemma 4) — if you have a GPU and memory to spare, move
+up in "Initial setup" on the first run, or in "Manage › ⚙ Engines". To fetch
+Gemma as well at install time:
 
 ```sh
-WITH_GEMMA=1 ./install.sh        # 윈도우: .\install.ps1 -WithGemma
+WITH_GEMMA=1 ./install.sh        # Windows: .\install.ps1 -WithGemma
 ```
 
-모델의 기본 위치는 `~/.local/share/mimiwatch/models`, 윈도우는
-`%LOCALAPPDATA%\mimiwatch\models`입니다. `MIMIWATCH_MODEL_DIR`로 바꿀 수
-있습니다. 어떤 모델이 있고 무엇이 필요한지는 화면의 「모델·도구」와
-`modelhub.py list`가 같은 목록으로 보여 줍니다.
+Models live in `~/.local/share/mimiwatch/models` by default, and in
+`%LOCALAPPDATA%\mimiwatch\models` on Windows. `MIMIWATCH_MODEL_DIR` changes
+that. Which models exist and what is needed is shown by "Models & Tools" in the
+UI and by `modelhub.py list`, from the same list.
 
-## 실행
+## Running
 
 ```sh
-./run.sh            # 윈도우: .\run.ps1
+./run.sh            # Windows: .\run.ps1
 ```
 
-http://localhost:8900 을 엽니다. 다른 포트는 `PORT=8951 ./run.sh`
-(윈도우는 `.\run.ps1 -Port 8951`). 설치할 때 모델 위치를 바꿨다면 실행할
-때도 같은 환경변수를 주십시오.
+Open http://localhost:8900. For another port, `PORT=8951 ./run.sh`
+(on Windows `.\run.ps1 -Port 8951`). If you changed the model location at
+install time, give the same environment variable when running too.
 
-끌 때는 위쪽 막대 오른쪽 끝의 **「⏻ 종료」**를 누르십시오. 받는 중인 방송을
-먼저 제대로 닫고 서버를 멈춥니다. 터미널의 `Ctrl-C`도 같은 경로를 탑니다.
+To turn it off, press **"⏻ Quit"** at the right end of the top bar. It closes
+the streams it is receiving properly first, then stops the server. `Ctrl-C` in
+the terminal takes the same path.
 
-## 쓰는 법
+## How to use it
 
-화면은 세 칸입니다. **왼쪽은 영상 목록**, 가운데는 플레이어, **오른쪽은
-자막 내역**입니다. 양옆은 각각 접힙니다 — 목록은 `V`, 자막 내역은 `S`.
+The screen has three columns. **The video library is on the left**, the player
+in the middle, **the subtitle transcript on the right**. Either side folds
+away — `V` for the library, `S` for the transcript.
 
-1. **왼쪽 「＋ 추가」**에 YouTube 주소, Twitch 채널 주소, m3u8 주소, 또는
-   이 기계의 파일 경로를 넣습니다. 라이브인지 녹화본인지는 서버가 판단합니다.
-2. **원본 언어를 지정하십시오.** 비워 두면 모델이 스스로 판별하는데, 판별이
-   흔들리면 문장 하나가 통째로 다른 언어로 나옵니다.
-3. **전사·번역 엔진과 장르**를 함께 고르고 「시작」을 누릅니다. 낮은 사양이라면
-   가벼운 엔진을 고르십시오. 위쪽 「관리」에서 진행 중에도 바꿀 수 있습니다.
-4. 자막이 어긋나면 오른쪽 자막 내역의 **✎ 편집** 모드로 원문·번역·시각을
-   고치고, **⟳ 번역** 모드로 대목을 골라 다시 번역합니다. **⤓ 내보내기**로
-   SRT·WebVTT·텍스트·JSON 을 받습니다.
+1. Into **"＋ Add" on the left** goes a YouTube URL, a Twitch channel URL, an
+   m3u8 URL, or a file path on this machine. Whether it is live or a VOD is for
+   the server to decide.
+2. **Set the source language.** Left empty, the model decides for itself, and
+   when that detection wavers a whole sentence comes out in another language.
+3. Pick **the transcription engine, the translation engine and the genre**
+   together, then press "Start". On a low-spec machine, pick the light engines.
+   "Manage" at the top can change them while a job is running.
+4. If a subtitle is off, fix the source text, the translation and the timing in
+   the **✎ Edit** mode of the transcript on the right, and pick a passage to
+   translate again in the **⟳ Translate** mode. **⤓ Export** gives you SRT,
+   WebVTT, text and JSON.
 
-그 밖의 모든 것 — 라이브 선택지, 멀티뷰, 지난 방송 이어받기, 엔진 교체와
-CPU 설정, 멤버십 전용 방송, 브라우저 확장, 판올림, 문제가 생겼을 때 — 는
-**[docs/GUIDE.md](docs/GUIDE.md)** 에 있습니다.
+Everything else — live options, multiview, resuming a past stream, swapping
+engines and CPU settings, members-only streams, the browser extension, updates,
+and what to do when something goes wrong — is in
+**[docs/GUIDE.md](docs/GUIDE.md)**.
 
-## 문서
+## Documentation
 
-- [`docs/GUIDE.md`](docs/GUIDE.md) — 상세 사용 안내
-- [`docs/PACKAGING.md`](docs/PACKAGING.md) — 묶음 배포와 판올림
-- [`docs/WINDOWS.md`](docs/WINDOWS.md) — 윈도우에서 다른 점
-- [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — 요구사항과 설계 판단
-- [`measurements/RESULTS.md`](measurements/RESULTS.md) — 모델 선정과 성능 실측
-- [`AGENTS.md`](AGENTS.md) — 코드를 고치는 사람과 에이전트를 위한 규칙
+- [`docs/GUIDE.md`](docs/GUIDE.md) — detailed usage guide
+- [`docs/PACKAGING.md`](docs/PACKAGING.md) — bundle distribution and updates
+- [`docs/WINDOWS.md`](docs/WINDOWS.md) — what differs on Windows
+- [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — requirements and design decisions
+- [`measurements/RESULTS.md`](measurements/RESULTS.md) — model selection and performance measurements
+- [`AGENTS.md`](AGENTS.md) — rules for the people and agents who change the code
 
-## 출처
+## Credits
 
-전사 파이프라인의 구조(VAD 분할, 선행 오디오, 2패스 정제)는
-[hayamimi](https://github.com/oboroge0/hayamimi)(MIT, oboroge0)에서
-가져왔습니다. 지금은 저장소 의존 없이 필요한 부분만 `stream.py`와
-`speaker_id.py`에 옮겨 두었습니다.
+The structure of the transcription pipeline (VAD splitting, lead-in audio,
+two-pass refinement) was taken from
+[hayamimi](https://github.com/oboroge0/hayamimi) (MIT, oboroge0). Now only the
+parts that are needed are ported into `stream.py` and `speaker_id.py`, with no
+dependency on that repository.
 
-m3u8 스트림의 화면 재생은 [hls.js](https://github.com/video-dev/hls.js)(Apache-2.0,
-video-dev)를 씁니다. `web/vendor/hls.min.js`에 그대로 묶여 있고 라이선스는 그 옆
-`hls.LICENSE.txt`입니다.
+On-screen playback of m3u8 streams uses
+[hls.js](https://github.com/video-dev/hls.js) (Apache-2.0, video-dev). It is
+bundled as it is in `web/vendor/hls.min.js`, and its license sits next to it in
+`hls.LICENSE.txt`.
 
-## 라이선스
+## License
 
-코드와 프로그램은 [PolyForm Noncommercial 1.0.0](LICENSE)입니다. **상업적 목적이
-아니라면 누구나** 쓰고 고치고 나눌 수 있습니다 — 개인 사용, 연구, 교육, 비영리
-단체와 공공기관의 사용이 여기 들어갑니다. 상업적으로 쓰려면 따로 허락을 받으십시오.
+The code and the program are [PolyForm Noncommercial 1.0.0](LICENSE).
+**Anyone whose purpose is not commercial** may use it, change it and share it —
+personal use, research, education, and use by nonprofit organizations and
+public institutions are included here. For commercial use, get permission
+separately.
 
-참고한 hayamimi(MIT)에서 가져온 라이브 전사 루프의 구조에는 그쪽 고지가
-`LICENSE` 안에 그대로 남아 있습니다. 모델과 ffmpeg은 저장소에 담기지 않고
-사용자가 직접 내려받으며 각자의 라이선스(예: Gemma 이용 약관)를 따릅니다.
+For the structure of the live transcription loop taken from hayamimi (MIT),
+that project's notice remains inside `LICENSE` as it is. The models and ffmpeg
+are not contained in the repository; the user downloads them directly and they
+follow their own licenses (for example the Gemma terms of use).

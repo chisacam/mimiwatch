@@ -1,150 +1,186 @@
-# 전사–번역–화면 파이프라인 점검 (2026-08-29)
+# Transcription–Translation–Display Pipeline Review (2026-08-29)
 
-"품질은 모델이 정하지만, 속도와 품질에 부가적으로 기여하는 것은 결국 처리
-파이프라인이다"라는 물음에서 시작해, 소리가 들어와 자막이 화면에 닿기까지의
-길을 코드와 실측 기록(`measurements/RESULTS.md`)을 맞대어 다시 보았습니다.
+*[한국어](PIPELINE.ko.md)*
 
-결론부터: **구조는 그대로 둡니다.** 각 단계의 모양은 이미 실측으로 정해진
-것이고, 그 근거를 뒤집을 새 사실은 없었습니다. 대신 코드에서 **번역 경로의
-경합 하나와 스레드 구조 하나**를 찾아 고쳤고, 검토했지만 손대지 않은 것들을
-이유와 함께 적어 둡니다.
+Starting from the question "quality is decided by the model, but what
+additionally contributes to speed and quality is, in the end, the processing
+pipeline", I looked again at the path from sound coming in to a subtitle
+reaching the screen, holding the code up against the measurement record
+(`measurements/RESULTS.md`).
 
-## 1. 지금의 길
+The conclusion first: **the structure stays as it is.** The shape of each stage
+was already settled by measurement, and no new fact turned up that would
+overturn that basis. Instead, in the code I found and fixed **one race in the
+translation path and one thread structure**, and I write down here, with the
+reasons, the things I reviewed but did not touch.
+
+## 1. The path as it is now
 
 ```
-소리(ffmpeg 파이프 또는 탭 PCM) ─ 0.1초 조각 ─▶ Silero VAD ─▶ 발화 조각(프로필별 3~12초, 앞 1초 선행)
-   ─▶ Whisper 해독(확정) ─▶ publish_line("final") ─▶ SQLite + SSE ─▶ 화면 (평균 0.38초)
-                                                     └▶ 번역 큐 ─▶ Gemma(문맥 3줄) ─▶ SSE
-   무음 2초 뒤 무리 재해독(정제) ─▶ publish_line("refine") ─▶ 흡수한 확정 줄을 대체 ─▶ 번역
+sound (ffmpeg pipe or tab PCM) ─ 0.1 s chunks ─▶ Silero VAD ─▶ utterance chunk (3~12 s per profile, 1 s of lead-in)
+   ─▶ Whisper decode (final) ─▶ publish_line("final") ─▶ SQLite + SSE ─▶ screen (average 0.38 s)
+                                                         └▶ translation queue ─▶ Gemma (3 lines of context) ─▶ SSE
+   after 2 s of silence, re-decode the utterance group (refinement) ─▶ publish_line("refine") ─▶ replaces the finals it absorbed ─▶ translation
 ```
 
-| 단계 | 값 | 근거 |
+| Stage | Value | Basis |
 |---|---|---|
-| VAD → 확정 자막이 화면에 닿기까지 | 평균 384ms, 최대 795ms (합방·collab) | 14절 |
-| 해독 한 번 | 평균 381ms (Metal, 3~4초 조각) | 14절 |
-| 번역 한 줄 | Gemma 0.15초, M2M-100 0.2초 | 5·23절 |
-| 정제 대기 | 무음 2초 (`GROUP_GAP_S`) → 확정본을 먼저 내보내고 뒤에 교체 | 2·7절 |
-| 문맥 | 직전 3줄 (0·1·2·3·5·8줄을 재서) | 28~31절 |
-| 양자화 | Q8_0 유지 (낮춰도 Metal에서 빨라지지 않음) | 15~18절 |
-| 배치 해독 | `run_batch`는 오히려 느림 | 16절 |
+| VAD → final subtitle reaching the screen | average 384 ms, max 795 ms (collab) | section 14 |
+| One decode | average 381 ms (Metal, 3~4 s chunks) | section 14 |
+| One translated line | Gemma 0.15 s, M2M-100 0.2 s | sections 5·23 |
+| Refinement wait | 2 s of silence (`GROUP_GAP_S`) → send the final out first, replace it afterwards | sections 2·7 |
+| Context | the previous 3 lines (having measured 0·1·2·3·5·8 lines) | sections 28~31 |
+| Quantization | Q8_0 stays (going lower does not get faster on Metal) | sections 15~18 |
+| Batched decode | `run_batch` is slower instead | section 16 |
 
-지연의 구성은 이렇습니다. 사람이 말을 마친 뒤 자막이 뜨기까지 = **무음
-판정(0.25~0.35초) + 해독(~0.38초) + 전송(수 ms)**. 무음 판정은 VAD가
-발화가 끝났다고 확신하는 데 드는 시간이라 줄이면 문장이 잘립니다. 해독은
-모델과 장치가 정합니다. 즉 파이프라인이 **더 줄일 수 있는 지연은 거의
-없습니다.** 나머지는 전부 "정확도를 위해 일부러 기다리는" 시간이고, 그
-시간을 기다리지 않게 만든 것이 "확정본 먼저, 정제본으로 교체"입니다.
+The latency is made up like this. From a person finishing a sentence to the
+subtitle appearing = **silence detection (0.25~0.35 s) + decoding (~0.38 s) +
+delivery (a few ms)**. Silence detection is the time the VAD needs to be
+confident the utterance has ended, so shortening it cuts sentences off.
+Decoding is decided by the model and the device. That is, **there is almost no
+latency left that the pipeline could remove.** The rest is all time spent
+waiting on purpose for accuracy, and what makes you not wait out that time is
+"the final first, replaced by the refined line".
 
-## 2. 고친 것
+## 2. What was fixed
 
-### 2.1 정제본이 흡수한 확정 줄의 번역이 정제본의 번역을 덮던 경합
+### 2.1 The race where the translation of a final line absorbed by a refined line overwrote the refined line's translation
 
-정제본은 흡수한 첫 확정 줄의 **id를 물려받습니다**(화면이 그 자리를 갈아
-끼우도록). 예전에는 자막 한 줄마다 번역 스레드를 새로 띄웠으므로, 그
-확정 줄의 번역 스레드가 정제본의 번역 스레드보다 **늦게** 끝나면 같은 id로
-옛 부분 번역이 발행·저장되었습니다. 화면과 DB에 정제본 아래 반 토막
-번역이 남고, 새로고침해도 그대로였습니다. 두 스레드의 끝나는 순서가
-정해져 있지 않아 간헐적이었습니다.
+A refined line **inherits the id** of the first final line it absorbed (so that
+the screen swaps out that slot). Previously a new translation thread was
+started for every subtitle line, so if that final line's translation thread
+finished **later** than the refined line's translation thread, the old partial
+translation was published and stored under the same id. A half-finished
+translation was left under the refined line on the screen and in the DB, and it
+stayed there through a reload. Since the order in which the two threads
+finished was not fixed, it was intermittent.
 
-이제 세션마다 **번역 작업 스레드 하나**가 큐를 넣은 순서대로 비웁니다.
-발행 순서가 곧 번역 순서이고, 각 줄은 번역 **전과 후**에 "이 id의 원문이
-아직 이 글자인가"(`_text_of`)를 확인합니다. 정제본이 그 사이 들어왔으면
-결과를 버립니다. 시험: `tests/test_live.py::test_superseded_final_is_not_translated_after_refine`.
+Now **one translation worker thread** per session drains the queue in the order
+things were put into it. The publish order is the translation order, and each
+line checks **before and after** translating whether "is the source text of
+this id still this text" (`_text_of`). If a refined line arrived in between,
+the result is discarded. Test:
+`tests/test_live.py::test_superseded_final_is_not_translated_after_refine`.
 
-### 2.2 덤으로 번역 호출이 줍니다
+### 2.2 As a bonus, translation calls drop
 
-정제본이 이미 도착한 확정 줄은 **번역기를 부르지도 않습니다.** 2절의 표본에서
-확정 15건에 정제 8건, 26건에 9건이었으니 정제가 켜진 방송에서는 확정 줄
-번역의 상당 부분이 정제본에 흡수됩니다. 그만큼 Gemma가 놀고, 정제본의
-번역이 그 앉은 자리에 더 빨리 옵니다. (얼마나 줄었는지는 아직 재지
-않았습니다 -- 다음 실측 항목입니다.)
+A final line whose refined line has already arrived **does not even call the
+translator.** In the sample in section 2 there were 15 finals to 8 refined
+lines, and 26 to 9, so on a stream with refinement on, a good part of the
+final-line translations is absorbed into refined lines. Gemma idles that much
+more, and the refined line's translation arrives in that slot sooner. (How much
+it dropped has not been measured yet -- it is the next measurement item.)
 
-### 2.3 스레드 수천 개 → 하나
+### 2.3 Thousands of threads → one
 
-두 시간 방송이면 스레드가 수천 번 만들어졌습니다. 모델 자물쇠가 하나라
-나란히 돌 수도 없었으니 얻는 것 없이 비용만 있었습니다. 세션이 끝날 때는
-큐에 남은 줄을 마저 번역하고 나옵니다(`_close_translator`, 최대 10초) --
-방송 끝의 인사가 원문으로만 남지 않게요.
+A two-hour stream created thousands of threads. With a single model lock they
+could not run side by side either, so there was cost and nothing gained. When a
+session ends it translates the lines left in the queue before leaving
+(`_close_translator`, up to 10 s) -- so that the goodbye at the end of a stream
+is not left as source text only.
 
-## 3. 검토했지만 바꾸지 않은 것
+## 3. Reviewed but not changed
 
-**Whisper에 직전 문장을 프롬프트로 주기(조건화).** 고유명사 일관성을
-높이는 흔한 기법입니다. (처음 적을 때 "바인딩에 칸이 없다"고 했는데 틀렸습니다 --
-0.2.2의 `WhisperRunOptions(initial_prompt, condition_on_prev_tokens, no_speech_thold,
-logprob_thold, compression_ratio_thold, …)`를 `Session.run(family=…)`로 넘길 수
-있습니다.) 그래도 빠른 패스에는 넣지 않습니다: 라이브에서 이 기법은 반복 환각을
-키우는 것으로 알려져 있고(whisper.cpp #3744·#2286, 13절의 다양도 검사가 막는 바로 그
-현상), ≤30초 조각에서 꼬리가 잘리는 결함도 보고됐습니다(transcribe.cpp #89).
-**정제 패스에만** 직전 정제본 한두 문장을 넘기는 실험은 할 만합니다 -- 환각 카운터를
-지표로. 조각별 `no_speech_prob`/`avg_logprob`(chunk trace)는 C API에만 있어 파이썬에서는
-임계값(`no_speech_thold`·`logprob_thold`)을 조정하는 길만 있습니다.
+**Giving Whisper the previous sentence as a prompt (conditioning).** A common
+technique for raising proper-noun consistency. (When I first wrote this I said
+"the bindings have no slot for it", which was wrong -- 0.2.2's
+`WhisperRunOptions(initial_prompt, condition_on_prev_tokens, no_speech_thold,
+logprob_thold, compression_ratio_thold, …)` can be passed through
+`Session.run(family=…)`.) Even so it does not go into the fast pass: in live
+use this technique is known to increase repetition hallucination (whisper.cpp
+#3744·#2286, exactly the phenomenon the diversity check in section 13 blocks),
+and a defect where the tail is cut off on ≤30 s chunks has been reported as
+well (transcribe.cpp #89). An experiment that passes one or two of the previous
+refined sentences **to the refinement pass only** is worth doing -- with the
+hallucination counter as the metric. Per-chunk
+`no_speech_prob`/`avg_logprob` (chunk trace) exist only in the C API, so from
+Python the only route is adjusting the thresholds
+(`no_speech_thold`·`logprob_thold`).
 
-**추측 해독(`spec_k_drafts`).** 바인딩이 노출하지만 whisper-large-v3-turbo에서
--1·0·4 모두 해독 시간이 같았습니다(5초 무음, 256~264ms). 이 모델은
-해당 기능을 광고하지 않아 조용히 무시되는 것으로 보입니다.
+**Speculative decoding (`spec_k_drafts`).** The bindings expose it, but on
+whisper-large-v3-turbo -1, 0 and 4 all took the same decode time (5 s of
+silence, 256~264 ms). This model does not advertise the feature, so it appears
+to be silently ignored.
 
-**Gemma 프롬프트 재평가.** 줄마다 200토큰 남짓의 지시문을 다시 평가하는
-것이 아깝지 않은가 보았는데, llama-cpp-python은 **직전 호출과 같은 접두
-토큰의 KV 캐시를 자동으로 재사용**합니다(`Llama.generate`의
-`longest_prefix`). 우리 프롬프트는 장르 지시문이 앞에, 바뀌는 문맥·원문이
-뒤에 오므로 지시문은 평가되지 않습니다. 이미 이 구조가 최적에 가깝습니다.
+**Re-evaluating the Gemma prompt.** I looked at whether re-evaluating some 200
+tokens of instructions on every line is wasteful, but llama-cpp-python
+**automatically reuses the KV cache for prefix tokens identical to the previous
+call** (`longest_prefix` in `Llama.generate`). Our prompt puts the genre
+instructions in front and the changing context and source text behind, so the
+instructions are not evaluated. This structure is already close to optimal.
 
-**여러 줄을 한 프롬프트로 번역(배치).** 녹화본 880줄 × 0.15초 = 2분을
-줄일 수 있겠지만, "한 줄 넣고 한 줄 받는" 계약이 깨져 줄이 합쳐지거나
-빠질 위험이 있고 라이브에는 뜻이 없습니다. 보류합니다.
+**Translating several lines in one prompt (batching).** It could cut the 880
+lines × 0.15 s = 2 minutes on a VOD, but the "one line in, one line out"
+contract breaks, so lines risk being merged or dropped, and for live it means
+nothing. Held off.
 
-**전사와 번역을 나란히 GPU에서.** 둘은 각자 자물쇠를 가지고 있어 서로를
-막지 않지만, 한 Metal 장치를 나눠 쓰므로 서로를 늦춥니다. 지금은 번역이
-0.15초라 눈에 띄지 않습니다. 녹화본에서 전사 중 번역을 병행하면 총 시간이
-줄 수도 늘 수도 있어 재 보기 전에는 바꾸지 않습니다.
+**Transcription and translation side by side on the GPU.** The two hold their
+own locks so they do not block each other, but they share one Metal device, so
+they slow each other down. Right now translation is 0.15 s, so it does not
+show. On a VOD, running translation alongside transcription could make the
+total time shorter or longer, so it is not changed before it is measured.
 
-**VAD 조각 0.1초, 선행 1초, 30초 오디오 보관.** 0.1초마다 `np.concatenate`로
-30초 버퍼를 다시 만들지만 1.9MB × 10회/초는 비용이 아닙니다.
+**0.1 s VAD chunks, 1 s of lead-in, keeping 30 s of audio.** Every 0.1 s the
+30 s buffer is rebuilt with `np.concatenate`, but 1.9 MB × 10 times/s is not a
+cost.
 
-## 4. 잰 것과 다음에 잴 것
+## 4. What was measured and what to measure next
 
-2026-08-29 저녁에 둘을 잤습니다(`measurements/RESULTS.md` 41~42절): **Silero VAD v5는
-VTuber 방송에서 말의 90%를 버려 v4 유지**, **Whisper 임계값 강화(0.84/-1.3)는 4초 조각에서
-차이 없음**. 손잡이(`whisper: {...}`, `refine_prompt`, `MIMIWATCH_VAD_MODEL`)만 남겼습니다.
+On the evening of 2026-08-29 two things were measured
+(`measurements/RESULTS.md` sections 41~42): **Silero VAD v5 throws away 90% of
+the speech in VTuber streams, so v4 stays**, and **hardening the Whisper
+thresholds (0.84/-1.3) makes no difference on 4 s chunks**. Only the knobs
+(`whisper: {...}`, `refine_prompt`, `MIMIWATCH_VAD_MODEL`) were left.
 
-같은 날 밤, 정답 자막이 있는 표본(뮤직비디오 넷, `bench/gold.py`)으로 손잡이 열두 개와 대안 모델
-넷을 잤습니다(43~45절): **Whisper 임계값·프롬프트·폴백은 전부 오차 안**, 짧게 끊을수록 나쁨,
-**VAD 문턱 0.5 → 0.3만 이득(64.4 → 59.0%)** 이고 대화 표본에서는 중립이라 기본값으로 올렸습니다.
-Fun-ASR·Qwen3-ASR·Cohere Transcribe는 일본어 노래에서 whisper-turbo에 6~14p 뒤졌습니다.
+That same night, with a sample that has reference subtitles (four music videos,
+`bench/gold.py`), twelve knobs and four alternative models were measured
+(sections 43~45): **the Whisper thresholds, the prompt and the fallback are all
+within the error margin**, the shorter the cut the worse it gets, and **only the
+VAD threshold 0.5 → 0.3 gains (64.4 → 59.0%)**; it is neutral on the
+conversational sample, so it was raised to the default. Fun-ASR, Qwen3-ASR and
+Cohere Transcribe fell 6~14p behind whisper-turbo on Japanese songs.
 
-애니메이션 116분(한국어 팬자막)으로는 끝단을 잤습니다(46~47절): VAD 0.3이 놓친 대사를 절반으로,
-Gemma chrF 29~31 vs M2M-100 13, 4초 분할이 12초보다 번역에 2p 유리, Gemma는 `心/ココロ` 같은
-고유명사를 놓침 → 용어집 실험이 다음 1순위.
+With 116 minutes of animation (Korean fansubs) the tail end was measured
+(sections 46~47): VAD 0.3 halves the lines it missed, Gemma chrF 29~31 vs
+M2M-100 13, splitting at 4 s is 2p better for translation than 12 s, Gemma
+misses proper nouns like `心/ココロ` → a glossary experiment is the next
+priority.
 
-남은 것:
+What is left:
 
-- 정제가 켜진 방송에서 번역 호출이 얼마나 줄었는가(2.2절).
-- collab 프로필(3초 끊기)에서 정제 대기 2초가 실제로 발동하는 비율 --
-  2절에서 정제가 5초 넘게 밀린 줄이 40~50%였는데 그때는 12초 끊기였습니다.
-- 문맥 3줄의 근거가 얇다는 것(31절)은 그대로입니다. 표본을 더 모아야 합니다.
+- How much translation calls dropped on a stream with refinement on
+  (section 2.2).
+- The rate at which the 2 s refinement wait actually fires on the collab
+  profile (3 s cuts) -- in section 2, 40~50% of lines had refinement pushed
+  back by more than 5 s, but that was with 12 s cuts.
+- That the basis for 3 lines of context is thin (section 31) still stands. More
+  samples have to be collected.
 
 
-## 5. 멀티뷰 (2026-08-30)
+## 5. Multiview (2026-08-30)
 
-여러 방송을 한 화면에 두되 **한 번에 한 세션만 받아 적습니다.** 그러려면 1절의
-길에서 「소리가 들어오는 일」과 「받아 적는 일」을 갈라야 했습니다 -- 예전에는
-ffmpeg 을 읽는 것과 VAD·해독이 한 스레드의 한 for 루프여서, 받아 적기를 멈추면
-파이프를 아무도 읽지 않아 ffmpeg 이 섰습니다.
+Several streams sit on one screen, but **only one session is transcribed at a
+time.** For that, the path in section 1 had to split "sound coming in" from
+"transcribing it" -- previously reading ffmpeg and the VAD/decoding were one
+for loop in one thread, so when transcribing stopped, nobody read the pipe and
+ffmpeg stalled.
 
 ```
-ffmpeg(또는 feed()) ─ 읽기 스레드 ─▶ Ring(최근 30초, 조각마다 읽기 시계 recv_s) ─▶ _consume() ─▶ run_stream
-                                  │                                                  ▲
-                                  │  초점이 없으면 오래된 것부터 버림                   │ 초점을 쥔 동안만 (_episode)
-                                  └  초점이면 자리가 날 때까지 기다림(= 예전의 파이프 역압)   └ 프로세스에 전사 토큰 하나
+ffmpeg (or feed()) ─ reader thread ─▶ Ring (last 30 s, each chunk carries the read clock recv_s) ─▶ _consume() ─▶ run_stream
+                                   │                                                                              ▲
+                                   │  with no focus, the oldest are dropped                                       │ only while it holds the focus (_episode)
+                                   └  with the focus, it waits for room (= the old pipe backpressure)             └ one transcription token per process
 ```
 
-| 결정 | 이유 |
+| Decision | Reason |
 |---|---|
-| 조각이 읽기 시계 값을 물고 링에 든다 | 자막 시각은 발행 시점의 `media_base + audio_s` 인데, 링에 고인 30초를 몰아 해독하면 30초 늦게 찍힌다. 소비자가 `audio_s` 를 조각의 값으로 **대입**하니 시각이 그 조각의 자리다 |
-| 재접속의 시간 기준 변경도 링의 표식(`rebase`)으로 | 링 밖에서 바꾸면 아직 링에 남은 옛 조각에 새 기준이 붙는다 |
-| 초점을 잃으면 `run_stream` 을 끝내고 VAD·이력·정제기는 다음 초점에서 새로 만든다 | 셋은 run_stream 시작을 0 으로 놓은 표본 위치 기준이라 공백을 넘겨 이어 쓰면 선행 구간이 엉뚱한 소리를 가리킨다. 전사기·번역기 껍데기는 남긴다(가중치는 공유) |
-| 옛 초점이 정제까지 끝내고 토큰을 놓은 뒤 새 초점이 잡는다 | 같은 `tc.Model` 을 두 세션이 동시에 돌리는 것은 바인딩이 보장하지 않는다. 그 사이 소리는 새 세션의 링에 있다 |
-| 묶음(Group)은 메모리에만 | 재시작하면 멤버는 어차피 「중단됨」이고, 다시 묶는 것은 사용자가 시킬 일 |
+| A chunk enters the ring carrying the read-clock value | the subtitle time is `media_base + audio_s` at the moment of publishing, but decoding 30 s that pooled in the ring all at once stamps it 30 s late. The consumer **assigns** the chunk's value to `audio_s`, so the time is where that chunk sits |
+| A change of the time base on reconnect also goes through a mark in the ring (`rebase`) | changing it outside the ring attaches the new base to old chunks still sitting in the ring |
+| When the focus is lost, `run_stream` ends and the VAD, the history and the refiner are made anew at the next focus | all three are based on sample positions that put the start of run_stream at 0, so carrying them across a gap makes the lead-in region point at the wrong sound. The transcriber and translator shells are kept (the weights are shared) |
+| The new focus takes the token only after the old focus has finished refining and let it go | two sessions running the same `tc.Model` at once is not guaranteed by the bindings. In the meantime the sound is in the new session's ring |
+| A Group lives in memory only | after a restart the members are "interrupted" anyway, and regrouping is for the user to ask for |
 
-비용: 세션마다 ffmpeg 하나와 30초 float32(≈1.9MB). 전사·번역은 초점 하나뿐이라 예전과 같습니다.
-초점을 옮긴 뒤 첫 자막까지는 옛 세션의 마지막 정제(≤1초 남짓) + 새 세션이 링을 드레인하는 시간입니다.
+Cost: one ffmpeg per session and 30 s of float32 (≈1.9 MB). Transcription and
+translation are one focus only, so they are as before. From moving the focus to
+the first subtitle is the old session's last refinement (≤1 s or so) plus the
+time the new session takes to drain the ring.

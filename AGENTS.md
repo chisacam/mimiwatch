@@ -27,14 +27,50 @@ Solo hobby project; the owner communicates in Korean.
 
 ## Language and style
 
-- **All Korean, in prose, explaining *why*.** Comments, docstrings, commit
-  messages, UI strings, error messages, docs. Only this file is English.
-- Comments typically open with the prior bad behaviour that motivated the code,
-  often citing a measurement. Match that. Use `--` as the dash inside code
-  comments (e.g. `# 예시 설정은 프로그램과 함께 다닙니다 -- 저장소 안, 또는 묶음 안.`).
-- Commit message: one Korean sentence in the `~합니다 / ~고칩니다` register,
-  optionally followed by ` -- ` and the reason. See `git log` for the pattern.
-- Module docstrings are long by design. Do not trim them.
+**English is the default for everything in the source**: docs, commit messages,
+comments, docstrings, error messages. Korean is written *separately* where it is
+wanted — a `.ko.md` companion beside an English doc, or the `ko` entries in the
+UI string table — and never mixed into an English file. The repository is
+public; a reader who does not read Korean should not be shut out of the
+reasoning.
+
+- **Docs: English is the source, Korean is a companion.** `README.md` and
+  `docs/*.md` are English; `README.ko.md` and `docs/*.ko.md` mirror them, with a
+  one-line language switcher under each title. Edit the English file first, then
+  its companion — a pair that disagrees is a bug. Do not start a new
+  Korean-only document.
+- **Comments and docstrings: English prose, explaining *why*.** They typically
+  open with the prior bad behaviour that motivated the code, often citing a
+  measurement. Match that. Use `--` as the dash inside code comments (e.g.
+  `# The example config travels with the program -- inside the repo, or inside the bundle.`).
+  Module docstrings are long by design. Do not trim them.
+- **Commit message: one English sentence in the present tense** ("Fix …",
+  "Add …", "Stop …"), optionally followed by ` -- ` and the reason. Bodies are
+  welcome and often long: they carry the measurement that justified the change,
+  which is the point of them. See `git log` for the pattern.
+- **UI strings never sit inline.** They go through the string table with an
+  English and a Korean entry.
+- Terminology, so docs, comments and UI strings agree:
+
+| Korean | English |
+|---|---|
+| 자막 / 큐 | subtitle / cue |
+| 확정본 | final (line) |
+| 정제본 / 정제 패스 | refined line / refinement pass |
+| 전사 | transcription |
+| 발화 무리 | utterance group |
+| 이어받기 | resume |
+| 대본 모드 / 오버레이 모드 | Script mode / Overlay mode |
+| 멀티뷰 | multiview |
+| 판올림 | update |
+| 묶음 | bundle |
+| 표본 / 절 | sample / section |
+| 문턱 / 손잡이 | threshold / knob |
+| 되쪼개기 | re-split |
+
+`measurements/RESULTS.md` is the one file still Korean-only. It is the
+measurement log the code comments cite by section number, and it is translated
+in its own pass — do not half-convert it.
 
 ## Checks (run before you call anything done)
 
@@ -111,7 +147,7 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 | `ext/` | Chrome MV3 extension: `content.js` overlay + `<video>` clock, `background.js` server I/O, `offscreen.*` tab capture, `panel.js` transcript, `popup.*` |
 | `tests/` | pytest, no models, no network |
 | `bench/` | Measurement and check scripts; `*_check.py` run in CI-equivalent, the rest load models or hit the network |
-| `docs/`, `measurements/RESULTS.md` | Design decisions and the measurements behind them; cite them, do not contradict them silently |
+| `docs/`, `measurements/RESULTS.md` | Design decisions and the measurements behind them; cite them, do not contradict them silently. Each `docs/X.md` has a Korean companion `docs/X.ko.md` — change both |
 
 ## Environment variables the code reads
 

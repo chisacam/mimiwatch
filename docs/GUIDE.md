@@ -1,865 +1,972 @@
-# 사용 안내
+# Usage guide
 
-README 에서 옮겨 온 상세 안내입니다. 설치와 실행은 [README](../README.md) 에,
-코드를 고치는 사람과 에이전트를 위한 규칙은 [AGENTS.md](../AGENTS.md) 에 있습니다.
+*[한국어](GUIDE.ko.md)*
 
-## 쓰는 법
+The detailed guide, moved out of the README. Installing and running are in
+[README](../README.md), and the rules for people and agents who change the code
+are in [AGENTS.md](../AGENTS.md).
 
-화면은 세 칸입니다. **왼쪽은 영상 목록**, 가운데는 플레이어, **오른쪽은
-자막 내역**입니다. 양옆은 각각 접힙니다 — 목록은 `V`, 자막 내역은 `S`.
+## How to use
 
-**왼쪽 「＋ 추가」**에 YouTube 주소나 Twitch 채널 주소, m3u8 주소를 넣습니다.
-라이브인지 녹화본인지는 서버가 판단하므로 고르실 필요가 없습니다. 생 m3u8 은
-라이브인지 알 길이 없어 라이브로 봅니다. 목록의 각 줄에
-마우스를 올리면 🗑 이 나오고, **그 줄의 영상**을 지웁니다.
+The screen has three columns. **The video list is on the left**, the player is
+in the middle, **the subtitle log is on the right**. Both sides collapse — the
+list with `V`, the subtitle log with `S`.
 
-목록에는 유튜브가 주는 썸네일이 함께 뜹니다. 플레이어를 이미 임베드하고
-있으므로 브라우저는 어차피 구글과 통신합니다 — 새로 생기는 통신 상대가
-아닙니다. m3u8을 직접 넣은 세션에는 영상 id가 없어 자리만 비어 있습니다.
+**Put a YouTube URL, a Twitch channel URL or an m3u8 URL into "＋ Add" on the
+left.** The server decides whether it is live or a VOD, so you do not have to
+choose. A bare m3u8 gives no way to know, so it is treated as live. Hovering a
+row in the list shows 🗑, which deletes **that row's video**.
 
-**전사·번역 엔진은 넣을 때 함께 고릅니다.** 추가하는 순간 그 엔진으로
-시작하므로, 낮은 사양이라면 가벼운 쪽을 고르십시오. 위쪽 「관리」에서도
-같은 값을 바꿀 수 있습니다 — 두 자리가 한 값을 가리킵니다.
+The list shows the thumbnails YouTube hands out. The player is already
+embedded, so the browser talks to Google anyway — this is not a new party to
+talk to. A session where you pasted an m3u8 directly has no video id, so the
+slot is simply empty.
 
-시작한 뒤에도 위쪽 진행 표시의 **「중단」**으로 멈춥니다. 전사 도중에도 몇
-초 안에 멈춥니다.
+**The transcription and translation engines are chosen as you add it.** It
+starts with that engine the moment you add it, so pick the light side if the
+machine is modest. "Manage" at the top changes the same values — the two places
+point at one value.
 
-위쪽 막대에는 **지금 보고 있는 것과 지금 돌고 있는 것**만 둡니다 — 제목,
-진행 상태, 그리고 「관리」(내 언어·전사·번역·엔진 관리)입니다.
+Once it has started, **"Stop"** in the progress indicator at the top stops it.
+It stops within a few seconds even mid-transcription.
 
-**원본 언어를 지정하십시오.** 비워 두면 모델이 스스로 판별하는데, 판별이
-흔들리면 문장 하나가 통째로 다른 언어로 나옵니다. 방송 언어를 아신다면
-지정하는 편이 훨씬 안정적입니다.
+The top bar holds **only what you are watching now and what is running now** —
+the title, the progress state, and "Manage" (my language, transcription,
+translation, engine management).
 
-### 장르
+**Specify the source language.** Left empty, the model decides for itself, and
+when that decision wobbles a whole sentence comes out in a different language.
+If you know the language of the stream, specifying it is far more stable.
 
-**번역 프롬프트를 발화의 성격에 맞춥니다.** 기술 발표의 화자와 게임 방송의
-화자는 쓰는 말이 다르므로, 한 벌의 프롬프트로 둘 다 잘하기는 어렵습니다.
-라이브와 녹화본 양쪽에 적용됩니다.
+### Genre
 
-| 장르 | 하는 일 |
+**It fits the translation prompt to the character of the speech.** A speaker at
+a tech talk and a speaker on a game stream use different words, so one set of
+prompts is unlikely to do both well. It applies to live and VOD alike.
+
+| Genre | What it does |
 |---|---|
-| 일반 | 장르를 모르거나 섞여 있을 때 |
-| 기술 발표·세미나 | 전사기가 뭉갠 제품·서비스 이름을 문맥에 맞게 되살립니다 |
-| 게임 방송 | 끝나지 않은 말을 대신 끝내지 않습니다. 감탄사는 감탄사로 둡니다 |
-| 잡담·버라이어티 | 은어와 줄임말은 뜻을 지어내지 않고 음차합니다 |
-| 노래·가사 | 이미지와 어순을 지키고 없는 주어를 넣지 않습니다 |
+| General | When you do not know the genre, or it is mixed |
+| Tech talk · seminar | Restores product and service names the transcriber mangled, to fit the context |
+| Game stream | Does not finish sentences that were left unfinished. Leaves interjections as interjections |
+| Chat · variety | Transliterates slang and abbreviations instead of inventing a meaning |
+| Song · lyrics | Keeps the imagery and the word order, and does not insert a subject that is not there |
 
-효과는 실측했습니다. 같은 모델·같은 63줄에서 47줄이 달라졌고, 발표 자막의
-`RAT fifty three`가 `Route 53`으로 되살아났습니다([실측 25절][m]).
+The effect was measured. With the same model over the same 63 lines, 47 lines
+changed, and `RAT fifty three` in the talk's subtitles came back as `Route 53`
+([measurement section 25][m]).
 
-**직전 자막 세 줄이 함께 번역기로 갑니다.** 자막 한 줄만으로는 뜻이
-정해지지 않는 경우가 많습니다 — `束縛強め。`가 문맥 없이는 "구속 강함",
-문맥과 함께면 "집착 강해"가 됩니다.
+**The three preceding subtitle lines go to the translator along with the
+line.** One subtitle line on its own often does not pin down the meaning —
+`束縛強め。` without context is "restraint is strong", and with context it is
+"so possessive".
 
-고른 장르는 전사 결과에 남습니다. 다른 엔진으로 다시 번역할 때 되묻지
-않으며, 영상을 열면 그 영상의 장르가 선택기에 다시 뜹니다.
+The genre you chose stays with the transcription result. It is not asked again
+when you re-translate with a different engine, and opening a video shows that
+video's genre in the picker again.
 
 [m]: ../measurements/RESULTS.md
 
-### 라이브 선택지
+### Live options
 
-**콘텐츠 유형** — 발화를 얼마나 자주 끊을지 정합니다. 여러 사람이 겹쳐
-말하면 짧게 끊어야 누락이 줄어듭니다. **장르와는 다른 축입니다** — 이쪽은
-끊는 간격이고, 장르는 옮기는 어휘입니다.
+**Content type** — decides how often speech is cut. When several people talk
+over each other, cutting short reduces what is dropped. **It is a different
+axis from genre** — this one is the cutting interval, genre is the vocabulary
+it is carried into.
 
-| 유형 | 최대 구간 | 쓸 곳 |
+| Type | Max segment | Where to use |
 |---|---|---|
-| 발표·강연 | 12초 | 한 사람이 문장 사이에 쉼 |
-| 대담·인터뷰 | 6초 | 번갈아 말하고 쉼이 있음 |
-| 일반 방송 | 4초 | 한두 사람, 쉼이 짧음 |
-| 합방·다인 대화 | 3초 | 발화가 겹침 |
+| Talk · lecture | 12 s | One person pausing between sentences |
+| Panel · interview | 6 s | Taking turns, with pauses |
+| General stream | 4 s | One or two people, short pauses |
+| Collab · group conversation | 3 s | Speech overlaps |
 
-**정제본으로 다듬기** — 켜면 발화 한 무리가 끝나기를 기다렸다 합쳐서 다시
-받아 적습니다. 문맥이 길어져 정확해지지만, 자막이 늦게 자리를 잡고 이미 뜬
-줄이 바뀝니다. 짧은 말이 빠르게 오가는 방송에서는 꺼서 문장 단위로 바로
-내보내는 편이 따라가기 쉽습니다. 기본값은 켬입니다.
+**Polish with refined lines** — switched on, it waits for one utterance group
+to finish, joins it and transcribes it again. The context is longer so it is
+more accurate, but the subtitle settles late and a line that is already up
+changes. On a stream where short remarks come and go fast, switching it off and
+sending each sentence out immediately is easier to follow. The default is on.
 
-### 화면 조작
+### Screen controls
 
 | | |
 |---|---|
-| `S` 키 | 자막 내역 패널 접기·펼치기 |
-| `V` 키 | 영상 목록 접기·펼치기 |
-| `F` 키 / 「⛶ 전체화면」 | 플레이어를 전체화면으로 |
-| 자막 모드 | 원문만 / 번역만 / 둘 다 |
-| 자막 자리 | **자막을 끌어서 옮깁니다.** 「⤾ 위치 되돌리기」로 아래 가운데로 |
-| 오프셋 | 라이브 자막의 미세 조정 (녹화본은 자동 정렬이라 불필요) |
-| 상태줄 | 지금 실제로 도는 전사 엔진 이름이 나옵니다 |
-| 「⊞ 타일 추가」 | 보고 있는 방송 옆에 다른 라이브를 붙입니다 (멀티뷰, 아래) |
-| `1`~`4` 키 / 타일 클릭 | 멀티뷰에서 소리·자막의 초점을 옮깁니다 |
+| `S` key | Collapse/expand the subtitle log panel |
+| `V` key | Collapse/expand the video list |
+| `F` key / "⛶ Fullscreen" | Player to fullscreen |
+| Subtitle mode | Source only / translation only / both |
+| Subtitle position | **Drag the subtitle to move it.** "⤾ Reset position" puts it back at bottom centre |
+| Offset | Fine adjustment of live subtitles (unnecessary for VODs, which align automatically) |
+| Status line | Shows the name of the transcription engine actually running now |
+| "⊞ Add tile" | Attaches another live stream next to the one you are watching (multiview, below) |
+| `1`~`4` keys / clicking a tile | Moves the focus of sound and subtitles in multiview |
 
-**전사 엔진은 진행 중에도 바꿀 수 있습니다.** 「관리」에서 고르면 그 자리에서
-갈아 끼웁니다 — 이미 받아 적은 자막은 그대로 남고 이후만 새 엔진이 맡습니다.
-번역 엔진과 같은 규칙입니다.
+**The transcription engine can be changed while it is running.** Pick one in
+"Manage" and it is swapped in place — the subtitles already transcribed stay,
+and only what comes after is handled by the new engine. Same rule as the
+translation engine.
 
-예전에는 세션을 다시 시작해야 했는데, 그러면 세션 id가 바뀌고 자막은 세션
-id로 저장되므로 그때까지의 자막 내역이 사라졌습니다. 한 영상 안에서 자막은
-이어져야 합니다.
+It used to require restarting the session, and that changed the session id;
+since subtitles are stored by session id, the subtitle log up to then
+disappeared. Within one video the subtitles have to be continuous.
 
-새 엔진이 그 방송의 언어를 지원하지 않으면(영어 전용 모델에 일본어 방송처럼)
-바꾸지 않고 그렇게 알려 줍니다. 쓰던 엔진이 그대로 남습니다.
+If the new engine does not support that stream's language (a Japanese stream on
+an English-only model, say), it is not changed and it says so. The engine you
+were using stays.
 
-**전체화면은 유튜브 것이 아니라 우리 것을 씁니다.** 유튜브의 전체화면
-단추는 iframe을 키우는데, 브라우저는 전체화면 요소의 하위 트리만 그리므로
-그 밖에 있는 자막이 통째로 사라집니다. 그래서 그 단추를 지우고(`fs=0`),
-영상과 자막을 함께 담은 상자를 키우는 단추를 대신 두었습니다. 자막 크기는
-화면이 커진 만큼 같이 커집니다.
+**Fullscreen uses ours, not YouTube's.** YouTube's fullscreen button enlarges
+the iframe, and the browser paints only the subtree of the fullscreen element,
+so the subtitles outside it vanish entirely. So that button is removed (`fs=0`)
+and a button that enlarges the box holding video and subtitles together is put
+there instead. The subtitle size grows along with the screen.
 
-전체화면에서도 **자막 모드와 글자 크기·배경을 바꾸고 자막을 끌어 옮길 수
-있습니다.** 창에서 고른 것과 같은 값을 공유하므로 어느 쪽에서 바꾸든 함께
-움직입니다. 자막 내역 패널만 상자 밖이라 보이지 않습니다.
+In fullscreen too you can **change the subtitle mode, font size and background,
+and drag the subtitle around.** It shares the same values as what you chose in
+the window, so changing either side moves both. Only the subtitle log panel is
+outside the box and therefore not visible.
 
-**자막 자리는 비율로 적어 둡니다** — 상자 왼쪽에서 잰 가운데의 가로 비율과,
-바닥에서 잰 아래끝의 세로 비율입니다. 픽셀로 적으면 창에서 정한 자리가
-전체화면에서는 구석이 됩니다. 글자 크기를 키워도 아래끝은 제자리에 남습니다.
+**The subtitle position is recorded as ratios** — the horizontal ratio of the
+centre measured from the left of the box, and the vertical ratio of the bottom
+edge measured from the floor. Recorded in pixels, the spot you chose in the
+window becomes a corner in fullscreen. Enlarging the font leaves the bottom
+edge where it was.
 
-예전의 「위치」 슬라이더는 없앴습니다. 끌기와 슬라이더가 같은 값을 쓰면서도
-범위가 다릅니다 — 슬라이더는 0~40%로 고정인데 끌기의 한계는 그때 자막
-덩어리의 높이에 따라 매번 달라지고, 가로는 슬라이더가 아예 말할 수
-없습니다. 값을 쓰는 곳을 하나로 두고, 되돌리는 단추만 남겼습니다.
+The old "Position" slider is gone. Dragging and the slider used the same value
+but with different ranges — the slider was fixed at 0–40% while the limit for
+dragging changes every time with the height of the subtitle block at that
+moment, and horizontally the slider could say nothing at all. There is one
+place that writes the value now, and only the button that resets it is left.
 
-조절기는 **오른쪽 가장자리에 세로로** 서고 2.5초 뒤 사라집니다. 자막은
-화면 아래 가운데에 있으므로 서로 겹치지 않습니다. 배경도 옅게 두어 떠 있는
-동안에도 영상이 비칩니다.
+The controls stand **vertically at the right edge** and disappear after 2.5
+seconds. The subtitles sit at the bottom centre of the screen, so the two do
+not overlap. The background is kept faint as well, so the video shows through
+while they float there.
 
-**다시 부르려면 커서를 오른쪽 가장자리 가운데 높이로 가져가십시오.** 영상
-위의 마우스 움직임은 우리에게 오지 않습니다 — iframe 안은 교차 출처라
-이벤트가 넘어오지 않기 때문입니다. 그래서 그 자리에만 받는 띠를 얹어
-두었습니다. 자막과 유튜브 제어줄은 둘 다 비켜 갑니다.
+**To call them back, move the cursor to the right edge at mid height.** Mouse
+movement over the video does not reach us — inside the iframe is a different
+origin, so the events do not cross. So a strip that receives them is laid over
+just that spot. The subtitles and YouTube's control bar are both given a wide
+berth.
 
-**커서는 감추지 않습니다.** 커서가 iframe 위에 있는 동안 그 모양은 유튜브
-문서가 정하므로 바깥에서 손댈 수 없습니다. 투명한 막으로 커서를 가져오는
-방법을 시도했지만 듣지 않았습니다 — 커서 모양은 포인터가 움직일 때 다시
-평가되는데, 멈춘 뒤에 막을 덮으면 다음 움직임까지 반영되지 않고 그 움직임이
-곧 막을 걷습니다.
+**The cursor is not hidden.** While the cursor is over the iframe its shape is
+decided by YouTube's document, so it cannot be touched from outside. Bringing
+the cursor onto a transparent layer was tried and did not work — the cursor
+shape is re-evaluated when the pointer moves, and covering it with a layer
+after the pointer has stopped is not reflected until the next movement, and
+that movement immediately takes the layer away.
 
-### 멀티뷰
+### Multiview
 
-합방처럼 여러 시점을 함께 보고 싶을 때, **「⊞ 타일 추가」**로 지금 보는 방송
-옆에 다른 라이브를 붙입니다 — YouTube, Twitch, m3u8 어느 것이든, 넷까지.
-**목록의 줄을 플레이어 영역에 끌어다 놓아도** 붙습니다 — 받는 중인 방송은
-그대로, 멈춘 방송은 같은 세션으로 이어받아 대기 타일로 들어옵니다. 배치는
-상하·좌우·1+2·1+3·2×2 중에서 고르고(둘일 때 기본은 상하 — 가로로 넓은 방송은
-그쪽이 크게 보입니다), 1+2/1+3 에서는 초점 타일이 **위의 큰 자리**를, 나머지가
-아래 한 줄을 차지합니다. 타일의 띠나 덮개를 끌어 다른 타일에 놓으면 자리가
-바뀝니다.
+When you want to watch several viewpoints together, as with a collab, **"⊞ Add
+tile"** attaches another live stream next to the one you are watching —
+YouTube, Twitch or m3u8, any of them, up to four. **Dragging a row from the
+list onto the player area** attaches it too — a stream that is being received
+comes in as it is, a stopped one is resumed as the same session and comes in as
+a waiting tile. The layout is chosen from vertical, horizontal, 1+2, 1+3 and
+2×2 (with two, the default is vertical — a stream that is wide horizontally
+looks bigger that way), and in 1+2/1+3 the focused tile takes **the large slot
+on top** while the rest take one row below. Dragging a tile's strip or cover
+onto another tile swaps their places.
 
-**소리와 자막은 초점 타일 하나만 냅니다.** 초점이 아닌 타일을 누르거나 `1`~`4`
-키를 치면 초점이 옮겨 가고, 소리·화면 위 자막·오른쪽 자막 내역·위쪽 상태줄이
-함께 따라옵니다. 초점 타일은 플레이어 조작(재생·일시정지·볼륨)이 그대로 되고,
-나머지는 투명한 덮개가 덮고 있어 누르면 초점이 됩니다.
+**Sound and subtitles come from the focused tile only.** Clicking a tile that
+is not focused, or pressing the `1`~`4` keys, moves the focus, and the sound,
+the on-screen subtitles, the subtitle log on the right and the status line at
+the top all follow. The focused tile takes player controls (play, pause,
+volume) as usual; the rest are under a transparent cover, and clicking makes
+them the focus.
 
-서버는 **초점 방송만 받아 적습니다.** 나머지는 소리만 계속 받아 최근 30초를
-들고 있다가, 초점이 오면 그 30초부터 받아 적기 시작합니다 — 그래서 초점을
-옮긴 직후 몇 초 안에 직전 대화가 자막으로 뜹니다. 초점이 아니었던 동안의
-자막은 없습니다(받아 적지 않았으니까요). 전사 모델은 한 벌을 나눠 쓰므로
-방송이 넷이라도 무거워지는 것은 ffmpeg 넷과 30초짜리 링 넷뿐입니다.
+The server **transcribes the focused stream only.** The rest keep receiving
+sound and hold the last 30 seconds, and when the focus arrives transcription
+starts from those 30 seconds — which is why, within a few seconds of moving the
+focus, the conversation just before appears as subtitles. There are no
+subtitles for the time it was not focused (it was not being transcribed). The
+transcription model is shared as one copy, so even with four streams the only
+thing that gets heavier is four ffmpegs and four 30-second rings.
 
-타일의 ✕ 는 그 방송의 자막 수신을 멈추고 타일을 닫습니다. 목록에서 묶음의
-멤버는 ⊞ 표시를 달고, 어느 멤버를 눌러도 묶음이 통째로 열립니다. 새로고침해도
-묶음과 초점은 서버에 있으므로 그대로 돌아오지만, **서버를 재시작하면 묶음은
-잊고** 멤버 세션만 「중단됨」으로 남습니다 — 다시 묶는 것은 사용자가 할 일입니다.
+A tile's ✕ stops receiving that stream's subtitles and closes the tile. In the
+list, members of a bundle carry a ⊞ mark, and clicking any member opens the
+whole bundle. A refresh brings the bundle and the focus back, because they live
+on the server, but **restarting the server forgets the bundle** and leaves only
+the member sessions as "interrupted" — re-bundling is the user's job.
 
-Twitch 는 공식 임베드 플레이어를 씁니다. 그 플레이어는 부모 페이지가
-`localhost` 나 `127.0.0.1` 이어야 열리므로, 화면은 늘 그 둘 중 하나로 여십시오
-(서버가 그렇게만 열립니다). 생 m3u8 은 hls.js 로 틉니다 — 방송 서버가 다른
-출처의 접근(CORS)을 막으면 화면은 열리지 않지만, 자막은 서버가 ffmpeg 으로
-받아 적으므로 계속 쌓입니다.
+Twitch uses the official embed player. That player only opens if the parent
+page is `localhost` or `127.0.0.1`, so always open the screen as one of those
+two (the server only opens that way). A bare m3u8 is played with hls.js — if
+the stream server blocks cross-origin access (CORS) the picture does not open,
+but the subtitles keep piling up, because the server receives it with ffmpeg.
 
-### 지난 방송
+### Past streams
 
-라이브 세션과 자막은 데이터베이스에 남습니다. **탭을 새로고침하면 보던
-방송으로 그대로 돌아오고**, 서버를 재시작해도 받아 적은 자막은 사라지지
-않습니다. 목록에서 지난 세션을 골라 다시 읽을 수 있습니다.
+Live sessions and subtitles stay in the database. **Refreshing the tab brings
+you back to the stream you were watching**, and restarting the server does not
+lose the subtitles that were transcribed. You can pick a past session from the
+list and read it again.
 
-멈춘 세션을 열면 위쪽에 **「이어받기」**가 뜹니다 — 누르면 **같은 세션에**
-이어 붙이므로 그때까지의 자막이 그대로 남고 뒤에 계속 쌓입니다. 서버가
-죽어 「중단됨」이 된 것도, 수신이 끊긴 것도, **사용자가 스스로 「중단」한
-것도** 마찬가지입니다 — 라이브는 잠깐 멈추고 돌아오는 일이 잦고, 그때
-새 세션을 시작하면 자막이 두 벌로 갈립니다. 목록의 줄에 마우스를 올리면
-나오는 **▶** 도 같은 일을 합니다. 확장 팝업에도 같은 단추가 있습니다.
+Opening a stopped session shows **"Resume"** at the top — pressing it appends
+**to the same session**, so the subtitles up to then stay and new ones keep
+piling up after them. That holds for a session left "interrupted" because the
+server died, for one whose reception was cut off, and **for one the user
+stopped themselves** — a live stream often pauses briefly and comes back, and
+starting a new session then splits the subtitles into two sets. The **▶** that
+appears when you hover a row in the list does the same thing. The extension
+popup has the same button.
 
-방송이 이미 끝난 세션만 이어받을 것이 없습니다. 그때는 **「⟳ 전체 영상
-전사」**가 대신 뜹니다 — 유튜브에 녹화본으로 남은 그 영상을 통째로 다시
-전사합니다(라이브 자막은 그대로 두고 녹화본 항목이 따로 생깁니다).
+Only a session whose stream has already ended has nothing to resume. **"⟳
+Transcribe the whole video"** appears instead then — it re-transcribes that
+video, which YouTube kept as a VOD, from end to end (the live subtitles are
+left alone and a separate VOD entry is created).
 
-**이어받기는 지금 라이브 끝에서 시작합니다.** 멈춘 자리까지 되감아 메우지
-않습니다 — 그러면 이어받기가 늦을수록 그 사이를 먼저 받아 적느라 지금 보는
-자리의 자막이 한참 뒤에나 나오고, 전사 엔진이 느리면 더 늦습니다. 대신 빠진
-구간이 얼마인지 자막 내역에 한 줄로 적습니다.
+**Resume starts at the current live edge.** It does not rewind to fill in up to
+where it stopped — that would mean the later you resume the longer the wait
+before the subtitles for the place you are watching arrive, because the gap is
+transcribed first, and with a slow transcription engine it is later still.
+Instead it writes one line in the subtitle log saying how long the gap was.
 
-    ⋯ 서버가 멈춘 사이 약 42초를 받지 못했습니다 ⋯
+    ⋯ about 42 s went unreceived while the server was down ⋯
 
-조용한 구멍을 남기지 않는다는 원칙은 그대로입니다. 세션 안에서 수신이 잠깐
-끊겨 스스로 다시 붙는 경우만 되감습니다 — 그때는 끊긴 것이 몇 초라 DVR 창
-안에서 바로 이어집니다.
+The principle of not leaving a silent hole is unchanged. Only the case where
+reception is briefly cut within a session and reattaches by itself is rewound —
+the cut is a few seconds then, so it picks up right away inside the DVR window.
 
-**자동으로 이어받지는 않습니다.** 서버를 켰다고 방송을 다시 받기 시작하는
-것은 눌러서 시킬 일입니다.
+**It does not resume automatically.** Starting to receive a stream again
+because the server came up is something to be told to do by pressing.
 
-### 다시 전사하기
+### Re-transcribing
 
-목록의 녹화본 줄에 마우스를 올리면 **⟳** 이 나옵니다. 누르면 「영상 추가」
-대화상자가 그 주소로 열리고, 거기서 전사 엔진·언어·장르를 고른 뒤 「시작」을
-누르면 다시 전사합니다. **같은 엔진으로도 됩니다** — 예전에는 다시 전사할
-길이 같은 주소를 다시 붙여 넣는 것뿐이라, 엔진을 바꿔야만 되는 것처럼
-보였습니다. 글자가 그대로인 줄은 이미 만든 번역과 손편집을 물려받습니다.
+Hovering a VOD row in the list shows **⟳**. Pressing it opens the "Add video"
+dialog with that URL, and choosing the transcription engine, language and genre
+there and pressing "Start" transcribes it again. **The same engine works
+too** — before, the only way to re-transcribe was to paste the same URL again,
+which made it look as if you had to change the engine. Lines whose text is
+unchanged inherit the translation already made and the hand edits.
 
-### 끝난 방송은 녹화본처럼 봅니다
+### A stream that has ended is watched like a VOD
 
-유튜브는 라이브가 끝나면 그것을 녹화본으로 남깁니다. 그 세션을 다시 열면
-자막이 **재생 위치를 따라갑니다** — 자막 내역에서 줄을 눌러 그 자리로 가면
-거기서부터 자막이 뜨고, 오른쪽 자막 내역도 지금 줄을 가운데에 맞춥니다.
+YouTube keeps a live stream as a VOD once it ends. Open that session again and
+the subtitles **follow the playback position** — press a line in the subtitle
+log to go to that spot and the subtitles appear from there, and the subtitle log
+on the right centres the current line.
 
-받는 중에는 그렇게 하지 않습니다. 자막은 말보다 몇 초 늦게 도착하므로,
-시각으로 맞추면 아무것도 보이지 않습니다. 그때는 가장 최근에 알아들은 줄을
-다음 줄이 올 때까지 붙잡아 둡니다. **같은 세션이라도 받는 중인지 끝났는지에
-따라 규칙이 다릅니다.**
+While it is being received it does not do that. Subtitles arrive a few seconds
+behind the speech, so matching by time shows nothing. It holds the most
+recently recognised line until the next one arrives instead. **Even in the same
+session the rule differs depending on whether it is being received or has
+ended.**
 
-라이브 자막의 시각은 방송 시작 기준이고, 유튜브의 녹화본도 같은 기준이라
-그대로 맞습니다.
+Live subtitle times are relative to the start of the stream, and YouTube's VOD
+uses the same reference, so they match as they are.
 
-### 자막 고치기
+### Editing subtitles
 
-전사는 틀립니다. 잡음을 말로 듣고, 고유명사를 엉뚱하게 적고, 번역은 그 위에서
-한 번 더 어긋납니다.
+Transcription gets things wrong. It hears noise as speech, writes proper nouns
+wildly, and the translation goes wrong once more on top of that.
 
-자막 내역 머리 아래에 **모드**가 있습니다. 줄을 눌렀을 때 무슨 일이 일어날지를
-정합니다.
+Under the subtitle log header there is a **mode**. It decides what happens when
+you press a line.
 
-| 모드 | 줄을 누르면 |
+| Mode | Pressing a line |
 | --- | --- |
-| **읽기** (기본) | 영상이 그 지점으로 이동합니다 — 예전 그대로 |
-| **✎ 편집** | 그 자리에서 원문·번역·시각을 고칩니다 |
-| **⟳ 번역** | 줄을 골라 다시 번역합니다 |
+| **Read** (default) | Moves the video to that point — as before |
+| **✎ Edit** | Edits the source, translation and time in place |
+| **⟳ Translate** | Selects lines to translate again |
 
-읽기 모드에서는 편집 단추가 아예 보이지 않습니다. 자막 내역의 본래 일은 읽는
-것이고, 읽다가 잘못 눌러서 편집기가 열리면 안 됩니다. 모드를 읽기로 되돌리면
-열려 있던 편집기는 닫힙니다.
+In read mode the edit button is not shown at all. The subtitle log's real job
+is reading, and an editor must not open because you mispressed while reading.
+Returning the mode to read closes an editor that was open.
 
-모드는 저장하지 않습니다. 늘 읽기로 시작합니다.
+The mode is not saved. It always starts as read.
 
-| 칸 | |
+| Field | |
 | --- | --- |
-| 원문 | 받아 적은 말 |
-| 번역 | 지금 고른 번역 엔진의 결과 |
-| 시각 | 이 줄이 뜨는 시각(초) |
-| 🗑 | 이 줄을 지웁니다 |
+| Source | The words as transcribed |
+| Translation | The result from the translation engine currently chosen |
+| Time | The time (in seconds) this line appears |
+| 🗑 | Deletes this line |
 
-`⌘/Ctrl+Enter` 저장, `Esc` 취소. 그냥 `Enter` 는 줄바꿈입니다 — 자막 한 줄이
-늘 한 문장은 아닙니다.
+`⌘/Ctrl+Enter` saves, `Esc` cancels. Plain `Enter` is a line break — a subtitle
+line is not always one sentence.
 
-**원문을 고쳐도 번역은 자동으로 다시 하지 않습니다.** 대신 그 번역이 옛
-문장의 것이라고 표시합니다.
+**Editing the source does not translate again automatically.** It marks that
+translation as belonging to the old sentence instead.
 
-> 뭔가 긴장되기 시작했어. 어떡하지.　**⟲ 원문과 다름**
+> I'm starting to get nervous. What do I do.　**⟲ Differs from source**
 
-번역까지 손으로 맞추면 표시가 내려갑니다. 사람이 고친 번역에는 표시가 남아
-있어서, 나중에 뭉텅이 재번역을 돌려도 그 줄은 덮지 않습니다.
+Fixing the translation by hand as well takes the mark down. A translation a
+person edited keeps its mark, so a bulk re-translation later does not overwrite
+that line.
 
-**시각을 옮기면 길이가 따라갑니다.** 시작만 옮기면 끝이 뒤에 남아 「끝이
-시작보다 앞선」 자막이 되고, SRT 도구는 그런 줄을 버리거나 파일을 통째로
-거부합니다.
+**Moving the time carries the duration with it.** Moving only the start leaves
+the end behind and makes a subtitle whose "end precedes the start", and SRT
+tools either drop such a line or refuse the whole file.
 
-라이브를 받는 중에 고치면 자막 내역 창에도 바로 반영됩니다.
+Editing while a live stream is being received is reflected in the subtitle log
+window immediately.
 
-### 다시 번역하기
+### Re-translating
 
-번역이 어긋난 대목만 다시 돌릴 수 있습니다. **⟳ 번역** 모드에서 줄을 고릅니다.
+You can run just the passages where the translation went wrong. Select lines in
+**⟳ Translate** mode.
 
-- 누르면 그 줄이 들어오고, 다시 누르면 빠집니다
-- **shift**로 누르면 직전에 고른 줄부터 여기까지 한꺼번에 (파일 탐색기와 같습니다)
-- 「전체」 / 「해제」
+- Pressing takes the line in, pressing again takes it out
+- Pressing with **shift** takes everything from the previously selected line to
+  here at once (the same as a file explorer)
+- "All" / "None"
 
-아래 띠에 몇 줄인지 나오고 「⟳ 재번역」으로 시작합니다. 지금 고른 번역 엔진과
-장르가 그대로 쓰입니다 — 엔진을 바꿔 같은 대목을 다시 돌려 비교할 수 있습니다.
+The strip below shows how many lines, and "⟳ Re-translate" starts it. The
+translation engine and genre currently chosen are used as they are — you can
+change the engine and run the same passage again to compare.
 
-**손으로 고친 번역은 건너뜁니다.** 그 줄에는 ✎ 가 붙고, 고르는 동안 「손으로
-고친 N줄은 건너뜁니다」라고 미리 알려 줍니다. 뭉텅이로 돌리다가 맞춰 둔
-번역을 덮으면 되돌릴 방법이 없습니다.
+**Translations edited by hand are skipped.** Those lines carry a ✎, and while
+you select it tells you in advance: "N hand-edited lines will be skipped". If a
+bulk run overwrites a translation you had fixed, there is no way back.
 
-원문을 고쳐 **⟲ 원문과 다름**이 붙은 줄은 다시 번역하면 표시가 걷힙니다.
-새 번역은 지금 원문의 것이니까요.
+A line that carries **⟲ Differs from source** because you edited the source has
+the mark cleared when it is translated again. The new translation belongs to the
+current source, after all.
 
-라이브를 받는 중에도 됩니다. 다시 번역한 줄은 자막 내역 창에도 바로 닿습니다.
+It works while a live stream is being received too. A re-translated line
+reaches the subtitle log window immediately as well.
 
-### 내보내기
+### Export
 
-자막 내역 머리의 **⤓ 내보내기** 로 쌓인 자막을 파일로 받습니다. 녹화본과
-라이브 모두 됩니다.
+**⤓ Export** in the subtitle log header takes the accumulated subtitles as a
+file. It works for VODs and live alike.
 
-| 형식 | 쓰임 | 못 받은 구간 안내 |
+| Format | Use | Missing-segment notes |
 | --- | --- | --- |
-| SRT | 영상 편집기·플레이어 | 빠짐 |
-| WebVTT | 웹 플레이어 | 빠짐 |
-| 텍스트 | 타임스탬프를 붙여 읽기 | 남음 |
-| JSON | 다시 불러오기·재번역 | 남음 |
+| SRT | Video editors · players | Dropped |
+| WebVTT | Web players | Dropped |
+| Text | Reading with timestamps attached | Kept |
+| JSON | Re-importing · re-translating | Kept |
 
-담을 것은 화면과 같은 축입니다 — 둘 다 / 번역만 / 원문만. 번역이 없는 줄은
-「번역만」에서도 원문으로 남습니다. 빼 버리면 그 발화가 아예 없었던 것이
-되니까요.
+What to include is the same axis as on screen — both / translation only /
+source only. A line with no translation stays as the source even under
+"translation only". Dropping it would make that utterance never have happened.
 
-**라이브 자막에는 끝 시각이 없습니다.** 발화가 끝나는 순간을 아는 것은
-VAD이고, 자막은 그보다 늦게 시작 시각만 달고 확정됩니다. SRT/VTT는 끝
-시각을 요구하므로 지어 줍니다 — 다음 자막이 시작할 때까지, **최대 6초**.
-바짝 붙은 줄은 최소 0.8초를 줍니다(0.2초짜리 자막은 읽을 수 없고 도구에
-따라 버립니다). 녹화본은 구간을 실제로 재어 두었으므로 그대로 씁니다.
+**Live subtitles have no end time.** What knows the moment speech ends is the
+VAD, and the subtitle is finalised later carrying only a start time. SRT/VTT
+demand an end time, so one is invented — until the next subtitle starts, **6
+seconds at most**. Lines packed tightly together get at least 0.8 seconds (a
+0.2-second subtitle cannot be read and some tools drop it). VODs have their
+ranges actually measured, so those are used as they are.
 
-주소로도 됩니다.
+It works by URL too.
 
 ```
-/api/export?id=live:<세션>&fmt=srt&view=both
-/api/export?id=<영상id>&fmt=txt&view=tr
+/api/export?id=live:<session>&fmt=srt&view=both
+/api/export?id=<video id>&fmt=txt&view=tr
 ```
 
-## 엔진 교체
+## Swapping engines
 
-⚙ 단추로 엽니다.
+Open it with the ⚙ button.
 
-**전사** — 기본은 로컬 Whisper입니다. OpenAI 호환 `/v1/audio/transcriptions`
-엔드포인트를 추가할 수도 있습니다. 녹화본은 몇 분짜리 창으로 잘라 보내고,
-라이브는 발화 한 조각(2~12초)마다 보냅니다 — 라이브에서는 왕복 시간만큼
-자막이 늦어지는 대신, 무료 로컬 모델보다 나은 인식을 비용을 내고 살 수
-있습니다. 진행 중에도 로컬↔원격을 갈아 끼울 수 있습니다.
+**Transcription** — the default is local Whisper. You can also add an
+OpenAI-compatible `/v1/audio/transcriptions` endpoint. VODs are cut into
+windows of a few minutes and sent, live sends one chunk of speech (2–12 s) at a
+time — in live the subtitle is late by the round trip, but in exchange you can
+pay for better recognition than a free local model. Local↔remote can be swapped
+while it is running.
 
-**번역** — 기본은 로컬 Gemma입니다. OpenAI 호환
-`/v1/chat/completions` 엔드포인트를 추가하면 더 큰 모델을 다른 기계에서
-돌릴 수 있습니다. 원격이 실패하면 자동으로 로컬로 되돌아가고, 어느 쪽이
-답했는지 기록에 남습니다.
+**Translation** — the default is local Gemma. Adding an OpenAI-compatible
+`/v1/chat/completions` endpoint lets a bigger model run on another machine. If
+the remote fails it falls back to local automatically, and which side answered
+is recorded.
 
-설정은 `backends.json`에 있습니다. 직접 고쳐도 됩니다.
+The settings are in `backends.json`. Editing it directly is fine.
 
-**새 기본 엔진은 저절로 들어옵니다.** `backends.json`은 첫 실행 때 한 번
-만들어지고 그 뒤로는 덮어쓰지 않습니다 — 실제 주소와 API 키가 들어 있기
-때문입니다. 그래서 나중에 추가된 기본 엔진이 기존 사용자에게 닿지 않는
-문제가 있었습니다. 이제는 **한 번도 들여온 적 없는 것만** 골라 넣습니다.
-지운 엔진은 다시 살아나지 않습니다(`seeded` 목록에 남습니다).
+**New default engines come in by themselves.** `backends.json` is created once
+on first run and is not overwritten after that — it holds real endpoints and API
+keys. That created the problem of default engines added later never reaching
+existing users. Now **only the ones never seeded before** are picked and put in.
+An engine you deleted does not come back to life (it stays in the `seeded`
+list).
 
-서버를 다시 시작할 필요는 없습니다. 설정은 요청마다 다시 읽습니다 —
-브라우저를 새로고침하면 나타납니다.
+There is no need to restart the server. The settings are re-read on every
+request — refresh the browser and it appears.
 
-### CPU로 돌리기
+### Running on the CPU
 
-**기본은 GPU입니다.** 전사는 `auto`로 있는 것 중 가장 빠른 장치를 고르고,
-번역은 모든 층을 GPU에 올립니다.
+**The default is GPU.** Transcription picks the fastest device available with
+`auto`, and translation puts every layer on the GPU.
 
-낮은 사양에서는 CPU가 나을 수 있습니다. 내장 그래픽은 시스템 메모리를
-CPU와 나눠 쓰고 대역폭도 좁아, 코어가 넉넉한 노트북에서는 CPU 쪽이 더
-빠르거나 최소한 다른 일을 방해하지 않습니다. 전사와 번역이 같은 작은
-iGPU를 다투는 것도 피할 수 있습니다.
+On a modest machine the CPU may be better. Integrated graphics share system
+memory with the CPU and have narrow bandwidth, so on a laptop with cores to
+spare the CPU side is faster, or at least does not get in the way of other
+work. It also avoids transcription and translation fighting over the same small
+iGPU.
 
-`backends.json`의 각 항목에 `device`를 적습니다.
+Write `device` into each entry in `backends.json`.
 
 ```json
 { "id": "tcpp-best", "backend": "tcpp", "device": "cpu" }
 { "id": "local-gemma", "backend": "gemma", "device": "cpu" }
 ```
 
-| 값 | 뜻 |
+| Value | Meaning |
 |---|---|
-| `auto` (기본) | 있는 것 중 가장 빠른 장치. GPU가 있으면 GPU |
-| `cpu` | GPU가 있어도 CPU로 |
-| `vulkan` `metal` `cuda` `rocm` | 딱 집어 지정 (없으면 `auto`로 물러납니다) |
+| `auto` (default) | The fastest device available. GPU if there is a GPU |
+| `cpu` | CPU even if there is a GPU |
+| `vulkan` `metal` `cuda` `rocm` | Pinned exactly (falls back to `auto` if absent) |
 
-**스레드 수는 `device`에 맞춰 자동으로 정해집니다** — GPU면 4, CPU면 논리
-코어의 절반(최대 8)입니다. `threads`를 직접 적으면 그것이 우선합니다.
+**The thread count is decided automatically to match `device`** — 4 for GPU,
+half the logical cores (8 at most) for CPU. Writing `threads` yourself takes
+precedence.
 
-전사만 잠깐 CPU로 돌려 보려면 파일을 고치지 않고 환경변수도 됩니다.
+To try transcription on the CPU for a moment without editing the file, an
+environment variable works too.
 
 ```sh
 TRANSCRIBE_BACKEND=cpu ./run.sh
 ```
 
-**속도 감각** — 이 기계(Apple M5 Pro)에서 20초 오디오를 재면 Metal이
-57배속, CPU 8스레드가 7.7배속입니다. **전사 결과는 글자까지 같았습니다.**
-CPU가 느릴 뿐 품질을 내주는 것은 아니고, 라이브에 필요한 1배속과는 여전히
-차이가 큽니다. 다만 이 배수는 기계마다 다르므로 그쪽에서 다시 재십시오.
+**A sense of the speed** — measuring 20 seconds of audio on this machine (Apple
+M5 Pro), Metal is 57× realtime and the CPU with 8 threads is 7.7×. **The
+transcription result was identical down to the character.** The CPU is only
+slower, it does not trade quality away, and it is still far from the 1× that
+live needs. These multiples differ from machine to machine, though, so measure
+again on yours.
 
 ```sh
 .venv/bin/python bench/asr_device.py
 ```
 
-무언가 안 될 때는 `bench/doctor.py`가 준비물·백엔드·모델 적재·주소 해석을
-한 번에 찍어 줍니다.
+When something does not work, `bench/doctor.py` prints the prerequisites,
+backends, model loading and URL resolution in one go.
 
 ```sh
 .venv/bin/python bench/doctor.py
 .venv/bin/python bench/doctor.py "https://www.youtube.com/live/..."
 ```
 
-M2M-100은 이 설정과 무관합니다. CTranslate2를 CPU로 고정해 씁니다.
+M2M-100 is unrelated to this setting. It uses CTranslate2 pinned to the CPU.
 
-### 모델은 상주합니다
+### Models stay resident
 
-전사·번역 모델은 처음 쓸 때 올라와 **프로세스가 사는 동안 그대로 남습니다.**
-세션과 작업이 한 벌을 함께 쓰므로, 라이브를 받는 중에 재번역을 돌려도
-Gemma가 두 벌 올라오지 않고, 다음 방송의 첫 자막이 모델 적재만큼 늦지도
-않습니다.
+Transcription and translation models load the first time they are used and
+**stay for as long as the process lives.** Sessions and jobs share one copy, so
+running a re-translation while a live stream is being received does not load a
+second Gemma, and the first subtitle of the next stream is not late by a model
+load either.
 
-이 기계로 다른 일도 하신다면 놀린 모델을 놓아주게 할 수 있습니다.
+If you do other things on this machine, you can have idle models released.
 
 ```sh
-MIMIWATCH_MODEL_IDLE_S=600 ./run.sh     # 10분 동안 아무 세션·작업도 안 쓰면 놓아줍니다
+MIMIWATCH_MODEL_IDLE_S=600 ./run.sh     # released if no session or job uses it for 10 minutes
 ```
 
-받는 중인 방송은 자막 한 줄마다 시계를 되돌리므로 두 시간 방송 도중에
-놓아주는 일은 없습니다. 놓아준 뒤 다시 쓰면 다시 올립니다(몇 초).
+A stream being received turns the clock back with every subtitle line, so a
+release never happens in the middle of a two-hour stream. After a release, using
+it again loads it again (a few seconds).
 
-### 기본 전사기가 버거우면
+### If the default transcriber is too heavy
 
-`whisper-large-v3-turbo`(845MB)가 무거운 기계를 위해 **SenseVoice
-Small**(241MB)도 함께 받아 둡니다. `backends.json`의 `asr_backends`에 넣으면
-화면의 「전사」 선택기에 나타납니다.
+Since `whisper-large-v3-turbo` (845MB) is heavy, **SenseVoice Small** (241MB)
+is downloaded alongside it for heavy-going machines. Put it into
+`asr_backends` in `backends.json` and it appears in the "Transcription" picker
+on screen.
 
 ```json
-{ "id": "tcpp-lite", "label": "SenseVoice Small (가벼움 · CPU)",
+{ "id": "tcpp-lite", "label": "SenseVoice Small (light · CPU)",
   "backend": "tcpp", "model": "SenseVoiceSmall-Q8_0.gguf", "device": "cpu" }
 ```
 
-**영어 방송이라면 더 가벼운 것이 있습니다.** `Moonshine base`(74MB)는
-기본의 11분의 1인데 영어 품질이 사실상 같습니다.
+**For an English stream there is something lighter.** `Moonshine base` (74MB)
+is one eleventh of the default with English quality that is practically the same.
 
 ```json
-{ "id": "tcpp-lite-en", "label": "Moonshine base (가벼움 · 영어 전용)",
+{ "id": "tcpp-lite-en", "label": "Moonshine base (light · English only)",
   "backend": "tcpp", "model": "moonshine-base-Q8_0.gguf", "device": "cpu" }
 ```
 
-같은 20초 조각을 이 기계(M5 Pro)에서 잰 값입니다.
+Values measured on the same 20-second chunk on this machine (M5 Pro).
 
-| 모델 | 크기 | GPU | **CPU** |
+| Model | Size | GPU | **CPU** |
 |---|---|---|---|
-| whisper-large-v3-turbo | 845MB | 56.8배속 | **7.7배속** |
-| SenseVoice Small | 241MB | 272.8배속 | **62.4배속** |
-| Moonshine base (영어) | 74MB | 89.7배속 | **91.8배속** |
+| whisper-large-v3-turbo | 845MB | 56.8× realtime | **7.7× realtime** |
+| SenseVoice Small | 241MB | 272.8× realtime | **62.4× realtime** |
+| Moonshine base (English) | 74MB | 89.7× realtime | **91.8× realtime** |
 
-**Moonshine은 CPU가 GPU보다 빠릅니다.** 모델이 작아 전송 비용이 계산
-비용을 넘습니다.
+**Moonshine is faster on the CPU than on the GPU.** The model is small enough
+that the transfer cost exceeds the compute cost.
 
-품질은 이렇습니다.
+Quality goes like this.
 
-- **Moonshine base** — 영어 표본 60초 지점에서 whisper와 **문장부호까지 한
-  글자도 다르지 않았습니다.** 대신 영어 외의 언어는 아예 거부합니다.
-  세션을 만들 때 미리 확인하므로 시작하는 순간에 알 수 있습니다.
-- **SenseVoice Small** — 일본어 표본에서 `工場内`과 `できた銃で`를 whisper
-  보다 정확히 받아 적었습니다. 대신 문장부호와 띄어쓰기를 넣지 않아 한
-  덩어리로 나오고, 한국어 고유명사를 줄입니다(`데이터독` → `데이터`).
+- **Moonshine base** — at the 60-second mark of an English sample, **not one
+  character differed from whisper, punctuation included.** In exchange it
+  refuses languages other than English outright. It is checked in advance when
+  the session is created, so you know the moment you start.
+- **SenseVoice Small** — on a Japanese sample it transcribed `工場内` and
+  `できた銃で` more accurately than whisper. In exchange it inserts no
+  punctuation or spacing, so it comes out as one block, and it shortens Korean
+  proper nouns (`데이터독` → `데이터`).
 
-기본을 바꾸지 않는 이유가 여기 있습니다. 자세한 것은 [실측 33~34절][m]을
-보십시오.
+This is where the reason for not changing the default lies. For the details see
+[measurement sections 33–34][m].
 
-## 종료
+## Shutdown
 
-위쪽 막대 오른쪽 끝의 **「⏻ 종료」**로 끕니다(⚙ 엔진 관리 안의 「서버 · 종료」도
-같은 일). 프로세스를 죽이는 것과 다릅니다 — 받는 중인 방송을 **먼저 제대로 닫고**
-서버를 멈춘 뒤, **이 창과 대본 창을 닫습니다.** 그냥 죽이면 세션이 「중단됨」이
-되어, 사용자가 스스로 끈 것과 서버가 죽은 것을 나중에 구분할 수 없습니다.
+Shut it down with **"⏻ Shut down"** at the right end of the top bar ("Server ·
+Shut down" inside ⚙ engine management does the same). It differs from killing
+the process — it **closes the streams being received properly first**, stops
+the server, and then **closes this window and the Script window.** Killing it
+outright leaves sessions as "interrupted", and then you cannot tell later
+whether the user shut it down themselves or the server died.
 
-묶음으로 쓰면 터미널이 없으므로 이 단추가 끄는 유일한 길입니다. 브라우저가
-스크립트로 탭을 닫게 두지 않는 경우(즐겨찾기로 들어와 여러 페이지를 거친 탭)에는
-종료됐다는 화면만 남으니 직접 닫으십시오.
+Used as a bundle there is no terminal, so this button is the only way to shut
+down. If the browser will not let a script close the tab (a tab that came in
+from a bookmark and went through several pages), only the shutdown screen is
+left, so close it yourself.
 
-터미널에서 돌리고 있다면 `Ctrl-C`도 같은 경로를 탑니다. 다시 켜려면 `./run.sh`
-또는 mimiwatch 를 다시 실행합니다.
+If you are running it from a terminal, `Ctrl-C` takes the same path. To start it
+again, run `./run.sh` or mimiwatch again.
 
-## 판올림
+## Updates
 
-서버가 하루 한 번 깃허브 릴리스를 확인하고, 새 판이 있으면 화면 위쪽에
-알림 띠를 세웁니다(「관리 › ⚙ 엔진 관리 › 판올림」에서 손으로도 확인).
+The server checks GitHub releases once a day, and if there is a new version it
+raises a notification strip at the top of the screen (also checked by hand in
+"Manage › ⚙ Engines › Update").
 
-- **묶음으로 쓰면** 띠의 「받기」가 이 플랫폼의 zip 을 받아 두고, 「다시
-  시작하며 적용」이 받는 중인 방송을 제대로 닫은 뒤 묶음을 갈아 끼우고 새
-  판으로 다시 뜹니다. 옛 판은 같은 자리의 `.old` 로 남아, 교체가 어긋나면
-  그것으로 되돌립니다. 모델·설정·자막은 프로그램 밖에 있으므로 그대로입니다.
-- **저장소에서 돌면** 알리기만 합니다 — `git pull` 로 받으십시오.
+- **Used as a bundle**, "Download" on the strip fetches the zip for this
+  platform, and "Restart and apply" closes the streams being received properly,
+  swaps the bundle and comes back up on the new version. The old version stays
+  as `.old` in the same place, so a swap that goes wrong is reverted with it.
+  Models, settings and subtitles live outside the program, so they stay as they
+  are.
+- **Running from the repository** it only tells you — get it with `git pull`.
 
-끄려면 `backends.json` 에 `"update_check": false` 를 넣거나 환경변수
-`MIMIWATCH_NO_UPDATE_CHECK=1` 로 띄웁니다. 확인을 꺼도 「판올림」의
-「새 판 확인」 단추는 그대로 동작합니다.
+To switch it off, put `"update_check": false` into `backends.json` or start it
+with the environment variable `MIMIWATCH_NO_UPDATE_CHECK=1`. Even with the check
+off, the "Check for updates" button under "Update" still works.
 
-## 실측 결과 요약
+## Measurement summary
 
-근거는 [`measurements/RESULTS.md`](../measurements/RESULTS.md)에 있습니다.
+The evidence is in [`measurements/RESULTS.md`](../measurements/RESULTS.md).
 
-**전사는 Whisper 하나로 정했습니다.** 라이브 방송 4개를 180초씩 녹음해 같은
-음성을 여러 모델에 물려 비교했습니다. Fun-ASR가 솔로 방송을 7% 더 받아
-적었지만 합방에서 언어 고정을 무시하고 인도네시아어·베트남어를 뱉었습니다.
-한 종류의 방송만 잘 보는 모델보다 전부 견디는 모델을 택했습니다.
+**Transcription was settled on Whisper alone.** Four live streams were recorded
+for 180 seconds each and the same audio was fed to several models for
+comparison. Fun-ASR transcribed 7% more of a solo stream but ignored the
+language pin on a collab and spat out Indonesian and Vietnamese. A model that
+endures everything was chosen over one that only handles one kind of stream
+well.
 
-**양자화를 낮춰도 빨라지지 않습니다.** Metal에서는 가중치 크기가 병목이
-아닙니다. 845MB를 511MB로 줄여도 13~16배속 사이에서 흔들릴 뿐이고, 품질만
-떨어집니다.
+**Lowering the quantisation does not make it faster.** On Metal the weight size
+is not the bottleneck. Cutting 845MB to 511MB only wobbles between 13× and 16×
+realtime, and the quality drops.
 
-**번역은 Gemma가 확실히 낫습니다.** 같은 자막에서 M2M-100은 개구리를
-거북이로, `潜る`를 잠수함으로, `おやすみなさい`를 "안녕하세요 안녕하세요"로
-냈습니다. Gemma는 전부 옳았고 줄당 0.15초입니다.
+**For translation Gemma is clearly better.** On the same subtitles M2M-100 made
+a frog a turtle, `潜る` a submarine, and `おやすみなさい` "hello hello". Gemma
+got them all right, at 0.15 seconds per line.
 
-**라이브 지연은 평균 0.4초입니다.** 합방 방송에서 25줄을 받아 적어 잰
-값입니다.
+**Live latency averages 0.4 seconds.** That is measured over 25 transcribed
+lines on a collab stream.
 
-**GPU 가속은 플랫폼이 정합니다.** macOS는 Metal, 윈도우는 Vulkan입니다.
-AMD·NVIDIA·Intel 모두 윈도우에서는 Vulkan 한 경로로 갑니다 — 드라이버 말고
-따로 깔 것이 없습니다. AMD에서 `whisper.cpp-amd`를 쓰지 않는 이유는
-[docs/WINDOWS.md](WINDOWS.md)에 적어 두었습니다.
+**GPU acceleration is decided by the platform.** macOS is Metal, Windows is
+Vulkan. AMD, NVIDIA and Intel all go down the one Vulkan path on Windows —
+there is nothing to install besides the driver. The reason `whisper.cpp-amd` is
+not used on AMD is written down in [docs/WINDOWS.md](WINDOWS.md).
 
-**번역 전용 모델로 바꾸지 않았습니다.** 구글의 TranslateGemma 4B는 절반
-크기로 조금 더 빠르고 온전한 문장에서는 대등하지만, 라이브 발화의 절반을
-차지하는 파편에서 말을 지어냅니다 — `なんも反応がないな。ゲームあっ。`를
-"게임은 끝났어"로 끝내 버립니다. 대신 **프롬프트를 장르에 맞추는 쪽**이
-훨씬 싸고 효과가 컸습니다.
+**It was not switched to a translation-only model.** Google's TranslateGemma 4B
+is half the size, slightly faster, and on whole sentences it is equal, but on
+the fragments that make up half of live speech it invents words — it finishes
+`なんも反応がないな。ゲームあっ。` as "the game is over". **Fitting the prompt
+to the genre** was far cheaper and had a bigger effect instead.
 
-## yt-dlp는 가상환경 안에 있습니다
+## yt-dlp lives in the virtualenv
 
-시스템에 깔지 않고 `.venv` 안에 둡니다. 유튜브가 추출 경로를 자주 바꾸고
-yt-dlp가 그때마다 따라가는데, `winget`이나 `brew`로 깐 것은 스스로 갱신되지
-않습니다. 몇 달 지나면 **포맷 목록을 통째로 받지 못해** 라이브에서 "오디오를
-찾지 못했습니다"가 됩니다 — 포맷이 없는 것이 아니라 아무것도 못 읽은
-것입니다.
+It is kept inside `.venv` rather than installed system-wide. YouTube changes
+its extraction path often and yt-dlp follows each time, but a copy installed
+with `winget` or `brew` does not update itself. After a few months it **fails
+to get the format list at all** and live becomes "no audio found" — it is not
+that there are no formats, it is that nothing could be read.
 
-**설치 스크립트를 다시 돌리면 판올림이 됩니다.**
+**Running the install script again updates it.**
 
 ```sh
-./install.sh          # 윈도우: .\install.ps1
+./install.sh          # Windows: .\install.ps1
 ```
 
-이미 끝난 단계는 건너뛰고 yt-dlp만 최신으로 올립니다. 예전 설치본이라
-시스템 것을 쓰고 있어도, 한 번 다시 돌리면 가상환경 안으로 들어옵니다.
-지금 무엇을 쓰고 있는지는 `bench/doctor.py`가 알려 줍니다.
+Steps already done are skipped and only yt-dlp is brought up to date. Even if
+an old installation is using the system copy, running it once more brings it
+inside the virtualenv. `bench/doctor.py` tells you which one is in use now.
 
-**묶음으로 쓰고 있다면** 안의 yt-dlp는 판이 박혀 있어 이 길이 없습니다.
-대신 「모델·도구」의 **yt-dlp 독립 실행 파일**을 받으십시오 — 도구
-디렉터리에 있으면 그것을 먼저 쓰고, 그 파일은 `-U`로 스스로 판올림합니다.
-자세한 것은 [docs/PACKAGING.md](PACKAGING.md).
+**If you are using a bundle**, the yt-dlp inside has its version baked in and
+this path does not exist. Download the **yt-dlp standalone executable** from
+"Models & tools" instead — if it is in the tools directory it is used first, and
+that file updates itself with `-U`. For the details see
+[docs/PACKAGING.md](PACKAGING.md).
 
-**두 달만 묵어도 라이브가 끊길 수 있습니다.** 2026-08 실측에서 7주 전 판이
-이미 라이브 오디오 포맷을 하나도 받지 못했습니다. 서버는 45일 넘은 판을
-낡았다고 알리고, 그때는 도구를 다시 받거나 `yt-dlp --update-to nightly`로
-올리십시오(yt-dlp가 일반 사용자에게 권하는 채널이 nightly입니다).
+**Two months of age is enough to break live.** In the 2026-08 measurement a
+version 7 weeks old already failed to get a single live audio format. The server
+warns that a version more than 45 days old is stale, and then you should
+download the tool again or bring it up with `yt-dlp --update-to nightly`
+(nightly is the channel yt-dlp recommends to ordinary users).
 
-### 유튜브에는 JS 런타임(deno)이 필요합니다
+### YouTube needs a JS runtime (deno)
 
-2025년 11월부터 yt-dlp는 유튜브의 서명 챌린지를 풀기 위해 **외부 JavaScript
-런타임**을 씁니다. 공개 라이브(HLS)는 없어도 되지만, **녹화본과 쿠키로 받는
-멤버십 방송은 deno가 없으면 포맷이 사라집니다.** 「엔진 관리 › 모델·도구」에서
-deno를 받거나(`brew install deno`도 됩니다) — 시스템에 있으면 그것을 씁니다.
-서버는 찾은 deno의 경로를 yt-dlp에 직접 알려 주므로(`--js-runtimes`), Finder에서
-띄운 묶음처럼 PATH가 짧은 환경에서도 됩니다. 풀이 스크립트(`yt-dlp-ejs`)는
-묶음과 가상환경에 함께 들어 있고, 판이 어긋나면 깃허브에서 받아 옵니다.
-무엇을 쓰고 있는지는 `bench/doctor.py`(묶음은 `mimiwatch --doctor`)가 보여 줍니다.
-[yt-dlp EJS 위키](https://github.com/yt-dlp/yt-dlp/wiki/EJS)
+Since November 2025 yt-dlp uses an **external JavaScript runtime** to solve
+YouTube's signature challenge. Public live (HLS) does without it, but **VODs and
+membership streams fetched with cookies lose their formats without deno.**
+Download deno in "Engines › Models & tools" (`brew install deno` works too) — if
+it is on the system, that one is used. The server tells yt-dlp the path of the
+deno it found directly (`--js-runtimes`), so it works even in an environment
+with a short PATH, such as a bundle launched from Finder. The solver script
+(`yt-dlp-ejs`) ships inside the bundle and the virtualenv, and if the versions
+do not match it is fetched from GitHub. `bench/doctor.py` (`mimiwatch --doctor`
+for the bundle) shows which one is in use.
+[yt-dlp EJS wiki](https://github.com/yt-dlp/yt-dlp/wiki/EJS)
 
-## 멤버십 전용 방송
+## Members-only streams
 
-두 가지가 따로 걸립니다 — **오디오를 받는 것**과 **화면에 띄우는 것**.
+Two separate things get in the way — **getting the audio** and **putting the
+picture on screen**.
 
-오디오는 두 갈래입니다. 서버가 쿠키를 들고 직접 받아 오거나, 이미 듣고 있는
-탭의 소리를 브라우저가 넘겨주거나. **뒤쪽을 권합니다** — 쿠키도, 유튜브
-추출 경로가 바뀔 때마다의 판올림도 필요 없습니다.
+Audio has two routes. Either the server holds cookies and fetches it directly,
+or the browser hands over the sound of a tab you are already listening to.
+**The latter is recommended** — it needs no cookies and no update every time
+YouTube's extraction path changes.
 
-### 오디오 (권장): 다른 탭의 소리를 받습니다
+### Audio (recommended): taking the sound of another tab
 
-「＋ 추가」에서 **소리 출처**를 「이 브라우저의 다른 탭 소리」로 바꾸면 크롬의
-화면 공유 창이 뜹니다. 유튜브가 열린 탭을 고르고 **「탭 오디오도 공유」를
-켜십시오.** 그 탭에서 나는 소리가 그대로 전사됩니다.
+Change **Audio source** in "＋ Add" to "Sound from another tab in this browser"
+and Chrome's screen-sharing window appears. Pick the tab where YouTube is open
+and **switch on "Also share tab audio".** The sound coming from that tab is
+transcribed as it is.
 
-사용자 본인이 공유 창에서 직접 고른, 본인이 이미 듣고 있는 소리입니다.
-우회하는 것이 없으므로 쿠키도 필요 없습니다.
+It is sound the user picked themselves in the sharing window, sound they are
+already listening to. Nothing is being circumvented, so no cookies are needed
+either.
 
-**이름은 직접 적으십시오.** 크롬은 공유한 탭의 제목을 알려 주지 않습니다 —
-캡처 트랙의 `label` 에 `web-contents-media-stream://8D6F…` 같은 불투명한
-식별자를 줍니다. 목록에서 무엇을 들었는지 알아볼 수 있는 것은 그 한 줄뿐이라,
-「탭 오디오」 둘이 나란히 서면 구별이 되지 않습니다.
+**Write the name yourself.** Chrome does not tell us the title of the shared
+tab — it gives the capture track's `label` an opaque identifier like
+`web-contents-media-stream://8D6F…`. That one line is the only thing that lets
+you recognise what you listened to in the list, so two "Tab audio" rows side by
+side cannot be told apart.
 
-비운 채 시작했어도 나중에 고칠 수 있습니다. 위쪽 제목 옆의 **「✎ 이름」** 을
-누르면 그 자리에서 바뀝니다. 끝난 세션도 됩니다 — 무엇을 들었는지는 대개
-다 듣고 나서 목록을 볼 때 문제가 되니까요.
+Even if you started with it empty you can fix it later. Press **"✎ Name"**
+beside the title at the top and it changes in place. It works for finished
+sessions too — what you listened to usually only becomes a problem when you look
+at the list after listening to it all.
 
-시작하면 **자막 내역 창이 저절로 열립니다.** 이 흐름에는 끼워 넣을 영상이 없어서
-본 화면에 남아 있을 이유가 없습니다.
+Once it starts, **the subtitle log window opens by itself.** This flow has no
+video to embed, so there is no reason to stay on the main screen.
 
 | | |
 | --- | --- |
-| 브라우저 | 크롬 계열 전용 (파이어폭스·사파리는 탭 오디오를 주지 않습니다) |
-| 보내는 것 | 16kHz 모노 int16 PCM, 2초마다 `POST /api/ingest/<세션>` |
-| 전송량 | 초당 32KB |
+| Browser | Chromium-based only (Firefox and Safari do not hand over tab audio) |
+| What is sent | 16kHz mono int16 PCM, `POST /api/ingest/<session>` every 2 seconds |
+| Bandwidth | 32KB per second |
 
-세 가지를 유의하십시오.
+Keep three things in mind.
 
-**브라우저에 묶입니다.** 그 탭을 닫거나 공유를 멈추면 자막도 멈춥니다.
-주소로 받는 쪽은 브라우저와 무관하게 서버에서 돕니다.
+**It is tied to the browser.** Close that tab or stop sharing and the subtitles
+stop too. The route that receives by URL runs on the server, independent of the
+browser.
 
-**되감을 수 없습니다.** 공유가 끊긴 사이의 소리는 어디에도 남아 있지 않습니다.
-다만 **같은 세션으로 이어 붙일 수는 있습니다.** 멈춘 탭 세션을 열면 「이어받기」가
-뜹니다 — 누르면 탭을 다시 공유하라고 묻고, 그 뒤부터 같은 자막 내역에 번호와
-시각을 이어서 쌓습니다. 못 받은 구간은 자막에 그렇게 적습니다.
+**It cannot be rewound.** The sound from while the sharing was cut is left
+nowhere. But **it can be appended to the same session.** Open a stopped tab
+session and "Resume" appears — pressing it asks you to share the tab again, and
+from then on the numbering and times continue to pile up in the same subtitle
+log. What could not be received is written into the subtitles as such.
 
-공유를 멈추거나 그 탭을 닫으면 세션은 「종료됨」이 됩니다. 서버가 죽은 것이
-아니라 그것이 정상 종료 경로라, 주소로 받는 세션과 달리 멈춰 있기만 하면
-언제든 이어받을 수 있습니다.
+Stop sharing or close that tab and the session becomes "ended". Since the server
+did not die and that is the normal exit path, unlike a URL session it can be
+resumed at any time as long as it is merely stopped.
 
-**전사가 실시간을 못 따라가면 버립니다.** 5분치까지 쌓아 두고 그보다 밀리면
-오래된 것부터 버리면서 몇 초를 버렸는지 알립니다. 그러면 가벼운 전사
-엔진으로 바꾸십시오 (「기본 전사기가 버거우면」 절).
+**If transcription cannot keep up with realtime it is thrown away.** It holds up
+to 5 minutes' worth and beyond that drops the oldest first while telling you how
+many seconds were thrown away. Change to a lighter transcription engine then
+(the "If the default transcriber is too heavy" section).
 
-붙일 영상이 없으므로 화면 위 자막과 오프셋 슬라이더는 쓰지 않습니다.
-자막 내역 패널 — 또는 「⧉ 따로 띄우기」 — 으로 읽는 방식입니다.
+Since there is no video to attach, the on-screen subtitles and the offset slider
+are unused. The way to read it is the subtitle log panel — or "⧉ Pop out".
 
-### 오디오 (대안 1): 확장이 로그인 쿠키를 넘깁니다
+### Audio (alternative 1): the extension hands over login cookies
 
-유튜브 탭에서 확장 팝업의 **「🔑 로그인 쿠키 넘기고 주소로」**를 누르면, 확장이
-그 순간 이 브라우저의 유튜브 로그인 쿠키(HttpOnly 포함)를 읽어 서버에 넘기고
-「주소로」 시작합니다. 멈춘 방송을 골라 두었으면 이어받기입니다. 켜 두는 스위치가
-아니라 **누른 그 한 번**뿐이고, 서버에 남은 파일은 「⚙ 엔진 관리 › 유튜브 로그인
-쿠키 › 지우기」로 지웁니다. 그러면 멤버십 방송도 브라우저를 닫아도 서버가 계속
-받고, 되감기(DVR)도 됩니다.
+Press **"🔑 Hand over login cookies and use the URL"** in the extension popup on
+a YouTube tab and the extension reads this browser's YouTube login cookies
+(HttpOnly included) at that moment, hands them to the server and starts "by
+URL". If you had a stopped stream selected, it is a resume. It is not a switch
+you leave on but **that one press**, and the file left on the server is deleted
+with "⚙ Engines › YouTube login cookies › Delete". With that, the server keeps
+receiving a membership stream even if you close the browser, and rewinding (DVR)
+works too.
 
-두 가지를 알고 누르십시오.
+Know two things before you press it.
 
-- **계정 위험.** 평소 계정의 쿠키로 yt-dlp를 돌리는 셈입니다. 로컬에서 방송 하나를
-  받는 정도는 대개 문제없지만, 유튜브가 봇 확인이나 일시 제한을 걸 수 있다는
-  것이 yt-dlp 쪽의 경고입니다. 그래서 기본은 꺼져 있고, 일회성입니다.
-- **쿠키는 계정의 열쇠입니다.** 서버는 `~/.local/share/mimiwatch/cookies/youtube.txt`에
-  권한 `0600`으로만 두고 내용을 화면·로그에 내보내지 않습니다. 쓸 일이 끝나면
-  지우십시오. 매번 새로 읽어 넘기므로 유튜브가 쿠키를 갈아 치워도(회전) 그 시점의
-  최신 것이 갑니다.
+- **Account risk.** It amounts to running yt-dlp with the cookies of your
+  everyday account. Receiving one stream locally is usually no problem, but
+  yt-dlp's own warning is that YouTube may put up a bot check or a temporary
+  restriction. That is why it is off by default and is one-shot.
+- **Cookies are the key to the account.** The server keeps them only at
+  `~/.local/share/mimiwatch/cookies/youtube.txt` with permission `0600` and does
+  not put the contents on screen or in the logs. Delete them when you are done.
+  They are read and handed over fresh every time, so even if YouTube swaps the
+  cookies out (rotation) the newest at that moment is what goes.
 
-쿠키를 쓰면 yt-dlp가 JS 런타임을 요구하는 클라이언트로 가므로 deno가 있어야
-합니다(「모델·도구」).
+Using cookies sends yt-dlp down a client that demands a JS runtime, so deno has
+to be there ("Models & tools").
 
-### 오디오 (대안 2): 쿠키 파일을 직접 줍니다
+### Audio (alternative 2): giving a cookie file directly
 
-유튜브는 아이디·비밀번호 로그인을 받지 않고 OAuth 도 더는 통하지 않습니다.
-쿠키뿐입니다.
+YouTube does not accept id and password login and OAuth no longer works either.
+Cookies are all there is.
 
 ```sh
 MIMIWATCH_YTDLP_COOKIES=/path/to/cookies.txt ./run.sh
 ```
 
-**평소 쓰는 브라우저의 쿠키를 그대로 쓰면 얼마 못 갑니다.** 유튜브는 열려
-있는 탭의 계정 쿠키를 계속 갈아 치우기 때문입니다. yt-dlp 쪽 안내대로
-시크릿 창에서 뽑아야 회전되지 않습니다.
+**Using the cookies of your everyday browser as they are does not last long.**
+YouTube keeps swapping out the account cookies of an open tab. As yt-dlp's own
+guidance says, they have to be taken from an incognito window so they are not
+rotated.
 
-1. 시크릿(새 비공개) 창을 열고 유튜브에 로그인합니다
-2. **같은 탭에서** `https://www.youtube.com/robots.txt` 로 이동합니다
-   (그 창에 다른 탭이 없어야 합니다)
-3. 확장 기능으로 `youtube.com` 쿠키를 Netscape 형식 파일로 내보냅니다
-4. **로그아웃하지 말고 그 창을 닫습니다** — 그 세션은 다시 열리지 않으므로
-   쿠키가 회전되지 않습니다
+1. Open an incognito (new private) window and log in to YouTube
+2. **In the same tab**, go to `https://www.youtube.com/robots.txt`
+   (that window must have no other tab)
+3. Export the `youtube.com` cookies to a file in Netscape format with an
+   extension
+4. **Close that window without logging out** — that session is never opened
+   again, so the cookies are not rotated
 
-편의를 위해 브라우저에서 바로 읽는 길도 둡니다. 위 이유로 유튜브에는
-권하지 않습니다.
+For convenience there is also a path that reads straight from the browser. For
+the reason above it is not recommended for YouTube.
 
 ```sh
 MIMIWATCH_YTDLP_COOKIES_BROWSER=chrome ./run.sh
 ```
 
-윈도우는 `.\run.ps1` 앞에 `$env:MIMIWATCH_YTDLP_COOKIES="C:\path\cookies.txt"`
-를 두면 됩니다. 둘 다 주면 파일이 이깁니다 — 함께 주면 yt-dlp 가 시크릿
-세션이 아닌 평소 쿠키를 덮어씁니다.
+On Windows, put `$env:MIMIWATCH_YTDLP_COOKIES="C:\path\cookies.txt"` before
+`.\run.ps1`. If both are given the file wins — given together, yt-dlp overwrites
+the incognito session's cookies with the everyday ones.
 
-**쿠키 파일은 그 계정에 로그인할 수 있는 열쇠입니다.** 저장소 안에 두지
-말고, 권한을 좁혀 두십시오.
+**A cookie file is a key that can log in to that account.** Do not keep it
+inside the repository, and narrow its permissions.
 
-### 화면: 임베드는 대개 막혀 있습니다
+### Video: embedding is usually blocked
 
-멤버십 전용 방송은 다른 사이트에 끼워 넣지 못하게 되어 있는 경우가
-많습니다. 그러면 플레이어 자리에 이렇게 뜹니다.
+Members-only streams are often set up so that they cannot be embedded in another
+site. Then this appears where the player would be.
 
-> 이 영상은 다른 사이트에 끼워 넣을 수 없게 되어 있습니다 … 유튜브에서
-> 열어 두고 오른쪽 자막 내역를 읽으십시오 — 자막은 계속 쌓입니다.
+> This video is set up so that it cannot be embedded in another site … keep it
+> open on YouTube and read the subtitle log on the right — the subtitles keep
+> piling up.
 
-**이것은 우리가 고칠 수 있는 문제가 아닙니다.** 영상 소유자가 정하는 것이고,
-로그인 상태와도 무관합니다.
+**This is not a problem we can fix.** The video's owner decides it, and it has
+nothing to do with being logged in.
 
-다만 **자막은 그대로 동작합니다.** 오디오는 위의 두 갈래 중 어느 쪽으로든
-따로 받으므로, 유튜브를 다른 창에 띄워 두고 오른쪽 자막 내역를 읽으면 됩니다.
-쿠키로 받는 경우 화면 위 자막을 쓰려면 오프셋 슬라이더로 맞추십시오 — 자동
-정렬은 임베드된 플레이어의 재생 위치를 읽어야 하는데 그 플레이어가 없기
-때문입니다.
+But **the subtitles work as they are.** The audio comes in separately by either
+of the two routes above, so you can have YouTube up in another window and read
+the subtitle log on the right. When receiving with cookies, use the offset
+slider to align if you want the on-screen subtitles — automatic alignment needs
+to read the playback position of the embedded player, and that player is not
+there.
 
-### 자막 내역 따로 띄우기
+### Popping the subtitle log out
 
-임베드가 막힌 방송을 위해, 자막 내역만 담은 별도 창을 띄울 수 있습니다. 자막 내역
-머리의 **⧉ 따로 띄우기** 을 누르면 세로로 긴 창이 하나 열립니다. 유튜브를 한쪽에
-띄워 두고 이 창을 옆에 붙여 두는 용도입니다.
+For streams whose embedding is blocked, a separate window holding just the
+subtitle log can be opened. Press **⧉ Pop out** in the subtitle log header and a
+tall narrow window opens. It is for keeping YouTube up on one side and this
+window beside it.
 
-이 창에는 목록도 플레이어도 없고 자막 내역만 있습니다. 자막은 본 창과 똑같이
-실시간으로 쌓입니다 — 같은 코드가 그리기 때문입니다. 본 창을 닫아도
-상관없지만, 서버는 켜져 있어야 합니다.
+This window has no list and no player, only the subtitle log. The subtitles pile
+up in realtime exactly as in the main window — the same code draws them.
+Closing the main window does not matter, but the server has to be up.
 
-창 안에서 조절할 수 있는 것:
+What can be adjusted inside the window:
 
-| 도구 | 하는 일 |
+| Tool | What it does |
 | --- | --- |
-| 둘 다 / 번역만 / 원문만 | 자막 내역 줄에 무엇을 보일지 |
-| 글자 크기 | 11~24px |
+| Both / translation only / source only | What to show on a subtitle log line |
+| Font size | 11–24px |
 
-선택은 기억되며, 본 창의 자막 내역에도 같이 적용됩니다.
+The choices are remembered, and they apply to the main window's subtitle log too.
 
-주소는 `?script=<영상 또는 방송 열쇠>` 입니다. 즐겨찾기에 넣어 두어도 되고,
-가리키던 것이 지워졌으면 그렇다고 알려 줍니다.
+The URL is `?script=<video or stream key>`. You can put it in your bookmarks,
+and if what it pointed at has been deleted it tells you so.
 
-**한계.** 이 창은 영상을 모르므로 화면 위 자막도, 줄을 눌러 그 지점으로
-뛰는 것도 되지 않습니다. 읽는 창입니다.
+**Limits.** This window does not know the video, so there are no on-screen
+subtitles and pressing a line does not jump to that point. It is a reading
+window.
 
-## 오버레이 모드 (브라우저 확장)
+## Overlay mode (browser extension)
 
-임베드가 막힌 방송은 우리 페이지에 끼워 넣을 수 없습니다. **확장은 유튜브
-페이지 자체에 자막을 얹으므로** 그 제약을 받지 않습니다. 영상은 유튜브에서
-그대로 보고, 자막만 그 위에 뜹니다.
+A stream whose embedding is blocked cannot be put into our page. **The extension
+lays subtitles onto the YouTube page itself**, so it is not bound by that
+restriction. You watch the video on YouTube as usual, and only the subtitles
+appear on top of it.
 
-덤이 하나 더 있습니다. 여기서는 진짜 `<video>` 를 잡을 수 있어 `currentTime`
-을 직접 읽습니다 — 우리 페이지에서는 임베드된 플레이어의 시계를 못 읽어
-라이브 자막 정렬이 수동이었습니다.
+There is one bonus. Here the real `<video>` can be grabbed, so `currentTime` is
+read directly — on our page the embedded player's clock cannot be read, so live
+subtitle alignment was manual.
 
-### 얹기
+### Installing
 
-스토어에 올리지 않습니다. 어차피 로컬 서버가 있어야 도는 물건이라 저장소에
-같이 두고, 릴리스에도 `mimiwatch-ext-*.zip`으로 붙입니다 — 묶음으로 쓰는
-사람은 그것을 받아 풀면 됩니다.
+It is not put on the store. It is a thing that needs a local server anyway, so
+it is kept in the repository and attached to releases as `mimiwatch-ext-*.zip` —
+people using a bundle can download and unpack that.
 
-1. 크롬에서 `chrome://extensions` 를 엽니다
-2. 오른쪽 위 **개발자 모드**를 켭니다
-3. **압축 해제된 확장 프로그램을 로드**하고 이 저장소의 `ext/`(또는 zip을 푼
-   `ext` 폴더)를 고릅니다
+1. Open `chrome://extensions` in Chrome
+2. Switch on **Developer mode** at the top right
+3. **Load unpacked** and pick this repository's `ext/` (or the `ext` folder from
+   the unpacked zip)
 
-판을 올릴 때는 같은 폴더에 새 파일을 덮어쓰고 `chrome://extensions`에서
-**새로고침(⟳)**을 누르십시오. 폴더를 옮기면 확장이 사라집니다.
+To move up a version, overwrite the new files in the same folder and press
+**refresh (⟳)** in `chrome://extensions`. Move the folder and the extension
+disappears.
 
-서버(`./run.sh`)는 따로 떠 있어야 합니다.
+The server (`./run.sh`) has to be up separately.
 
-### 쓰기
+### Using it
 
-유튜브 탭에서 확장 아이콘을 누르면 팝업이 뜹니다.
+Press the extension icon on a YouTube tab and the popup appears.
 
-**이미 받아 둔 것을 얹기** — 「무엇을 얹을까요」에서 라이브 세션이나 녹화본을
-고르면 그 자막이 화면에 붙습니다. 그 탭이 아직 확장을 들고 있지 않으면
-(확장을 다시 로드한 직후가 그렇습니다) 저절로 한 번 새로고침합니다 — 닿을
-때는 하지 않습니다. 보고 있던 자리가 튀는 것은 그 자체로 손해입니다.
+**Overlaying something already received** — pick a live session or a VOD in
+"What to overlay" and those subtitles attach to the screen. If that tab is not
+holding the extension yet (which is the case right after reloading the
+extension) it refreshes once by itself — it does not when it can reach it. The
+spot you were watching jumping is a loss in itself.
 
-녹화본은 재생이 그 자막의 시각에 닿아야 화면 위에 뜹니다. 붙었는지 바로
-확인하려면 「자막 내역을 채팅 자리에」를 켜 보십시오 — 그쪽은 재생 위치와
-무관하게 쌓인 것을 전부 보여 줍니다.
+For a VOD, playback has to reach that subtitle's time for it to appear on
+screen. To check right away whether it attached, try switching on "Subtitle log
+in the chat column" — that side shows everything accumulated, regardless of the
+playback position.
 
-**이 탭에서 새로 받아 적기** — 두 갈래입니다.
+**Transcribing anew on this tab** — there are two routes.
 
-| | 언제 | |
+| | When | |
 | --- | --- | --- |
-| **주소로** | 보통의 공개 방송 | 서버가 yt-dlp 로 받습니다. 브라우저를 닫아도 계속 받습니다 |
-| **이 탭 소리로** | 멤버십 전용 등 | 이 탭에서 나는 소리를 받습니다. 탭을 닫으면 끝납니다 |
+| **By URL** | Ordinary public streams | The server receives it with yt-dlp. Keeps receiving even if you close the browser |
+| **By this tab's sound** | Members-only and so on | Takes the sound coming from this tab. Ends when the tab closes |
 
-주소를 다시 붙여 넣을 필요가 없습니다 — 확장은 이미 어느 탭인지 압니다.
-**세션 이름도 탭 제목을 그대로 씁니다.** 페이지 쪽에서는 크롬이 그 제목을
-주지 않아 「탭 오디오」로만 남았는데, 확장은 그냥 읽을 수 있습니다.
+There is no need to paste the URL again — the extension already knows which tab
+it is. **The session name uses the tab title as it is, too.** On the page side
+Chrome does not hand that title over, so it was left as just "Tab audio", but
+the extension can simply read it.
 
-언어·장르·정제는 다음에 시작할 때를 위해 기억해 둡니다. **정제는 꺼진 채로
-시작합니다** — mimiwatch 페이지의 기본값과 다릅니다. 저쪽은 녹화본도 다루지만
-확장은 라이브만 시작하고, 라이브에서 정제는 대개 손해입니다. 발화 한 무리가
-끝나기를 2초 기다렸다 합쳐서 다시 받아 적으므로, 말이 빠르게 오가면 자막이
-늦게 자리를 잡고 이미 읽은 줄이 통째로 바뀝니다.
+Language, genre and refinement are remembered for the next start. **Refinement
+starts switched off** — different from the default on the mimiwatch page. That
+side handles VODs as well, but the extension only starts live, and in live
+refinement is usually a loss. It waits 2 seconds for one utterance group to
+finish, joins it and transcribes it again, so when speech goes back and forth
+quickly the subtitle settles late and a line already read changes entirely.
 
-자막 모드·글자 크기·배경·오프셋은 팝업에서 조절하고, 자리는 자막을 끌어
-옮깁니다.
+Subtitle mode, font size, background and offset are adjusted in the popup, and
+the position is set by dragging the subtitle.
 
-**「자막 내역을 채팅 자리에」** 를 켜면 오른쪽 열에 자막 내역이 섭니다. 라이브면 채팅을
-대신 들어가고(끄면 채팅이 돌아옵니다), 아니면 관련 영상 위에 붙습니다. 줄을
-누르면 그 지점으로 이동합니다 — 여기서는 진짜 `<video>` 를 잡을 수 있어
-그냥 됩니다. 아래로 끌면 높이를 바꿀 수 있고, 위로 올려 읽으면 따라가기가
-저절로 멈춥니다.
+Switch on **"Subtitle log in the chat column"** and the subtitle log stands in
+the right column. On live it goes in in place of the chat (switch it off and the
+chat comes back), otherwise it attaches above the related videos. Pressing a
+line moves to that point — here the real `<video>` can be grabbed, so it simply
+works. Dragging downwards changes the height, and scrolling up to read stops the
+following by itself.
 
-읽기 전용입니다. 고치기·재번역·내보내기는 mimiwatch 페이지에 있습니다.
+It is read-only. Editing, re-translating and exporting are on the mimiwatch page.
 
-**다른 영상으로 옮기면 자막을 내립니다.** 세션은 탭에 매여 있지 영상에 매여
-있지 않아서, 그냥 두면 엉뚱한 영상 위에 옛 자막이 계속 붙습니다. 어느
-영상의 자막인지 알 수 있으면 알아서 내리고, 알 수 없으면 — 탭 소리로
-시작했는데 주소를 못 읽은 경우 등 — 내리지 않고 플레이어 위에서 묻습니다.
-「계속」을 고르면 그 영상을 이 자막의 것으로 기억해 다시 묻지 않습니다.
+**Moving to a different video takes the subtitles down.** The session is bound
+to the tab, not to the video, so left alone old subtitles would keep attaching
+over the wrong video. When it can tell which video the subtitles belong to it
+takes them down by itself, and when it cannot — started by tab sound but the URL
+could not be read, and so on — it does not take them down and asks over the
+player. Choose "Keep" and it remembers that video as this subtitle's own and
+does not ask again.
 
-**멈춘 방송은 이어받습니다.** 고르개에서 멈춘 방송(「· 멈춤」)을 고르면 「주소로」와
-「이 탭 소리로」가 **「▶ 이어받기 (주소로 / 이 탭 소리로)」** 로 바뀌고, 누른 쪽의
-출처로 같은 세션에 이어 붙입니다 — 저장된 출처와 달라도 됩니다. 주소로 받던 방송이
-도중에 멤버십 전용으로 바뀌면 탭 소리로, 탭 소리로 받던 것을 브라우저를 닫고
-이어 가려면 주소로 바꾸면 됩니다. 서버가 죽었든 사용자가 중단했든 같습니다. 끝난
-방송(「· 끝난 방송」)은 이어받을 것이 없으니 전체 영상 전사는 mimiwatch 페이지에서 합니다.
+**A stopped stream is resumed.** Pick a stopped stream ("· stopped") in the
+picker and "By URL" and "By this tab's sound" change to **"▶ Resume (by URL / by
+this tab's sound)"**, appending to the same session from whichever source you
+pressed — it may differ from the stored source. A stream received by URL that
+turns members-only partway through can go to tab sound, and one received by tab
+sound that you want to carry on after closing the browser can be changed to
+URL. It is the same whether the server died or the user stopped it. A stream
+that is over ("· stream over") has nothing to resume, so transcribing the whole
+video is done on the mimiwatch page.
 
-**「화면에서 내리기」와 「■ 받아 적기 중단」은 다릅니다.**
+**"Remove from screen" and "■ Stop transcribing" are different.**
 
-앞은 이 탭에서만 내립니다 — 서버는 계속 받아 적습니다. **토글이라 다시
-누르면 「화면에 다시 얹기」로 바뀝니다.** 고르개는 그대로 두므로 무엇을 보던
-중이었는지 잊지 않습니다.
+The former only takes it down on this tab — the server keeps transcribing.
+**It is a toggle, so pressing again changes it to "Put back on screen".** It
+leaves the picker as it is, so it does not forget what you were watching.
 
-뒤는 세션을 서버에서 끝냅니다. 쌓인 자막은 둘 다 그대로 남아 다시 고를 수
-있습니다.
+The latter ends the session on the server. The accumulated subtitles stay in both
+cases and can be chosen again.
 
-**자막이 안 보이면** 팝업 아래 상태줄을 보십시오. 「안 보인다」를 갈라서
-적습니다 — `플레이어 못 찾음` / `화면에 자리 없음` / `지금 구간에 자막 없음` /
-`자막 끔` / `시계 멈춤`. 어디를 봐야 할지가 거기서 갈립니다. 「치우기」는 화면에서만 치웁니다 — 받아 적던 것을 끝내려면
-mimiwatch 페이지의 「중단」입니다.
+**If the subtitles are not visible**, look at the status line at the bottom of
+the popup. It splits "not visible" up and says which — `player not found` /
+`no room on screen` / `no subtitle in the current segment` / `subtitles off` /
+`clock stopped`. Where to look diverges from there. "Dismiss" only clears it from
+the screen — to end what was being transcribed, it is "Stop" on the mimiwatch
+page.
 
-목록 관리·엔진 설정·자막 편집은 팝업에 없습니다. mimiwatch 페이지가
-그대로 맡습니다 — 그것까지 지으면 두 벌이 됩니다.
+List management, engine settings and subtitle editing are not in the popup. The
+mimiwatch page keeps them — building those too would make two sets.
 
-## 알려진 한계
+## Known limits
 
-**라이브 자막과 영상의 정렬은 수동입니다.** 오프셋 슬라이더로 맞추십시오.
-녹화본은 자동으로 맞습니다.
+**Aligning live subtitles with the video is manual.** Match them with the offset
+slider. VODs match automatically.
 
-**멀티뷰에서 초점이 아닌 방송은 받아 적지 않습니다.** 최근 30초의 소리만 들고
-있다가 초점이 오면 거기서부터 시작합니다. 넷을 전부 받아 적는 것은 전사 모델을
-동시에 넷이 돌리는 일이라 하지 않습니다. 방송 수만큼 ffmpeg 이 뜹니다.
+**In multiview, streams that are not focused are not transcribed.** They hold
+only the last 30 seconds of sound and start from there when the focus arrives.
+Transcribing all four would mean running four transcription models at once, so it
+is not done. One ffmpeg comes up per stream.
 
-**겹친 발화를 분리하지 못합니다.** 두 사람이 동시에 말하면 한쪽이 묻히거나
-섞입니다. 콘텐츠 유형을 짧게 잡으면 줄지만 없어지지는 않습니다.
+**Overlapping speech cannot be separated.** When two people talk at the same
+time one is buried or they are mixed. Setting the content type short reduces it
+but does not remove it.
 
-**화자 태그는 녹화본 전용입니다.** 라이브는 구간이 짧아 화자 임베딩이 자리를
-잡지 못합니다. 70초 방송에서 여섯 명이 나온 적이 있고, 실제로는 그만큼 있지
-않았습니다.
+**Speaker tags are VOD-only.** Live segments are short, so speaker embeddings do
+not settle. A 70-second stream once produced six people, and there were not that
+many.
 
-**영어는 전용 모델보다 1.7배 느립니다.** 품질은 같습니다. 라이브에는
-충분하지만 긴 녹화본에서는 체감될 수 있습니다.
+**English is 1.7× slower than a dedicated model.** The quality is the same. It
+is enough for live but may be noticeable on a long VOD.
 
-**중국어는 재 본 적이 없습니다.** Whisper가 지원하지만 비교 근거가 없습니다.
+**Chinese has never been measured.** Whisper supports it, but there is no basis
+for comparison.
 
-## 문제가 생기면
+## If something goes wrong
 
-**모델이 없다고 나옵니다** — `./install.sh`를 다시 실행하십시오. 이미 받은
-것은 건너뜁니다. 다른 위치를 쓰신다면 `MIMIWATCH_MODEL_DIR`이 설치할 때와
-같은지 확인하십시오.
+**It says the model is missing** — run `./install.sh` again. What is already
+downloaded is skipped. If you use a different location, check that
+`MIMIWATCH_MODEL_DIR` is the same as it was at install time.
 
-**서버가 뜨지 않습니다** — `.venv`가 없으면 `run.sh`가 그렇게 말합니다.
-`./install.sh`를 먼저 실행하십시오.
+**The server does not come up** — if `.venv` is missing, `run.sh` says so. Run
+`./install.sh` first.
 
-**라이브를 켰는데 아무 반응이 없습니다** — 브라우저 콘솔을 보십시오. 서버
-로그(`[ja/whisper-...]` 줄)에 자막이 찍히는데 화면이 비어 있다면 화면 쪽
-문제입니다. 강제 새로고침(`Cmd+Shift+R`)으로 낡은 스크립트를 지우십시오.
+**I started live and nothing happens** — look at the browser console. If
+subtitles are being printed in the server log (the `[ja/whisper-...]` lines) but
+the screen is empty, it is a problem on the screen side. Clear out stale scripts
+with a hard refresh (`Cmd+Shift+R`).
 
-**전사가 엉뚱한 언어로 나옵니다** — 영상 추가할 때 원본 언어를 지정하지
-않으면 모델이 스스로 판별합니다. 지정하십시오.
+**The transcription comes out in the wrong language** — if you do not specify
+the source language when adding the video, the model decides for itself. Specify
+it.
 
-**같은 말이 자막에 두 번 나옵니다** — 정제본이 확정본을 흡수하지 못한
-경우입니다. 서버 로그의 `[refine/...]` 줄과 그 앞 확정본을 함께 보내
-주십시오.
+**The same words appear twice in the subtitles** — this is the case where the
+refined line failed to absorb the final. Send the `[refine/...]` line from the
+server log together with the final before it.
 
-**포트가 이미 쓰이고 있습니다** — 이전 서버가 살아 있을 수 있습니다.
+**The port is already in use** — a previous server may still be alive.
 
 ```sh
 lsof -ti:8900 | xargs kill
 ```
 
-### 어디에 무엇이 있는가
+### Where things are
 
-| 경로 | 내용 |
+| Path | Contents |
 |---|---|
-| `backends.json` | 엔진 설정 (git에 올라가지 않습니다). `MIMIWATCH_CONFIG`로 다른 파일을 쓸 수 있습니다 |
-| `data/mimiwatch.db` | 작업·세션·**자막 전부** (녹화본과 라이브). `MIMIWATCH_DATA_DIR`로 자리를 바꿀 수 있습니다 |
-| `data/legacy/` | 옛 판이 남긴 `<영상id>.json`. 아무도 읽지 않습니다 |
-| `~/.local/share/mimiwatch/models` | 모델 (윈도우는 `%LOCALAPPDATA%\mimiwatch\models`) |
-| `ext/` | 브라우저 확장 (압축 해제된 채로 로드합니다) |
+| `backends.json` | Engine settings (not committed to git). `MIMIWATCH_CONFIG` can point at another file |
+| `data/mimiwatch.db` | Jobs, sessions and **all the subtitles** (VOD and live). `MIMIWATCH_DATA_DIR` can move the location |
+| `data/legacy/` | `<video id>.json` left behind by old versions. Nobody reads them |
+| `~/.local/share/mimiwatch/models` | Models (`%LOCALAPPDATA%\mimiwatch\models` on Windows) |
+| `ext/` | The browser extension (loaded unpacked) |
 
-`data/`를 통째로 지우면 초기 상태로 돌아갑니다. 모델은 지워지지 않습니다.
+Deleting `data/` wholesale returns it to the initial state. The models are not
+deleted.
 
-**녹화본 자막도 SQLite에 있습니다.** 예전에는 영상마다 JSON 파일 하나였는데,
-그러면 자막 한 줄을 고칠 때마다 그 영상의 자막을 통째로 다시 써야 하고, 쓰는
-도중에 죽으면 전부 잃습니다. 옮기는 것은 처음 실행할 때 자동으로 한 번 돕니다.
-**원본은 지우지 않고 `data/legacy/`로 옮깁니다** — 한동안 써 보고 괜찮으면
-지우면 됩니다.
+**VOD subtitles are in SQLite too.** It used to be one JSON file per video, and
+then fixing one subtitle line meant rewriting that video's subtitles from end to
+end, and dying mid-write lost all of them. The move happens automatically once on
+first run. **The originals are not deleted but moved to `data/legacy/`** — use it
+for a while and delete them if it is fine.

@@ -522,22 +522,27 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 
 .primary-seg{background:var(--accent); border-color:var(--accent); color:#04211b; font-weight:700}
 .primary-seg:hover{filter:brightness(1.08); color:#04211b}
-#add-form{display:flex; flex-direction:column; gap:.7rem; padding:1.4rem}
-#add-form h3{margin:0; font-size:1rem}
-#add-form .hint{margin:0; font-size:.78rem; color:var(--dim); line-height:1.6}
-#add-form label{display:flex; flex-direction:column; gap:.25rem; font-size:.76rem; color:var(--dim)}
-#add-form input,#add-form select{
+/* The add and export dialogs share these rules. Each dialog form used to carry
+   its own copy of the same block, and the export form simply never got one --
+   `dialog{padding:0}` left its content flush against the border and its buttons
+   at the browser default. A new dialog form belongs in these selectors, not in
+   a fifth copy of them. */
+#add-form,#export-form{display:flex; flex-direction:column; gap:.7rem; padding:1.4rem}
+#add-form h3,#export-form h3{margin:0; font-size:1rem}
+#add-form .hint,#export-form .hint{margin:0; font-size:.78rem; color:var(--dim); line-height:1.6}
+#add-form label,#export-form label{display:flex; flex-direction:column; gap:.25rem; font-size:.76rem; color:var(--dim)}
+#add-form input,#add-form select,#export-form select{
   background:#0d1017; color:var(--text); border:1px solid var(--line);
   border-radius:6px; padding:.45rem .6rem; font-size:.85rem; font-family:inherit;
 }
-#add-form small{color:var(--dim); font-size:.7rem; line-height:1.5}
-#add-form .row{display:flex; gap:.5rem; margin-top:.4rem}
-#add-form .grow{flex:1}
-#add-form button{
+#add-form small,#export-form small{color:var(--dim); font-size:.7rem; line-height:1.5}
+#add-form .row,#export-form .row{display:flex; gap:.5rem; margin-top:.4rem}
+#add-form .grow,#export-form .grow{flex:1}
+#add-form button,#export-form button{
   background:#0d1017; color:var(--dim); border:1px solid var(--line);
   border-radius:6px; padding:.45rem 1rem; font-size:.82rem; cursor:pointer; font-family:inherit;
 }
-#add-form button.primary{background:var(--accent); border-color:var(--accent); color:#04211b; font-weight:700}
+#add-form button.primary,#export-form button.primary{background:var(--accent); border-color:var(--accent); color:#04211b; font-weight:700}
 #add-dialog{background:var(--panel); color:var(--text); border:1px solid var(--line);
   border-radius:12px; padding:0; max-width:480px; width:92vw}
 #add-dialog::backdrop{background:rgba(4,6,10,.7)}

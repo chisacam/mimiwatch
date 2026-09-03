@@ -288,7 +288,14 @@ class OpenAIStreamASR:
 
     def transcribe(self, samples: np.ndarray, sample_rate: int,
                    known_lang: str | None = None, speech_s: float | None = None,
-                   live: bool = True) -> dict:
+                   live: bool = True, segments: bool = False) -> dict:
+        """`segments`(구간 시각)는 받아서 무시합니다.
+
+        이 원격 표면은 발화 한 조각을 통째로 보내고 글자만 돌려받습니다.
+        부르는 쪽은 「달라고 했는데 안 왔다」를 이미 다뤄야 하므로 -- 원격
+        서버가 verbose_json 을 안 줄 수도 있습니다 -- 여기서 예외를 내는
+        것보다 빈 손으로 돌아서는 편이 낫습니다.
+        """
         if sample_rate != SAMPLE_RATE:
             raise ValueError(f"16kHz만 지원합니다 (받은 값 {sample_rate})")
         from tcpp_asr import looks_hallucinated

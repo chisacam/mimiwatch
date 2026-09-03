@@ -19,6 +19,7 @@ from collections import Counter
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config, stream, tcpp_asr
+import refine_pass
 from live import PROFILES
 
 SR = 16000
@@ -64,7 +65,8 @@ def read_ref(path: str) -> list[dict]:
 
 # ---- 전사 -----------------------------------------------------------------------
 
-def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float) -> list[dict]:
+def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float,
+               do_refine: bool = False, split: bool = False) -> list[dict]:
     with wave.open(wav) as w:
         pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
     prof = PROFILES[profile]
@@ -72,7 +74,7 @@ def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float) 
                            threshold=threshold)
     hist = stream.AudioHistory()
     asr = tcpp_asr.build_live_asr(spec, lang)
-    out = []
+    out, spans = [], []
     t0 = time.time()
 
     def drain():
@@ -83,11 +85,20 @@ def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float) 
             vad.pop()
             if got["text"].strip():
                 out.append({"start": round(start, 2), "end": round(end, 2), "text": got["text"].strip()})
+                spans.append((s.start, s.start + len(a)))
 
     for i in range(0, len(pcm), 1600):
         c = pcm[i:i + 1600]; vad.accept_waveform(c); hist.push(c); drain()
     vad.flush(); drain()
+    fast_n = len(out)
+    # 정제는 확정본이 다 나온 뒤에 붙습니다. 녹화본에는 오디오가 통째로 있어
+    # 라이브의 30초 링 한도가 없지만, 무리를 묶는 규칙은 같게 두었습니다 --
+    # 다르게 두면 라이브에서 재 둔 것과 비교가 성립하지 않습니다.
+    if do_refine:
+        print(f"    정제 {fast_n}구간...", file=sys.stderr, flush=True)
+        out = refine_pass.refine(pcm, spans, [o["text"] for o in out], asr, split=split)
     return {"segments": out, "hallucinations": asr.hallucinations,
+            "fast_segments": fast_n,
             "audio_s": len(pcm) / SR, "elapsed_s": round(time.time() - t0, 1)}
 
 
@@ -163,26 +174,34 @@ def main():
     ap.add_argument("--translate", default="", help="번역 엔진 id. 비우면 전사만")
     ap.add_argument("--genre", default="general")
     ap.add_argument("--window", type=float, default=60.0)
+    ap.add_argument("--refine", action="store_true",
+                    help="확정본 뒤에 정제 패스를 붙입니다 (라이브와 같은 무리 규칙)")
+    ap.add_argument("--refine-split", action="store_true",
+                    help="정제본을 런타임의 구간 시각으로 도로 여러 줄로 쪼갭니다")
     a = ap.parse_args()
 
     ref = read_ref(a.ref)
     spec = dict(config.find_asr(a.asr or config.active("asr")) or {"backend": "tcpp"})
     if a.model: spec["model"] = a.model
     if a.device: spec["device"] = a.device
-    tag = a.tag or f"{(spec.get('model') or 'whisper')[:12]}-{a.profile}-vad{a.vad_threshold}"
+    tag = a.tag or (f"{(spec.get('model') or 'whisper')[:12]}-{a.profile}-vad{a.vad_threshold}"
+                    + ("-refine" if a.refine else "")
+                    + ("-split" if a.refine_split else ""))
     cache = f"{a.wav}.{tag}.asr.json"
     if os.path.exists(cache):
         got = json.load(open(cache, encoding="utf-8"))
         print(f"[{tag}] 전사 재사용 {cache}")
     else:
-        got = transcribe(a.wav, spec, a.lang, a.profile, a.vad_threshold)
+        got = transcribe(a.wav, spec, a.lang, a.profile, a.vad_threshold,
+                         a.refine, a.refine_split)
         json.dump(got, open(cache, "w", encoding="utf-8"), ensure_ascii=False)
     segs = got["segments"]
     hit, n = coverage(ref, segs)
     speech = sum(s["end"] - s["start"] for s in segs)
-    print(f"[{tag}] 정답 큐 {n}  대사 포착률 {hit / n * 100:.1f}%  전사 구간 {len(segs)}  "
-          f"말 {speech:.0f}s/{got['audio_s']:.0f}s  환각차단 {got['hallucinations']}  "
-          f"전사 {got['audio_s'] / max(1, got['elapsed_s']):.0f}x")
+    print(f"[{tag}] 정답 큐 {n}  대사 포착률 {hit / n * 100:.1f}%  전사 구간 {len(segs)}"
+          + (f"(정제 전 {got['fast_segments']})  " if got.get("fast_segments") else "  ")
+          + f"말 {speech:.0f}s/{got['audio_s']:.0f}s  환각차단 {got['hallucinations']}  "
+          + f"전사 {got['audio_s'] / max(1, got['elapsed_s']):.0f}x")
     if a.translate:
         el = translate_all(segs, a.translate, a.genre, a.lang, a.tgt)
         json.dump(got, open(f"{a.wav}.{tag}.{a.translate}.{a.genre}.json", "w", encoding="utf-8"),

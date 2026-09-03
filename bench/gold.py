@@ -18,6 +18,7 @@ import argparse, glob, json, os, re, sys, time, unicodedata, wave
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config, stream, tcpp_asr
+import refine_pass
 from live import PROFILES
 
 PUNCT = re.compile(r"[\s、。，．,.!?！？「」『』（）()\[\]【】…・~〜\-—–\"'“”‘’:;：；♪]")
@@ -77,10 +78,11 @@ def read_ref(wav: str) -> tuple[str, str]:
 
 
 def segments(pcm: np.ndarray, profile: str, pad_s: float, threshold: float | None = None):
+    """(해독할 조각들, 그 조각의 표본 구간). 구간은 정제 패스가 무리를 묶는 데 씁니다."""
     ms, mx = PROFILES[profile]["min_silence"], PROFILES[profile]["max_speech"]
     vad = stream.build_vad(min_silence=ms, max_speech=mx, threshold=threshold)
     hist = stream.AudioHistory()
-    out, pending = [], []
+    out, spans, pending = [], [], []
 
     def drain(final=False):
         while not vad.empty():
@@ -93,11 +95,12 @@ def segments(pcm: np.ndarray, profile: str, pad_s: float, threshold: float | Non
             start, end = pending.pop(0)
             end2 = min(end + int(pad_s * 16000), have)
             out.append(hist.slice(start, end2))          # slice 가 앞 1초 선행을 붙입니다
+            spans.append((start, end2))
 
     for i in range(0, len(pcm), 1600):
         chunk = pcm[i:i + 1600]; vad.accept_waveform(chunk); hist.push(chunk); drain()
     vad.flush(); drain(final=True)
-    return out
+    return out, spans
 
 
 def main():
@@ -116,6 +119,10 @@ def main():
     ap.add_argument("--tag", default="", help="결과 줄 앞에 붙일 이름")
     ap.add_argument("--vad-threshold", type=float, default=stream.VAD_THRESHOLD,
                     help=f"Silero 말 판정 문턱 (기본 {stream.VAD_THRESHOLD})")
+    ap.add_argument("--refine", action="store_true",
+                    help="확정본 뒤에 정제 패스를 붙입니다 (라이브와 같은 무리 규칙)")
+    ap.add_argument("--refine-split", action="store_true",
+                    help="정제본을 런타임의 구간 시각으로 도로 여러 줄로 쪼갭니다")
     a = ap.parse_args()
     if a.diversity is not None:
         tcpp_asr.DIVERSITY_FLOOR = a.diversity
@@ -137,10 +144,19 @@ def main():
         with wave.open(f) as w:
             pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
         asr = tcpp_asr.build_live_asr(spec, a.lang or lang)
-        segs = segments(pcm, a.profile, a.pad, a.vad_threshold)
+        segs, spans = segments(pcm, a.profile, a.pad, a.vad_threshold)
         speech_s = sum(len(s) for s in segs) / 16000
         t0 = time.time()
-        hyp = " ".join(asr.transcribe(s, 16000)["text"] for s in segs)
+        parts = [asr.transcribe(s, 16000)["text"] for s in segs]
+        # 정제 패스는 확정본을 낸 뒤에 붙습니다 -- 라이브와 같은 차례입니다.
+        # 44절이 「짧게 끊어 잃은 것을 정제가 되살린다」고 미룬 판단을 여기서
+        # 실제로 잽니다. 무리 수도 함께 적습니다(구간이 몇 개로 합쳐졌는지).
+        groups = 0
+        if a.refine:
+            lines = refine_pass.refine(pcm, spans, parts, asr, split=a.refine_split)
+            groups = len(lines)
+            parts = [ln["text"] for ln in lines]
+        hyp = " ".join(parts)
         el = time.time() - t0
         if lang == "en":
             score, unit = wer(hyp, ref), "WER"
@@ -150,7 +166,8 @@ def main():
             err, n = round(score * len(norm(ref))), len(norm(ref))
         total_err += err; total_len += n
         print(f"  {os.path.basename(f):<22} {lang} {unit} {score*100:5.1f}%  구간 {len(segs):>3} "
-              f"({speech_s:.0f}s/{len(pcm)/16000:.0f}s)  환각차단 {asr.hallucinations}  정답 {n}자  "
+              + (f"→무리 {groups:>3} " if a.refine else "")
+              + f"({speech_s:.0f}s/{len(pcm)/16000:.0f}s)  환각차단 {asr.hallucinations}  정답 {n}자  "
               f"{len(pcm)/16000/el:4.1f}x")
         if a.dump:
             print("    가설:", hyp[:400]); print("    정답:", ref[:400])

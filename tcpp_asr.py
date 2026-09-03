@@ -198,7 +198,15 @@ class TranscribeCppASR:
     def transcribe(self, samples: np.ndarray, sample_rate: int,
                    known_lang: str | None = None,
                    speech_s: float | None = None,
-                   live: bool = True, prompt: str | None = None) -> dict:
+                   live: bool = True, prompt: str | None = None,
+                   segments: bool = False) -> dict:
+        """`segments`는 결과 안의 구간 시각(t0/t1)을 함께 달라는 뜻입니다.
+
+        긴 조각을 한 번에 해독하고 나서 자막 줄로 되쪼갤 때 씁니다 -- 25초를
+        한 줄로 내보내면 글자는 좋아져도 자막으로 못 씁니다. 기본은 꺼 둡니다:
+        시각을 달라고 하면 런타임이 다른 해독 경로를 타므로, 라이브의 짧은
+        조각까지 그 값을 치를 이유가 없습니다.
+        """
         import time
 
         if sample_rate != 16000:
@@ -209,11 +217,11 @@ class TranscribeCppASR:
         models.touch(self._key)          # 유휴 언로드가 켜져 있으면 "쓰는 중"이라고
         family = self._family(prompt)
         try:
+            kw = {"family": family} if family is not None else {}
+            if segments:
+                kw["timestamps"] = "segment"
             with self._lock:
-                if family is not None:
-                    result = self._session.run(pcm, language=self.forced_lang, family=family)
-                else:
-                    result = self._session.run(pcm, language=self.forced_lang)
+                result = self._session.run(pcm, language=self.forced_lang, **kw)
         except OutputTruncated:
             # 생성 상한에 닿았다는 것은 몇 초짜리 조각에서 256토큰을 뽑아
             # 냈다는 뜻이고, 그런 조각은 사람의 발화가 아니라 같은 말을
@@ -225,7 +233,7 @@ class TranscribeCppASR:
             return {"text": "", "lang": self.forced_lang, "tier": self.label,
                     "lid_ms": 0.0,
                     "decode_ms": (time.perf_counter() - t0) * 1000,
-                    "probe_ms": 0.0}
+                    "probe_ms": 0.0, **({"segments": []} if segments else {})}
         decode_ms = (time.perf_counter() - t0) * 1000
 
         text = (result.text or "").strip()
@@ -241,9 +249,17 @@ class TranscribeCppASR:
         # 한 줄도 번역되지 않던 원인이었습니다. 빈 문자열이 자막에 실려 가고,
         # LiveSession._translate 는 원본 언어를 모르면 그냥 돌아섭니다 --
         # 전사는 멀쩡히 나오는데 번역만 조용히 빠지므로 알아채기 어렵습니다.
-        return {"text": text, "lang": self.forced_lang or (result.language or ""),
-                "tier": self.label,
-                "lid_ms": 0.0, "decode_ms": decode_ms, "probe_ms": 0.0}
+        got = {"text": text, "lang": self.forced_lang or (result.language or ""),
+               "tier": self.label,
+               "lid_ms": 0.0, "decode_ms": decode_ms, "probe_ms": 0.0}
+        if segments:
+            # 환각으로 지워진 줄에는 구간도 딸려 보내지 않습니다 -- 시각만
+            # 남으면 부르는 쪽이 빈 자막을 만듭니다.
+            got["segments"] = [] if not text else [
+                {"start": sg.t0_ms / 1000.0, "end": sg.t1_ms / 1000.0,
+                 "text": (sg.text or "").strip()}
+                for sg in (result.segments or ()) if (sg.text or "").strip()]
+        return got
 
 
 # 언어별 기본 배치.
@@ -394,12 +410,12 @@ class LiveASR:
         return getattr(self._inner, "refine_prompt", False)
 
     def transcribe(self, samples, sample_rate, known_lang=None, speech_s=None,
-                   live=True, prompt=None):
+                   live=True, prompt=None, segments=False):
+        kw = {"segments": True} if segments else {}
         if prompt is not None:
-            return self._inner.transcribe(samples, sample_rate, known_lang=known_lang,
-                                          speech_s=speech_s, live=live, prompt=prompt)
+            kw["prompt"] = prompt
         return self._inner.transcribe(samples, sample_rate, known_lang=known_lang,
-                                      speech_s=speech_s, live=live)
+                                      speech_s=speech_s, live=live, **kw)
 
 
 def build_live_asr(spec: dict | None, lang: str | None, threads: int = 4) -> LiveASR:

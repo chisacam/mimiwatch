@@ -68,9 +68,12 @@ reasoning.
 | 문턱 / 손잡이 | threshold / knob |
 | 되쪼개기 | re-split |
 
-`measurements/RESULTS.md` is the one file still Korean-only. It is the
-measurement log the code comments cite by section number, and it is translated
-in its own pass — do not half-convert it.
+`measurements/RESULTS.md` is English too, with `RESULTS.ko.md` beside it. Its
+**section numbers are load-bearing**: comments across the codebase cite them
+("section 49"), so a section is never renumbered, merged or split — append the
+next number instead. The samples quoted inside it stay in the language they were
+recorded in; they are the evidence, and translating them deletes the
+measurement.
 
 ## Checks (run before you call anything done)
 
@@ -147,7 +150,7 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 | `ext/` | Chrome MV3 extension: `content.js` overlay + `<video>` clock, `background.js` server I/O, `offscreen.*` tab capture, `panel.js` transcript, `popup.*` |
 | `tests/` | pytest, no models, no network |
 | `bench/` | Measurement and check scripts; `*_check.py` run in CI-equivalent, the rest load models or hit the network |
-| `docs/`, `measurements/RESULTS.md` | Design decisions and the measurements behind them; cite them, do not contradict them silently. Each `docs/X.md` has a Korean companion `docs/X.ko.md` — change both |
+| `docs/`, `measurements/RESULTS.md` | Design decisions and the measurements behind them; cite them, do not contradict them silently. Each `docs/X.md` has a Korean companion `docs/X.ko.md` — change both. Never renumber a RESULTS section |
 
 ## Environment variables the code reads
 

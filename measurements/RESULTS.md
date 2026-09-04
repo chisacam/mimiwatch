@@ -1,191 +1,199 @@
-# 실측 결과 (2026-08-27)
+# Measured results (2026-08-27)
 
-hayamimi를 라이브 스트림에 연결할 수 있는지, 자막이 얼마나 늦게 도착하는지를 확인하기 위한 측정입니다. 요구사항 초안이 종이 위에서 결론 낼 수 없던 항목들을 대상으로 삼았습니다.
+*[한국어](RESULTS.ko.md)*
 
-## 대상
+A measurement to find out whether hayamimi can be connected to a live stream, and how late the subtitles arrive. It took as its targets the items the requirements draft could not settle on paper.
 
-| | 방송 A | 방송 B |
+## Targets
+
+| | Stream A | Stream B |
 |---|---|---|
-| 채널 | 桃鈴ねね (hololive) | 雪花ラミィ (hololive) |
-| 성격 | 일본어 잡담 라이브 | 일본어 잡담 라이브 |
-| 측정 구간 | 130초 | 136초 |
+| Channel | 桃鈴ねね (hololive) | 雪花ラミィ (hololive) |
+| Character | Japanese chat live | Japanese chat live |
+| Measured window | 130 s | 136 s |
 
-두 방송 모두 같은 설정으로 측정했습니다. hayamimi를 `--input ws --serve --mode single --lang ja --translate ko`로 실행하고, yt-dlp가 해석한 오디오 전용 HLS를 ffmpeg으로 16kHz 모노 PCM으로 변환하여 WebSocket 인제스트로 보냈으며, 자막은 SSE로 받았습니다.
+Both streams were measured with the same settings. hayamimi was run with `--input ws --serve --mode single --lang ja --translate ko`, the audio-only HLS that yt-dlp resolved was converted to 16 kHz mono PCM with ffmpeg and sent to the WebSocket ingest, and the subtitles were received over SSE.
 
-## 1. 경로 검증
+## 1. Verifying the path
 
-| 항목 | 결과 |
+| Item | Result |
 |---|---|
-| yt-dlp가 라이브 오디오를 해석하는가 | **가능합니다.** 포맷 234(오디오 전용 HLS)를 제공합니다 |
-| `EXT-X-PROGRAM-DATE-TIME` 제공 여부 | **제공합니다.** 2초 세그먼트마다 절대 시각이 붙습니다 |
-| ffmpeg에서 hayamimi 인제스트까지 | **동작합니다.** `ws_ingest.py`를 수정하지 않고 연결했습니다 |
-| 오디오 공급 속도 | 실시간보다 약간 빠릅니다. 156초 분량을 150.8초에 공급했습니다 |
+| Does yt-dlp resolve the live audio | **It does.** It offers format 234 (audio-only HLS) |
+| Is `EXT-X-PROGRAM-DATE-TIME` provided | **It is.** An absolute time is attached to every 2 s segment |
+| From ffmpeg to the hayamimi ingest | **It works.** It connected without modifying `ws_ingest.py` |
+| Audio supply rate | Slightly faster than realtime. 156 s worth was supplied in 150.8 s |
 
-## 2. 지연 측정
+## 2. Measuring the delay
 
-| 방송 | 확정 자막 | 정제본 | 확정 → 번역 | 확정 → 정제 (중앙값) | 정제 최대 | 5초 초과 |
+| Stream | Final subtitles | Refined lines | Final → translation | Final → refined (median) | Refined max | Over 5 s |
 |---|---|---|---|---|---|---|
-| A | 15건 | 8건 | 0.16초 | 2.28초 | 20.03초 | 6/15 (40%) |
-| B | 26건 | 9건 | 0.27초 | 5.31초 | 20.07초 | 13/26 (50%) |
+| A | 15 | 8 | 0.16 s | 2.28 s | 20.03 s | 6/15 (40%) |
+| B | 26 | 9 | 0.27 s | 5.31 s | 20.07 s | 13/26 (50%) |
 
-**번역은 병목이 아닙니다.** 로컬 M2M-100의 번역 지연은 중앙값 0.2초 안팎입니다.
+**Translation is not the bottleneck.** The translation delay of the local M2M-100 has a median of about 0.2 s.
 
-**병목은 정제 발동입니다.** hayamimi의 2패스 정제는 2초 이상의 침묵을 기다렸다가 동작하는데, 쉬지 않고 말하는 화자에게는 침묵이 좀처럼 오지 않습니다. 두 방송 모두 최대 20초까지 밀렸고, 5초를 넘긴 비율이 40퍼센트와 50퍼센트였습니다.
+**The bottleneck is the triggering of the refinement.** hayamimi's two-pass refinement waits for 2 s or more of silence before it runs, and for a speaker who talks without pausing, that silence rarely comes. Both streams were pushed out to as much as 20 s, and the share that went over 5 s was 40 percent and 50 percent.
 
-**이것은 화자 개인의 특성이 아니라 구조적 문제입니다.** 서로 다른 두 화자에게서 같은 양상이 재현되었습니다.
+**This is not a trait of an individual speaker but a structural problem.** The same pattern was reproduced with two different speakers.
 
-## 3. 인식 품질 차이
+## 3. The difference in recognition quality
 
-같은 엔진과 같은 설정인데도 두 방송의 인식 품질이 눈에 띄게 달랐습니다.
+Even with the same engine and the same settings, the recognition quality of the two streams differed noticeably.
 
-**방송 A**
+**Stream A**
 ```
 ちいかはね。映画見たからね。
 プロフィール帳のちょうってどれだこれか。
 ```
 
-**방송 B**
+**Stream B**
 ```
 ゲストで出る曲聴いて覚えてるかいみたいな。
 そうじゃないときは大体うん。何してるかな？
 TIKTOKを見てるか。YOUTUBE見てるか。
 ```
 
-방송 B는 조사와 어미가 온전하고 고유명사도 정확합니다. 방송 A에서는 캐릭터 이름 `ちいかわ`가 `ちいかは`로 뭉개졌습니다. 확정 자막 한 건의 평균 길이도 A가 15자, B가 21자로 차이가 납니다.
+In stream B the particles and endings are intact and the proper nouns are accurate too. In stream A the character name `ちいかわ` was smeared into `ちいかは`. The average length of a single final subtitle also differs: 15 characters for A against 21 for B.
 
-**함의**: 사용자가 자막 품질에 불만을 느낄 때 원인이 설정인지 원본 오디오인지 구분할 수 있어야 합니다. UI에 오디오 상태를 드러내는 지표가 필요합니다.
+**Implication**: when a user is unhappy with subtitle quality, it has to be possible to tell whether the cause is the settings or the source audio. The UI needs an indicator that exposes the state of the audio.
 
-## 4. 되돌림 경로 결함
+## 4. A defect in the loopback path
 
-`ws_ingest.py`는 인제스트 연결에 자막 이벤트를 되돌려 보내는 기능도 갖고 있습니다. 이 경로가 이벤트를 유실합니다.
+`ws_ingest.py` also has the ability to send subtitle events back over the ingest connection. This path loses events.
 
-| 측정 | 결과 |
+| Measurement | Result |
 |---|---|
-| 1차 | 클라이언트 버그로 측정 불가 |
-| 2차 | 22건 수신 후 57초에서 중단 |
-| 3차 (엔진 새로 기동) | 0건 |
-| SSE와 동시 비교 | **SSE 92건 대 WebSocket 15건** |
+| 1st | Could not measure, because of a client bug |
+| 2nd | Received 22 events, then stopped at 57 s |
+| 3rd (engine started fresh) | 0 |
+| Compared against SSE at the same time | **92 over SSE against 15 over WebSocket** |
 
-엔진은 세 번 모두 정상 전사했으므로 발행 자체는 문제가 없습니다. **따라서 오디오는 WebSocket으로 보내고 자막은 SSE로 받습니다.**
+The engine transcribed correctly all three times, so publishing itself is not the problem. **So the audio goes over WebSocket and the subtitles come back over SSE.**
 
-## 5. 번역 품질
+## 5. Translation quality
 
-로컬 M2M-100 418M의 한계가 드러났습니다.
+The limits of the local M2M-100 418M showed themselves.
 
-| 원문 | 번역 | 문제 |
+| Source | Translation | Problem |
 |---|---|---|
-| 社長とお料理企画 | 대통령과 요리 프로젝트 | `社長`(사장)을 대통령으로 오역 |
-| まずホロメンいこうよ | 우선 호르몬이 되어야 한다 | 고유명사 `ホロメン`을 호르몬으로 오역 |
+| 社長とお料理企画 | 대통령과 요리 프로젝트 | `社長` (a company president) mistranslated as 대통령 (head of state) |
+| まずホロメンいこうよ | 우선 호르몬이 되어야 한다 | The proper noun `ホロメン` mistranslated as 호르몬 (hormone) |
 
-번역 속도는 충분하므로, 외부 엔드포인트 연동은 **속도가 아니라 품질을 위한 선택지**입니다.
+The translation speed is sufficient, so wiring up an external endpoint is **an option for quality, not for speed**.
 
-## 6. 정제본의 가치 확인
+## 6. Confirming the value of the refined line
 
 ```
-확정:  ちいかはね。映画見たからね。
-정제:  ちいかわが今はやってます。ちいかわね。映画見たからね。
+final:    ちいかはね。映画見たからね。
+refined:  ちいかわが今はやってます。ちいかわね。映画見たからね。
 ```
 
-정제 단계에서 캐릭터 이름이 복원되었습니다. 번역 단위를 정제본으로 삼는 판단은 품질 측면에서 옳습니다. 다만 위의 지연 문제를 함께 해결해야 합니다.
+The refinement stage restored the character name. The decision to make the refined line the unit of translation is right on quality grounds. It only has to be solved together with the delay problem above.
 
-## 7. 결론
+## 7. Conclusion
 
-1. **경로는 성립합니다.** yt-dlp에서 hayamimi까지 이어지며, 기존 인제스트를 수정하지 않아도 됩니다.
-2. **자막 수신은 SSE로 합니다.** WebSocket 되돌림은 사용하지 않습니다.
-3. **정제 지연을 해결해야 합니다.** 확정 자막을 먼저 표시하고 정제본이 도착하면 교체하는 방식이 적절합니다. hayamimi를 수정하지 않아도 되고, 화면에 항상 무언가가 떠 있게 됩니다.
-4. **라이브에서도 자동 정렬의 근거가 있습니다.** `EXT-X-PROGRAM-DATE-TIME`을 활용할 수 있으며, 수동 오프셋은 보조 수단으로 둡니다.
-5. **번역 품질 개선은 외부 엔드포인트로 해결합니다.** 속도는 이미 충분합니다.
+1. **The path holds.** It runs from yt-dlp to hayamimi, and the existing ingest does not have to be modified.
+2. **Subtitles are received over SSE.** The WebSocket loopback is not used.
+3. **The refinement delay has to be solved.** Showing the final subtitle first and replacing it when the refined line arrives is the right approach. It requires no change to hayamimi, and it keeps something on the screen at all times.
+4. **There is a basis for automatic alignment in live streams too.** `EXT-X-PROGRAM-DATE-TIME` can be used, with the manual offset kept as a secondary means.
+5. **Improving translation quality is solved with an external endpoint.** The speed is already sufficient.
 
 ---
 
-# 전사 모델 선정 (2026-08-28)
+# Choosing the transcription model (2026-08-28)
 
-라이브 전사 품질이 가장 큰 약점으로 남아, transcribe.cpp를 런타임으로 삼아
-후보 모델을 실측했습니다. 표본은 20초 조각 8개입니다 — 일본어 게임 방송 4개
-(`s_ja_600/1800/3000/4200`)와 한국어 세미나 4개(`s_ko_60/400/900/1400`).
+Live transcription quality remained the biggest weakness, so transcribe.cpp was
+taken as the runtime and the candidate models were measured. The sample is
+8 pieces of 20 s each -- 4 from Japanese game streams
+(`s_ja_600/1800/3000/4200`) and 4 from Korean seminars (`s_ko_60/400/900/1400`).
 
-## 8. 속도
+## 8. Speed
 
-Apple Silicon Metal 백엔드, 20초 오디오 기준입니다.
+Apple Silicon Metal backend, against 20 s of audio.
 
-| 모델 | 크기 | 속도 |
+| Model | Size | Speed |
 |---|---|---|
-| SenseVoice Small Q8_0 | 241 MB | 205배속 |
-| whisper-large-v3-turbo Q8_0 | 845 MB | 29~40배속 |
-| Fun-ASR MLT Nano Q8_0 | 850 MB | 23~39배속 |
-| Voxtral Mini Realtime Q8_0 (오프라인) | 4513 MB | 5배속 |
-| Voxtral Mini Realtime Q8_0 (스트리밍) | 4513 MB | 2.9배속 |
+| SenseVoice Small Q8_0 | 241 MB | 205x realtime |
+| whisper-large-v3-turbo Q8_0 | 845 MB | 29~40x realtime |
+| Fun-ASR MLT Nano Q8_0 | 850 MB | 23~39x realtime |
+| Voxtral Mini Realtime Q8_0 (offline) | 4513 MB | 5x realtime |
+| Voxtral Mini Realtime Q8_0 (streaming) | 4513 MB | 2.9x realtime |
 
-라이브는 1배속만 넘기면 되므로 SenseVoice의 205배속은 남는 여유입니다.
-반대로 Voxtral의 2.9배속은 한 세션은 감당하지만 여유가 거의 없습니다.
+Live only has to clear 1x realtime, so SenseVoice's 205x is headroom to spare.
+Voxtral's 2.9x, on the other hand, carries one session but has almost no margin.
 
-## 9. Voxtral Realtime: 채택하지 않음
+## 9. Voxtral Realtime: not adopted
 
-저지연 스트리밍을 내세운 모델이라 별도로 확인했습니다. 스트리밍 지연을
-바꿔 가며 같은 조각을 돌렸습니다.
+It is a model that advertises low-latency streaming, so it was checked
+separately. The same piece was run with the streaming latency varied.
 
-| 지연 설정 | 출력 |
+| Latency setting | Output |
 |---|---|
-| 80 ms | 88자 — `これはお父さん` 삽입 (환각) |
-| 480 ms | 81자 — 안정 |
-| 2400 ms | 81자 — 480 ms와 **완전 동일** |
+| 80 ms | 88 chars -- `これはお父さん` inserted (hallucination) |
+| 480 ms | 81 chars -- stable |
+| 2400 ms | 81 chars -- **exactly identical** to 480 ms |
 
-**지연을 늘려도 품질이 나아지지 않습니다.** 480 ms에서 이미 수렴하고,
-그 아래로 내리면 환각이 섞입니다. 품질이 Fun-ASR를 넘지 못하면서 속도는
-10배 이상 느리고, 화자 분리는 이 모델이 아니라 API 전용 기능이었습니다.
-**채택 근거를 찾지 못했습니다.**
+**Raising the latency does not improve the quality.** It has already converged
+at 480 ms, and below that hallucinations creep in. The quality does not surpass
+Fun-ASR while the speed is more than 10 times slower, and speaker separation
+turned out to be an API-only feature rather than something the model does.
+**No grounds for adopting it were found.**
 
-## 10. SenseVoice 양자화를 높이면 나아지는가
+## 10. Does raising the SenseVoice quantisation make it better
 
-문서의 자체 표는 F32·F16·Q8_0이 모두 WER 3.13%로 같다고 적고 있습니다.
-한국어·일본어에서도 그런지 8개 조각으로 직접 대조했습니다.
+The documentation's own table records F32, F16 and Q8_0 as all having the same
+WER of 3.13%. Whether that also holds for Korean and Japanese was checked
+directly against the 8 pieces.
 
-- 8개 중 2개는 **출력이 한 글자도 다르지 않았습니다.**
-- 나머지 6개는 **1~2자 차이**뿐이며, 방향은 F32가 조금 낫습니다.
+- 2 of the 8 had **not a single character of difference in the output.**
+- The remaining 6 differ by **only 1~2 characters**, and the direction is that
+  F32 is slightly better.
 
-| 조각 | Q8_0 | F32 |
+| Piece | Q8_0 | F32 |
 |---|---|---|
 | s_ja_1800 | `やろうとてら` | `やろうとしてら` |
 | s_ja_4200 | `カスタカスタマイズ` | `カスタムカスタマイズ` |
 | s_ko_60 | `엔지니를` | `엔지니어를` |
 
-F32는 떨어뜨린 음절 하나씩을 되살립니다. 그러나 그뿐이고 용량은 3.7배입니다.
-그리고 한국어의 진짜 문제 — `데이터독`을 `데이터`로, `프리세일즈`를
-`프리세일`로 줄여 버리는 것 — 은 F32도 고치지 못합니다.
-**이것은 양자화가 아니라 모델의 한계이므로, 양자화를 올리는 것은 해법이
-아닙니다.** Q8_0을 유지합니다.
+F32 brings back the odd dropped syllable. But that is all it does, and it costs
+3.7 times the size. And the real problem in Korean -- shortening `데이터독` to
+`데이터` and `프리세일즈` to `프리세일` -- is not fixed by F32 either.
+**This is a limit of the model rather than of the quantisation, so raising the
+quantisation is not the answer.** We keep Q8_0.
 
-## 11. 라이브 방송 4개로 다시 확인
+## 11. Checking again against 4 live streams
 
-20초 조각 8개로 얻은 잠정 결론(일본어=Fun-ASR)을 실제 방송으로 검증했습니다.
-라이브 방송 4개를 180초씩 녹음해, **같은 음성**을 여러 모델에 물렸습니다.
-순차로 라이브에 붙이면 엔진마다 다른 구간을 듣게 되어 비교가 성립하지
-않기 때문입니다. 구간 분할은 라이브와 같은 값(최대 4초 / 무음 0.30초)을
-썼고, 세 엔진 모두 같은 줄 수가 나왔으므로 조각은 동일합니다.
+The provisional conclusion from the 8 pieces of 20 s (Japanese = Fun-ASR) was
+verified against real streams. 4 live streams were recorded for 180 s each, and
+**the same audio** was fed to several models. Attaching them to a live stream
+one after another would make each engine hear a different stretch, so the
+comparison would not hold. The chunking used the same values as live
+(max 4 s / silence 0.30 s), and all three engines produced the same number of
+lines, so the chunks are identical.
 
-| 방송 | hayamimi | Fun-ASR | Whisper v3 turbo |
+| Stream | hayamimi | Fun-ASR | Whisper v3 turbo |
 |---|---|---|---|
-| 일본어 솔로 (SMAvGS1YwCo) | 374자 | **575자** | 533자 |
-| 일본어 솔로·다변 (AurxqUYrBuk) | 492자 | **657자** | 604자 |
-| 일본어 합방 (lfBZHXZWqqg) | 370자 | 614자 † | **619자** |
-| 한국어 솔로 (mxCUAACJ790) | 556자 | — | 522자 |
+| Japanese solo (SMAvGS1YwCo) | 374 chars | **575 chars** | 533 chars |
+| Japanese solo, talkative (AurxqUYrBuk) | 492 chars | **657 chars** | 604 chars |
+| Japanese collab (lfBZHXZWqqg) | 370 chars | 614 chars † | **619 chars** |
+| Korean solo (mxCUAACJ790) | 556 chars | — | 522 chars |
 
-† 분량은 비슷하지만 내용이 무너졌습니다. 아래 참조.
+† The volume is similar but the content collapsed. See below.
 
-### 솔로에서는 Fun-ASR가 앞섭니다
+### On solo streams Fun-ASR is ahead
 
-hayamimi가 절을 통째로 흘리는 자리를 Fun-ASR가 받아 적었고, 고유명사도
-정확했습니다.
+Where hayamimi dropped whole clauses, Fun-ASR wrote them down, and the proper
+nouns were accurate too.
 
 | hayamimi | Fun-ASR |
 |---|---|
 | `ここ毎回な毎回やって` | `でもお任せも経験値強かったりしないかなでここ毎回な毎回やって` |
-| `暢ちゃんとは` | `スバルちゃんとは` (실제 이름) |
+| `暢ちゃんとは` | `スバルちゃんとは` (the actual name) |
 | `試合。` | `試合速度が応援を a ボタンでなんかあると` |
 
-### 그러나 합방에서 언어 고정이 풀립니다
+### But on collabs the language lock comes undone
 
-`-l ja`로 고정했는데도 Fun-ASR가 다른 언어를 뱉었습니다.
+Even though it was pinned with `-l ja`, Fun-ASR spat out other languages.
 
 | hayamimi | Fun-ASR | Whisper |
 |---|---|---|
@@ -193,11 +201,11 @@ hayamimi가 절을 통째로 흘리는 자리를 Fun-ASR가 받아 적었고, �
 | `ちゃんとプライバシードアつけない` | `テンション高い!silプライバシーね…` | `高いプライバシーねちゃんとプライバシーどうつけない` |
 | — | `tahu` / `truk` / `hơi vui` | — |
 
-인도네시아어·베트남어이며, 내부 토큰 `!sil`도 그대로 흘러나왔습니다.
-Whisper는 세 방송 모두에서 언어가 새지 않았고, 합방에서는 오히려 가장
-많이 받아 적었습니다.
+That is Indonesian and Vietnamese, and the internal token `!sil` leaked straight
+through as well. Whisper's language never leaked on any of the three streams,
+and on the collab it in fact wrote down the most.
 
-### 한국어
+### Korean
 
 | hayamimi | Whisper |
 |---|---|
@@ -205,166 +213,184 @@ Whisper는 세 방송 모두에서 언어가 새지 않았고, 합방에서는 �
 | `0 포 티랑 일하면` | `영포티랑 일하면` |
 | `허러비스에서는` | `컬어비스에서는` |
 
-hayamimi가 글자 수는 많지만(556 대 522) 뜻이 통하지 않습니다. 분량이 아니라
-내용으로 판단해야 한다는 것을 `s_ja_1800`의 환각에서 이미 배웠습니다.
+hayamimi has more characters (556 against 522) but the sense does not come
+through. That the judgement has to be made on content and not on volume was
+already learned from the hallucination in `s_ja_1800`.
 
-## 12. 언어별 배치 (확정)
+## 12. The per-language assignment (settled)
 
-| 언어 | 채택 | 속도 |
+| Language | Choice | Speed |
 |---|---|---|
-| 일본어 | **whisper-large-v3-turbo Q8_0** | 11~15배속 |
-| 한국어 | **whisper-large-v3-turbo Q8_0** | 18배속 |
-| 그 외 | hayamimi RoutedASR | — |
+| Japanese | **whisper-large-v3-turbo Q8_0** | 11~15x realtime |
+| Korean | **whisper-large-v3-turbo Q8_0** | 18x realtime |
+| Everything else | hayamimi RoutedASR | — |
 
-일본어에서 솔로 기준 7%를 Fun-ASR에 내주지만, 합방에서 무너지지 않는 쪽을
-택했습니다. 한 종류의 방송만 잘 보는 모델보다 전부 견디는 모델이 낫고,
-두 언어가 같은 모델을 쓰므로 845MB 하나만 상주하면 됩니다.
+In Japanese it concedes 7% to Fun-ASR on solo streams, but the side that does
+not collapse on collabs was chosen. A model that survives everything is better
+than one that only handles a single kind of stream well, and since both
+languages use the same model only one 845 MB copy has to be resident.
 
-Fun-ASR의 35~46배속에 비해 Whisper는 11~18배속으로 느리지만, 라이브는
-1배속만 넘기면 됩니다.
+Against Fun-ASR's 35~46x, Whisper is slower at 11~18x, but live only has to
+clear 1x realtime.
 
-## 13. 환각 방어
+## 13. Defending against hallucination
 
-Fun-ASR는 `s_ja_1800`에서 `おらおら`를 117회 반복해 262자를 만들어 냈습니다.
-같은 구간을 SenseVoice는 8자로 처리했으므로 그 구간은 실제로 거의 무음이며,
-262자는 전부 환각입니다. 처음에는 이것을 "포착량이 가장 많다"고 잘못
-평가했습니다.
+On `s_ja_1800` Fun-ASR repeated `おらおら` 117 times and manufactured 262
+characters. SenseVoice handled the same stretch in 8 characters, so that stretch
+is in fact nearly silent and the 262 characters are all hallucination. At first
+this was wrongly rated as "the one that catches the most".
 
-4-gram 다양도로 두 경우가 깨끗하게 갈립니다.
+The 4-gram diversity separates the two cases cleanly.
 
-| 구간 | 다양도 |
+| Stretch | Diversity |
 |---|---|
-| 정상 발화 | 0.94 |
-| 반복 폭주 | 0.02 |
+| Normal speech | 0.94 |
+| Repetition runaway | 0.02 |
 
-방어는 두 겹입니다.
+The defence is two layers.
 
-1. **다양도 검사** — 40자 이상인 결과의 4-gram 다양도가 0.35 미만이면 버립니다.
-   기존에 저장된 실제 자막 2176개로 검증해 오탐 0건입니다.
-2. **생성 상한 예외** — 몇 초짜리 조각이 256토큰을 다 쓰면 `OutputTruncated`가
-   납니다. 사람의 발화가 그럴 수 없으므로 같은 폭주로 보고 같이 버립니다.
-   이 예외는 실제로 합방 비교 도중 실행을 중단시켰고, 라이브였다면 세션이
-   죽었을 자리입니다.
+1. **The diversity check** -- a result of 40 characters or more whose 4-gram
+   diversity is below 0.35 is thrown away. Verified against the 2176 real
+   subtitles already in storage, with 0 false positives.
+2. **The generation-cap exception** -- when a piece a few seconds long uses up
+   all 256 tokens, `OutputTruncated` is raised. Human speech cannot do that, so
+   it is treated as the same runaway and thrown away with it. This exception
+   actually aborted a run in the middle of the collab comparison, and in a live
+   session that is where the session would have died.
 
-## 14. 라이브 실사용 검증
+## 14. Verification in real live use
 
-가장 어려운 합방 방송에 collab 프로파일로 붙였습니다.
+It was attached to the hardest stream, the collab, with the collab profile.
 
-| 항목 | 값 |
+| Item | Value |
 |---|---|
-| 자막 | 25줄, 전부 일본어 |
-| 해독 | 평균 381 ms / 최대 793 ms |
-| 화면까지의 지연 | 평균 384 ms / 최대 795 ms |
-| 환각 차단 | 0건 |
-| 오류 | 없음 |
+| Subtitles | 25 lines, all Japanese |
+| Decoding | average 381 ms / max 793 ms |
+| Delay to the screen | average 384 ms / max 795 ms |
+| Hallucinations blocked | 0 |
+| Errors | none |
 
-`スバル`, `セブンデイズ・トゥーダイ`, `寝袋` 등 고유명사와 게임 용어가
-정확히 나왔습니다. 25줄 중 한 줄에서 `風料雨 Turnew add` 같은 깨진 출력이
-있었으나 빈도가 낮고 다음 줄에서 회복했습니다.
+Proper nouns and game terms such as `スバル`, `セブンデイズ・トゥーダイ` and
+`寝袋` came out accurately. One of the 25 lines had a broken output like
+`風料雨 Turnew add`, but the frequency is low and it recovered on the next line.
 
 ---
 
-# Whisper 양자화 단계 검토 (2026-08-28)
+# Reviewing the Whisper quantisation levels (2026-08-28)
 
-녹화본 전사가 길이만큼 곱해지므로, 양자화를 낮추면 시간이 줄지 확인했습니다.
-실측은 라이브 방송 녹음 2개(각 180초)에 녹화본과 같은 구간 설정
-(최대 12초 / 무음 0.35초)을 적용했습니다.
+Because VOD transcription multiplies with the length, whether lowering the
+quantisation shortens the time was checked. The measurement applied the same
+chunking settings as VOD (max 12 s / silence 0.35 s) to 2 recordings of live
+streams (180 s each).
 
-## 15. 속도: 줄지 않습니다
+## 15. Speed: it does not go down
 
-| 양자화 | 크기 | 일본어 | 한국어 |
+| Quantisation | Size | Japanese | Korean |
 |---|---|---|---|
-| Q8_0 | 845 MB | 13.2배속 | 14.4배속 |
-| Q6_K | 660 MB | 15.9배속 | 13.9배속 |
-| Q5_K_M | 591 MB | 13.2배속 | 14.8배속 |
-| Q4_K_M | 511 MB | 11.0배속 | 14.3배속 |
+| Q8_0 | 845 MB | 13.2x realtime | 14.4x realtime |
+| Q6_K | 660 MB | 15.9x realtime | 13.9x realtime |
+| Q5_K_M | 591 MB | 13.2x realtime | 14.8x realtime |
+| Q4_K_M | 511 MB | 11.0x realtime | 14.3x realtime |
 
-13~16배속 사이에서 흔들릴 뿐 경향이 없습니다. 모델을 40% 줄여도 시간이
-줄지 않고, 일본어의 Q4_K_M은 오히려 가장 느렸습니다.
+It merely wobbles between 13 and 16x realtime with no trend. Shrinking the model
+by 40% does not shorten the time, and Q4_K_M in Japanese was in fact the
+slowest.
 
-transcribe.cpp 문서의 M4 Max 측정과 같은 결과입니다 — Metal에서 38.4배속
-대 38.1배속, CPU에서만 1.4배속 대 1.9배속. **Metal에서는 가중치 크기가
-병목이 아닙니다.**
+The same result as the M4 Max measurement in the transcribe.cpp documentation --
+38.4x against 38.1x on Metal, and only on CPU 1.4x against 1.9x. **On Metal the
+weight size is not the bottleneck.**
 
-## 16. run_batch: 오히려 느립니다
+## 16. run_batch: it is slower, in fact
 
-바인딩의 `run_batch`는 "묶음 연산 경로가 있는 계열에서 약 2배 처리량"이라고
-적혀 있어 녹화본에 맞을 것으로 보고 함께 쟀습니다.
+The binding's `run_batch` is described as "about 2x the throughput on families
+that have a batched-operation path", so it looked like a fit for VOD and was
+measured alongside.
 
-| | 순차 | 묶음 |
+| | Sequential | Batched |
 |---|---|---|
-| 일본어 (30구간 / 발화 117초) | 13.6초 | **21.1초** |
-| 한국어 (25구간 / 발화 86초) | 12.5초 | 13.5초 |
+| Japanese (30 chunks / 117 s of speech) | 13.6 s | **21.1 s** |
+| Korean (25 chunks / 86 s of speech) | 12.5 s | 13.5 s |
 
-Whisper는 문서가 말하는 "차례로 실행하는 방식으로 물러난다"에 해당하는
-것으로 보이며, 조각 길이가 제각각일 때 가장 긴 것에 맞춰 채우는 낭비가
-얹히는 듯합니다. 조각이 더 많고 길이 편차가 큰 일본어가 훨씬 나빠진 것이
-그 방향을 가리킵니다.
+Whisper appears to fall into what the documentation calls "falling back to
+running them one at a time", and on top of that the waste of padding to the
+longest piece when the pieces differ in length seems to be added. That Japanese,
+which has more pieces and a wider spread of lengths, got far worse points in
+that direction.
 
-## 17. 품질: 낮출수록 벌어집니다
+## 17. Quality: the lower you go, the further it drifts
 
-Q8_0을 기준으로 구간별로 대조했습니다. 이어붙인 글자를 위치로 비교하면
-앞쪽 한 글자만 밀려도 뒤가 전부 다르게 잡히므로, 구간 단위로 봐야 합니다.
+The comparison was made per chunk, against Q8_0 as the baseline. Comparing the
+concatenated characters by position means that a single character shifted near
+the front makes everything after it register as different, so it has to be
+looked at per chunk.
 
-| 양자화 | 일본어 (30구간) | 한국어 (25구간) |
+| Quantisation | Japanese (30 chunks) | Korean (25 chunks) |
 |---|---|---|
-| Q6_K | 27개 완전 일치 / 유사도 0.955 | 21개 / 0.981 |
-| Q5_K_M | 24개 / 0.958 | 19개 / 0.958 |
-| Q4_K_M | **16개 / 0.932** | **11개 / 0.872** |
+| Q6_K | 27 exact matches / similarity 0.955 | 21 / 0.981 |
+| Q5_K_M | 24 / 0.958 | 19 / 0.958 |
+| Q4_K_M | **16 / 0.932** | **11 / 0.872** |
 
-Q6_K와 Q5_K_M의 차이는 대체로 무해합니다 — `ねぇ`와 `ねぇー`, `아저씨는`과
-`아저씨가`, 말끝의 `요` 유무 정도입니다.
+The difference between Q6_K and Q5_K_M is mostly harmless -- `ねぇ` against
+`ねぇー`, `아저씨는` against `아저씨가`, whether the `요` at the end of a
+sentence is there.
 
-Q4_K_M은 단어를 흘립니다.
+Q4_K_M drops words.
 
 | Q8_0 | Q4_K_M |
 |---|---|
 | `無理がいい機嫌なんだ。` | `いい機嫌なんだ。` |
 | `でもそれでもずっとそのなんかバリオカートとか` | `でもそれでもずっとバリオカートとか` |
 
-다만 방향이 한쪽만은 아닙니다. Q4_K_M이 `最近回戦の調子` 대신 `最近回線の調子`를
-냈는데, 문맥이 접속 상태 이야기이므로 **Q4_K_M 쪽이 맞습니다.** 낮은 단계가
-언제나 나쁜 것이 아니라, 출력이 흔들리는 폭이 커진다고 보는 편이 정확합니다.
+The direction is not one-way, though. Q4_K_M produced `最近回線の調子` instead
+of `最近回戦の調子`, and since the context is a conversation about the
+connection, **Q4_K_M is the one that is right.** It is more accurate to see it
+not as the lower level always being worse, but as the spread of the output's
+wobble getting wider.
 
-## 18. 결론: Q8_0을 유지합니다
+## 18. Conclusion: we keep Q8_0
 
-속도 이득이 없으므로 품질을 조금이라도 내줄 이유가 없습니다.
+There is no speed gain, so there is no reason to give up even a little quality.
 
-메모리를 아껴야 할 때만 **Q6_K**가 선택지입니다. 185MB 덜 쓰면서 일본어
-30구간 중 27개, 한국어 25구간 중 21개가 Q8_0과 글자까지 같고 속도 손해도
-없습니다. 지금은 메모리가 부족하지 않으므로 바꾸지 않습니다.
+**Q6_K** is an option only when memory has to be saved. It uses 185 MB less
+while 27 of the 30 Japanese chunks and 21 of the 25 Korean chunks match Q8_0
+down to the character, with no speed penalty. Memory is not short right now, so
+we are not changing it.
 
-녹화본 시간을 실제로 줄이려면 남은 길은 세션 병렬화입니다. VAD가 무음을
-이미 걸러 내므로(일본어 180초 중 발화 117초) 처리 시간은 영상 길이가 아니라
-말한 시간에 비례하며, 현재 13배속이면 1시간짜리가 4~5분입니다.
+The remaining road to actually shortening VOD time is parallelising sessions.
+Since the VAD already filters out the silence (117 s of speech out of 180 s of
+Japanese), the processing time is proportional not to the length of the video
+but to the time spent speaking, and at the current 13x realtime an hour-long one
+takes 4~5 minutes.
 
 ---
 
-# 번역 모델 비교: TranslateGemma 4B (2026-08-28)
+# Comparing translation models: TranslateGemma 4B (2026-08-28)
 
-구글이 번역 전용으로 내놓은 **TranslateGemma 4B**(`google/translategemma-4b-it`,
-Gemma 3 4B 기반, 55개 언어)를 지금 쓰고 있는 **Gemma 4 E4B**와 같은 자막
-줄에 붙여 비교했습니다.
+**TranslateGemma 4B** (`google/translategemma-4b-it`, based on Gemma 3 4B,
+55 languages), which Google released as a translation-only model, was attached
+to the same subtitle lines as the **Gemma 4 E4B** in use today and compared.
 
-## 19. 방법
+## 19. Method
 
-표본 63줄입니다. 자막 번역기가 실제로 받는 것과 같은 분포를 만들려고
-녹화본에서 시간축을 따라 고르게 뽑았습니다.
+The sample is 63 lines. To make the distribution the same as what the subtitle
+translator actually receives, they were drawn evenly along the time axis from
+VODs.
 
-| 출처 | 줄 | 성격 |
+| Source | Lines | Character |
 |---|---|---|
-| `MPSTWzF2ZKU` (ぶいすぽ 게임 방송, ja) | 34 | 파편·감탄사·겹말 |
-| `71SnC4H-G1Q` (ぶいすぽ 노래 방송, ja) | 14 | 곡 제목, 관객 호명 |
-| `jrLVa1Md4GU` (Datadog 발표, en) | 12 | 온전한 문장, 전문용어 |
-| 위 5절의 M2M-100 실패 줄 | 3 | 고정 기준점 |
+| `MPSTWzF2ZKU` (ぶいすぽ game stream, ja) | 34 | fragments, interjections, repeated words |
+| `71SnC4H-G1Q` (ぶいすぽ singing stream, ja) | 14 | song titles, calling out audience members |
+| `jrLVa1Md4GU` (Datadog talk, en) | 12 | complete sentences, technical terms |
+| The M2M-100 failure lines from section 5 above | 3 | fixed reference points |
 
-두 모델 모두 Q4급 양자화, `n_ctx=2048`, Metal, 같은 프로세스 구조입니다.
-**프롬프트는 같게 두지 않았습니다** — 같게 둘 수가 없습니다(21절 참조).
-Gemma 4는 `translate.LocalGemma`가 실제로 보내는 프롬프트를 그대로 썼고
-(temperature 0.2), TranslateGemma는 GGUF에 들어 있는 공식 챗 템플릿을
-jinja2로 렌더해서 썼습니다(temperature 0.0).
+Both models are Q4-class quantisation, `n_ctx=2048`, Metal, the same process
+structure. **The prompts were not held the same** -- they cannot be held the
+same (see section 21). Gemma 4 used exactly the prompt that
+`translate.LocalGemma` actually sends (temperature 0.2), and TranslateGemma used
+the official chat template embedded in the GGUF, rendered with jinja2
+(temperature 0.0).
 
-재현 코드는 `bench/`에 있습니다.
+The code to reproduce it is in `bench/`.
 
 ```sh
 .venv/bin/python bench/sample.py
@@ -373,35 +399,38 @@ jinja2로 렌더해서 썼습니다(temperature 0.0).
 .venv/bin/python bench/compare.py
 ```
 
-## 20. 속도와 크기: TranslateGemma가 낫습니다
+## 20. Speed and size: TranslateGemma is better
 
 | | Gemma 4 E4B q4_0 | TranslateGemma 4B Q4_K_M |
 |---|---|---|
-| 파일 크기 | 5.15 GB | **2.49 GB** |
-| 중앙값 | 0.18초 | **0.17초** |
-| p90 | 0.44초 | **0.34초** |
-| 최대 | 1.06초 | **0.79초** |
-| 63줄 합계 | 14.7초 | **12.9초** |
-| 실패 | 0 | 0 |
+| File size | 5.15 GB | **2.49 GB** |
+| Median | 0.18 s | **0.17 s** |
+| p90 | 0.44 s | **0.34 s** |
+| Max | 1.06 s | **0.79 s** |
+| Total for 63 lines | 14.7 s | **12.9 s** |
+| Failures | 0 | 0 |
 
-절반 크기로 조금 더 빠릅니다. 다만 5절에서 이미 확인했듯 **번역은 병목이
-아닙니다.** 0.18초든 0.17초든 자막 도착 시각은 달라지지 않습니다. 여기서
-의미 있는 숫자는 속도가 아니라 **2.7GB 절약**뿐입니다.
+At half the size it is a little faster. But as section 5 already confirmed,
+**translation is not the bottleneck.** Whether it is 0.18 s or 0.17 s, the
+arrival time of the subtitle does not change. The meaningful number here is not
+the speed but **the 2.7 GB saved**, and nothing else.
 
-## 21. 그대로 갈아 끼울 수 없습니다
+## 21. You cannot swap it in as-is
 
-TranslateGemma의 챗 템플릿은 원문·출발어·도착어를 **필드로** 받습니다.
-영어 지시문을 문자열로 넣으면 템플릿이 스스로 예외를 냅니다.
+TranslateGemma's chat template takes the source text, the source language and
+the target language **as fields**. Put an English instruction in as a string and
+the template raises an exception on its own.
 
 ```
 ValueError: User role must provide `content` as a list with a single entry ...
 ```
 
-`llama-cpp-python`은 GGUF에 박힌 템플릿을 그대로 적용하므로, `translate.py`의
-모델 경로만 바꾸는 교체는 **63줄 전부 실패**하고 조용히 M2M-100으로
-떨어집니다. 채택하려면 `LocalGemma`에 번역 전용 렌더 경로를 따로 내야 합니다.
+`llama-cpp-python` applies the template baked into the GGUF as it is, so a
+replacement that only changes the model path in `translate.py` **fails on all
+63 lines** and quietly falls back to M2M-100. Adopting it would require running
+a separate translation-only render path out of `LocalGemma`.
 
-렌더된 프롬프트는 이렇게 생겼습니다.
+The rendered prompt looks like this.
 
 ```
 <start_of_turn>user
@@ -412,160 +441,170 @@ Please translate the following Japanese text into Korean:
 <start_of_turn>model
 ```
 
-## 22. 품질: 온전한 문장은 대등하고, 파편에서 갈립니다
+## 22. Quality: on complete sentences they are equals, on fragments they part ways
 
-**온전한 문장에서는 우열을 가리기 어렵습니다.** 영어 발표 12줄은 둘 다
-읽을 만했고, TranslateGemma가 나은 줄도 있었습니다.
+**On complete sentences it is hard to pick a winner.** Both were readable on the
+12 lines of the English talk, and there were lines where TranslateGemma was
+better.
 
-| 원문 | Gemma 4 | TranslateGemma |
+| Source | Gemma 4 | TranslateGemma |
 |---|---|---|
 | And this famous conveys that message. | 그리고 이 유명한 **것이** 그 메시지를 전달합니다. | 그리고 이 유명한 **표현은** 그 메시지를 전달합니다 |
 | リサイクルマークで選べない。 | 재활용 마크로 선택할 수 없습니다 | 재활용 **표시만으로는** 선택할 수 없습니다 |
 
-**파편에서는 TranslateGemma가 말을 지어냅니다.** 화자가 끝내지 않은 문장을
-대신 끝내 버립니다. 63줄 중 눈에 띄게 갈린 것을 모두 적으면 이렇습니다.
+**On fragments TranslateGemma makes things up.** It finishes, on the speaker's
+behalf, a sentence the speaker did not finish. Writing out every one of the
+63 lines where they visibly parted ways gives this.
 
-| 원문 | Gemma 4 | TranslateGemma | 무엇이 더해졌나 |
+| Source | Gemma 4 | TranslateGemma | What was added |
 |---|---|---|---|
-| やろっかー。 | 할까 | 어쩌라고? | 뜻이 반대입니다 |
-| いいだけ。 | 그냥 | 네, 좋습니다. | 없던 동의 |
-| って。 | 라고. | 네. | 없던 동의 |
-| 危ないだろ。 | 위험하잖아. | 위험한가요? | 단정이 질문으로 |
-| あっずっと角にいた。 | 아, 계속 구석에 있었어. | **그는** 계속해서 구석에 서 있었다. | 없던 3인칭 주어 |
-| ずっとラブにくっついてくる。 | 계속 사랑에 매달려 와. | **'러브'라는 단어에** 얽매여 있다. | 낱말에 대한 논평으로 바뀜 |
-| なんも反応がないな。ゲームあっ。 | 아무런 반응이 없네. 게임 아. | 아무런 반응이 없네. **게임은 끝났어.** | 없던 결말 |
-| この帽子ケイトルーツだろ。絶対帽子が。 | 이 모자 케이트의 것이잖아. 분명 모자가. | 이 모자는 케이트 루트 모델이 맞아요. **꼭 이 모자를 입어야 해요.** | 없던 권유 |
-| そばにいてほしくて。 | 곁에 있어 **줬으면 해서.** | 제 곁에 **있어주세요.** | 바람이 명령으로 |
-| おじいちゃんおばあちゃんたちよ。ろこぶんじゃないか。 | 할아버지, 할머니들. 즐거운 일이네요. | 할아버지, 할머니, **혹시 괜찮으신가요?** | 없던 안부 |
-| えっ。 / あっ。 / あ。 | 네? / 아. / 아. | 음. / 음. / 음. | 셋을 하나로 뭉갬 |
-| 矢印押すのWSDって…方向器を押すだけだったら私。結構得意で楽しかった。 | 화살표 누르는 게 WSD라면 어렵겠지만, 방향키만 누르는 거라면 저. 꽤 잘했고 즐거웠어요. | (같은 절을 두 번 되풀이하며 원문 길이의 두 배로 늘어남) | 중복 생성 |
+| やろっかー。 | 할까 | 어쩌라고? | The sense is reversed |
+| いいだけ。 | 그냥 | 네, 좋습니다. | An agreement that was not there |
+| って。 | 라고. | 네. | An agreement that was not there |
+| 危ないだろ。 | 위험하잖아. | 위험한가요? | An assertion turned into a question |
+| あっずっと角にいた。 | 아, 계속 구석에 있었어. | **그는** 계속해서 구석에 서 있었다. | A third-person subject that was not there |
+| ずっとラブにくっついてくる。 | 계속 사랑에 매달려 와. | **'러브'라는 단어에** 얽매여 있다. | Turned into a comment about the word |
+| なんも反応がないな。ゲームあっ。 | 아무런 반응이 없네. 게임 아. | 아무런 반응이 없네. **게임은 끝났어.** | An ending that was not there |
+| この帽子ケイトルーツだろ。絶対帽子が。 | 이 모자 케이트의 것이잖아. 분명 모자가. | 이 모자는 케이트 루트 모델이 맞아요. **꼭 이 모자를 입어야 해요.** | An exhortation that was not there |
+| そばにいてほしくて。 | 곁에 있어 **줬으면 해서.** | 제 곁에 **있어주세요.** | A wish turned into a command |
+| おじいちゃんおばあちゃんたちよ。ろこぶんじゃないか。 | 할아버지, 할머니들. 즐거운 일이네요. | 할아버지, 할머니, **혹시 괜찮으신가요?** | An enquiry after their health that was not there |
+| えっ。 / あっ。 / あ。 | 네? / 아. / 아. | 음. / 음. / 음. | Flattens all three into one |
+| 矢印押すのWSDって…方向器を押すだけだったら私。結構得意で楽しかった。 | 화살표 누르는 게 WSD라면 어렵겠지만, 방향키만 누르는 거라면 저. 꽤 잘했고 즐거웠어요. | (repeats the same clause twice, growing to twice the length of the source) | Duplicate generation |
 
-영어에서도 같은 성향이 두 번 나왔습니다.
+The same tendency showed up twice in English as well.
 
-| 원문 | TranslateGemma | 문제 |
+| Source | TranslateGemma | Problem |
 |---|---|---|
-| It'll **at best** reduce the performance … and **at worst** | **최악의 경우**, 이는 앱 및 인프라의 성능을 저하시킬 뿐입니다. | at best/at worst가 뒤집혔습니다 |
-| DNS sniffers or dig into VPC logs for managed cloud services … | … VPC 로그를 분석하여 **악성 행위를 탐지할 수 있습니다.** | 원문에 없는 목적을 붙였습니다 |
+| It'll **at best** reduce the performance … and **at worst** | **최악의 경우**, 이는 앱 및 인프라의 성능을 저하시킬 뿐입니다. | at best and at worst were flipped |
+| DNS sniffers or dig into VPC logs for managed cloud services … | … VPC 로그를 분석하여 **악성 행위를 탐지할 수 있습니다.** | Attached a purpose that is not in the source |
 
-모르는 고유명사를 만났을 때도 태도가 다릅니다. `メンゲン`(멤버십 전용
-방송을 가리키는 방송인의 줄임말)을 Gemma 4는 `멘겐`으로 남겼고,
-TranslateGemma는 `보컬 그룹`으로 지어냈습니다. 남겨 두면 시청자가 찾아볼 수
-있지만, 지어내면 틀린 줄 모릅니다.
+The attitude also differs when it meets a proper noun it does not know.
+`メンゲン` (a streamer's abbreviation for a members-only stream) was left as
+`멘겐` by Gemma 4, while TranslateGemma made up `보컬 그룹` (a vocal group).
+Left as it is, a viewer can go and look it up; made up, they never know it is
+wrong.
 
-**이것은 temperature 탓이 아닙니다.** TranslateGemma는 0.0(그리디)으로
-돌렸고 Gemma 4는 0.2로 돌렸습니다. 더 결정적으로 뽑은 쪽이 더 많이
-지어냈습니다.
+**This is not the temperature's fault.** TranslateGemma was run at 0.0 (greedy)
+and Gemma 4 at 0.2. The side that was sampled more deterministically made more
+up.
 
-길이로도 같은 방향이 보입니다. 출력/원문 글자 수 중앙값입니다.
+The same direction shows in the length too. These are the median output/source
+character counts.
 
-| 원문 길이 | Gemma 4 | TranslateGemma |
+| Source length | Gemma 4 | TranslateGemma |
 |---|---|---|
-| 7~20자 | 1.13배 | 1.28배 |
-| 21자 이상 | 0.70배 | 0.89배 |
+| 7~20 chars | 1.13x | 1.28x |
+| 21 chars or more | 0.70x | 0.89x |
 
-## 23. 결론: 바꾸지 않습니다
+## 23. Conclusion: we are not changing it
 
-TranslateGemma 4B는 잘 만든 번역기입니다. 절반 크기로 조금 더 빠르고,
-온전한 문장에서는 Gemma 4 E4B와 대등하거나 낫습니다. 번역할 것이 문서라면
-좋은 선택입니다.
+TranslateGemma 4B is a well-made translator. At half the size it is a little
+faster, and on complete sentences it is the equal of Gemma 4 E4B or better. If
+what you are translating is a document, it is a good choice.
 
-**하지만 mimiwatch가 번역하는 것은 문서가 아닙니다.** 라이브 발화의 38~55%가
-여섯 자 이하 파편이고(5절), 이 구간에서 TranslateGemma는 모르는 것을 비워
-두는 대신 그럴듯하게 채웁니다. 자막에서 이것은 가장 나쁜 실패 방식입니다 —
-M2M-100의 `⁇`나 `호르몬`은 시청자가 오역임을 알아채지만, "게임은 끝났어"는
-알아챌 수 없습니다. `looks_broken`도 이런 문장은 걸러 내지 못합니다. 말이
-되기 때문입니다.
+**But what mimiwatch translates is not documents.** 38~55% of live speech is
+fragments of six characters or fewer (section 5), and in that range
+TranslateGemma fills in what it does not know plausibly instead of leaving it
+empty. In subtitles this is the worst possible mode of failure -- a viewer
+notices that M2M-100's `⁇` or `호르몬` is a mistranslation, but "게임은 끝났어"
+they cannot notice. `looks_broken` cannot filter a sentence like that out
+either. Because it makes sense.
 
-세 가지가 함께 걸립니다.
+Three things catch together.
 
-1. **파편에서 지어냅니다.** 눈에 띄게 갈린 15줄 중 13줄이 TranslateGemma의
-   창작이었습니다.
-2. **이득이 자막 지연으로 오지 않습니다.** 번역은 이미 병목이 아니므로,
-   남는 것은 디스크 2.7GB뿐입니다.
-3. **공짜 교체가 아닙니다.** `translate.py`에 번역 전용 프롬프트 경로를
-   새로 내야 합니다(21절).
+1. **It makes things up on fragments.** 13 of the 15 lines that visibly parted
+   ways were TranslateGemma's invention.
+2. **The gain does not arrive as subtitle delay.** Translation is already not
+   the bottleneck, so what is left is 2.7 GB of disk and nothing else.
+3. **It is not a free swap.** A translation-only prompt path has to be newly run
+   out of `translate.py` (section 21).
 
-**다시 볼 조건**은 이렇습니다. 디스크 2.7GB가 실제로 문제가 되거나, 파편
-문제가 번역기 바깥에서 풀릴 때 — 즉 정제본을 문장 단위로 합쳐 번역하도록
-바꾸면, TranslateGemma가 약한 구간 자체가 사라집니다. 그때는 다시 재 볼
-값어치가 있습니다. **12B/27B는 재지 않았습니다.** 4B에서 드러난 것이 용량
-부족이 아니라 파편에 대한 학습 성향이므로, 키운다고 나아진다는 보장이
-없습니다.
+**The conditions for looking again** are these. When 2.7 GB of disk actually
+becomes a problem, or when the fragment problem is solved outside the translator
+-- that is, changing it so that refined lines are merged into sentences before
+being translated makes the very range TranslateGemma is weak in disappear. At
+that point it is worth measuring again. **12B/27B were not measured.** What 4B
+revealed is not a shortage of capacity but a learned tendency towards fragments,
+so there is no guarantee that scaling up makes it better.
 
 ---
 
-# 장르 프리셋과 문맥 (2026-08-28)
+# Genre presets and context (2026-08-28)
 
-23절에서 모델을 바꾸지 않기로 한 뒤, 남은 질문은 **같은 모델을 더 잘 쓰는
-법**이었습니다. 자막 번역의 실패는 모델 용량보다 발화의 성격에서 왔으므로,
-프롬프트를 성격에 맞추면 어떻게 되는지 쟀습니다.
+After deciding in section 23 not to change the model, the remaining question was
+**how to use the same model better**. The failures of subtitle translation came
+from the character of the speech rather than from model capacity, so what
+happens when the prompt is matched to that character was measured.
 
-## 24. 방법
+## 24. Method
 
-19절과 **같은 63줄, 같은 Gemma 4 E4B q4_0, 같은 temperature 0.2**입니다.
-바뀌는 것은 프롬프트뿐입니다. 네 가지를 각각 돌렸습니다.
+The **same 63 lines, the same Gemma 4 E4B q4_0, the same temperature 0.2** as
+section 19. The only thing that changes is the prompt. Four variants were each run.
 
-| | 프롬프트 | 직전 자막 |
+| | Prompt | Preceding subtitles |
 |---|---|---|
-| `generic` | 지금까지의 한 벌 | 없음 |
-| `preset` | 장르별 | 없음 |
-| `generic-ctx` | 지금까지의 한 벌 | 3줄 |
-| `preset-ctx` | 장르별 | 3줄 |
+| `generic` | the one set used so far | none |
+| `preset` | per genre | none |
+| `generic-ctx` | the one set used so far | 3 lines |
+| `preset-ctx` | per genre | 3 lines |
 
-프리셋과 문맥을 따로 잰 것은, 한꺼번에 켜서 좋아지면 어느 쪽이 일했는지
-알 수 없기 때문입니다. 장르는 표본의 출처에 따라 붙였습니다 — 게임 방송에
-`gaming`, 노래 방송에 `music`, 발표에 `tech`.
+The preset and the context were measured separately because if both are turned
+on at once and the result gets better, there is no telling which one did the
+work. The genre was attached according to where the sample came from -- `gaming`
+for the game stream, `music` for the singing stream, `tech` for the talk.
 
 ```sh
 .venv/bin/python bench/run_prompt.py {generic|preset|generic-ctx|preset-ctx}
 .venv/bin/python bench/compare4.py
 ```
 
-## 25. 프리셋: 전사기가 뭉갠 이름을 되살립니다
+## 25. The preset: it brings back the names the transcriber mangled
 
-가장 분명한 이득은 기술 발표에서 나왔습니다. Whisper가 뭉갠 제품명을
-**번역기가 문맥으로 복원합니다.** 번역기는 이 줄이 클라우드 발표라는 것을
-아는 유일한 지점입니다.
+The clearest gain came from the tech talk. **The translator restores from
+context** a product name that Whisper mangled. The translator is the only point
+that knows this line comes from a cloud talk.
 
-| 원문(전사) | generic | preset |
+| Source (transcription) | generic | preset |
 |---|---|---|
 | …managed cloud services like **RAT fifty three**. | …**RAT fifty three**와 같은 관리형 클라우드 서비스의… | …**Route 53**과 같은 관리형 클라우드 서비스의… |
 
-되살아나지 않은 것도 있습니다. `Cordian S`(→ Consul)와 `Data Doc`(→
-Datadog)은 네 조합 모두 그대로 두었습니다. 프리셋은 만능이 아니라 **문맥이
-충분히 좁을 때** 듣습니다.
+Some were not brought back. `Cordian S`(→ Consul) and `Data Doc`(→ Datadog)
+were left exactly as they were by all four combinations. The preset is not a
+cure-all; it works **when the context is narrow enough**.
 
-두 번째 이득은 어투입니다. 게임 방송 자막이 방송처럼 읽힙니다.
+The second gain is register. The game stream subtitles read like a stream.
 
-| 원문 | generic | preset |
+| Source | generic | preset |
 |---|---|---|
 | コメント見なければこんなもんですか？ | 코멘트 안 보면 이런 건가요? | 댓글 안 보면 이렇냐? |
 | ねっめっちゃ怖い。 | 와, 진짜 무서워. | 헐 진짜 무서워 |
 | 私グリンピースでした。バギ。 | 저는 그린피스였습니다. 바기. | 나 그린피스였어. 바기. |
 | リサイクルマークで選べない。 | 재활용 마크로 선택할 수 없다. | 리사이클 마크로 못 고르겠네. |
 
-**프리셋에도 회귀가 있습니다.** 첫 판의 게임 프리셋은 "고유명사는 그대로"를
-과적용해 `玉を打って`를 **`玉을 쳐서`**로 냈습니다 — 일본어 한자를 그대로
-남긴 것입니다. "이름은 이름으로 두되 보통 명사는 반드시 옮긴다"를 덧붙여
-`공을 쳐서`로 고쳤습니다. 장르 프롬프트는 한 번에 맞지 않으며, 이 표본에
-다시 걸어 보는 절차가 필요합니다.
+**The preset has regressions of its own.** The first version of the game preset
+over-applied "leave proper nouns alone" and turned `玉を打って` into
+**`玉을 쳐서`** -- it left the Japanese kanji standing. Adding "leave names as
+names, but always carry common nouns over" fixed it to `공을 쳐서`. A genre
+prompt does not come out right the first time, and it needs a procedure that
+runs it against this sample again.
 
-## 26. 문맥: 경계를 조이기 전까지는 손해였습니다
+## 26. Context: it was a loss until the boundary was tightened
 
-직전 자막 3줄을 붙이자 **모델이 대상 줄 대신 참고 줄을 번역했습니다.**
-63줄 중 4줄입니다.
+Once the 3 preceding subtitle lines were attached, **the model translated a
+reference line instead of the target line.** 4 lines out of 63.
 
-| 원문 | 직전 자막 | 첫 판의 출력 |
+| Source | Preceding subtitles | First version's output |
 |---|---|---|
 | ここまで。 | …ノアちゃんが…オススメしてくれた曲の中の一つ。 / はい。 / 今回Vスポの… | **이번에 V스포 보컬 노래 방송으로요.** |
 | ふだんの歌ってさ。… | …この歌枠はなんと残ります。 | **평소 노래 방송은 멘겐으로 가지만, 이번 노래 방송은 남아요.** |
-| It'll **at best** … and **at worst** | There is no way it's DNS. / But somehow it was DNS. | **최악의 경우** (문장이 통째로 사라짐) |
+| It'll **at best** … and **at worst** | There is no way it's DNS. / But somehow it was DNS. | **최악의 경우** (the whole sentence is gone) |
 | とっとさんなんですけど。二十五分から… | ちょっと。 / いやでも雑談する。 | **그냥.** |
 
-첫 판의 문맥 블록은 "참고용"이라고 한 번 적고 대상 줄을 그 뒤에 그냥
-두었습니다. 지시와 대상 사이에 참고 줄 세 개가 끼면서 지시가 멀어진 것이
-원인입니다. **대상 줄 바로 앞에 경계를 한 번 더 세우자** 네 건이 모두
-사라졌습니다.
+The first version's context block wrote "for reference" once and then simply
+left the target line after it. The cause is that three reference lines sat
+between the instruction and the target, so the instruction drifted away. **Once
+a boundary was raised one more time right in front of the target line,** all
+four disappeared.
 
 ```
 Context -- these ja lines came before and are NOT to be translated:
@@ -577,270 +616,289 @@ Now translate only this one ja line:
 って。
 ```
 
-경계를 조인 뒤에는 문맥이 **뜻을 좁히는** 쪽으로만 일합니다.
+After the boundary was tightened, the context works only in the direction of
+**narrowing the meaning**.
 
-| 원문 | 직전 자막 | 문맥 없음 | 문맥 있음 |
+| Source | Preceding subtitles | Without context | With context |
 |---|---|---|---|
 | 束縛強め。 | ププッ。/ やめ。/ 仲よく仲よ。 | 구속 강함. | **집착 강해.** |
 | うちに心奪われるなんてことあるはずないでしょ。 | あ。/ 聴いてください。/ リック。 | **집에서** 마음을 빼앗기다니… | **우리에게** 마음을 빼앗긴다는 일은… |
 | And this famous conveys that message. | Maybe my applications aren't able to communicate… | 이 유명한 **것이** | 이 유명한 **문구가** |
 
-**비용은 거의 없습니다.**
+**It costs almost nothing.**
 
 | | generic | preset | generic-ctx | preset-ctx |
 |---|---|---|---|---|
-| 중앙값 | 0.19초 | 0.19초 | 0.19초 | 0.20초 |
-| 63줄 합계 | 14.1초 | 13.6초 | 15.4초 | 15.2초 |
+| Median | 0.19 s | 0.19 s | 0.19 s | 0.20 s |
+| Total for 63 lines | 14.1 s | 13.6 s | 15.4 s | 15.2 s |
 
-문맥 3줄이 8% 더 듭니다. 5절에서 번역이 병목이 아님을 확인했으므로 자막
-도착 시각은 달라지지 않습니다.
+3 context lines cost 8% more. Since section 5 confirmed that translation is
+not the bottleneck, the arrival time of a subtitle does not change.
 
-## 27. 결론: 둘 다 켭니다
+## 27. Conclusion: we turn both on
 
-63줄 중 `generic`과 `preset-ctx`가 글자까지 같은 줄은 **16줄뿐**입니다.
-나머지 47줄이 바뀌었고, 바뀐 방향은 대체로 옳았습니다. 모델을 바꾸는
-쪽(2.5GB 내려받기, 21절의 배관 공사)과 견주면 프롬프트를 맞추는 쪽이
-**훨씬 싸고 효과가 큽니다.**
+Of the 63 lines, only **16** are identical down to the character between
+`generic` and `preset-ctx`. The other 47 changed, and the direction of the
+change was mostly right. Compared with changing the model (a 2.5GB download, the
+plumbing work of section 21), fitting the prompt is **far cheaper and has a
+bigger effect.**
 
-구현은 이렇습니다.
+The implementation goes like this.
 
-- 장르 다섯 가지(`일반` `기술 발표·세미나` `게임 방송` `잡담·버라이어티`
-  `노래·가사`)를 「＋ 영상 추가」에서 고릅니다. 라이브와 녹화본 양쪽에
-  적용됩니다.
-- 고른 장르는 전사 결과에 남습니다. 다른 백엔드로 다시 번역할 때 되묻지
-  않습니다.
-- 직전 자막 3줄을 함께 넘깁니다. 라이브에서는 이 줄보다 **이른** 줄만
-  고릅니다(정제본은 흡수한 줄이 이미 빠졌고, 기다리는 동안 들어온 뒤 줄이
-  남아 있습니다). 녹화본에서도 뒤쪽은 넘기지 않습니다 — 라이브에 없는
-  정보를 쓰면 두 경로의 번역이 갈립니다.
-- M2M-100은 문맥을 받지만 쓰지 않습니다. 한 문장을 한 문장으로 옮기는
-  모델이라 붙일 자리가 없습니다.
+- The five genres (`General` `Tech talk · seminar` `Game stream`
+  `Chat · variety` `Song · lyrics`) are picked in 「＋ Add video」. They apply to
+  both live and VOD.
+- The chosen genre stays with the transcription. It is not asked again when
+  translating with another backend.
+- The 3 preceding subtitle lines are passed along. In live, only lines
+  **earlier** than this one are picked (a refined line has already dropped the
+  lines it absorbed, and later lines that came in while waiting are still
+  there). In VOD the later side is not passed either -- using information live
+  does not have would make the two paths' translations diverge.
+- M2M-100 receives the context but does not use it. It is a model that carries
+  one sentence into one sentence, so there is nowhere to attach it.
 
-**남은 한계.** 장르는 영상 하나에 하나입니다. 발표 중간의 잡담이나 게임
-방송 중간의 노래는 그 구간만 다르게 번역되지 않습니다. 그리고 프리셋
-문구 자체가 실측 대상입니다 — 25절의 `玉을 쳐서`처럼, 한 줄 고치면 다른
-줄이 상합니다. 프리셋을 바꿀 때는 `bench/run_prompt.py`를 다시 돌리십시오.
+**Remaining limits.** There is one genre per video. Chat in the middle of a talk,
+or a song in the middle of a game stream, does not get that stretch translated
+differently. And the preset wording is itself something to be measured -- as
+with `玉을 쳐서` in section 25, fixing one line spoils another. When you change
+a preset, run `bench/run_prompt.py` again.
 
 ---
 
-# 문맥 줄 수 (2026-08-28)
+# Number of context lines (2026-08-28)
 
-27절에서 직전 자막 3줄을 넘기기로 했는데, **3은 재서 정한 수가 아니었습니다.**
-"3줄 대 없음"만 쟀고 1·2·5·8을 서로 견준 적이 없었습니다. 여기서 잽니다.
+Section 27 decided to pass 3 preceding subtitle lines, but **3 was not a number
+arrived at by measuring.** Only "3 lines versus none" was measured; 1·2·5·8 were
+never compared against each other. They are measured here.
 
-## 28. 방법
+## 28. Method
 
-24절과 같은 63줄, 같은 모델, 장르 프리셋 켠 상태에서 문맥 줄 수만
-0·1·2·3·5·8로 바꿉니다. 표본은 직전 8줄까지 담아 두고 뒤에서부터
-잘라 씁니다 — 가까운 줄이 먼 줄보다 값어치가 큽니다.
+The same 63 lines as section 24, the same model, the genre preset on, and only
+the number of context lines changed to 0·1·2·3·5·8. The sample holds up to the
+8 preceding lines and is cut from the back -- a near line is worth more than a
+far one.
 
-**조건마다 네 번씩 돌렸습니다.** temperature 0.2이므로 한 번의 결과는
-표본 하나일 뿐이라고 보았기 때문인데, **네 번이 글자까지 같았습니다.**
-이 설정에서는 사실상 결정적이라는 뜻이고, 따라서 아래 결과는 재현되는
-성향이지 표집 잡음이 아닙니다. 다만 씨앗을 바꿔 가며 잰 것은 아니므로
-"통계적으로 견고하다"는 말과는 다릅니다.
+**Each condition was run four times.** At temperature 0.2 a single result was
+taken to be no more than one sample -- and **all four were identical down to the
+character.** That means it is effectively deterministic at this setting, so the
+results below are a reproducible tendency and not sampling noise. It was not
+measured across changing seeds, though, so this is not the same as saying
+"statistically robust".
 
 ```sh
 for n in 0 1 2 3 5 8; do .venv/bin/python bench/run_prompt.py ctx$n; done
-.venv/bin/python bench/sweep.py        # 지표
-.venv/bin/python bench/sweep_agg.py    # 반복분까지 합산
+.venv/bin/python bench/sweep.py        # metrics
+.venv/bin/python bench/sweep_agg.py    # aggregates the repeats too
 ```
 
-## 29. 5줄부터 모델이 옮기기를 그만둡니다
+## 29. From 5 lines on, the model stops carrying it over
 
-품질을 자동으로 점수 낼 방법이 없어 대리 지표를 봤는데, 그중 하나가
-갈랐습니다 — **출력에 일본어 가나가 남은 줄**입니다.
+There is no way to score quality automatically, so proxy metrics were looked at,
+and one of them separated the conditions -- **lines with Japanese kana left in
+the output.**
 
-| 문맥 줄 | 원문유출 (4회 252줄 중) | 유출된 줄 | 실패 | 중앙값 |
+| Context lines | Source leaked (of 252 lines over 4 runs) | Leaked line | Failures | Median |
 |---|---|---|---|---|
-| 0 | 0 | — | 0 | 0.18초 |
-| 1 | 4 | `ラムネ先輩見つけちゃったー。` | 0 | 0.19초 |
-| 2 | 4 | 〃 | 0 | 0.20초 |
-| **3** | **4** | 〃 | 0 | 0.20초 |
-| 5 | 8 | 〃 + **`って。`** | 0 | 0.20초 |
-| 8 | 8 | 〃 + **`って。`** | 0 | 0.20초 |
+| 0 | 0 | — | 0 | 0.18 s |
+| 1 | 4 | `ラムネ先輩見つけちゃったー。` | 0 | 0.19 s |
+| 2 | 4 | 〃 | 0 | 0.20 s |
+| **3** | **4** | 〃 | 0 | 0.20 s |
+| 5 | 8 | 〃 + **`って。`** | 0 | 0.20 s |
+| 8 | 8 | 〃 + **`って。`** | 0 | 0.20 s |
 
-1~3줄의 유출은 `찾았다ー`의 장음부호 하나입니다. 늘어지는 말투를 옮긴
-것이라 흠이라 보기 어렵습니다.
+The leak at 1~3 lines is a single long-vowel mark in `찾았다ー`. It carries a
+drawled delivery over, so it is hard to call it a flaw.
 
-**5줄부터 `って。`가 `って`로 돌아옵니다.** 번역하지 않고 원문을 그대로
-내놓는 것입니다. 네 번 모두 같았습니다.
+**From 5 lines on, `って。` comes back as `って`.** It hands the source back
+untranslated. All four runs were the same.
 
-이것이 가장 나쁜 실패 방식입니다. `looks_broken`이 잡지 못합니다 —
-비어 있지도, 원문보다 길지도 않고, `⁇`도 없습니다. 화면에는 한국어
-자막 자리에 일본어가 뜹니다.
+This is the worst way to fail. `looks_broken` does not catch it -- it is not
+empty, not longer than the source, and there is no `⁇`. On screen, Japanese
+appears where the Korean subtitle should be.
 
-속도는 갈리지 않습니다. 0줄과 8줄의 중앙값 차이가 0.02초입니다.
+Speed does not separate them. The difference in median between 0 lines and 8
+lines is 0.02 s.
 
-## 30. 1줄은 모자라고, 2와 3은 종이 한 장 차이입니다
+## 30. 1 line is not enough, and 2 and 3 are a sheet of paper apart
 
-인접한 단계 사이에서 바뀐 줄은 17~24개인데, **대부분이 개선이 아니라
-동의어 교체입니다**(`노력할게요` ↔ `노력하겠습니다`, 마침표 유무). 뜻이
-달라진 것만 추리면 이렇습니다.
+Between adjacent steps 17~24 lines changed, but **most of them are synonym swaps
+rather than improvements** (`노력할게요` ↔ `노력하겠습니다`, a full stop present
+or not). Picking out only the ones where the meaning changed gives this.
 
-**1 → 2**: 1줄은 긴 문장의 뒷부분을 잃습니다.
+**1 → 2**: with 1 line the back half of a long sentence is lost.
 
-| 원문 | ctx1 | ctx2 |
+| Source | ctx1 | ctx2 |
 |---|---|---|
 | あなたはどうして生きてるの？**百文字以内で答えよ。** | 당신은 왜 살고 있나요? | 당신은 왜 살고 있나요? **백자로 답하세요.** |
 | 玉を打って倒してください。 | **구슬** 쳐서 쓰러뜨려 줘. | **공을** 쳐서 쓰러뜨려 주세요. |
 
-**2 → 3**: 세 줄이 바로잡히고 한 줄이 상합니다.
+**2 → 3**: three lines are put right and one is spoiled.
 
-| 원문 | ctx2 | ctx3 | |
+| Source | ctx2 | ctx3 | |
 |---|---|---|---|
-| うちに心奪われるなんてことあるはずないでしょ。 | **집에서** 마음을… | **우리에게** 마음을… | 좋아짐 |
-| まくります。 | **박아버릴게요.** | 막을게요. | 좋아짐 |
-| づける。 | 달다 | 붙인다. | 좋아짐 |
-| いいだけ。 | 좋기만 해. | 좋은 만큼 | 나빠짐 |
+| うちに心奪われるなんてことあるはずないでしょ。 | **집에서** 마음을… | **우리에게** 마음을… | better |
+| まくります。 | **박아버릴게요.** | 막을게요. | better |
+| づける。 | 달다 | 붙인다. | better |
+| いいだけ。 | 좋기만 해. | 좋은 만큼 | worse |
 
-**3 → 5**: `って。`의 유출 말고는 잡음입니다.
+**3 → 5**: apart from the `って。` leak it is noise.
 
-## 31. 결론: 3을 유지하되, 근거는 얇습니다
+## 31. Conclusion: we keep 3, but the evidence is thin
 
-| 줄 수 | 판정 |
+| Lines | Verdict |
 |---|---|
-| 0 | 문맥 이득 없음 |
-| 1 | 긴 문장의 뒷부분을 잃음 |
-| 2 | 쓸 만함 |
-| **3** | **기본값.** 2에서 틀린 줄 셋이 바로잡히고 하나가 상함 |
-| 5·8 | 원문을 그대로 돌려주는 줄이 생김 |
+| 0 | No gain from context |
+| 1 | Loses the back half of a long sentence |
+| 2 | Usable |
+| **3** | **The default.** Three lines 2 got wrong are put right and one is spoiled |
+| 5·8 | Lines appear that hand the source straight back |
 
-**5 이상을 배제할 근거는 분명합니다** — 재현되는 원문 유출이고, 지금의
-`looks_broken`으로는 걸러지지 않습니다. **2와 3 사이는 그렇지 않습니다.**
-63줄에서 순증 두 줄이고, 다른 표본에서는 뒤집힐 수 있는 폭입니다.
+**The grounds for ruling out 5 and above are clear** -- it is a reproducible
+source leak, and the current `looks_broken` does not filter it. **Between 2 and
+3 they are not.** It is a net gain of two lines out of 63, a margin that another
+sample could overturn.
 
-바꿀 이유가 생긴다면 이런 것들입니다. 다른 모델로 갈아탈 때(유출 문턱이
-모델마다 다를 것입니다), 원본 언어가 바뀔 때(이 표본은 일본어 51줄과
-영어 12줄입니다), 또는 유료 엔드포인트를 쓸 때(문맥 3줄이 곧 요금입니다).
-그때는 `bench/run_prompt.py ctxN`을 다시 돌리십시오.
+Reasons to change it, should they arise, are these. Switching to another model
+(the leak threshold will differ from model to model), the source language
+changing (this sample is 51 Japanese lines and 12 English), or using a paid
+endpoint (3 context lines are money). Run `bench/run_prompt.py ctxN` again then.
 
-**남은 구멍.** `looks_broken`은 원문을 그대로 돌려준 번역을 잡지 못합니다.
-지금 기본값에서는 드러나지 않지만, 문맥을 늘리거나 모델을 바꾸면 드러날
-자리입니다.
+**The remaining hole.** `looks_broken` does not catch a translation that hands
+the source straight back. It does not show at the current default, but it is the
+place it will show if the context is lengthened or the model changed.
 
 ---
 
-# 낮은 사양: 어디서 무엇을 돌릴 것인가 (2026-08-28)
+# Low-spec machines: what to run where (2026-08-28)
 
-이슈 #1의 제보자(Ryzen 7 7840HS · Radeon 780M 내장 그래픽)에게서 나온
-질문입니다. 모델은 올라갔는데 해독이 3초 걸렸고 얼마 뒤 런타임이 죽었습니다.
+A question that came from the reporter on issue #1 (Ryzen 7 7840HS · Radeon 780M
+integrated graphics). The model loaded, but decoding took 3 seconds and a little
+later the runtime died.
 
-## 32. 한 조각의 실패가 방송 전체를 끝내고 있었습니다
+## 32. One chunk's failure was ending the whole stream
 
-`_drain`은 `asr.transcribe()`를 아무것도 감싸지 않고 불렀습니다. 그래서
-GPU 드라이버가 조각 하나에서 넘어지면 그 예외가 `run_stream`을 뚫고
-`_run`까지 올라가 세션이 끝났습니다. 정제 경로는 이미 한 무리의 실패를
-가두고 있었는데(`stream.py`의 Refiner) 빠른 경로만 비어 있었습니다.
+`_drain` called `asr.transcribe()` wrapped in nothing. So when the GPU driver
+fell over on a single chunk, that exception went straight through `run_stream`
+up to `_run` and the session ended. The refinement path was already confining
+the failure of one utterance group (`stream.py`'s Refiner); only the fast path
+was empty.
 
-이제 한 번의 실패는 그 조각만 버리고 넘어갑니다. 다만 장치가 정말 죽었다면
-계속 시도해도 소용없으므로, **연달아 다섯 번** 실패하면 그때는 놓습니다.
-성공하면 세는 것이 0으로 돌아가므로, 드문드문 실패하는 것은 방송을 끊지
-않습니다. `translate.py`의 차단기와 같은 생각입니다.
+Now a single failure drops that chunk and moves on. But if the device really has
+died there is no use in going on trying, so after **five failures in a row** it
+does let go then. A success returns the count to 0, so the occasional failure
+does not cut the stream off. The same thinking as `translate.py`'s breaker.
 
-## 33. 가벼운 전사기를 붙입니다
+## 33. We add a light transcriber
 
-8절에서 이미 재 두었던 SenseVoice Small을 선택지로 넣습니다. 같은 20초
-조각을 이 기계(M5 Pro)에서 다시 쟀습니다.
+SenseVoice Small, already measured in section 8, goes in as an option. The same
+20-second chunk was measured again on this machine (M5 Pro).
 
-| 모델 | 크기 | GPU(Metal) | **CPU(8스레드)** |
+| Model | Size | GPU (Metal) | **CPU (8 threads)** |
 |---|---|---|---|
-| whisper-large-v3-turbo Q8_0 | 845 MB | 56.8배속 | **7.7배속** |
-| SenseVoice Small Q8_0 | 241 MB | 272.8배속 | **62.4배속** |
+| whisper-large-v3-turbo Q8_0 | 845 MB | 56.8× realtime | **7.7× realtime** |
+| SenseVoice Small Q8_0 | 241 MB | 272.8× realtime | **62.4× realtime** |
 
-**CPU에서 8배 빠릅니다.** 그리고 가벼운 쪽이 CPU로 돌 때가 무거운 쪽이
-GPU로 돌 때보다 빠릅니다. 내장 그래픽이 버거운 기계에서 이것은 큰 차이입니다.
+**It is 8× faster on the CPU.** And the light one running on the CPU is faster
+than the heavy one running on the GPU. On a machine where integrated graphics
+struggles, that is a large difference.
 
-품질은 일방적인 손해가 아닙니다. 같은 조각에서 SenseVoice가 바로잡은
-자리가 있습니다.
+Quality is not a one-sided loss. On the same chunk there are places SenseVoice
+put right.
 
 | | whisper-large-v3-turbo | SenseVoice Small |
 |---|---|---|
 | | 相手も広う**同場内**で | あえてもいれ**工場内**で |
 | | **できた中で**他のプレイヤー | **できた銃で**他のプレーヤー |
 
-`工場内`(공장 안)과 `できた銃で`(만든 총으로)가 맞습니다. 대신 SenseVoice는
-문장 부호와 띄어쓰기를 넣지 않아 한 덩어리로 나옵니다.
+`工場内` (inside the factory) and `できた銃で` (with the gun that was made) are
+the correct ones. In exchange SenseVoice inserts no punctuation or spacing, so
+it comes out as one lump.
 
-**기본을 바꾸지는 않습니다.** 12절의 판단 -- 합방에서 무너지지 않는 쪽을
-고른다 -- 은 그대로입니다. 10절에서 확인한 한국어 고유명사 축약(`데이터독`
-→ `데이터`)도 남아 있습니다. 다만 기본이 버거운 기계에는 선택지가 있어야
-합니다.
+**It does not change the default.** The judgment of section 12 -- pick the one
+that does not collapse on a collab stream -- stands. The clipping of Korean
+proper nouns confirmed in section 10 (`데이터독` → `데이터`) is still there too.
+But a machine that struggles with the default has to have an option.
 
-`backends.json`에 넣고 화면의 「전사」 선택기에서 고릅니다.
+It goes into `backends.json` and is picked from the 「Transcription」 picker on
+screen.
 
 ```json
 { "id": "tcpp-lite", "backend": "tcpp",
   "model": "SenseVoiceSmall-Q8_0.gguf", "device": "cpu" }
 ```
 
-## 34. 영어는 74MB로 충분합니다
+## 34. For English, 74MB is enough
 
-영어 전용 경량 모델도 재 봤습니다. 표본은 Datadog 발표(`jrLVa1Md4GU`)의
-18초 조각 세 개입니다.
+An English-only light model was measured too. The sample is three 18-second
+chunks from the Datadog talk (`jrLVa1Md4GU`).
 
-| 모델 | 크기 | GPU | **CPU(8스레드)** |
+| Model | Size | GPU | **CPU (8 threads)** |
 |---|---|---|---|
-| whisper-large-v3-turbo Q8_0 | 845 MB | 69.1배속 | 7.9배속 |
-| SenseVoice Small Q8_0 | 241 MB | 270.2배속 | 63.1배속 |
-| **moonshine-base Q8_0** | **74 MB** | 89.7배속 | **91.8배속** |
-| moonshine-tiny Q8_0 | 34 MB | 151.1배속 | 169.3배속 |
+| whisper-large-v3-turbo Q8_0 | 845 MB | 69.1× realtime | 7.9× realtime |
+| SenseVoice Small Q8_0 | 241 MB | 270.2× realtime | 63.1× realtime |
+| **moonshine-base Q8_0** | **74 MB** | 89.7× realtime | **91.8× realtime** |
+| moonshine-tiny Q8_0 | 34 MB | 151.1× realtime | 169.3× realtime |
 
-**moonshine은 CPU가 GPU보다 빠릅니다.** 모델이 작아 전송 비용이 계산
-비용을 넘습니다. 이런 모델에는 `device: cpu`가 손해가 아니라 이득입니다.
+**Moonshine is faster on the CPU than on the GPU.** The model is small enough
+that the transfer cost exceeds the compute cost. For a model like this
+`device: cpu` is a gain, not a loss.
 
-품질은 이렇습니다. 60초 지점에서 whisper와 moonshine-base는 **문장부호까지
-한 글자도 다르지 않았습니다.**
+Quality goes like this. At the 60-second mark whisper and moonshine-base **did
+not differ by a single character, punctuation included.**
 
-| 모델 | 60초 지점 |
+| Model | At the 60-second mark |
 |---|---|
 | whisper (845MB) | …find and communicate with both internal and external endpoints they're dependent on. |
 | moonshine-base (74MB) | …find and communicate with both internal and external endpoints they're dependent on. |
 | SenseVoice (241MB) | …find and communicate with both internal and external endpoints that they're dependent on |
 
-**SenseVoice는 영어에서 문장부호와 대문자를 넣지 않습니다.** `dns`가
-소문자로 나오고 마침표가 없어 한 덩어리가 됩니다. 180초 지점에서는
-moonshine-base가 오히려 쉼표를 정확히 넣었습니다(`approaches, there are`).
+**SenseVoice inserts no punctuation or capitals in English.** `dns` comes out in
+lowercase and, with no full stop, it becomes one lump. At the 180-second mark
+moonshine-base actually placed the comma accurately (`approaches, there are`).
 
-moonshine-tiny(34MB)는 두 배 더 빠르지만 틀립니다 — `how it affects`를
-`how to affect`로, `before it affected`를 `before defective`로 냈습니다.
-**base를 고릅니다.**
+moonshine-tiny (34MB) is twice as fast again but gets things wrong -- it turned
+`how it affects` into `how to affect`, and `before it affected` into
+`before defective`. **We pick base.**
 
-### 영어 전용이라는 것
+### What being English-only means
 
-moonshine은 다른 언어를 아예 거부합니다.
+Moonshine refuses other languages outright.
 
     UnsupportedRequest: transcribe_run: unsupported language (status 10)
 
-이것을 그냥 두면 자막이 나오지 않다가 세션이 끝나고 로그에 같은 예외가
-쌓입니다. 재시도해도 달라질 수 없는 실패이므로 **세션을 만들 때 무음
-0.1초로 미리 물어봅니다**(moonshine 기준 30밀리초). 방송을 20초 받아 본
-뒤가 아니라 시작하는 순간에 알게 됩니다.
+Left alone, no subtitles come out, then the session ends and the same exception
+piles up in the log. It is a failure a retry cannot change, so **it is asked in
+advance with 0.1 s of silence when the session is created** (30 milliseconds
+with moonshine). You find out the moment you start, not after taking 20 seconds
+of the stream.
 
-언어를 비워 두면(자동 판별) 묻지 않습니다. 대신 일본어를 물리면 영어로
-환청을 만드는데, 13절의 다양도 검사가 그것을 잡습니다 — 실제로 시험에서
-`I'm going to tell you.` 반복(다양도 0.07)이 차단되었습니다.
+If the language is left empty (auto-detect) it is not asked. Feed it Japanese
+instead and it hallucinates in English, and the diversity check of section 13
+catches that -- in the test a repetition of `I'm going to tell you.` (diversity
+0.07) was actually blocked.
 
-## 35. 남은 것
+## 35. What is left
 
-**3초 지연의 원인은 아직 모릅니다.** 780M에서 whisper 845MB를 Vulkan으로
-돌릴 때의 값인데, 이 기계에는 그 조합이 없어 재현할 수 없습니다. 죽은
-이유도 트레이스백이 없어 단정할 수 없습니다 -- 다만 32절의 수정으로
-이제는 죽는 대신 그 조각만 버리고, 다섯 번 연달아 실패해야 놓습니다.
-그때는 로그에 예외가 다섯 줄 남으므로 원인이 드러납니다.
+**The cause of the 3-second delay is still unknown.** It is the figure for
+running whisper 845MB on a 780M through Vulkan, and this machine does not have
+that combination, so it cannot be reproduced. The reason it died cannot be
+settled either, with no traceback -- but with the fix of section 32 it now drops
+only that chunk instead of dying, and has to fail five times in a row before
+letting go. Five lines of exception are left in the log then, so the cause shows.
 
 ---
 
-# 초기 로딩 (2026-08-28)
+# Initial loading (2026-08-28)
 
-새로고침할 때마다 3초 넘게 기다린다는 보고가 있었습니다. 화면에 있는 것은
-목록과 자막뿐이라 그럴 이유가 없어 보였습니다.
+There was a report of waiting more than 3 seconds on every refresh. All that is
+on screen is the list and the subtitles, so there seemed to be no reason for it.
 
-## 36. 4.4초 중 4.4초가 남의 스크립트였습니다
+## 36. 4.4 seconds of the 4.4 were someone else's script
 
-브라우저의 Resource Timing 으로 쟀습니다.
+Measured with the browser's Resource Timing.
 
-| | 시작 | 끝 |
+| | Start | End |
 |---|---|---|
 | `/static/app.css` | 9ms | 20ms |
 | `/static/app.js` | 9ms | 20ms |
@@ -848,63 +906,67 @@ moonshine은 다른 언어를 아예 거부합니다.
 | `/api/backends` | 4435ms | 4437ms |
 | `/api/videos` | 4444ms | 4452ms |
 | `/api/live/sessions` | 4459ms | 4461ms |
-| `/api/videos` (또) | 4463ms | 4470ms |
-| `/api/live/sessions` (또) | 4470ms | 4471ms |
+| `/api/videos` (again) | 4463ms | 4470ms |
+| `/api/live/sessions` (again) | 4470ms | 4471ms |
 | `/api/video/<id>` | 4474ms | 4476ms |
 
-**우리 것은 전부 10ms 아래입니다.** 서버도, 자막 파일도, 목록도 빠릅니다.
-`domInteractive` 가 4435ms 인 것은 `<script src=".../iframe_api">` 가 동기
-스크립트라 파서가 거기서 멈춰 있었기 때문입니다. 그 스크립트가 오기 전에는
-`init()` 이 첫 요청조차 보내지 못합니다.
+**Everything of ours is under 10ms.** The server, the subtitle files and the
+list are all fast. `domInteractive` being 4435ms is because
+`<script src=".../iframe_api">` is a synchronous script and the parser was
+stopped there. Until that script arrives, `init()` cannot send even its first
+request.
 
-`app.js` 의 `whenApiReady()` 는 `onYouTubeIframeAPIReady` 콜백과 폴링으로
-늦게 오는 경우를 이미 다루고 있었습니다. **막아 세울 이유가 처음부터
-없었습니다.**
+`app.js`'s `whenApiReady()` was already handling the late-arrival case with the
+`onYouTubeIframeAPIReady` callback and polling. **There was never any reason to
+block on it.**
 
-## 37. 고친 뒤
+## 37. After the fix
 
-`async` 한 낱말과, 시작할 때의 중복 요청 정리입니다.
+One word, `async`, plus a tidy-up of the duplicate requests at startup.
 
-| | 전 | 후 |
+| | Before | After |
 |---|---|---|
 | domInteractive | 4435ms | **24ms** |
 | domContentLoaded | 4436ms | **25ms** |
-| 마지막 API 응답 | 4476ms | **39ms** |
-| 서버 요청 수 | 8 (둘은 중복) | **6** |
-| 목록이 화면에 | ~4.5초 | **39ms** |
+| Last API response | 4476ms | **39ms** |
+| Server requests | 8 (two of them duplicates) | **6** |
+| List on screen | ~4.5 s | **39ms** |
 
-`iframe_api` 는 여전히 4.2초가 걸립니다 -- 구글까지의 왕복이라 우리가 줄일
-수 있는 것이 아닙니다. 다만 이제 아무것도 막지 않습니다. 화면과 목록과
-스크립트는 40ms 안에 서고, 플레이어만 늦게 자리를 잡습니다.
+`iframe_api` still takes 4.2 s -- it is a round trip to Google, not something we
+can shorten. But it now blocks nothing. The screen, the list and the script
+stand up within 40ms, and only the player settles in late.
 
-중복이던 `/api/videos` 와 `/api/live/sessions` 는 `init()` 이 받은 것을
-`refreshVideoList` 에 넘겨 없앴습니다. 셋을 나란히 보내도록 바꾼 것은
-합쳐서 15ms 남짓이라 큰 몫은 아니지만, 서로 기다릴 이유가 없었습니다.
+The duplicated `/api/videos` and `/api/live/sessions` were removed by passing
+what `init()` received on to `refreshVideoList`. Changing the three to be sent
+side by side is not a big share -- some 15ms altogether -- but there was no
+reason for them to wait on one another.
 
-목록 썸네일에는 `fetchpriority="low"` 를 답니다. 열넉 장이 같은 호스트로
-몰리면 플레이어 임베드가 그 뒤에 줄을 섭니다.
+The list thumbnails get `fetchpriority="low"`. When fourteen of them pile onto
+the same host, the player embed queues up behind them.
 
-## 38. 자동 판별로 켠 라이브는 한 줄도 번역되지 않았습니다
+## 38. A live session started on auto-detect had not one line translated
 
-탭 오디오 수신을 붙이며 그 길이 끝까지 이어지는지 재는 시험(`bench/tab_ingest.py`)을
-썼는데, 전사는 멀쩡한데 번역이 0건으로 나왔습니다. 처음에는 시험이 잘못
-쓴 것으로 보였습니다 -- 그 녹음이 한국어라 옮길 것이 없었으니까요.
-일본어 녹음으로 바꿔도 0건이었습니다.
+While attaching tab audio ingest, a test that measures whether the path carries
+through to the end (`bench/tab_ingest.py`) was used, and transcription was fine
+while translation came out at 0. At first it looked as if the test had been
+written wrong -- that recording was Korean, so there was nothing to carry over.
+Switching to a Japanese recording still gave 0.
 
-원인은 탭 수신과 무관했습니다. **원본 언어를 「자동 판별」로 둔 라이브
-세션은 종류를 가리지 않고 번역되지 않고 있었습니다.**
+The cause had nothing to do with tab ingest. **A live session with the source
+language left on 「Auto-detect」 was going untranslated, whatever kind it was.**
 
-`tcpp_asr.TranscribeCppASR.transcribe()` 가 자막에 실어 보내는 언어는
-`self.forced_lang` 이었습니다. 언어를 못 박았으면 맞는 값이지만, 자동
-판별이면 그것은 빈 문자열입니다. 런타임은 알고 있었습니다.
+The language `tcpp_asr.TranscribeCppASR.transcribe()` puts on the subtitle was
+`self.forced_lang`. That is the right value if the language was pinned, but on
+auto-detect it is an empty string. The runtime knew.
 
 ```
 >>> session.run(pcm, language="").language
 'ja'
 ```
 
-그 값을 버리고 `""` 를 실어 보냈고, `LiveSession._translate` 는 원본 언어를
-모르면 그냥 돌아섭니다.
+That value was thrown away and `""` was sent instead, and
+`LiveSession._translate` simply turns back when it does not know the source
+language.
 
 ```python
 src = cue.get("lang") or self.lang or ""
@@ -912,415 +974,498 @@ if not src or src == self.viewer_lang:
     return
 ```
 
-정제 경로에도 같은 것이 하나 더 있었습니다. `stream.Refiner` 가
-`self.asr.forced_lang` 을 그대로 넘기고 있어서, 확정본을 고쳐도 정제본은
-여전히 언어 없이 나갔습니다.
+There was one more of the same on the refinement path. `stream.Refiner` was
+passing `self.asr.forced_lang` straight through, so even with the final fixed
+the refined line still went out with no language.
 
-**왜 여태 안 보였는가.** 오류가 나지 않습니다. 자막은 정상으로 쌓이고
-번역만 조용히 빠집니다. 그리고 우리가 쓰던 시험은 대부분 언어를 못 박아
-두고 돌렸습니다 -- 그쪽 경로에는 처음부터 문제가 없었습니다.
+**Why it went unseen this long.** No error is raised. Subtitles pile up
+normally and only the translation quietly drops out. And most of the tests we
+used ran with the language pinned -- that path never had the problem.
 
-고친 뒤, 같은 50초 구간:
+After the fix, the same 50-second stretch:
 
-| | 전 | 후 |
+| | Before | After |
 |---|---|---|
-| 자막 | 10줄 | 10줄 |
-| 자막에 붙은 언어 | `''` | `ja` |
-| 번역 | **0건** | **14건** |
+| Subtitles | 10 lines | 10 lines |
+| Language attached to the subtitle | `''` | `ja` |
+| Translations | **0** | **14** |
 
-실제 방송(HLS)에서도 같습니다. 자동 판별로 켠 일본어 방송 66초에서 자막
-11줄에 번역 17건이 나왔습니다. 고치기 전이라면 0건이었을 세션입니다.
+It is the same on a real stream (HLS). 66 seconds of a Japanese stream started
+on auto-detect gave 11 subtitle lines and 17 translations. Before the fix that
+session would have been 0.
 
-## 39. 브라우저가 올린 소리로도 자막이 나옵니다
+## 39. Subtitles come out of sound the browser uploads too
 
-멤버십 전용 방송은 서버가 받을 수 없습니다. 대신 사용자가 이미 듣고 있는
-탭의 소리를 브라우저가 올리도록 했습니다. 뒷단은 하나도 바뀌지 않습니다 --
-`run_stream` 이 받는 것은 float32 조각을 내놓는 제너레이터뿐이라,
-ffmpeg 파이프 자리에 큐를 놓으면 됩니다.
+A members-only stream is one the server cannot take. Instead the browser uploads
+the sound of the tab the user is already listening to. Nothing on the back end
+changes -- what `run_stream` takes is only a generator that yields float32
+chunks, so a queue goes where the ffmpeg pipe was.
 
-전송은 WebSocket이 아니라 청크 POST입니다. 16kHz 모노 int16은 초당 32KB,
-2초 조각이면 요청 하나에 64KB에 초당 0.5회입니다. 표준 라이브러리
-`http.server` 위에 핸드셰이크와 프레이밍을 얹을 값에 비해 얻는 것이 없고,
-지연은 조각 길이가 지배하지 전송 방식이 아닙니다.
+The transport is a chunked POST, not a WebSocket. 16kHz mono int16 is 32KB per
+second, so a 2-second chunk is 64KB in one request at 0.5 requests per second.
+There is nothing to gain against the price of laying a handshake and framing on
+top of the standard library's `http.server`, and the latency is dominated by the
+chunk length, not by the transport.
 
-브라우저 쪽 사슬을 합성 톤으로 재 봤습니다(공유 창은 사람이 골라야 열리므로
-스트림만 바꿔 끼웠습니다).
-
-| | |
-|---|---|
-| AudioContext 표본율 | 16000 (크롬이 리샘플까지 합니다) |
-| 9초 동안 올린 표본 | 144,256 (= 9.02초) |
-| 서버가 먹은 `audio_s` | 8.0 (마지막 조각은 아직 오는 중) |
-
-**여기서 하나가 걸렸습니다.** 새 `AudioContext` 는 크롬의 자동재생 정책
-때문에 `suspended` 로 태어납니다. 그 상태에서는 워클릿이 한 번도 돌지 않아
-표본이 0인데, 아무 데서도 오류가 나지 않습니다 -- 화면은 「받는 중」이고
-자막만 늘지 않습니다. `ctx.resume()` 을 걸고, 4초 안에 소리가 오지 않으면
-그렇다고 적도록 했습니다.
-
-실제 녹음으로 끝까지 확인한 값(50초, 일본어, 정제 켬):
+The browser-side chain was measured with a synthetic tone (the share dialog only
+opens when a person picks, so only the stream was swapped in).
 
 | | |
 |---|---|
-| 올린 것 / 서버가 먹은 것 | 50초 / 50.0초 |
-| 큐에 쌓인 최대 | 2.0초 (실시간을 따라갑니다) |
-| 버린 오디오 | 0초 |
-| 자막 / 번역 | 10줄 / 14건 |
+| AudioContext sample rate | 16000 (Chrome does the resampling as well) |
+| Samples uploaded over 9 seconds | 144,256 (= 9.02 s) |
+| `audio_s` the server consumed | 8.0 (the last chunk is still on its way) |
 
-## 40. 크롬은 공유한 탭의 제목을 알려 주지 않습니다
+**One thing was caught here.** A new `AudioContext` is born `suspended` because
+of Chrome's autoplay policy. In that state the worklet never runs once, so the
+sample count is 0, and no error is raised anywhere -- the screen says
+「receiving」 and only the subtitles do not grow. `ctx.resume()` was added, and
+if no sound arrives within 4 seconds it now says so.
 
-탭 소리로 시작한 세션은 목록에 「탭 오디오」로만 남습니다. 무엇을 들었는지
-알아볼 수 있는 것이 그 한 줄뿐이라, 둘이 나란히 서면 구별이 되지 않습니다.
+Values confirmed end to end with a real recording (50 seconds, Japanese,
+refinement on):
 
-`getDisplayMedia` 가 돌려주는 비디오 트랙의 `label` 에 고른 대상의 이름이
-들어온다고 보고 그것을 쓰도록 했습니다. 실제로 공유하고 있는 세션에서 읽어
-보니 이렇습니다.
+| | |
+|---|---|
+| Uploaded / consumed by the server | 50 s / 50.0 s |
+| Maximum piled up in the queue | 2.0 s (it keeps up with realtime) |
+| Audio thrown away | 0 s |
+| Subtitles / translations | 10 lines / 14 |
+
+## 40. Chrome does not tell us the title of the shared tab
+
+A session started from tab sound is left in the list as no more than
+「Tab audio」. That one line is all there is to tell what was listened to, so two
+of them standing side by side cannot be told apart.
+
+The name of the chosen target was expected to come in on the `label` of the
+video track `getDisplayMedia` returns, so that was what got used. Read from a
+session that is actually sharing, it goes like this.
 
 ```
 { label: 'web-contents-media-stream://8D6FD737C5BFC47DBCE78F63FA28FECB',
   surface: 'browser' }
 ```
 
-**탭 제목이 아니라 불투명한 식별자입니다.** `surface` 는 `browser` 이므로
-탭을 고른 것은 맞고, 크롬이 제목을 내주지 않는 것입니다. 걸러 내는 규칙은
-그대로 두었습니다 -- 저 문자열을 제목으로 쓰면 「탭 오디오」보다 나쁩니다.
-창이나 화면을 고르면 그쪽 이름이 오고 다른 크로미움 판이 제목을 줄 수도
-있으므로, 오면 쓰도록 함수는 남겨 두었습니다.
+**It is an opaque identifier, not the tab title.** `surface` is `browser`, so a
+tab was indeed picked; it is Chrome that does not hand the title over. The
+filtering rule was left as it was -- using that string as the title is worse
+than 「Tab audio」. Picking a window or a screen brings that name in, and another
+Chromium build may give the title, so the function was left in place to use it
+if it comes.
 
-그래서 이름은 **나중에 고치는 쪽**으로 갔습니다. `POST /api/live/title` 과
-제목 옆의 「✎ 이름」입니다. 끝난 세션도 고쳐집니다 -- 인메모리 세션이면
-그 자리에서, 아니면 저장소에서 바꿉니다. 무엇을 들었는지는 대개 다 듣고
-나서 목록을 볼 때 문제가 되므로 이쪽이 더 자주 쓰일 것입니다.
+So the name went the way of **fixing it afterwards**. `POST /api/live/title` and
+「✎ Name」 beside the title. A finished session can be fixed too -- in place if
+it is an in-memory session, otherwise in the store. What you were listening to
+usually becomes a problem when you look at the list after listening to it all,
+so this one will be used more often.
 
-주소로 받는 세션에는 달지 않습니다. yt-dlp 가 제목을 가져오고 이어받을 때
-다시 가져오므로, 고쳐 봐야 되돌아갑니다.
+It is not attached to a session taken from a URL. yt-dlp fetches the title and
+fetches it again on resume, so fixing it would only revert.
 
 ---
 
-# 재점검 실측 (2026-08-29 저녁)
+# Re-check measurements (2026-08-29 evening)
 
-레퍼런스 조사(`.claude/review-2026-08-29-2.md`)가 권한 두 가지를 이 저장소의 표본
-녹음 다섯 개(`data/*.wav` — 일본어 VTuber 방송 2, 한국어 발표 2, 영어 발표 1)로
-재 보았습니다. 스크립트는 `bench/vad_ab.py`, `bench/whisper_ab.py`.
+The reference survey (`.claude/review-2026-08-29-2.md`) recommended two things,
+and they were measured against this repository's five sample recordings
+(`data/*.wav` — 2 Japanese VTuber streams, 2 Korean talks, 1 English talk). The
+scripts are `bench/vad_ab.py`, `bench/whisper_ab.py`.
 
-## 41. Silero VAD v5: 우리 표본에서는 말을 놓칩니다 — v4 유지
+## 41. Silero VAD v5 drops speech on our samples — keeping v4
 
-Silero 위키의 수치(ROC-AUC v4 0.91 → v5 0.96, 잡음 오탐 감소)만 보면 v5가 낫습니다.
-그런데 같은 표본을 두 모델에 물리면 **"말"로 판정한 총 초가 방송 종류에 따라 갈립니다.**
+Going by the figures in the Silero wiki alone (ROC-AUC v4 0.91 → v5 0.96, fewer
+false positives on noise), v5 is the better model. But put the same sample
+through both models and **the total seconds judged as "speech" splits by what
+kind of broadcast it is.**
 
-| 표본 | 언어·성격 | v4 말(초) | v5 말(초) | 비고 |
+| Sample | Language · character | v4 speech (s) | v5 speech (s) | Note |
 |---|---|---|---|---|
-| MPSTWzF2ZKU (108분) | 일본어 합방, BGM | 4,072 | **413** | v5가 90%를 버림 |
-| 71SnC4H-G1Q (26분) | 일본어, 노래 포함 | 854 | **84** | 같음 |
-| d1QeXqS53nA (83분) | 한국어 발표 | 2,342 | 1,124 | 절반 |
-| 9zlrjY2Upxo (30분) | 한국어 발표 | 1,520 | 1,522 | 같음 |
-| jrLVa1Md4GU (6분) | 영어 발표 | 286 | 295 | 같음 |
+| MPSTWzF2ZKU (108 min) | Japanese collab, BGM | 4,072 | **413** | v5 throws away 90% |
+| 71SnC4H-G1Q (26 min) | Japanese, singing included | 854 | **84** | same |
+| d1QeXqS53nA (83 min) | Korean talk | 2,342 | 1,124 | half |
+| 9zlrjY2Upxo (30 min) | Korean talk | 1,520 | 1,522 | same |
+| jrLVa1Md4GU (6 min) | English talk | 286 | 295 | same |
 
-(broadcast 프로필, min_silence 0.30 · max_speech 4.0. 세 프로필 모두 같은 양상.)
+(broadcast profile, min_silence 0.30 · max_speech 4.0. All three profiles show
+the same pattern.)
 
-깨끗한 발표에서는 둘이 같고, **BGM이 깔리고 목소리가 높은 VTuber 방송에서 v5는 대부분을
-무음으로 봅니다.** Silero의 v6 릴리스 노트가 스스로 적은 약점 — "사람 목소리 같은 악기
-음악, 매우 높은 목소리(인공·만화·어린이)" — 가 바로 이 장르입니다. 이 도구의 주 대상이
-그쪽이므로 **v4(k2 재수출 643KB)를 그대로 씁니다.** v5는 「모델·도구」 목록에 선택지로만
-두고(`MIMIWATCH_VAD_MODEL=silero_vad_v5.onnx`), 발표·강연만 보는 사람이 잡음 오탐이
-거슬릴 때 골라 볼 수 있게 했습니다. v6.2(고음·만화 목소리 개선)는 sherpa-onnx가 아직
-지원하지 않아 감시 항목입니다.
+On a clean talk the two agree, and **on a VTuber broadcast with BGM underneath
+and a high voice v5 sees most of it as silence.** The weakness Silero's own v6
+release notes write down — "instrumental music that sounds like a human voice,
+very high voices (synthetic, cartoon, children)" — is exactly this genre. That
+genre is this tool's main target, so **we stay on v4 (the k2 re-export,
+643KB).** v5 sits in the 「Models & Tools」 list as an option only
+(`MIMIWATCH_VAD_MODEL=silero_vad_v5.onnx`), so someone who only watches talks
+and lectures can pick it when false positives on noise bother them. v6.2
+(improved on high and cartoon voices) is not supported by sherpa-onnx yet, so it
+stays a thing to watch.
 
-## 42. Whisper 임계값 강화: 차이 없음 — 기본값 유지
+## 42. Tightening the Whisper thresholds: no difference — keeping the defaults
 
-WhisperJAV가 일본어 자막에 쓰는 `no_speech_thold 0.84 · logprob_thold -1.3`을
-transcribe.cpp의 `WhisperRunOptions`로 넘겨 기본값(0.6 · -1.0)과 맞대었습니다.
-표본은 가장 어려운 합방 MPSTWzF2ZKU의 600~1200초, broadcast 프로필 126구간.
+We passed `no_speech_thold 0.84 · logprob_thold -1.3`, what WhisperJAV uses for
+Japanese subtitles, through transcribe.cpp's `WhisperRunOptions` and put it
+against the defaults (0.6 · -1.0). The sample is 600~1200 s of the hardest
+collab, MPSTWzF2ZKU, 126 segments on the broadcast profile.
 
-| 설정 | 빈 구간 | 환각 차단 | 글자 수 | 해독 |
+| Setting | Empty segments | Hallucinations blocked | Characters | Decode |
 |---|---|---|---|---|
-| 기본 | 0/126 | 0 | 2,244 | 46.1s |
-| 강화 | 0/126 | 0 | 2,212 | 45.9s |
-| 강화 + condition_on_prev_tokens=False | 0/126 | 0 | 2,166 | 45.4s |
+| Default | 0/126 | 0 | 2,244 | 46.1s |
+| Tightened | 0/126 | 0 | 2,212 | 45.9s |
+| Tightened + condition_on_prev_tokens=False | 0/126 | 0 | 2,166 | 45.4s |
 
-임계값을 올려도 **빈 구간으로 떨어진 것이 하나도 없습니다** — 4초 조각에서는 no_speech
-확률이 그 높이까지 올라가지 않습니다. 두 설정의 결과가 다른 20구간은 전부 여러 사람이
-겹쳐 말하는 자리의 쓰레기 출력이었고(`isi を作って Six` ↔ `BBの固を持って…`), 어느 쪽이
-낫다고 할 수 없었습니다. 정답 자막이 없어 WER은 못 냈습니다. **기본값을 유지합니다.**
-손잡이는 남겨 두었습니다 — `asr_backends` 항목에 `"whisper": {"no_speech_thold": …}`를
-적으면 그대로 넘어가고, `"refine_prompt": true`면 정제 패스에만 직전 정제본을
-`initial_prompt`로 넘깁니다(빠른 패스에는 넣지 않음, 43절 예정).
+Raising the thresholds dropped **not a single segment into empty** — on a
+4-second chunk the no_speech probability never climbs that high. The 20 segments
+where the two settings differ were all garbage output from places where several
+people talk over each other (`isi を作って Six` ↔ `BBの固を持って…`), and
+neither could be called the better one. There are no ground-truth subtitles, so
+we could not compute WER. **We keep the defaults.** The knobs were left in place
+-- write `"whisper": {"no_speech_thold": …}` into the `asr_backends` entry and it
+is passed straight through, and with `"refine_prompt": true` the previous refined
+line is handed to the refinement pass only as `initial_prompt` (not fed to the
+fast pass; section 43 to come).
 
-이 슬라이스는 13절의 다양도 검사에도 한 번도 걸리지 않았습니다. 120초 지점에서 보였던
-`ほんとに見てない` 반복은 20초 조각을 통째로 해독할 때 나온 것이고, VAD가 4초로 자른
-조각에서는 나오지 않았습니다 — 짧게 끊는 것이 그 자체로 환각 억제라는 뜻입니다.
+This slice never once tripped the diversity check of section 13. The
+`ほんとに見てない` repetition seen at the 120-second mark came from decoding a
+20-second chunk whole; it does not appear on the chunks VAD cut to 4 seconds --
+which means cutting short is itself hallucination suppression.
 
-# 정답 자막 표본으로 재기 (2026-08-29 밤)
+# Measuring against ground-truth subtitle samples (night of 2026-08-29)
 
-## 43. 표본과 채점
+## 43. The samples and the scoring
 
-유튜브가 **수동** 원어 자막을 제공하는 뮤직비디오 넷을 정답으로 삼았습니다(`bench/gold_fetch.py`,
-`data/gold/`). 일본어 셋(音乃瀬奏 You＆合図 · TAK ニャニャニャチュニャ · ヨルシカ 晴る), 영어
-하나(Mili Fly, My Wings). 채점은 `bench/gold.py` -- 라이브와 같은 길(VAD → 앞 1초 선행 →
-조각 해독)로 자르고, 자막 전체를 이어 붙여 CER(일본어)/WER(영어). 가라오케식 자막의 후리가나·
-크레딧·되풀이는 걷어 냈습니다.
+We took as ground truth four music videos for which YouTube provides **manual**
+original-language subtitles (`bench/gold_fetch.py`, `data/gold/`). Three
+Japanese (音乃瀬奏 You＆合図 · TAK ニャニャニャチュニャ · ヨルシカ 晴る) and one
+English (Mili Fly, My Wings). Scoring is `bench/gold.py` -- cut on the same path
+as live (VAD → 1 s of preroll → decode the chunk), then join the whole subtitle
+together and take CER (Japanese) / WER (English). Furigana, credits and repeats
+in the karaoke-style subtitles were stripped out.
 
-**노래는 전사의 최악 조건**이라 절대값이 높습니다(기준선 CER 47~80%). `晴る/春`처럼 작가가
-일부러 고른 표기도 오류로 셉니다. 그래서 아래 표는 설정 사이의 **차이**로 읽어야 합니다.
-표본 크기(정답 1,490자)에서 반복 실행 편차는 ±1p 남짓입니다(같은 설정 두 번: 63.7 / 64.4).
+**Singing is the worst case for transcription**, so the absolute values are high
+(baseline CER 47~80%). A spelling the writer chose on purpose, like `晴る/春`,
+counts as an error too. So the tables below have to be read as the **difference**
+between settings. At this sample size (1,490 ground-truth characters) run-to-run
+variation is about ±1p (the same setting twice: 63.7 / 64.4).
 
-## 44. Whisper 손잡이는 전부 오차 안, VAD 문턱만 움직였습니다
+## 44. Every Whisper knob stayed inside the noise; only the VAD threshold moved anything
 
-whisper-large-v3-turbo Q8_0, talk 프로필(12초) 기준.
+whisper-large-v3-turbo Q8_0, talk profile (12 s) as the reference.
 
-| 설정 | ニャニャ | 晴る | You＆合図 | Fly(en) | 전체 |
+| Setting | ニャニャ | 晴る | You＆合図 | Fly(en) | Overall |
 |---|---|---|---|---|---|
-| 기준선 (talk, VAD 0.5) | 68.5 | 80.4 | 47.0 | 55.8 | **63.7** |
-| broadcast 프로필(4초) | 70.4 | 85.2 | 51.4 | 62.0 | 67.4 |
-| interview 프로필(6초) | 74.3 | 83.5 | 50.9 | 60.1 | 68.1 |
-| 뒤패딩 0.3초 / 0.5초 | 69.2 / 72.6 | 84.6 / 83.8 | 47.0 / 47.0 | 58.9 / 52.1 | 65.3 / 65.6 |
-| 다양도 검사 끔 / 바닥 0.2 | 70.5 / 66.0 | 80.4 | 47.0 | 54.6 / 56.4 | 64.3 / 62.9 |
+| Baseline (talk, VAD 0.5) | 68.5 | 80.4 | 47.0 | 55.8 | **63.7** |
+| broadcast profile (4 s) | 70.4 | 85.2 | 51.4 | 62.0 | 67.4 |
+| interview profile (6 s) | 74.3 | 83.5 | 50.9 | 60.1 | 68.1 |
+| Trailing padding 0.3 s / 0.5 s | 69.2 / 72.6 | 84.6 / 83.8 | 47.0 / 47.0 | 58.9 / 52.1 | 65.3 / 65.6 |
+| Diversity check off / floor 0.2 | 70.5 / 66.0 | 80.4 | 47.0 | 54.6 / 56.4 | 64.3 / 62.9 |
 | no_speech 0.84 · logprob -1.3 | 72.2 | 80.4 | 47.0 | 54.6 | 64.9 |
 | condition_on_prev_tokens | 71.5 | 80.4 | 47.0 | 57.7 | 65.0 |
-| 온도 폴백 끔 | 73.7 | 80.4 | 47.0 | 54.6 | 65.4 |
-| **VAD 문턱 0.4 / 0.3 / 0.2** | 73.9 / 71.7 / 74.3 | 72.9 / **53.1** / 55.9 | 55.3 / 52.1 / 56.0 | 49.7 / 49.1 / 44.2 | 65.6 / **59.0** / 61.2 |
+| Temperature fallback off | 73.7 | 80.4 | 47.0 | 54.6 | 65.4 |
+| **VAD threshold 0.4 / 0.3 / 0.2** | 73.9 / 71.7 / 74.3 | 72.9 / **53.1** / 55.9 | 55.3 / 52.1 / 56.0 | 49.7 / 49.1 / 44.2 | 65.6 / **59.0** / 61.2 |
 
-세 가지가 읽힙니다.
+Three things read out of this.
 
-- **Whisper 임계값·프롬프트·폴백 손잡이는 이 표본에서 아무것도 바꾸지 않았습니다.** 두
-  표본은 값이 글자 하나도 안 달랐습니다 -- 임계값이 한 번도 발동하지 않았다는 뜻입니다.
-  42절과 같은 결론이고, 손잡이는 설정에 남겨 두되 기본은 그대로입니다.
-- **짧게 끊을수록 나빠집니다**(12초 63.7 → 6초 68.1 → 4초 67.4). 노래는 구절 중간에서 잘리면
-  앞뒤가 사라집니다. 라이브 프로필의 짧은 상한은 지연과 누락을 위해 일부러 낸 값이므로(2절,
-  `live.PROFILES` 주석) 바꾸지 않지만, 정제 패스가 12~25초로 되살리는 것이 그만큼 중요하다는 뜻입니다.
-- **VAD 문턱이 유일한 이득이었습니다.** 0.5에서 `晴る`는 277초 중 57초만 말로 판정됐고 --
-  반주 위의 노랫소리를 무음으로 봤습니다 -- 0.3에서 177초로 늘며 CER 80 → 53. 전체 64.4 → 59.0.
-  0.2는 반주까지 잡아 다시 나빠졌습니다.
+- **The Whisper threshold, prompt and fallback knobs changed nothing on this
+  sample.** Two of the samples did not differ by a single character -- which
+  means the thresholds never fired once. Same conclusion as section 42: the
+  knobs stay in the settings, the defaults stay as they are.
+- **The shorter the cut, the worse it gets** (12 s 63.7 → 6 s 68.1 → 4 s 67.4).
+  Cut a song in the middle of a phrase and what came before and after is gone.
+  The short ceilings of the live profiles are values chosen on purpose for
+  latency and for what gets dropped (section 2, the `live.PROFILES` comment), so
+  they do not change -- but it means the refinement pass bringing it back at
+  12~25 s matters that much.
+- **The VAD threshold was the only gain.** At 0.5, only 57 of `晴る`'s 277
+  seconds were judged speech -- it saw the singing over the accompaniment as
+  silence -- and at 0.3 that grows to 177 seconds, with CER 80 → 53. Overall
+  64.4 → 59.0. 0.2 picks up the accompaniment as well and goes bad again.
 
-**대화 표본에서의 부작용**(한국어 발표 5분, 일본어 합방 5분, 영어 발표 5분; broadcast 프로필):
+**Side effects on conversational samples** (5 min of a Korean talk, 5 min of a
+Japanese collab, 5 min of an English talk; broadcast profile):
 
-| 표본 | 0.5 말(초) | 0.3 말(초) | 빈 구간 | 환각 차단 |
+| Sample | 0.5 speech (s) | 0.3 speech (s) | Empty segments | Hallucinations blocked |
 |---|---|---|---|---|
-| 한국어 발표 | 294 | 292 | 0 → 0 | 0 → 0 |
-| 일본어 합방 | 258 | 284 | 0 → 0 | 0 → 0 |
-| 영어 발표 | 276 | 277 | 0 → 0 | 0 → 0 |
+| Korean talk | 294 | 292 | 0 → 0 | 0 → 0 |
+| Japanese collab | 258 | 284 | 0 → 0 | 0 → 0 |
+| English talk | 276 | 277 | 0 → 0 | 0 → 0 |
 
-대화에서는 중립이고 노래·BGM에서 이득이므로 **기본 문턱을 0.3으로 낮춥니다**
-(`stream.VAD_THRESHOLD`, `MIMIWATCH_VAD_THRESHOLD`로 되돌림).
+It is neutral on conversation and a gain on singing and BGM, so **we lower the
+default threshold to 0.3** (`stream.VAD_THRESHOLD`, put back with
+`MIMIWATCH_VAD_THRESHOLD`).
 
-## 45. 다국어 대안 모델: 노래에서는 whisper-turbo가 가장 낫습니다
+## 45. Multilingual alternatives: on singing, whisper-turbo is the best of them
 
-transcribe.cpp가 지원하는 JA·KO 포함 모델을 같은 표본으로. 전체 오류율, VAD 0.5 / 0.3.
+The models transcribe.cpp supports that cover JA and KO, on the same samples.
+Overall error rate, VAD 0.5 / 0.3.
 
-| 모델 | 크기 | 전체 (0.5 / 0.3) | 속도(맥 Metal) |
+| Model | Size | Overall (0.5 / 0.3) | Speed (Mac Metal) |
 |---|---|---|---|
-| **whisper-large-v3-turbo Q8_0** | 845MB | **64.4 / 59.0** | 16~62배속 |
+| **whisper-large-v3-turbo Q8_0** | 845MB | **64.4 / 59.0** | 16~62× realtime |
 | SenseVoice Small Q8_0 (CPU) | 241MB | 70.0 / - | - |
-| Fun-ASR-MLT-Nano-2512 Q8_0 | 891MB | 73.2 / 66.1 | 75~250배속 |
-| Qwen3-ASR-0.6B Q8_0 | 850MB | 73.4 / 69.4 | 40~285배속 |
-| Cohere Transcribe 03-2026 Q4_K_M | 1.56GB | 74.5 / 72.5 | 50~197배속 |
-| Moonshine base (영어만) | 74MB | 73.6 (en) | - |
+| Fun-ASR-MLT-Nano-2512 Q8_0 | 891MB | 73.2 / 66.1 | 75~250× realtime |
+| Qwen3-ASR-0.6B Q8_0 | 850MB | 73.4 / 69.4 | 40~285× realtime |
+| Cohere Transcribe 03-2026 Q4_K_M | 1.56GB | 74.5 / 72.5 | 50~197× realtime |
+| Moonshine base (English only) | 74MB | 73.6 (en) | - |
 
-영어 한 곡에서는 Cohere·Qwen(46.6)이 whisper(49.1)보다 조금 낫지만 일본어 세 곡에서는 전부
-whisper에 6~14p 뒤집니다. **기본 전사기(품질 쪽)는 whisper-turbo 유지**, 경량 자리도
-SenseVoice 유지(Fun-ASR가 노래에서 더 나쁘고 크기는 3.7배). 대안들이 훨씬 빠르다는 점은
-남습니다 -- 대화 방송의 정답 표본이 생기면 다시 재야 합니다. 노래에서의 결론이 대화로
-그대로 옮겨진다고 볼 근거는 없습니다.
+On the one English song Cohere and Qwen (46.6) are slightly better than whisper
+(49.1), but on the three Japanese songs they all fall 6~14p behind whisper.
+**The default transcriber (on the quality side) stays whisper-turbo**, and the
+light slot stays SenseVoice too (Fun-ASR is worse on singing and 3.7× the size).
+That the alternatives are far faster still stands -- once a ground-truth sample
+of a conversational broadcast exists, this has to be measured again. There is no
+ground for taking a conclusion drawn on singing straight over to conversation.
 
-# 애니메이션 표본으로 재기 (2026-08-29 밤)
+# Measuring against an animation sample (night of 2026-08-29)
 
-## 46. 대사·효과음·BGM이 섞인 116분: VAD 문턱 0.3이 놓친 대사를 절반으로
+## 46. 116 minutes of dialogue, effects and BGM mixed: VAD threshold 0.3 halves the dialogue it misses
 
-방송과 비슷하게 대사·효과음·BGM이 섞인 표본으로 애니메이션 영화(『거울 속 외딴 성』, 116분,
-일본어 음성)를 썼습니다. 붙어 있던 자막은 **한국어 팬자막**(SAMI, 1,439큐)이라 전사 정답은
-아니지만, 두 가지를 셀 수 있습니다(`bench/gold_e2e.py`).
+For a sample that mixes dialogue, sound effects and BGM the way a broadcast
+does, we used an animated film (『거울 속 외딴 성』, Lonely Castle in the Mirror,
+116 min, Japanese audio). The subtitles that came with it are **Korean fansubs**
+(SAMI, 1,439 cues), so they are not ground truth for the transcription, but two
+things can be counted from them (`bench/gold_e2e.py`).
 
-**대사 포착률** -- 한국어 큐의 시각(±0.5초)에 전사 구간이 겹치는 비율. VAD가 대사를 놓치면
-떨어집니다.
+**Dialogue capture rate** -- the fraction of Korean cue timings (±0.5 s) that a
+transcription segment overlaps. It falls when VAD misses dialogue.
 
-| 프로필 · VAD 문턱 | 포착률 | 놓친 큐 | 전사 구간 | 말(초) | 환각 차단 |
+| Profile · VAD threshold | Capture rate | Missed cues | Transcription segments | Speech (s) | Hallucinations blocked |
 |---|---|---|---|---|---|
-| talk(12초) · 0.5 | 96.7% | 48 | 893 | 3,350 | 0 |
-| talk(12초) · **0.3** | **98.3%** | 24 | 647 | 4,048 | 0 |
-| broadcast(4초) · 0.5 | 96.5% | 50 | 1,100 | 3,267 | 0 |
-| broadcast(4초) · **0.3** | **98.1%** | 27 | 1,022 | 3,893 | 0 |
+| talk (12 s) · 0.5 | 96.7% | 48 | 893 | 3,350 | 0 |
+| talk (12 s) · **0.3** | **98.3%** | 24 | 647 | 4,048 | 0 |
+| broadcast (4 s) · 0.5 | 96.5% | 50 | 1,100 | 3,267 | 0 |
+| broadcast (4 s) · **0.3** | **98.1%** | 27 | 1,022 | 3,893 | 0 |
 
-포착률은 프로필과 무관하게 **문턱이 정합니다.** 0.3이 놓친 대사를 절반으로 줄이고 환각 차단은
-여전히 0입니다 -- 44절의 결정(기본 0.3)이 대화+효과음 표본에서도 섭니다. 0.3에서 구간 수가
-줄어드는 것은 대사 사이 짧은 틈을 말로 이어 붙여 구간이 길어지기 때문입니다(12초 상한 안).
+The capture rate is **decided by the threshold**, whatever the profile. 0.3
+halves the dialogue missed and hallucinations blocked is still 0 -- section 44's
+decision (default 0.3) stands on a dialogue-plus-effects sample as well. The
+segment count drops at 0.3 because the short gaps between lines get joined as
+speech and the segments grow longer (within the 12 s ceiling).
 
-## 47. 끝단(전사→번역) chrF: Gemma 29~31 vs M2M-100 13
+## 47. End to end (transcription → translation) chrF: Gemma 29~31 vs M2M-100 13
 
-같은 전사본(whisper-turbo, 0.3)을 두 번역기로 옮겨 사람 번역과 60초 창 글자 n-gram F2(chrF)로
-맞대었습니다. 절대값은 팬자막의 의역 때문에 낮습니다 -- 차이를 보십시오.
+The same transcription (whisper-turbo, 0.3) was carried through both translators
+and matched against the human translation with a character n-gram F2 (chrF) over
+60-second windows. The absolute values are low because the fansubs paraphrase --
+look at the difference.
 
-| 전사 분할 | 번역기 | chrF | 줄 | 실패 |
+| Transcription split | Translator | chrF | Lines | Failures |
 |---|---|---|---|---|
-| talk(12초) | **Gemma 4 E4B** | **29.3** | 647 | 0 |
-| talk(12초) | M2M-100 | 13.4 | 647 | 24 (`⁇` 로 깨져 원문 유지) |
-| broadcast(4초) | **Gemma 4 E4B** | **31.3** | 1,022 | 0 |
+| talk (12 s) | **Gemma 4 E4B** | **29.3** | 647 | 0 |
+| talk (12 s) | M2M-100 | 13.4 | 647 | 24 (broken into `⁇`, source kept) |
+| broadcast (4 s) | **Gemma 4 E4B** | **31.3** | 1,022 | 0 |
 
-눈으로 본 것(20분·50분·90분 창): Gemma는 사람 번역과 거의 같은 문장을 냅니다(`맘에 드는 거
-있으면 빌려줄게 / 정말?` ↔ `마음에 드는 거 있으면 빌려줄게 진짜?`). M2M-100은 없는 말을
-지어내고(`엘리자베스 박사`), 원문을 그대로 남기고, 이모티콘 자모(`ᅲᅲ ᄏᄏ`)를 뱉습니다.
-5절·23절의 판단이 116분 규모에서 수치로 확인된 셈입니다 -- **경량 기본(M2M-100)은 도는 것이
-목적이고, 품질을 원하면 초기 설정에서 Gemma를 골라야 합니다.** 초기 설정 화면에 이 차이를
-적어 두는 것이 맞습니다.
+What the eye saw (windows at 20, 50 and 90 minutes): Gemma produces almost the
+same sentence as the human translation (`맘에 드는 거 있으면 빌려줄게 / 정말?`
+↔ `마음에 드는 거 있으면 빌려줄게 진짜?`, "I'll lend you anything you like /
+Really?"). M2M-100 invents things that are not there (`엘리자베스 박사`, "Doctor
+Elizabeth"), leaves the source as it is, and spits out emoticon jamo (`ᅲᅲ ᄏᄏ`).
+The judgement of sections 5 and 23, confirmed with numbers at 116-minute scale
+-- **the light default (M2M-100) is there so that it runs at all, and if you
+want quality you have to pick Gemma in the first-run setup.** Writing this
+difference onto the first-run setup screen is the right thing to do.
 
-**4초 분할이 12초보다 끝단에서 2p 낫습니다.** 12초 구간은 대사 서너 개가 구두점 없이 한
-줄로 이어져(`本当?パパがヨーロッパ行った時なんかに買ってくるな`) 번역기가 문장 경계를 스스로
-찾아야 합니다. 라이브의 짧은 분할이 지연만이 아니라 번역에도 유리합니다.
+**The 4-second split is 2p better than 12 seconds at the end of the pipeline.**
+A 12-second segment runs three or four lines of dialogue together into one line
+with no punctuation (`本当?パパがヨーロッパ行った時なんかに買ってくるな`),
+leaving the translator to find the sentence boundaries itself. Live's short
+split helps not only the latency but the translation.
 
-**Gemma의 남은 약점 하나가 또렷합니다.** 주인공 이름 `ココロ`가 전사에서 `心`으로 적히면 번역이
-`마음`이 됩니다(`心ちゃんみんな心ちゃんよ` → `코코짱 모두 코코짱이야`처럼 맞추는 때도 있고, `心
-ごめん` → `마음 미안해`처럼 틀리는 때도). 세션 안에서 고유명사를 모아 프롬프트에 주는
-「용어집」 실험의 근거입니다 -- 다음 실험 1순위.
+**One remaining weakness of Gemma is plain to see.** When the heroine's name
+`ココロ` is written `心` in the transcription, the translation becomes `마음`
+("heart"). Sometimes it gets it right (`心ちゃんみんな心ちゃんよ` → `코코짱 모두
+코코짱이야`), sometimes it gets it wrong (`心 ごめん` → `마음 미안해`, "Sorry,
+heart"). This is the ground for the 「glossary」 experiment -- collecting the
+proper nouns within a session and handing them to the prompt -- and the first
+thing to try next.
 
-# 녹화본에 정제 패스를 붙일 것인가 (2026-09-03)
+# Should a VOD get a refinement pass? (2026-09-03)
 
-44절이 「짧게 끊을수록 나빠지고, **정제 패스가 12~25초로 되살린다**」고 적었는데, 그 되살림은
-그때 재지 않은 추론이었습니다. 녹화본 경로(`transcribe_vod.transcribe`)에는 정제가 없고
-지연 제약도 없으니, 붙이면 이득이라는 말이 자연스럽게 따라옵니다. 두 가지를 실제로 쟀습니다.
+Section 44 wrote 「the shorter the cut the worse it gets, and **the refinement
+pass brings it back at 12~25 s**」, but that bringing-back was an inference, not
+measured at the time. The VOD path (`transcribe_vod.transcribe`) has no
+refinement and no latency constraint either, so "attaching it would be a gain"
+follows naturally. We measured the two things for real.
 
-정제 패스는 라이브의 것과 같은 규칙으로 오프라인에서 돌립니다(`bench/refine_pass.py` --
-`GROUP_GAP_S`·`GROUP_MAX_S`·`PREROLL_S`·`REFINE_MIN_KEEP` 를 `stream` 에서 읽어 옵니다).
-`bench/gold.py --refine`, `bench/gold_e2e.py --refine [--refine-split]`.
+The refinement pass runs offline under the same rules as live's
+(`bench/refine_pass.py` -- it reads `GROUP_GAP_S`·`GROUP_MAX_S`·`PREROLL_S`·`REFINE_MIN_KEEP`
+from `stream`). `bench/gold.py --refine`, `bench/gold_e2e.py --refine [--refine-split]`.
 
-## 48. 정제는 정말로 되살립니다 (43절 표본, CER/WER)
+## 48. Refinement really does bring it back (section 43 samples, CER/WER)
 
-whisper-large-v3-turbo Q8_0, VAD 문턱 0.3. 표본·채점은 43절과 같습니다.
+whisper-large-v3-turbo Q8_0, VAD threshold 0.3. Samples and scoring as in
+section 43.
 
-| 설정 | ニャニャ | 晴る | Fly(en) | You＆合図 | 전체 |
+| Setting | ニャニャ | 晴る | Fly(en) | You＆合図 | Overall |
 |---|---|---|---|---|---|
-| talk(12초) 단독 | 71.1 | 53.1 | 47.2 | 49.3 | **57.8** |
-| broadcast(4초) 단독 | 77.9 | 66.2 | 50.3 | 59.2 | **66.6** |
-| talk(12초) + 정제 | 67.9 | 50.6 | 33.1 | 54.1 | **55.9** |
-| broadcast(4초) + 정제 | 69.4 | 51.7 | 42.3 | 51.4 | **56.9** |
+| talk (12 s) alone | 71.1 | 53.1 | 47.2 | 49.3 | **57.8** |
+| broadcast (4 s) alone | 77.9 | 66.2 | 50.3 | 59.2 | **66.6** |
+| talk (12 s) + refinement | 67.9 | 50.6 | 33.1 | 54.1 | **55.9** |
+| broadcast (4 s) + refinement | 69.4 | 51.7 | 42.3 | 51.4 | **56.9** |
 
-- **44절의 추론이 섭니다.** 4초로 끊어 잃은 8.8p(57.8 → 66.6)를 정제가 거의 되돌립니다
-  (66.6 → 56.9). 라이브가 짧게 끊고도 견디는 이유가 이것이라는 말은 사실이었습니다.
-- **12초에도 이득이 있습니다**(57.8 → 55.9). 다만 표본마다 방향이 다릅니다 -- 영어가
-  47.2 → 33.1로 크게 좋아지고 `You＆合図`는 49.3 → 54.1로 나빠졌습니다. 43절이 말한
-  ±1p 편차보다는 크지만 한 표본에 끌려간 값이라 이 표만으로 「녹화본에도 붙이자」는
-  결론은 나오지 않습니다.
+- **Section 44's inference stands.** The 8.8p lost by cutting at 4 seconds
+  (57.8 → 66.6) is nearly all given back by refinement (66.6 → 56.9). Saying
+  that this is why live survives cutting short was true.
+- **There is a gain at 12 seconds too** (57.8 → 55.9). Only the direction
+  differs by sample -- English improves a lot, 47.2 → 33.1, while `You＆合図`
+  gets worse, 49.3 → 54.1. That is larger than the ±1p variation section 43
+  quoted, but it is a figure dragged along by one sample, so this table alone
+  does not yield the conclusion 「attach it to VODs as well」.
 
-## 49. 그러나 라이브의 정제를 그대로 옮기면 자막이 나빠집니다
+## 49. But porting live's refinement over as it is makes the subtitles worse
 
-46·47절과 같은 116분 표본(『거울 속 외딴 성』)으로 끝단까지. 번역은 local-gemma/general.
-창 폭을 바꿔 가며 채점한 것은, 정제본이 **자막 줄을 뭉치기** 때문입니다 -- 무리 하나가
-한 줄이 되어 60초 창의 경계 효과를 더 받습니다.
+The same 116-minute sample as sections 46 and 47 (『거울 속 외딴 성』), all the
+way to the end of the pipeline. Translation is local-gemma/general. We scored it
+at several window widths because refined lines **clump the subtitle lines
+together** -- one utterance group becomes one line, so it feels the boundary
+effect of a 60-second window more.
 
-| 설정 | 줄 | 줄길이 중앙 | 포착률 | chrF(60s) | chrF(120s) | 전체 |
+| Setting | Lines | Median line length | Capture rate | chrF(60s) | chrF(120s) | Whole |
 |---|---|---|---|---|---|---|
-| talk(12초) | 647 | 4.8s | 98.3% | 29.3 | 30.9 | 39.6 |
-| broadcast(4초) | 1,022 | 4.1s | 98.1% | 31.3 | 31.6 | 39.2 |
-| talk + 정제 | 362 | 11.7s | 98.3% | 27.7 | 30.5 | 39.6 |
-| broadcast + 정제 | 360 | 10.1s | 98.1% | 27.5 | 29.9 | 39.8 |
-| **talk + 정제 + 되쪼개기** | **1,420** | **2.8s** | **98.9%** | **32.4** | **32.5** | **40.1** |
+| talk (12 s) | 647 | 4.8s | 98.3% | 29.3 | 30.9 | 39.6 |
+| broadcast (4 s) | 1,022 | 4.1s | 98.1% | 31.3 | 31.6 | 39.2 |
+| talk + refinement | 362 | 11.7s | 98.3% | 27.7 | 30.5 | 39.6 |
+| broadcast + refinement | 360 | 10.1s | 98.1% | 27.5 | 29.9 | 39.8 |
+| **talk + refinement + re-split** | **1,420** | **2.8s** | **98.9%** | **32.4** | **32.5** | **40.1** |
 
-- **정제본을 무리째 한 줄로 내보내면 끝단이 집니다**(29.3 → 27.7). 글자는 좋아지는데
-  (48절) 자막이 나빠지는 이유는 줄이 4.8초에서 11.7초로 늘어서입니다. 전체 이어붙이기
-  chrF 가 39.6으로 똑같은 것이 그 증거입니다 -- 내용은 그대로고 시각만 뭉갠 것입니다.
-  **녹화본 자막은 시각 구간을 들고 플레이어가 그것으로 찾아갑니다. 25초짜리 큐는
-  글자가 아무리 좋아도 자막이 아닙니다.**
-- **되쪼개면 전부 이깁니다.** 런타임에 `timestamps="segment"` 로 물어 구간 시각을 받아
-  무리를 도로 나누면(1,420줄, 중앙 2.8초) 창 폭 셋 모두에서 가장 높고(32.4 / 32.5 / 40.1)
-  포착률도 가장 높습니다(98.9%). 45~47절을 통틀어 이 표본에서 가장 좋은 설정입니다.
-- 값은 전사 시간입니다. 되쪼개기 포함 17배속으로, 정제 없는 talk 보다 30~50% 깁니다.
-  녹화본에는 지연 제약이 없으므로 치를 만한 값입니다.
+- **Send the refined line out as one line per group and the end of the pipeline
+  loses** (29.3 → 27.7). The characters get better (section 48) while the
+  subtitle gets worse, and the reason is that the line grows from 4.8 s to
+  11.7 s. The whole-concatenation chrF being identical at 39.6 is the proof --
+  the content is the same, only the timing was smeared. **A VOD subtitle carries
+  a time range and the player navigates by it. A 25-second cue is not a
+  subtitle, however good its characters are.**
+- **Re-split it and it wins on everything.** Ask the runtime with
+  `timestamps="segment"`, take back the segment timings and split the group
+  again (1,420 lines, median 2.8 s), and it is the highest at all three window
+  widths (32.4 / 32.5 / 40.1) and the highest capture rate too (98.9%). Across
+  sections 45 to 47 it is the best setting on this sample.
+- The price is transcription time. With the re-split included it runs at 17×
+  realtime, 30~50% longer than talk without refinement. A VOD has no latency
+  constraint, so it is a price worth paying.
 
-**출하 코드로 다시 쟀습니다.** 위 되쪼개기 줄은 벤치 안의 시제품이었습니다. 같은 규칙을
-`transcribe_vod.refine_cues` 로 옮기고 벤치가 그것을 부르게 한 뒤 같은 표본을 다시 돌렸습니다.
+**Measured again with the shipping code.** The re-split row above was a
+prototype living inside the bench. We moved the same rules into
+`transcribe_vod.refine_cues`, made the bench call that, and ran the same sample
+again.
 
-| | 줄 | 줄길이 중앙 | 포착률 | chrF(60s) | chrF(120s) | 전체 |
+| | Lines | Median line length | Capture rate | chrF(60s) | chrF(120s) | Whole |
 |---|---|---|---|---|---|---|
-| 시제품 | 1,420 | 2.8s | 98.9% | 32.4 | 32.5 | 40.1 |
-| **출하 코드** | 1,417 | 2.5s | 98.3% | **32.1** | 32.2 | 39.8 |
+| Prototype | 1,420 | 2.8s | 98.9% | 32.4 | 32.5 | 40.1 |
+| **Shipping code** | 1,417 | 2.5s | 98.3% | **32.1** | 32.2 | 39.8 |
 
-차이는 출하 쪽이 구간 시각을 무리 경계 `[첫 표본, 끝 표본]` 안으로 조이기 때문입니다 --
-런타임이 무리 밖을 가리키는 시각을 내도 자막이 이웃을 침범하지 않게 하려는 것인데, 그
-대가로 포착률이 98.9 → 98.3으로 내려갑니다(기준선과 같은 값입니다). 잃은 0.6p 보다
-줄이 겹치지 않는 편이 낫다고 보고 조이는 쪽을 뒀습니다. chrF 는 여전히 기준선보다
-2.8p 높고 4초 분할(31.3)보다도 높습니다.
+The difference is that the shipping side clamps the segment timings inside the
+group boundary `[first sample, last sample]` -- so that a subtitle does not
+intrude on its neighbour even when the runtime emits a timing pointing outside
+the group -- and the price for it is the capture rate going 98.9 → 98.3 (the
+same value as the baseline). We judged non-overlapping lines to be worth more
+than the 0.6p lost and kept the clamping. chrF is still 2.8p above the baseline,
+and above the 4-second split (31.3) as well.
 
-## 50. 곁가지: 47절의 「4초가 2p 낫다」는 상당 부분 창 경계입니다
+## 50. An aside: section 47's 「4 seconds is 2p better」 is in large part the window boundary
 
-같은 저장 결과를 창 폭만 바꿔 다시 채점했습니다(위 표의 오른쪽 두 칸).
+We rescored the same stored results with only the window width changed (the two
+right-hand columns of the table above).
 
-| | chrF(60s) | chrF(120s) | 전체 |
+| | chrF(60s) | chrF(120s) | Whole |
 |---|---|---|---|
-| talk(12초) → broadcast(4초) | +2.0p | +0.7p | **−0.4p** |
+| talk (12 s) → broadcast (4 s) | +2.0p | +0.7p | **−0.4p** |
 
-47절의 결론(짧게 끊는 편이 번역에 유리)은 60초 창에서만 그만큼이고, 창을 넓히면 줄고
-창을 없애면 뒤집힙니다. **구두점 없이 이어진 12초 줄이 번역기를 괴롭힌다는 관찰 자체는
-남습니다**(47절의 예문은 그대로입니다). 다만 그 크기를 2p로 인용하지 마십시오. 그리고
-49절의 되쪼개기가 4초 분할보다 낫기 때문에, 「녹화본 분할을 4초로 줄이자」는 방향은
-접습니다.
+Section 47's conclusion (cutting short helps the translation) is that large only
+at a 60-second window; widen the window and it shrinks, take the window away and
+it flips. **The observation itself -- that a 12-second line run together with no
+punctuation gives the translator trouble -- stands** (section 47's example
+sentence is unchanged). Only do not quote its size as 2p. And because section
+49's re-split beats the 4-second split, the direction 「shorten the VOD split to
+4 seconds」 is dropped.
 
-## 51. 결론
+## 51. Conclusions
 
-1. **정제의 값어치는 확인됐습니다**(48절). 44절이 미룬 판단이 섰습니다.
-2. **라이브의 `Refiner` 를 녹화본에 그대로 옮기는 것은 잘못된 이식입니다**(49절).
-   라이브에서 무리 한 줄이 괜찮은 것은 그 줄이 곧 지나가기 때문이고, 녹화본 자막은
-   남아서 찾아가는 대상입니다.
-3. **「정제 → 구간 시각으로 되쪼개기」를 녹화본 기본으로 붙였습니다**
-   (`transcribe_vod.refine_cues`). 런타임이 이미 내주는 값이고
-   (`transcribe_cpp.Result.segments` 의 `t0_ms`/`t1_ms`), 어댑터의 손잡이는
-   `tcpp_asr.TranscribeCppASR.transcribe(segments=True)` 입니다 -- 기본 꺼짐이고
-   정제 패스만 켭니다. 라이브의 짧은 조각까지 다른 해독 경로를 탈 이유가 없습니다.
-4. **끌 수 있습니다.** 화면의 「정제본으로 다듬기」(라이브와 같은 칸), `--no-refine`,
-   `POST /api/transcribe` 의 `refine`. 전사가 30~50% 길어지는 것이 아까운 자리가
-   있습니다.
-5. **경량 기본 전사기에서는 정제가 돌지 않습니다.** 모델이 구간 시각을 낼 수 있어야
-   하는데, 런타임의 `Capabilities.max_timestamp_kind` 로 물어 보면 이렇습니다.
+1. **Refinement is worth it, confirmed** (section 48). The judgement section 44
+   deferred now stands.
+2. **Porting live's `Refiner` to a VOD as it is, is the wrong port** (section
+   49). One line per group is fine in live because that line goes by in a
+   moment; a VOD subtitle stays, and is a thing you navigate to.
+3. **「refine → re-split on the segment timings」 is now attached as the VOD
+   default** (`transcribe_vod.refine_cues`). The runtime already hands the
+   values out (`t0_ms`/`t1_ms` in `transcribe_cpp.Result.segments`), and the
+   adapter's knob is `tcpp_asr.TranscribeCppASR.transcribe(segments=True)` --
+   off by default, switched on for the refinement pass only. There is no reason
+   for live's short chunks to take a different decode path as well.
+4. **It can be turned off.** 「Polish with refined lines」 on the screen (the
+   same box as live), `--no-refine`, and `refine` on `POST /api/transcribe`.
+   There are places where a 30~50% longer transcription is not worth it.
+5. **Refinement does not run on the light default transcriber.** The model has
+   to be able to give segment timings, and asking the runtime's
+   `Capabilities.max_timestamp_kind` gives this.
 
-   | 전사기 | arch | max_timestamp_kind | 정제 |
+   | Transcriber | arch | max_timestamp_kind | Refinement |
    |---|---|---|---|
-   | whisper-large-v3-turbo (`tcpp-best`) | whisper | `segment` | **돕니다** |
-   | SenseVoice Small (`tcpp-lite`, 경량 기본) | sensevoice | `none` | 건너뜁니다 |
-   | moonshine base (`tcpp-lite-en`) | moonshine | `none` | 건너뜁니다 |
+   | whisper-large-v3-turbo (`tcpp-best`) | whisper | `segment` | **runs** |
+   | SenseVoice Small (`tcpp-lite`, light default) | sensevoice | `none` | skipped |
+   | moonshine base (`tcpp-lite-en`) | moonshine | `none` | skipped |
 
-   물어 보면 `UnsupportedRequest` 가 나므로, 무리마다 그것을 맞기 전에 시작할 때
-   한 번 보고 정제를 걸지 않습니다(로그에 이유를 적습니다). 되쪼개기 없는 정제는
-   49절에서 진 쪽이라 대안도 되지 못합니다. **33~34절대로 경량 쌍이 기본이므로,
-   새로 깐 기계에서 이 이득을 보려면 초기 설정에서 무거운 쌍을 골라야 합니다** --
-   품질을 원할 때 Gemma 를 고르라는 47절의 안내와 같은 자리입니다.
-6. 표본이 하나(116분 애니메이션 영화)이고 정답이 팬자막이었습니다. 방송 녹화본으로
-   한 번 더 본 것이 52절이고, 거기서 이 잠정을 풉니다.
-7. 시각을 못 주는 전사기와 되돌림에 걸린 무리는 확정본을 그대로 둡니다.
-   좋아지지 않는 자리에서 나빠지지는 않아야 합니다.
+   Asking anyway raises `UnsupportedRequest`, so rather than take that once per
+   group we look once at the start and do not attach refinement (the reason goes
+   into the log). Refinement without the re-split is the side that lost in
+   section 49, so it is not an alternative either. **Per sections 33~34 the
+   light pair is the default, so to see this gain on a freshly installed machine
+   you have to pick the heavy pair in the first-run setup** -- the same place as
+   section 47's advice to pick Gemma when you want quality.
+6. There was one sample (a 116-minute animated film) and the ground truth was a
+   fansub. Section 52 is one more look, at a recorded broadcast, and it is there
+   that this provisional mark is lifted.
+7. For a transcriber that cannot give timings, and for a group caught by the
+   rollback, the final lines are left as they are. Where it does not get better
+   it must at least not get worse.
 
-## 52. 방송 표본에서 확인 (ASMR 29분)
+## 52. Confirmed on a broadcast sample (29-minute ASMR)
 
-51절이 「표본 하나(애니메이션 영화)라 잠정」이라고 남겨 둔 자리입니다. 실제 방송 녹화본
-하나로 다시 봤습니다 -- 白上フブキ 의 귀청소 ASMR 29분(`vuvdEqKK3KY`), 일본어. **정답
-자막이 없으므로 CER·chrF 는 못 냅니다.** 볼 수 있는 것은 구조와 유지율, 그리고 눈입니다.
-whisper-large-v3-turbo, talk 프로필, VAD 0.3, 서버와 같은 길(`transcribe_vod.transcribe`).
+This is the spot section 51 left open with 「one sample (an animated film), so
+provisional」. We looked again with one real recorded broadcast -- 29 minutes of
+白上フブキ's ear-cleaning ASMR (`vuvdEqKK3KY`), Japanese. **There are no
+ground-truth subtitles, so CER and chrF cannot be computed.** What can be looked
+at is the structure, the retention rate, and the eye. whisper-large-v3-turbo,
+talk profile, VAD 0.3, the same path as the server
+(`transcribe_vod.transcribe`).
 
-| | 줄 | 길이 중앙 | 최대 | 7초 초과 | 줄당 글자 중앙 | 전체 글자 | 전사 |
+| | Lines | Median length | Max | Over 7 s | Median characters per line | Total characters | Transcription |
 |---|---|---|---|---|---|---|---|
-| 정제 끔 | 175 | 3.4s | 14.2s | **44** | 12 | 3,105 | 33배속 |
-| **정제 켬** | **315** | **2.0s** | 11.9s | **8** | 8 | **3,255** | 21배속 |
+| Refinement off | 175 | 3.4s | 14.2s | **44** | 12 | 3,105 | 33× realtime |
+| **Refinement on** | **315** | **2.0s** | 11.9s | **8** | 8 | **3,255** | 21× realtime |
 
-- **읽을 수 있는 줄이 됩니다.** 7초를 넘는 줄이 44 → 8. 확정본의 12초짜리 한 줄
-  (`まままま、耳掃除をサボりましたねまぁ、ダメですよ、耳掃除サボっちゃよいしょ、よいしょ`)이
-  구두점이 붙은 세 줄로 나뉩니다. 49절이 「무리 한 줄은 자막이 아니다」라고 한 것의
-  반대 방향 -- 확정본의 긴 줄도 자막으로는 무겁다는 뜻입니다.
-- **글자가 줄지 않습니다**(3,105 → 3,255). 시각 근처(±4초)로 맞대어 본 유지율은 양쪽
-  82~85%이고, 낮게 나온 자리는 **확정본이 쓰레기를 냈고 정제가 제대로 받아 적은**
-  경우였습니다: `犬` → `じゃあ耳かきセリフ久しぶりにいきましょうか`, `www` → `うふふふふ`,
-  `ブルーベージ` → `さてさて、ここに溜め込んでいる悪い奴は両国だー`. 정제가 삼킨 자리는
-  찾지 못했습니다.
-- 자막 구조에 흠이 없습니다: 순서 역전 0, 겹침 0, 시작>끝 0.
-- 전사는 33 → 21배속으로 **1.6배** 걸립니다. 49절의 30~50% 예상보다 조금 깁니다 --
-  이 표본은 발화가 짧게 흩어져 무리 수가 많습니다.
+- **The lines become readable.** Lines over 7 seconds go 44 → 8. One 12-second
+  final line (`まままま、耳掃除をサボりましたねまぁ、ダメですよ、耳掃除サボっちゃよいしょ、よいしょ`)
+  splits into three lines with punctuation on them. The opposite direction of
+  section 49's 「one line per group is not a subtitle」 -- it means that a long
+  final line, too, is heavy as a subtitle.
+- **No characters are lost** (3,105 → 3,255). Matched by nearby timing (±4 s),
+  the retention rate is 82~85% both ways, and the places where it came out low
+  were cases of **the final line producing garbage and the refinement writing it
+  down properly**: `犬` → `じゃあ耳かきセリフ久しぶりにいきましょうか`, `www` →
+  `うふふふふ`, `ブルーベージ` → `さてさて、ここに溜め込んでいる悪い奴は両国だー`.
+  We found no place where refinement swallowed something.
+- The subtitle structure has no flaws: 0 order inversions, 0 overlaps, 0 with
+  start > end.
+- Transcription goes 33 → 21× realtime, so it takes **1.6×** as long. A little
+  longer than section 49's 30~50% estimate -- in this sample the speech is
+  scattered in short bursts, so there are many groups.
 
-**두 가지는 그대로 둡니다.**
+**Two things are left as they are.**
 
-- 속삭이는 구간에서 whisper 의 구간 시각이 2초 격자에 붙습니다(`85.36~87.36`,
-  `87.36~89.36`, ...). 시각을 못 짚을 때 런타임이 둥근 값을 내는 것이고, 자막이
-  이웃을 침범하지는 않습니다.
-- **화자 딱지는 혼자 하는 방송에서 다섯을 만들었습니다**(S1 274 · S2 33 · 나머지 8).
-  `speaker_id` 의 도크스트링이 경고한 그대로입니다 -- CAM++ 는 구간에 목소리가 충분해야
-  하는데 이 표본의 확정 구간은 중앙 3.4초입니다(녹화본이 12초로 자른다는 그 문서의
-  전제가 대사가 짧게 끊기는 방송에서는 성립하지 않습니다). 정제가 딱지를 물려받는
-  방식의 문제가 아니라 딱지 자체의 한계이고, 「화자 태그 붙이기」는 기본이 꺼져
-  있습니다. 정답이 없는 표본에서 문턱을 만지는 것은 재는 것이 아니라 맞추는 것이라
-  손대지 않았습니다.
+- In whispered stretches whisper's segment timings stick to a 2-second grid
+  (`85.36~87.36`, `87.36~89.36`, ...). That is the runtime emitting round values
+  when it cannot pin the timing down, and the subtitles do not intrude on their
+  neighbours.
+- **The speaker tags made five speakers out of a solo broadcast** (S1 274 · S2
+  33 · 8 for the rest). Exactly what `speaker_id`'s docstring warned about --
+  CAM++ needs enough voice in a segment, and the final segments of this sample
+  are a median of 3.4 s (that document's premise, that a VOD cuts at 12 s, does
+  not hold for a broadcast whose dialogue is cut short). It is not a problem
+  with the way refinement inherits the tags but a limit of the tags themselves,
+  and 「Attach speaker tags」 is off by default. Touching the threshold on a
+  sample with no ground truth is fitting rather than measuring, so we did not
+  touch it.
 
-**결론: 51절의 잠정을 풉니다.** 방송 표본에서도 정제(되쪼개기)가 자막을 낫게 합니다.
+**Conclusion: section 51's provisional mark is lifted.** On a broadcast sample
+too, refinement (with the re-split) makes the subtitles better.

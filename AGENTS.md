@@ -38,7 +38,10 @@ reasoning.
   `docs/*.md` are English; `README.ko.md` and `docs/*.ko.md` mirror them, with a
   one-line language switcher under each title. Edit the English file first, then
   its companion — a pair that disagrees is a bug. Do not start a new
-  Korean-only document.
+  Korean-only document. In the Korean companions a particle attaches to
+  what precedes it with no space, including after a code span or bold run
+  (`` `init()`이 ``, `**⤓ 내보내기**로`) -- that is 92% of the existing text and now
+  all of it.
 - **Comments and docstrings: English prose, explaining *why*.** They typically
   open with the prior bad behaviour that motivated the code, often citing a
   measurement. Match that. Use `--` as the dash inside code comments (e.g.

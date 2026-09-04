@@ -113,7 +113,7 @@ http://localhost:8900 을 엽니다. 다른 포트는 `PORT=8951 ./run.sh`
 
 그 밖의 모든 것 — 라이브 선택지, 멀티뷰, 지난 방송 이어받기, 엔진 교체와
 CPU 설정, 멤버십 전용 방송, 브라우저 확장, 판올림, 문제가 생겼을 때 — 는
-**[docs/GUIDE.ko.md](docs/GUIDE.ko.md)** 에 있습니다.
+**[docs/GUIDE.ko.md](docs/GUIDE.ko.md)**에 있습니다.
 
 ## 문서
 

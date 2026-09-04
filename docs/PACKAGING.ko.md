@@ -99,7 +99,7 @@ entry point로 찾으므로** dist-info를 같이 넣습니다(`copy_metadata`) 
 ## 처음 열 때 걸리는 것
 
 **맥 — 왜 막히나.** 앱은 ad-hoc 서명이 되어 있고 그 서명은 유효합니다(`codesign
---verify --deep --strict` 통과). 다만 Apple 의 **공증(notarization)** 이 없어
+--verify --deep --strict` 통과). 다만 Apple 의 **공증(notarization)**이 없어
  Gatekeeper 가 격리(quarantine) 표시된 파일을 막습니다. 공증은 유료 Developer
 ID($99/년)를 요구하므로 이 배포에는 없습니다. **한 번만 격리를 벗기면 그 뒤로는
 경고 없이 열립니다** — 유효하게 ad-hoc 서명된 앱은 격리만 없으면 Gatekeeper 가
@@ -112,7 +112,7 @@ ID($99/년)를 요구하므로 이 배포에는 없습니다. **한 번만 격�
 
 권하는 순서:
 
-1. **터미널로 받으면 처음부터 격리가 없어 바로 열립니다.** `curl` 로 받은 파일에는
+1. **터미널로 받으면 처음부터 격리가 없어 바로 열립니다.** `curl`로 받은 파일에는
    격리 속성이 붙지 않습니다.
    ```sh
    curl -L -o mimiwatch.zip https://github.com/chisacam/mimiwatch/releases/latest/download/mimiwatch-<판>-macos-arm64.zip
@@ -133,9 +133,9 @@ Utility)나 `ditto`로** 풀어야 합니다. 다른 압축 도구는 묶음 안
 링크로 잇습니다).
 
 **공증까지 하려면** Apple Developer Program($99/년)에 가입해 Developer ID 인증서를
-받고, 빌드 때 `MIMIWATCH_CODESIGN="Developer ID Application: 이름 (팀ID)"` 로 서명한 뒤
-`xcrun notarytool submit` 으로 공증·스테이플하면 첫 실행 경고까지 사라집니다. 지금
-`packaging/build.sh` 는 그 환경변수가 있으면 ad-hoc 대신 그 인증서로 서명합니다.
+받고, 빌드 때 `MIMIWATCH_CODESIGN="Developer ID Application: 이름 (팀ID)"`로 서명한 뒤
+`xcrun notarytool submit`으로 공증·스테이플하면 첫 실행 경고까지 사라집니다. 지금
+`packaging/build.sh`는 그 환경변수가 있으면 ad-hoc 대신 그 인증서로 서명합니다.
 
 **윈도우**: SmartScreen이 「알 수 없는 게시자」로 막습니다. 「추가 정보 › 실행」.
 

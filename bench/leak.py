@@ -20,6 +20,6 @@ for mode in ["generic", "preset", "generic-ctx", "preset-ctx"]:
     blown = [r for r in rows
              if not r["error"] and len(r["text"]) >= 4
              and len(r["out"]) > len(r["text"]) * 3]
-    print(f"{mode:<12} 실패 {len(fails)}  길이폭발 {len(blown)}")
+    print(f"{mode:<12} failures {len(fails)}  length blowups {len(blown)}")
     for r in fails + blown:
         print(f"    {r['text'][:24]!r} -> {(r['out'] or r['error'])[:60]!r}")

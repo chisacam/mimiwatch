@@ -41,13 +41,13 @@ def _stub_dir(tmp) -> str:
             return False
 
     if not real("sherpa_onnx"):
-        (d / "sherpa_onnx.py").write_text("# CI용 가짜 모듈. 서버는 import 만 합니다.\n")
+        (d / "sherpa_onnx.py").write_text("# A fake module for CI. The server only imports it.\n")
     if not real("transcribe_cpp"):
         pkg = d / "transcribe_cpp"
         pkg.mkdir(exist_ok=True)
         (pkg / "__init__.py").write_text(
             "class Model:\n    def __init__(self, *a, **k):\n"
-            "        raise RuntimeError('시험은 전사 모델을 올리지 않습니다')\n"
+            "        raise RuntimeError('tests do not load transcription models')\n"
             "def backend_available(name):\n    return False\n"
             "def backends():\n    return []\n")
         (pkg / "errors.py").write_text(
@@ -92,11 +92,11 @@ def server(tmp_path_factory):
             break
         except Exception:
             if proc.poll() is not None:
-                raise RuntimeError("서버가 죽었습니다:\n" + proc.stdout.read())
+                raise RuntimeError("the server died:\n" + proc.stdout.read())
             time.sleep(0.1)
     else:
         proc.kill()
-        raise RuntimeError("서버가 뜨지 않았습니다")
+        raise RuntimeError("the server never came up")
     yield base, port
     proc.terminate()
     try:

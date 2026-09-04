@@ -53,22 +53,22 @@ def norm(cue: dict) -> dict:
 
 
 def main():
-    print("\n[1] 스키마")
+    print("\n[1] schema")
     import sqlite3
     db = sqlite3.connect(f"file:{store.DB}?mode=ro", uri=True)
     cols = [r[1] for r in db.execute("PRAGMA table_info(cues)")]
     for c in ("owner", "start", "end"):
-        check(c in cols, f"cues.{c} 가 있다")
+        check(c in cols, f"cues.{c} exists")
     for gone in ("session", "t"):
-        check(gone not in cols, f"옛 이름 cues.{gone} 는 없다")
+        check(gone not in cols, f"the old name cues.{gone} is gone")
     tables = {r[0] for r in db.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
-    check("docs" in tables, "docs 표가 있다")
+    check("docs" in tables, "the docs table exists")
     idx = {r[0] for r in db.execute(
         "SELECT name FROM sqlite_master WHERE type='index'")}
-    check("cues_owner_start" in idx, "owner+start 인덱스가 있다")
+    check("cues_owner_start" in idx, "the owner+start index exists")
 
-    print("\n[2] 옮기는 코드가 원본을 그대로 옮기는가")
+    print("\n[2] does the migrating code move the originals across untouched")
     # Built exactly in the shape the old version left behind. The last one is
     # an even older version that hung a single translation on each subtitle --
     # this checks that folding too.
@@ -113,7 +113,7 @@ def main():
         store._db = None
         store.init()
         moved = store.import_legacy_docs()
-        check(moved == len(FIXTURES), f"{len(FIXTURES)}개를 옮겼다 ({moved})")
+        check(moved == len(FIXTURES), f"{len(FIXTURES)} moved across ({moved})")
         for vid, doc in FIXTURES.items():
             old = json.loads(json.dumps(doc))      # leave the original alone
             old_cues = old.pop("cues")
@@ -134,38 +134,38 @@ def main():
             keys = {k for k in set(old) | set(meta or {}) if k != "backends_done"}
             same_m = meta is not None and all(old.get(k) == meta.get(k) for k in keys)
             check(same_n and same_c and same_m,
-                  f"{vid}: 자막 {len(old_cues)}줄과 메타 {len(keys)}칸이 그대로"
-                  + ("" if same_n else f" (줄 수 {len(old_cues)}->{len(new_cues)})")
-                  + ("" if same_c or not same_n else " (내용 다름)")
-                  + ("" if same_m else " (메타 다름)"))
+                  f"{vid}: {len(old_cues)} cue lines and {len(keys)} meta fields unchanged"
+                  + ("" if same_n else f" (line count {len(old_cues)}->{len(new_cues)})")
+                  + ("" if same_c or not same_n else " (content differs)")
+                  + ("" if same_m else " (meta differs)"))
         # Folding the old version's translation
         got = store.cues("vid-old")
         check(got[0]["translations"] == {"local-m2m100": "하나"},
-              f"옛 translation 을 백엔드 지도로 접는다 ({got[0]['translations']})")
+              f"the old translation folds into a backend map ({got[0]['translations']})")
         check(got[1]["translations"] == {},
-              "빈 translation 은 빈 지도가 된다")
+              "an empty translation becomes an empty map")
         check(store.doc("vid-old")["backends_done"] == ["local-m2m100"],
-              "backends_done 을 자막에서 다시 센다")
+              "backends_done is recounted from the cues")
         check(not [n for n in os.listdir(os.path.join(tmp, "data"))
-                   if n.endswith(".json")], "옮긴 원본은 data/ 에 남지 않는다")
+                   if n.endswith(".json")], "the migrated originals do not stay in data/")
         check(len(os.listdir(store.LEGACY)) == len(FIXTURES),
-              "원본은 legacy/ 로 옮겨진다 (지우지 않습니다)")
-        check(store.import_legacy_docs() == 0, "다시 불러도 옮길 것이 없다")
+              "the originals move into legacy/ (nothing is deleted)")
+        check(store.import_legacy_docs() == 0, "a second run has nothing left to move")
     finally:
         store.DATA, store.DB, store.LEGACY, store._db = real
         shutil.rmtree(tmp, ignore_errors=True)
 
-    print("\n[3] 라이브 자막은 그대로인가")
+    print("\n[3] are the live cues unchanged")
     sess = [s for s in store.sessions(200) if s.get("cues")]
-    check(len(sess) > 0, f"자막이 있는 세션 {len(sess)}개")
+    check(len(sess) > 0, f"{len(sess)} sessions with cues")
     for s in sess[:3]:
         cs = store.cues(s["id"])
-        check(len(cs) == s["cues"], f"{s['id']}: 세는 수와 읽는 수가 같다 "
+        check(len(cs) == s["cues"], f"{s['id']}: the counted number matches the number read "
                                     f"({s['cues']} / {len(cs)})")
         check(all("t" in c for c in cs),
-              f"{s['id']}: 시작 시각 키가 t 로 나온다 (통신 형식 유지)")
+              f"{s['id']}: the start-time key comes back as t (the wire format is kept)")
 
-    print("\n[4] 자막 한 줄만 고치기 (사본에서)")
+    print("\n[4] editing a single cue line (on a copy)")
     tmp = tempfile.mkdtemp(prefix="mw-store-")
     try:
         # The WAL travels along too. Copying only the main file drops
@@ -194,18 +194,18 @@ def main():
                              text=True, cwd=tmp)
         line = [x for x in out.stdout.splitlines() if x.startswith("{")]
         if not line:
-            check(False, f"사본에서 돌리지 못했습니다: {out.stderr[-300:]}")
+            check(False, f"could not run on the copy: {out.stderr[-300:]}")
         else:
             r = json.loads(line[-1])
-            check(r["ok"], "update_cue 가 한 줄을 고쳤다")
-            check(r["n0"] == r["n1"], f"줄 수가 그대로 ({r['n0']})")
-            check(r["changed"] == "바꾼 줄", "고친 줄이 반영됐다")
-            check(r["neighbour_same"], "앞뒤 줄은 건드리지 않았다")
-            check(r["tr_kept"], "그 줄의 번역은 남아 있다")
+            check(r["ok"], "update_cue changed one line")
+            check(r["n0"] == r["n1"], f"the line count is unchanged ({r['n0']})")
+            check(r["changed"] == "바꾼 줄", "the edited line came through")
+            check(r["neighbour_same"], "the lines either side were left alone")
+            check(r["tr_kept"], "that line's translation is still there")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    print("\n" + ("전부 통과" if not FAIL else f"실패 {len(FAIL)}건: " + "; ".join(FAIL)))
+    print("\n" + ("all passed" if not FAIL else f"{len(FAIL)} failed: " + "; ".join(FAIL)))
     return 1 if FAIL else 0
 
 

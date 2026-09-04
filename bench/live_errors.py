@@ -76,30 +76,30 @@ def run_failing(monkey):
 
 
 def main():
-    print("[1] yt-dlp 를 찾지 못할 때 (asr 가 만들어지기 전에 실패)")
+    print("[1] yt-dlp cannot be found (failing before asr is created)")
     boom = types.SimpleNamespace(
         run=lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("yt-dlp 없음")),
         Popen=None)
     s, escaped, released, retired = run_failing(boom)
-    check(escaped is None, f"예외가 밖으로 새지 않는다 ({escaped})")
-    check(s.state == "error", f"상태가 error 다 ({s.state})")
-    check("yt-dlp" in (s.error or ""), f"진짜 원인이 남는다 ({s.error})")
-    check(bool(released), "_release() 가 불린다 (모델을 놓아준다)")
-    check(retired == ["t"], f"_retire() 가 불린다 ({retired})")
+    check(escaped is None, f"no exception escapes ({escaped})")
+    check(s.state == "error", f"the state is error ({s.state})")
+    check("yt-dlp" in (s.error or ""), f"the real cause survives ({s.error})")
+    check(bool(released), "_release() is called (the model is let go)")
+    check(retired == ["t"], f"_retire() is called ({retired})")
 
-    print("\n[2] 라이브가 아닌 주소일 때 (try 안에서 return)")
+    print("\n[2] a URL that is not live (returning from inside the try)")
     class Done:
         returncode = 0
         stdout = '{"title": "x", "id": "y", "is_live": false}'
         stderr = ""
     vod = types.SimpleNamespace(run=lambda *a, **k: Done(), Popen=None)
     s, escaped, released, retired = run_failing(vod)
-    check(escaped is None, f"예외가 밖으로 새지 않는다 ({escaped})")
-    check(s.state == "error", f"상태가 error 다 ({s.state})")
-    check("not live" in (s.error or ""), f"안내가 남는다 ({s.error})")
-    check(bool(released) and retired == ["t"], "정리가 돈다")
+    check(escaped is None, f"no exception escapes ({escaped})")
+    check(s.state == "error", f"the state is error ({s.state})")
+    check("not live" in (s.error or ""), f"the notice survives ({s.error})")
+    check(bool(released) and retired == ["t"], "cleanup runs")
 
-    print("\n[3] resolve_audio 가 yt-dlp 의 말을 실어 보내는가")
+    print("\n[3] does resolve_audio carry out what yt-dlp said")
     class NoFmt:
         returncode = 1
         stdout = ""
@@ -114,10 +114,10 @@ def main():
     finally:
         live.subprocess = real
     check("requested format is not available" in msg,
-          "yt-dlp 가 한 말이 그대로 실린다")
-    check("234" in msg, "어느 포맷을 시도했는지도 남는다")
+          "what yt-dlp said is carried through verbatim")
+    check("234" in msg, "which format was tried survives too")
 
-    print("\n[4] 전사 엔진을 갈아 끼워도 세션과 자막이 유지되는가")
+    print("\n[4] does swapping the transcription engine keep the session and its cues")
     # This is the point. Changing the engine used to mean restarting the
     # session, and since cues are stored by session id the transcript up to
     # that moment disappeared.
@@ -148,16 +148,16 @@ def main():
         live.config.find_asr = real_find_asr
         live._sessions.pop(s.id, None)
 
-    check(not res.get("error"), f"갈아 끼웠다 ({res})")
-    check(s.id == before_id, f"세션 id가 그대로다 ({s.id})")
+    check(not res.get("error"), f"the swap went through ({res})")
+    check(s.id == before_id, f"the session id is unchanged ({s.id})")
     check(s._recent == [{"t": 1.0, "text": "이미 받아 적은 줄"}],
-          "이미 받아 적은 줄이 남아 있다")
+          "the lines already transcribed are still there")
     check(s.asr_backend_id == "tcpp-lite" and s.asr_label == "new-model",
-          f"엔진 이름이 바뀌었다 ({s.asr_label})")
+          f"the engine name changed ({s.asr_label})")
     check(swapped.get("spec", {}).get("model") == "SenseVoiceSmall-Q8_0.gguf",
-          "설정이 그대로 전달됐다")
+          "the spec was passed through unchanged")
 
-    print("\n[5] 갈아 끼우기가 실패하면 쓰던 것이 남는가")
+    print("\n[5] does a failed swap leave the engine in use as it was")
     class Refuses(FakeAsr):
         def swap(self, spec):
             raise RuntimeError("이 모델은 'ja' 언어를 지원하지 않습니다")
@@ -172,11 +172,11 @@ def main():
     finally:
         live.config.find_asr = real_find_asr
         live._sessions.pop(s2.id, None)
-    check("error" in res2, f"실패를 알린다 ({res2.get('error', '')[:40]})")
+    check("error" in res2, f"the failure is reported ({res2.get('error', '')[:40]})")
     check(s2.asr_backend_id == "tcpp-best" and s2.asr_label == "old-model",
-          "쓰던 엔진이 그대로다")
+          "the engine in use is unchanged")
 
-    print("\n[6] 끊긴 세션을 같은 세션으로 이어받는가")
+    print("\n[6] does an interrupted session resume as the same session")
     started = {}
     real_store_session, real_store_cues = live.store.session, live.store.cues
     # **The write path is blocked too.** With only the reads faked, the
@@ -205,31 +205,31 @@ def main():
         live.store.save_session, live.store.save_job = real_save_session, real_save_job
         live._sessions.pop("sess-1", None)
 
-    check(not res.get("error"), f"이어받기가 받아들여졌다 ({res})")
-    check(s is not None and s.id == "sess-1", "세션 id를 그대로 쓴다")
-    check(s and s._seq == 7, f"번호가 이어진다 (_seq={s and s._seq})")
-    check(s and s.lines == 3, f"줄 수를 물려받는다 ({s and s.lines})")
+    check(not res.get("error"), f"the resume was accepted ({res})")
+    check(s is not None and s.id == "sess-1", "it keeps the session id")
+    check(s and s._seq == 7, f"the numbering carries on (_seq={s and s._seq})")
+    check(s and s.lines == 3, f"the line count is inherited ({s and s.lines})")
     check(s and abs(s.resume_from - 1500.0) < 0.01,
-          f"끊긴 미디어 위치를 계산한다 ({s and s.resume_from})")
+          f"the interrupted media position is worked out ({s and s.resume_from})")
     check(s and s.profile == "collab" and s.genre == "gaming" and s.refine,
-          "설정을 그대로 물려받는다")
+          "the settings are inherited unchanged")
 
-    print("\n[7] 이어받을 수 없는 경우")
+    print("\n[7] when resume is not possible")
     live.store.save_session = lambda *a, **k: None
     live.store.session = lambda sid: None
-    check("error" in live.resume("없음"), "없는 세션은 거절한다")
+    check("error" in live.resume("no-such-session"), "a missing session is refused")
     live.store.session = lambda sid: {"id": sid, "state": "running", "url": "x"}
-    check("error" in live.resume("sess-1"), "이미 받는 중이면 거절한다")
+    check("error" in live.resume("sess-1"), "a session already running is refused")
     live.store.session = lambda sid: {"id": sid, "state": "interrupted", "url": ""}
-    check("error" in live.resume("sess-1"), "주소가 없으면 거절한다")
+    check("error" in live.resume("sess-1"), "a session with no URL is refused")
     live.store.session = real_store_session
     live.store.save_session = real_save_session
 
     # Confirm for ourselves that the check left nothing in the store.
     check(live.store.session("sess-1") is None,
-          "시험용 세션이 저장소에 남지 않았다")
+          "no test session was left in the store")
 
-    print("\n[8] 값이 None 인 자막을 저장해도 세션이 죽지 않는가")
+    print("\n[8] does saving a cue with None values keep the session alive")
     # Leaving the source language to auto-detection lets lang flow through as
     # None. The cues column is NOT NULL, and `.get(k, "")` does **not** hand
     # back the default when the key is present and the value is None, so None
@@ -247,12 +247,12 @@ def main():
                                   "text": "안녕", "lang": None, "speaker": None})
         row = live.store.cues("s")[0]
         check(row["lang"] == "" and row["speaker"] == "",
-              f"None 이 빈 문자열로 저장된다 (lang={row['lang']!r})")
+              f"None is stored as an empty string (lang={row['lang']!r})")
         live.store.save_cue("s", {"id": 2, "kind": None, "t": None,
                                   "text": None, "lang": None, "speaker": None})
-        check(len(live.store.cues("s")) == 2, "전부 None 이어도 저장된다")
+        check(len(live.store.cues("s")) == 2, "it is stored even when everything is None")
     except Exception as exc:                                # noqa: BLE001
-        check(False, f"저장에서 예외가 났다: {type(exc).__name__}: {exc}")
+        check(False, f"saving raised an exception: {type(exc).__name__}: {exc}")
     finally:
         live.store.DB, live.store.DATA, live.store._db = real_db, real_data, real_conn
         shutil.rmtree(tmp, ignore_errors=True)
@@ -263,13 +263,13 @@ def main():
     for lang in (None, "", "ja"):
         a.forced_lang = lang or ""
         check(a.forced_lang is not None and isinstance(a.forced_lang, str),
-              f"forced_lang 이 문자열이다 (입력 {lang!r} -> {a.forced_lang!r})")
+              f"forced_lang is a string (input {lang!r} -> {a.forced_lang!r})")
 
     print()
     if FAIL:
-        print(f"{len(FAIL)} 건 실패")
+        print(f"{len(FAIL)} failed")
         return 1
-    print("전부 통과")
+    print("all passed")
     return 0
 
 

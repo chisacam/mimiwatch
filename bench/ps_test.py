@@ -57,13 +57,13 @@ def slice_script():
                 and "Remove-Item -LiteralPath $tmp" in src[i - 2])
     # Getting the range wrong runs the model-download stretch as well. That is
     # how 2.2GB got downloaded once.
-    assert v_e - v_s < 25, f"확인 블록이 {v_e - v_s}행 -- 범위를 잘못 잡았습니다"
-    assert b_e - b_s < 60, f"백엔드 블록이 {b_e - b_s}행 -- 범위를 잘못 잡았습니다"
+    assert v_e - v_s < 25, f"the verify block is {v_e - v_s} lines -- the range was taken wrong"
+    assert b_e - b_s < 60, f"the backend block is {b_e - b_s} lines -- the range was taken wrong"
     L = lambda a, b: "\n".join(src[a - 1:b])
     return {"fns": L(fn_s, fn_e), "python": L(py_s, py_e),
             "verify": L(v_s, v_e), "backend": L(b_s, b_e),
-            "at": f"함수 {fn_s}~{fn_e} / 파이썬 {py_s}~{py_e} / "
-                  f"확인 {v_s}~{v_e} / 백엔드 {b_s}~{b_e}"}
+            "at": f"functions {fn_s}~{fn_e} / python {py_s}~{py_e} / "
+                  f"verify {v_s}~{v_e} / backend {b_s}~{b_e}"}
 
 
 HEAD = """$ErrorActionPreference = 'Stop'
@@ -85,71 +85,73 @@ function Assert($c, $w) {{
 {p['fns']}
 $ModelDir = $env:TESTMODELS
 
-# [1]~[3] 은 Get-Model(모델 내려받기)의 시험이었습니다. 내려받기는 modelhub.py 로
-# 옮겨 갔고 tests/test_modelhub.py 가 완성본·.part·이어 받기·실패를 지킵니다.
+# [1]~[3] used to test Get-Model (model downloading). Downloading moved to
+# modelhub.py, and tests/test_modelhub.py guards the finished file, .part,
+# resume and failure.
 
 {p['python']}
-Assert ($null -ne $PythonExe) "[4] 앞선 명령이 exit 1 이어도 파이썬을 찾는다 ($PythonExe)"
+Assert ($null -ne $PythonExe) "[4] Python is found even when the previous command exited 1 ($PythonExe)"
 $o = & $PythonExe @PythonArgs -c "import sys; print(sys.version_info[0])"
-Assert ("$o" -eq '3') '[5] 빈 배열 스플래팅이 동작한다'
+Assert ("$o" -eq '3') '[5] splatting an empty array works'
 
 $Py = Join-Path $env:REPO '.venv/bin/python'
 $Here = $env:REPO
 $env:MIMIWATCH_MODEL_DIR = $env:REALMODELS
 {p['verify']}
-Assert ($check.Code -eq 0) '[6] 파이썬 조각을 넘겨 확인이 통과한다'
+Assert ($check.Code -eq 0) '[6] the verify passes with the Python snippet handed over'
 $env:MIMIWATCH_MODEL_DIR = $ModelDir
 {p['verify']}
-Assert ($check.Code -eq 1) '[6b] 모델이 없으면 종료 코드 1'
+Assert ($check.Code -eq 1) '[6b] exit code 1 when the model is missing'
 
 $Backend = 'auto'
 {p['backend']}
-Assert ($Backend -eq 'cpu') "[7] GPU/WMI/드라이브가 없어도 멈추지 않고 cpu 로 간다 ($Backend)"
+Assert ($Backend -eq 'cpu') "[7] with no GPU/WMI/drive it does not stop but goes to cpu ($Backend)"
 
-Assert (-not ('{w}' -notmatch [regex]::Escape('{n}'))) '[8] 기본 위치면 안내하지 않는다'
-Assert ('D:{chr(92)}models' -notmatch [regex]::Escape('{n}')) '[8] 다른 위치면 안내한다'
+Assert (-not ('{w}' -notmatch [regex]::Escape('{n}'))) '[8] no notice at the default location'
+Assert ('D:{chr(92)}models' -notmatch [regex]::Escape('{n}')) '[8] a notice at any other location'
 
-# [9] 이슈 #1의 회귀 시험.
+# [9] Regression test for issue #1.
 #
-# 아직 깔지 않은 패키지를 import 해 보는 확인은 트레이스백을 냅니다. 그것이
-# 정상이고, 스크립트를 세워서는 안 됩니다. Windows PowerShell 5.1에서는
-# $ErrorActionPreference='Stop'이 그 stderr를 종료 오류로 바꿔 설치를
-# 통째로 죽였습니다. 헬퍼가 stderr를 붙잡고 종료 코드만 돌려주는지 봅니다.
+# The check that imports a package not installed yet prints a traceback. That
+# is normal, and it must not halt the script. On Windows PowerShell 5.1
+# $ErrorActionPreference='Stop' turned that stderr into a terminating error and
+# killed the whole install. This looks at whether the helper catches stderr and
+# hands back only the exit code.
 $ErrorActionPreference = 'Stop'
 $threw = $false
 $res = $null
 try {{
   $res = Get-Native $env:SYSPY @('-c', 'import sys; print("boom", file=sys.stderr); sys.exit(3)')
 }} catch {{ $threw = $true }}
-Assert (-not $threw) '[9] stderr를 내는 명령이 스크립트를 세우지 않는다'
-Assert ($res -and $res.Code -eq 3) "[9] 종료 코드를 그대로 돌려준다 ($($res.Code))"
-Assert ($res -and ($res.Lines -join ' ') -match 'boom') '[9] stderr 내용도 붙잡는다'
+Assert (-not $threw) '[9] a command writing to stderr does not halt the script'
+Assert ($res -and $res.Code -eq 3) "[9] the exit code comes back unchanged ($($res.Code))"
+Assert ($res -and ($res.Lines -join ' ') -match 'boom') '[9] the stderr content is caught too'
 
 $threw = $false
 try {{
   $code = Invoke-Native $env:SYSPY @('-c', 'import sys; print("boom", file=sys.stderr); sys.exit(4)')
 }} catch {{ $threw = $true }}
-Assert (-not $threw) '[9] 흘려보내는 쪽도 세우지 않는다'
-Assert ($code -eq 4) "[9] 흘려보내는 쪽도 종료 코드를 돌려준다 ($code)"
+Assert (-not $threw) '[9] the pass-through path does not halt either'
+Assert ($code -eq 4) "[9] the pass-through path returns the exit code too ($code)"
 
-# [10] 공백이 든 경로를 인자로 넘겨도 살아남는가.
+# [10] does a path with a space survive being passed as an argument.
 $spaced = Join-Path $ModelDir 'a b'
 New-Item -ItemType Directory -Force -Path $spaced | Out-Null
 $probe = Get-Native $env:SYSPY @('-c', 'import sys,os; print(os.path.isdir(sys.argv[1]))', $spaced)
-Assert (($probe.Lines -join '') -match 'True') '[10] 공백이 든 경로가 온전히 전달된다'
+Assert (($probe.Lines -join '') -match 'True') '[10] a path with a space is passed through intact'
 
 Write-Host ""
-if ($fail) {{ Write-Host "$fail 건 실패" -ForegroundColor Red; exit 1 }}
-Write-Host '전부 통과' -ForegroundColor Green
+if ($fail) {{ Write-Host "$fail failed" -ForegroundColor Red; exit 1 }}
+Write-Host 'all passed' -ForegroundColor Green
 """
     open(f"{tmp}/harness.ps1", "w", encoding="utf-8").write(harness)
 
 
 def main():
     if not shutil.which("pwsh"):
-        sys.exit("pwsh가 없습니다.  brew install powershell")
+        sys.exit("pwsh is missing.  brew install powershell")
     p = slice_script()
-    print(f"install.ps1에서 떼어 옴: {p['at']}")
+    print(f"lifted out of install.ps1: {p['at']}")
 
     tmp = tempfile.mkdtemp(prefix="mimiwatch-pstest-")
     try:
@@ -169,7 +171,7 @@ $e=$null; $t=$null
 $null=[System.Management.Automation.Language.Parser]::ParseFile(
   (Resolve-Path '{os.path.join(ROOT, f)}'), [ref]$t, [ref]$e)
 if ($e.Count) {{ $e | ForEach-Object {{ $_.Message }}; exit 1 }}
-'  구문 OK  {f}'"""], capture_output=True, text=True)
+'  syntax OK  {f}'"""], capture_output=True, text=True)
             print(r.stdout.strip() or r.stderr.strip())
             if r.returncode:
                 return 1
@@ -187,7 +189,7 @@ if ($e.Count) {{ $e | ForEach-Object {{ $_.Message }}; exit 1 }}
         r = subprocess.run(["pwsh", "-NoProfile", "-File", f"{tmp}/harness.ps1"],
                            env=env, capture_output=True, text=True)
         for line in r.stdout.splitlines():
-            if "PASS" in line or "FAIL" in line or "통과" in line or "실패" in line:
+            if "PASS" in line or "FAIL" in line or "passed" in line or "failed" in line:
                 print(line)
         if r.returncode:
             print(r.stderr[-2000:], file=sys.stderr)

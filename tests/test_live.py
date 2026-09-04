@@ -130,7 +130,7 @@ def test_user_stop_does_not_reconnect(session, fake_ffmpeg):
         s.stop()
         return raw
     s._ff.stdout.read = read_then_stop
-    s._resolve_hls = lambda reconnect=False: pytest.fail("중단 뒤에 다시 붙으려 했습니다")
+    s._resolve_hls = lambda reconnect=False: pytest.fail("tried to reconnect after the stop")
     s._read_loop()
     # The transcribing side sees the stop flag and does not touch the remaining frames.
     assert list(s._consume()) == []

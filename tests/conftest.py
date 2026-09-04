@@ -44,7 +44,7 @@ def _stub_native():
 
         class Model:
             def __init__(self, *a, **k):
-                raise RuntimeError("시험은 전사 모델을 올리지 않습니다")
+                raise RuntimeError("tests do not load transcription models")
 
         err.OutputTruncated, err.UnsupportedRequest = OutputTruncated, UnsupportedRequest
         tc.errors, tc.Model = err, Model
@@ -69,15 +69,15 @@ _stub_native()
 # side the same content is written out **as files** and handed over on
 # PYTHONPATH. Only the missing ones are written, so on a machine where the
 # runtimes are installed the real ones are used as before.
-_SHERPA_STUB = '"""시험용 가짜. 이름만 있으면 됩니다 -- 쓰는 자리는 모두 함수 안입니다."""\n'
+_SHERPA_STUB = '"""A fake for tests. Only the name has to exist -- every use site is inside a function."""\n'
 
-_TCPP_STUB = '''"""시험용 가짜 전사 런타임. import 만 되게 하고, 실제로 부르면 죽습니다."""
+_TCPP_STUB = '''"""A fake transcription runtime for tests. It imports, and dies if anything actually calls it."""
 from .errors import OutputTruncated, UnsupportedRequest   # noqa: F401
 
 
 class Model:
     def __init__(self, *a, **k):
-        raise RuntimeError("시험은 전사 모델을 올리지 않습니다")
+        raise RuntimeError("tests do not load transcription models")
 
 
 def backend_available(name):
@@ -177,7 +177,7 @@ def wait_job(job_id: str, timeout: float = 10.0) -> dict:
         if st and st["state"] not in ("running",):
             return st
         time.sleep(0.02)
-    raise AssertionError(f"작업 {job_id}가 {timeout}초 안에 끝나지 않았습니다: {jobs.job_status(job_id)}")
+    raise AssertionError(f"job {job_id} did not finish within {timeout}s: {jobs.job_status(job_id)}")
 
 
 @pytest.fixture

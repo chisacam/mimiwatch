@@ -36,7 +36,7 @@ def leaks(row):
     return any(lo <= ord(ch) <= hi for ch in row["out"] for lo, hi in KANA)
 
 
-print("| 문맥 줄 | 실패 | 길이폭발 | 원문유출 | ctx0 대비 변화 | 중앙값(초) |")
+print("| context lines | failures | length blowups | source leaks | change vs ctx0 | median (s) |")
 print("|---|---|---|---|---|---|")
 for n in NS:
     rows = runs[n]
@@ -55,7 +55,7 @@ if len(sys.argv) > 1:                    # how one particular line changes acros
     key = sys.argv[1]
     idx = [i for i, r in enumerate(base) if r["text"].startswith(key)]
     for i in idx:
-        print(f"\n원문: {base[i]['text'][:60]}")
-        print(f"  직전: {' / '.join((base[i].get('context') or [])[-8:])[:100]}")
+        print(f"\nsource: {base[i]['text'][:60]}")
+        print(f"  preceding: {' / '.join((base[i].get('context') or [])[-8:])[:100]}")
         for n in NS:
             print(f"  ctx{n}: {runs[n][i]['out'] or runs[n][i]['error']}")

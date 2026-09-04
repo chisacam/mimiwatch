@@ -31,7 +31,7 @@ def main() -> int:
             print(f"  FAIL  {name}: {exc}")
             bad.append(name)
     if not bad:
-        print("  PASS  모듈 전부 컴파일")
+        print("  PASS  every module compiles")
 
     for name in CHECKS:
         print(f"\n[{name}]")
@@ -49,7 +49,7 @@ def main() -> int:
         r = subprocess.run([sys.executable, "-m", "pytest", "-q", tests],
                            capture_output=True, text=True)
         if r.returncode == 5 or "No module named pytest" in r.stderr:
-            print("  ----  pytest 없음 또는 시험 없음 (건너뜀)")
+            print("  ----  no pytest or no tests (skipped)")
         else:
             print("  " + ("PASS" if r.returncode == 0 else "FAIL") + "  "
                   + (r.stdout.strip().splitlines() or [""])[-1])
@@ -57,7 +57,7 @@ def main() -> int:
                 print(r.stdout[-4000:], r.stderr[-2000:])
                 bad.append("pytest")
 
-    print("\n" + ("전부 통과" if not bad else f"실패: {', '.join(bad)}"))
+    print("\n" + ("all passed" if not bad else f"failed: {', '.join(bad)}"))
     return 1 if bad else 0
 
 

@@ -24,7 +24,7 @@ PROFILES = {"talk": (0.35, 12.0), "broadcast": (0.30, 4.0), "collab": (0.25, 3.0
 def ensure_v5():
     p = os.path.join(stream.model_dir(), V5)
     if not os.path.exists(p):
-        print(f"  {V5} 받는 중…", file=sys.stderr)
+        print(f"  fetching {V5}…", file=sys.stderr)
         urllib.request.urlretrieve(URL, p + ".part"); os.replace(p + ".part", p)
     return p
 
@@ -48,14 +48,14 @@ def main(files):
         with wave.open(f) as w:
             pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
         dur = len(pcm) / 16000
-        print(f"\n== {os.path.basename(f)}  {dur/60:.0f}분")
-        print(f"  {'프로필':<9} {'모델':<4} {'구간':>5} {'평균':>6} {'중앙':>6} {'상한걸림':>8} {'말(초)':>7} {'소요':>6}")
+        print(f"\n== {os.path.basename(f)}  {dur/60:.0f}min")
+        print(f"  {'profile':<9} {'model':<6} {'segs':>5} {'mean':>6} {'median':>6} {'capped':>8} {'talk(s)':>7} {'time':>6}")
         for name, (ms, mx) in PROFILES.items():
             for tag, mf in (("v4", "silero_vad.onnx"), ("v5", V5)):
                 t0 = time.time(); segs = segments(pcm, mf, ms, mx); el = time.time() - t0
-                if not segs: print(f"  {name:<9} {tag:<4} 구간 없음"); continue
+                if not segs: print(f"  {name:<9} {tag:<6} no segments"); continue
                 capped = sum(1 for s in segs if s >= mx - 0.05) / len(segs)
-                print(f"  {name:<9} {tag:<4} {len(segs):>5} {st.mean(segs):>6.2f} {st.median(segs):>6.2f}"
+                print(f"  {name:<9} {tag:<6} {len(segs):>5} {st.mean(segs):>6.2f} {st.median(segs):>6.2f}"
                       f" {capped*100:>7.0f}% {sum(segs):>7.0f} {el:>5.1f}s")
 
 

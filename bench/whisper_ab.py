@@ -35,7 +35,7 @@ def main(path, start=0.0, end=None):
         while not vad.empty():
             s = vad.front; a = np.asarray(s.samples, dtype=np.float32)
             segs.append(hist.with_preroll(s.start, a)); vad.pop()
-    print(f"구간 {len(segs)}개 ({start:.0f}~{(end or len(pcm)/16000):.0f}초)")
+    print(f"{len(segs)} segments ({start:.0f}-{(end or len(pcm)/16000):.0f}s)")
     results = {}
     for name, opts in CONFIGS.items():
         asr = tcpp_asr.TranscribeCppASR(tcpp_asr.default_whisper(), "ja", whisper=opts)
@@ -44,14 +44,14 @@ def main(path, start=0.0, end=None):
             texts.append(asr.transcribe(seg, 16000)["text"])
         el = time.time() - t0
         empty = sum(1 for t in texts if not t.strip())
-        print(f"\n[{name}] 빈 구간 {empty}/{len(segs)} · 환각 차단 {asr.hallucinations} · "
-              f"글자 {sum(len(t) for t in texts)} · 해독 {el:.1f}s")
+        print(f"\n[{name}] empty segments {empty}/{len(segs)} · hallucinations blocked {asr.hallucinations} · "
+              f"chars {sum(len(t) for t in texts)} · decode {el:.1f}s")
         results[name] = texts
     base = results["기본"]
     for name, texts in results.items():
         if name == "기본": continue
         diff = [(i, base[i], texts[i]) for i in range(len(segs)) if base[i] != texts[i]]
-        print(f"\n== 기본 vs {name}: 다른 구간 {len(diff)}개 (앞 8개)")
+        print(f"\n== 기본 vs {name}: {len(diff)} differing segments (first 8)")
         for i, a, b in diff[:8]:
             print(f"  #{i}\n    기본: {a[:70]}\n    {name}: {b[:70]}")
 

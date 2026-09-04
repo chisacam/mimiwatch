@@ -35,7 +35,7 @@ def test_ffmpeg_cmd_prefers_path_then_tools_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "which", lambda n: None)
     try:
         stream.ffmpeg_cmd()
-        raise AssertionError("없는데 예외가 나지 않았습니다")
+        raise AssertionError("ffmpeg is missing, but no exception was raised")
     except FileNotFoundError as exc:
         assert "Models & Tools" in str(exc)          # It says where to get it
     exe = tmp_path / "ffmpeg"

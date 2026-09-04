@@ -109,7 +109,7 @@ def test_download_without_available_refuses():
 
 def test_status_never_touches_network(monkeypatch):
     def boom(url):
-        raise AssertionError("status()가 네트워크에 나갔습니다")
+        raise AssertionError("status() went out to the network")
 
     monkeypatch.setattr(update, "_get_json", boom)
     st = update.status()

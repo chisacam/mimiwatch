@@ -104,7 +104,7 @@ def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float,
     # kept identical -- make it different and the comparison against what was
     # measured on live no longer holds.
     if do_refine:
-        print(f"    정제 {fast_n}구간...", file=sys.stderr, flush=True)
+        print(f"    refining {fast_n} segments...", file=sys.stderr, flush=True)
         out = (refine_pass.refine_merged(pcm, spans, [o["text"] for o in out], asr)
                if merged else vod.refine_cues(pcm, out, spans, asr))
     return {"segments": out, "hallucinations": asr.hallucinations,
@@ -169,7 +169,7 @@ def translate_all(segs: list[dict], backend_id: str, genre: str, src: str, tgt: 
         except Exception as exc:
             s["tr"] = s["text"]; s["tr_error"] = str(exc)[:80]
         if i % 100 == 0:
-            print(f"    번역 {i}/{len(segs)}", file=sys.stderr, flush=True)
+            print(f"    translating {i}/{len(segs)}", file=sys.stderr, flush=True)
     return round(time.time() - t0, 1)
 
 
@@ -181,13 +181,13 @@ def main():
     ap.add_argument("--profile", default="talk", choices=sorted(PROFILES))
     ap.add_argument("--vad-threshold", type=float, default=stream.VAD_THRESHOLD)
     ap.add_argument("--tag", default="")
-    ap.add_argument("--translate", default="", help="번역 엔진 id. 비우면 전사만")
+    ap.add_argument("--translate", default="", help="translation engine id. Empty means transcription only")
     ap.add_argument("--genre", default="general")
     ap.add_argument("--window", type=float, default=60.0)
     ap.add_argument("--refine", action="store_true",
-                    help="확정본 뒤에 정제 패스를 붙입니다 (라이브와 같은 무리 규칙)")
+                    help="add a refinement pass after the finals (the same grouping rule as live)")
     ap.add_argument("--refine-merged", action="store_true",
-                    help="49절 재현: 되쪼개지 않고 무리 하나를 자막 한 줄로 둡니다")
+                    help="reproduce section 49: no re-split, one utterance group stays one subtitle line")
     a = ap.parse_args()
 
     ref = read_ref(a.ref)
@@ -200,7 +200,7 @@ def main():
     cache = f"{a.wav}.{tag}.asr.json"
     if os.path.exists(cache):
         got = json.load(open(cache, encoding="utf-8"))
-        print(f"[{tag}] 전사 재사용 {cache}")
+        print(f"[{tag}] reusing the transcription {cache}")
     else:
         got = transcribe(a.wav, spec, a.lang, a.profile, a.vad_threshold,
                          a.refine, a.refine_merged)
@@ -208,18 +208,18 @@ def main():
     segs = got["segments"]
     hit, n = coverage(ref, segs)
     speech = sum(s["end"] - s["start"] for s in segs)
-    print(f"[{tag}] 정답 큐 {n}  대사 포착률 {hit / n * 100:.1f}%  전사 구간 {len(segs)}"
-          + (f"(정제 전 {got['fast_segments']})  " if got.get("fast_segments") else "  ")
-          + f"말 {speech:.0f}s/{got['audio_s']:.0f}s  환각차단 {got['hallucinations']}  "
-          + f"전사 {got['audio_s'] / max(1, got['elapsed_s']):.0f}x")
+    print(f"[{tag}] ref cues {n}  dialogue caught {hit / n * 100:.1f}%  segments {len(segs)}"
+          + (f"(before refinement {got['fast_segments']})  " if got.get("fast_segments") else "  ")
+          + f"speech {speech:.0f}s/{got['audio_s']:.0f}s  blocked {got['hallucinations']}  "
+          + f"transcription {got['audio_s'] / max(1, got['elapsed_s']):.0f}x")
     if a.translate:
         el = translate_all(segs, a.translate, a.genre, a.lang, a.tgt)
         json.dump(got, open(f"{a.wav}.{tag}.{a.translate}.{a.genre}.json", "w", encoding="utf-8"),
                   ensure_ascii=False)
         score = windowed_chrf(ref, segs, a.window)
         errs = sum(1 for s in segs if s.get("tr_error"))
-        print(f"[{tag} → {a.translate}/{a.genre}] chrF({a.window:.0f}s 창) {score * 100:.1f}  "
-              f"번역 {len(segs)}줄 {el}s  실패 {errs}")
+        print(f"[{tag} → {a.translate}/{a.genre}] chrF({a.window:.0f}s window) {score * 100:.1f}  "
+              f"translated {len(segs)} lines {el}s  failures {errs}")
 
 
 if __name__ == "__main__":

@@ -49,10 +49,10 @@ def main():
     model = sys.argv[3] if len(sys.argv) > 3 else None
     lang = sys.argv[4] if len(sys.argv) > 4 else "ja"
     if not os.path.exists(path):
-        sys.exit(f"오디오가 없습니다: {path}")
+        sys.exit(f"no audio: {path}")
     pcm, sr = load(path, secs)
-    print(f"표본: {path} {secs:.0f}초 · {sr}Hz · {lang} · "
-          f"논리 코어 {os.cpu_count()}\n")
+    print(f"sample: {path} {secs:.0f}s · {sr}Hz · {lang} · "
+          f"{os.cpu_count()} logical cores\n")
 
     for device in ("auto", "cpu"):
         spec = {"backend": "tcpp", "device": device}
@@ -63,8 +63,8 @@ def main():
         t0 = time.time()
         out = asr.transcribe(pcm, sr, speech_s=secs, live=False)
         took = time.time() - t0
-        print(f"  {device:<5} {asr.device:<6} {asr.threads}스레드  "
-              f"{took:5.2f}초  {secs / took:5.1f}배속")
+        print(f"  {device:<5} {asr.device:<6} {asr.threads} threads  "
+              f"{took:5.2f}s  {secs / took:5.1f}x")
         print(f"        {out['text'][:70]}")
         del asr
 

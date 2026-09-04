@@ -172,7 +172,7 @@ def test_fetch_audio_cancel_kills_download(monkeypatch, tmp_path):
     except stream.Cancelled:
         pass
     else:
-        raise AssertionError("Cancelled가 나야 합니다")
+        raise AssertionError("Cancelled should have been raised")
     assert killed
 
 
@@ -186,4 +186,4 @@ def test_probe_failure_is_not_system_exit(monkeypatch):
         assert "boom" in str(exc)
         assert isinstance(exc, Exception) and not isinstance(exc, SystemExit)
     else:
-        raise AssertionError("VodError가 나야 합니다")
+        raise AssertionError("VodError should have been raised")

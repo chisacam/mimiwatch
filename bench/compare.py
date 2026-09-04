@@ -36,13 +36,13 @@ def main():
     sa, sb = summarise(a), summarise(b)
     print("| | Gemma 4 E4B q4_0 | TranslateGemma 4B Q4_K_M |")
     print("|---|---|---|")
-    for k, label in [("file", "파일"), ("load", "적재(초)"),
-                     ("answered", "응답"), ("failed", "실패"),
-                     ("median", "중앙값(초)"), ("p90", "p90(초)"),
-                     ("max", "최대(초)"), ("total", "합계(초)")]:
+    for k, label in [("file", "file"), ("load", "load (s)"),
+                     ("answered", "answered"), ("failed", "failed"),
+                     ("median", "median (s)"), ("p90", "p90 (s)"),
+                     ("max", "max (s)"), ("total", "total (s)")]:
         print(f"| {label} | {sa[k]} | {sb[k]} |")
     print()
-    print("| 원문 | Gemma 4 | TranslateGemma | 초 (G4 / TG) |")
+    print("| source | Gemma 4 | TranslateGemma | s (G4 / TG) |")
     print("|---|---|---|---|")
     for ra, rb in zip(a["rows"], b["rows"]):
         assert ra["text"] == rb["text"]

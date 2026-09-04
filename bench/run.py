@@ -67,7 +67,7 @@ class TranslateGemmaRunner:
                          n_gpu_layers=-1, verbose=False)
         tpl = self.llm.metadata.get("tokenizer.chat_template")
         if not tpl:
-            raise RuntimeError("이 GGUF에 chat_template이 없습니다")
+            raise RuntimeError("this GGUF has no chat_template")
         import jinja2
 
         def raise_exception(msg):            # transformers' template helper
@@ -108,7 +108,7 @@ class PlainPromptRunner:
 def main(which):
     path = os.path.join(stream.model_dir(), MODELS[which])
     if not os.path.exists(path):
-        sys.exit(f"모델이 없습니다: {path}")
+        sys.exit(f"no model: {path}")
     t0 = time.time()
     runner = {"gemma4": Gemma4Runner,
               "translategemma": TranslateGemmaRunner,

@@ -37,7 +37,7 @@ def fetch(vid: str, lang: str):
         subprocess.run([stream.ffmpeg_cmd(), "-loglevel", "error", "-y", "-i", src, "-vn", "-ac", "1",
                         "-ar", "16000", wav], check=True)
         os.remove(src)
-    print(f"  {vid} {lang} 준비됨")
+    print(f"  {vid} {lang} ready")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ def leaked(r):
     return (not r["error"] and r["src_lang"] == "ja"
             and any(0x3040 <= ord(c) <= 0x30ff for c in r["out"]))
 
-print("| 문맥 줄 | 원문유출 (4회 합) | 유출된 줄 | 실패 | 중앙값(초) |")
+print("| context lines | source leaks (4 runs) | leaked lines | failures | median (s) |")
 print("|---|---|---|---|---|")
 detail = {}
 for n in NS:
@@ -39,7 +39,7 @@ for n in NS:
     print(f"| {n} | {tot}/{len(TAGS) * len(rows)} | {names} | {fails} | "
           f"{statistics.median(secs):.2f} |")
 
-print("\n유출 내용")
+print("\nleaked content")
 for n in NS:
     for text, outs in detail[n].items():
         print(f"  ctx{n}  {text!r} -> {outs}")

@@ -10,13 +10,13 @@ runs = {m: load(m) for m in MODES}
 secs = {m: sorted(r["seconds"] for r in runs[m]["rows"]) for m in MODES}
 print("| | " + " | ".join(MODES) + " |")
 print("|---|" + "---|" * len(MODES))
-print("| 중앙값(초) | " + " | ".join(f"{statistics.median(secs[m]):.2f}" for m in MODES) + " |")
-print("| 합계(초) | " + " | ".join(f"{sum(secs[m]):.1f}" for m in MODES) + " |")
+print("| median (s) | " + " | ".join(f"{statistics.median(secs[m]):.2f}" for m in MODES) + " |")
+print("| total (s) | " + " | ".join(f"{sum(secs[m]):.1f}" for m in MODES) + " |")
 print()
 
 only = sys.argv[1] if len(sys.argv) > 1 else None
 rows = list(zip(*[runs[m]["rows"] for m in MODES]))
-print("| 원문 | " + " | ".join(MODES) + " |")
+print("| source | " + " | ".join(MODES) + " |")
 print("|---|" + "---|" * len(MODES))
 esc = lambda s: (s or "").replace("|", "\\|").replace("\n", " ")
 for tup in rows:

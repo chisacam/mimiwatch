@@ -80,7 +80,7 @@ def read_ref(wav: str) -> tuple[str, str]:
                     continue                                       # repeat while it stays on screen
                 lines.append(ln)
             return lang, " ".join(lines)
-    raise FileNotFoundError(f"{base}.<lang>.srt 가 없습니다")
+    raise FileNotFoundError(f"no {base}.<lang>.srt")
 
 
 def segments(pcm: np.ndarray, profile: str, pad_s: float, threshold: float | None = None):
@@ -113,23 +113,23 @@ def segments(pcm: np.ndarray, profile: str, pad_s: float, threshold: float | Non
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("files", nargs="*")
-    ap.add_argument("--asr", default="", help="설정의 전사 엔진 id (기본: 활성 엔진)")
-    ap.add_argument("--model", default="", help="모델 파일 이름으로 직접 지정")
+    ap.add_argument("--asr", default="", help="transcription engine id from the config (default: the active engine)")
+    ap.add_argument("--model", default="", help="name the model file directly")
     ap.add_argument("--device", default="")
     ap.add_argument("--profile", default="talk", choices=sorted(PROFILES))
-    ap.add_argument("--pad", type=float, default=0.0, help="VAD 뒤패딩(초)")
-    ap.add_argument("--whisper", default="", help='WhisperRunOptions JSON, 예: {"no_speech_thold": 0.84}')
-    ap.add_argument("--lang", default="", help="원본 언어 고정 (기본: 정답 자막의 언어)")
-    ap.add_argument("--dump", action="store_true", help="가설 전문을 출력")
+    ap.add_argument("--pad", type=float, default=0.0, help="VAD trailing padding (seconds)")
+    ap.add_argument("--whisper", default="", help='WhisperRunOptions JSON, e.g. {"no_speech_thold": 0.84}')
+    ap.add_argument("--lang", default="", help="pin the source language (default: the ground truth's language)")
+    ap.add_argument("--dump", action="store_true", help="print the hypothesis in full")
     ap.add_argument("--diversity", type=float, default=None,
-                    help="환각 차단의 4-gram 다양도 바닥 (기본 0.35, 0 이면 끔)")
-    ap.add_argument("--tag", default="", help="결과 줄 앞에 붙일 이름")
+                    help="4-gram diversity floor for hallucination blocking (default 0.35, 0 turns it off)")
+    ap.add_argument("--tag", default="", help="name to put in front of each result line")
     ap.add_argument("--vad-threshold", type=float, default=stream.VAD_THRESHOLD,
-                    help=f"Silero 말 판정 문턱 (기본 {stream.VAD_THRESHOLD})")
+                    help=f"Silero speech threshold (default {stream.VAD_THRESHOLD})")
     ap.add_argument("--refine", action="store_true",
-                    help="확정본 뒤에 정제 패스를 붙입니다 (라이브와 같은 무리 규칙)")
+                    help="add a refinement pass after the finals (the same grouping rule as live)")
     ap.add_argument("--refine-merged", action="store_true",
-                    help="49절 재현: 되쪼개지 않고 무리 하나를 자막 한 줄로 둡니다")
+                    help="reproduce section 49: no re-split, one utterance group stays one subtitle line")
     a = ap.parse_args()
     if a.diversity is not None:
         tcpp_asr.DIVERSITY_FLOOR = a.diversity
@@ -141,10 +141,10 @@ def main():
     if a.whisper: spec["whisper"] = json.loads(a.whisper)
     label = spec.get("model") or "whisper-large-v3-turbo-Q8_0.gguf"
     print(f"[{a.tag}] " if a.tag else "", end="")
-    print(f"엔진 {label} · {spec.get('device', 'auto')} · 프로필 {a.profile} · 뒤패딩 {a.pad}s"
+    print(f"engine {label} · {spec.get('device', 'auto')} · profile {a.profile} · pad {a.pad}s"
           + (f" · whisper {spec['whisper']}" if spec.get("whisper") else "")
-          + (f" · 다양도 {a.diversity}" if a.diversity is not None else "")
-          + f" · VAD 문턱 {a.vad_threshold}")
+          + (f" · diversity {a.diversity}" if a.diversity is not None else "")
+          + f" · VAD threshold {a.vad_threshold}")
     total_err = total_len = 0
     for f in files:
         lang, ref = read_ref(f)
@@ -176,14 +176,14 @@ def main():
             score, unit = cer(hyp, ref), "CER"
             err, n = round(score * len(norm(ref))), len(norm(ref))
         total_err += err; total_len += n
-        print(f"  {os.path.basename(f):<22} {lang} {unit} {score*100:5.1f}%  구간 {len(segs):>3} "
-              + (f"→무리 {groups:>3} " if a.refine else "")
-              + f"({speech_s:.0f}s/{len(pcm)/16000:.0f}s)  환각차단 {asr.hallucinations}  정답 {n}자  "
+        print(f"  {os.path.basename(f):<22} {lang} {unit} {score*100:5.1f}%  segs {len(segs):>3} "
+              + (f"→groups {groups:>3} " if a.refine else "")
+              + f"({speech_s:.0f}s/{len(pcm)/16000:.0f}s)  blocked {asr.hallucinations}  ref {n} chars  "
               f"{len(pcm)/16000/el:4.1f}x")
         if a.dump:
-            print("    가설:", hyp[:400]); print("    정답:", ref[:400])
+            print("    hyp:", hyp[:400]); print("    ref:", ref[:400])
     if total_len:
-        print(f"  전체 오류율 {total_err/total_len*100:.1f}%")
+        print(f"  overall error rate {total_err/total_len*100:.1f}%")
 
 
 if __name__ == "__main__":

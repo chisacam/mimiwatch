@@ -51,7 +51,7 @@
 이제 세션마다 **번역 작업 스레드 하나**가 큐를 넣은 순서대로 비웁니다.
 발행 순서가 곧 번역 순서이고, 각 줄은 번역 **전과 후**에 "이 id의 원문이
 아직 이 글자인가"(`_text_of`)를 확인합니다. 정제본이 그 사이 들어왔으면
-결과를 버립니다. 시험: `tests/test_live.py::test_superseded_final_is_not_translated_after_refine`.
+결과를 버립니다. 테스트: `tests/test_live.py::test_superseded_final_is_not_translated_after_refine`.
 
 ### 2.2 덤으로 번역 호출이 줍니다
 

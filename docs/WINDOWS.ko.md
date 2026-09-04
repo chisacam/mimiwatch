@@ -211,7 +211,7 @@ brew install powershell
 ```
 
 `bench/ps_test.py`는 `install.ps1`을 **베끼지 않고 행 범위로 떼어 와서**
-돌립니다. 베껴 두면 시험한 것과 배포하는 것이 갈라지기 때문입니다.
+돌립니다. 베껴 두면 테스트한 것과 배포하는 것이 갈라지기 때문입니다.
 
 확인한 것:
 
@@ -225,7 +225,7 @@ brew install powershell
 - 필요한 휠이 `win_amd64`로 실재한다는 것 (`transcribe-cpp-native` 0.2.2에
   `ggml-vulkan.dll`이 들어 있음을 내려받아 확인)
 
-이 시험이 실제로 잡아낸 버그 셋:
+이 테스트가 실제로 잡아낸 버그 셋:
 
 1. `& cmd | Select-Object -First 1` 뒤의 `$LASTEXITCODE`는 갱신되지
    않습니다(파이프라인이 일찍 끊깁니다). 새 셸에서는 이 변수가 비어 있어서
@@ -243,7 +243,7 @@ brew install powershell
 **Windows PowerShell 5.1은 네이티브 명령의 stderr 한 줄을 종료 오류로
 바꿉니다**(`NativeCommandError`). `$ErrorActionPreference='Stop'`일 때
 그렇고, `2>$null`로는 막히지 않습니다. pwsh 7에는 그 동작이 없어서 macOS
-시험에서는 드러나지 않았고, 실제 윈도우 사용자가 이슈 #1로 알려 주었습니다.
+테스트에서는 드러나지 않았고, 실제 윈도우 사용자가 이슈 #1로 알려 주었습니다.
 
 이 스크립트에는 stderr가 정상인 자리가 여럿입니다 — 아직 깔지 않은 패키지를
 `import` 해 보는 확인, `curl`의 진행 막대, `pip`의 알림. 그래서 네이티브

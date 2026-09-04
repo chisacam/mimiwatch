@@ -134,8 +134,8 @@ edge where it was.
 The old "Position" slider is gone. Dragging and the slider used the same value
 but with different ranges — the slider was fixed at 0–40% while the limit for
 dragging changes every time with the height of the subtitle block at that
-moment, and horizontally the slider could say nothing at all. There is one
-place that writes the value now, and only the button that resets it is left.
+moment, and horizontally the slider had no effect. There is one place that
+writes the value now, and only the button that resets it is left.
 
 The controls stand **vertically at the right edge** and disappear after 2.5
 seconds. The subtitles sit at the bottom centre of the screen, so the two do
@@ -228,8 +228,8 @@ The principle of not leaving a silent hole is unchanged. Only the case where
 reception is briefly cut within a session and reattaches by itself is rewound —
 the cut is a few seconds then, so it picks up right away inside the DVR window.
 
-**It does not resume automatically.** Starting to receive a stream again
-because the server came up is something to be told to do by pressing.
+**It does not resume automatically.** Resuming reception after the server
+comes back up requires explicit user action (clicking the button).
 
 ### Re-transcribing
 
@@ -271,7 +271,7 @@ you press a line.
 | **⟳ Translate** | Selects lines to translate again |
 
 In read mode the edit button is not shown at all. The subtitle log's real job
-is reading, and an editor must not open because you mispressed while reading.
+is reading, and an editor must not open because of an accidental tap while reading.
 Returning the mode to read closes an editor that was open.
 
 The mode is not saved. It always starts as read.
@@ -291,9 +291,9 @@ translation as belonging to the old sentence instead.
 
 > I'm starting to get nervous. What do I do.　**⟲ Differs from source**
 
-Fixing the translation by hand as well takes the mark down. A translation a
-person edited keeps its mark, so a bulk re-translation later does not overwrite
-that line.
+Fixing the translation by hand as well clears the differing-translation badge.
+A translation edited by hand keeps its edit mark (✎), so a bulk re-translation
+later does not overwrite that line.
 
 **Moving the time carries the duration with it.** Moving only the start leaves
 the end behind and makes a subtitle whose "end precedes the start", and SRT
@@ -307,8 +307,8 @@ window immediately.
 You can run just the passages where the translation went wrong. Select lines in
 **⟳ Translate** mode.
 
-- Pressing takes the line in, pressing again takes it out
-- Pressing with **shift** takes everything from the previously selected line to
+- Clicking selects the line; clicking again deselects it
+- Shift-clicking selects the range from the previously selected line to
   here at once (the same as a file explorer)
 - "All" / "None"
 
@@ -592,7 +592,7 @@ inside the virtualenv. `bench/doctor.py` tells you which one is in use now.
 
 **If you are using a bundle**, the yt-dlp inside has its version baked in and
 this path does not exist. Download the **yt-dlp standalone executable** from
-"Models & tools" instead — if it is in the tools directory it is used first, and
+"Models & Tools" instead — if it is in the tools directory it is used first, and
 that file updates itself with `-U`. For the details see
 [docs/PACKAGING.md](PACKAGING.md).
 
@@ -607,7 +607,7 @@ download the tool again or bring it up with `yt-dlp --update-to nightly`
 Since November 2025 yt-dlp uses an **external JavaScript runtime** to solve
 YouTube's signature challenge. Public live (HLS) does without it, but **VODs and
 membership streams fetched with cookies lose their formats without deno.**
-Download deno in "Engines › Models & tools" (`brew install deno` works too) — if
+Download deno in "Engines › Models & Tools" (`brew install deno` works too) — if
 it is on the system, that one is used. The server tells yt-dlp the path of the
 deno it found directly (`--js-runtimes`), so it works even in an environment
 with a short PATH, such as a bundle launched from Finder. The solver script
@@ -683,7 +683,7 @@ are unused. The way to read it is the subtitle log panel — or "⧉ Pop out".
 
 ### Audio (alternative 1): the extension hands over login cookies
 
-Press **"🔑 Hand over login cookies and use the URL"** in the extension popup on
+Press **"🔑 Hand over login cookies, from this URL"** in the extension popup on
 a YouTube tab and the extension reads this browser's YouTube login cookies
 (HttpOnly included) at that moment, hands them to the server and starts "by
 URL". If you had a stopped stream selected, it is a resume. It is not a switch
@@ -705,7 +705,7 @@ Know two things before you press it.
   cookies out (rotation) the newest at that moment is what goes.
 
 Using cookies sends yt-dlp down a client that demands a JS runtime, so deno has
-to be there ("Models & tools").
+to be there ("Models & Tools").
 
 ### Audio (alternative 2): giving a cookie file directly
 
@@ -872,7 +872,7 @@ player. Choose "Keep" and it remembers that video as this subtitle's own and
 does not ask again.
 
 **A stopped stream is resumed.** Pick a stopped stream ("· stopped") in the
-picker and "By URL" and "By this tab's sound" change to **"▶ Resume (by URL / by
+picker and "By URL" and "By this tab's sound" change to **"▶ Resume (from this URL / from
 this tab's sound)"**, appending to the same session from whichever source you
 pressed — it may differ from the stored source. A stream received by URL that
 turns members-only partway through can go to tab sound, and one received by tab
@@ -881,10 +881,10 @@ URL. It is the same whether the server died or the user stopped it. A stream
 that is over ("· stream over") has nothing to resume, so transcribing the whole
 video is done on the mimiwatch page.
 
-**"Remove from screen" and "■ Stop transcribing" are different.**
+**"Hide from page" and "■ Stop transcribing" are different.**
 
 The former only takes it down on this tab — the server keeps transcribing.
-**It is a toggle, so pressing again changes it to "Put back on screen".** It
+**It is a toggle, so pressing again changes it to "Put back on page".** It
 leaves the picker as it is, so it does not forget what you were watching.
 
 The latter ends the session on the server. The accumulated subtitles stay in both
@@ -893,7 +893,7 @@ cases and can be chosen again.
 **If the subtitles are not visible**, look at the status line at the bottom of
 the popup. It splits "not visible" up and says which — `player not found` /
 `no room on screen` / `no subtitle in the current segment` / `subtitles off` /
-`clock stopped`. Where to look diverges from there. "Dismiss" only clears it from
+`clock stopped`. Where to look diverges from there. "Hide from page" only clears it from
 the screen — to end what was being transcribed, it is "Stop" on the mimiwatch
 page.
 

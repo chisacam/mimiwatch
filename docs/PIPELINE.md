@@ -57,8 +57,8 @@ finished was not fixed, it was intermittent.
 
 Now **one translation worker thread** per session drains the queue in the order
 things were put into it. The publish order is the translation order, and each
-line checks **before and after** translating whether "is the source text of
-this id still this text" (`_text_of`). If a refined line arrived in between,
+line checks **before and after** translating whether the source text of
+this id is still this text (`_text_of`). If a refined line arrived in between,
 the result is discarded. Test:
 `tests/test_live.py::test_superseded_final_is_not_translated_after_refine`.
 
@@ -137,7 +137,7 @@ That same night, with a sample that has reference subtitles (four music videos,
 (sections 43~45): **the Whisper thresholds, the prompt and the fallback are all
 within the error margin**, the shorter the cut the worse it gets, and **only the
 VAD threshold 0.5 → 0.3 gains (64.4 → 59.0%)**; it is neutral on the
-conversational sample, so it was raised to the default. Fun-ASR, Qwen3-ASR and
+conversational sample, so it was promoted to the default. Fun-ASR, Qwen3-ASR and
 Cohere Transcribe fell 6~14p behind whisper-turbo on Japanese songs.
 
 With 116 minutes of animation (Korean fansubs) the tail end was measured

@@ -13,7 +13,7 @@ Details in [PACKAGING.md](PACKAGING.md). Below is the path that runs from the re
 git clone https://github.com/chisacam/mimiwatch.git
 cd mimiwatch
 winget install --id Python.Python.3.12
-winget install --id Gyan.FFmpeg     # Optional. Without it, you can fetch it from 「Models · Tools」 on the screen
+winget install --id Gyan.FFmpeg     # Optional. Without it, you can fetch it from "Models & Tools" on the screen
 # If you just installed those two, open a new terminal (PATH is refreshed)
 # yt-dlp is put into the virtual environment at its latest by install.ps1
 .\install.ps1
@@ -100,11 +100,11 @@ English streams `Moonshine base` (74MB) is 12 times faster**. Moonshine's Englis
 quality is effectively the same as the default, but it refuses other languages.
 
 Put them in `asr_backends` and they appear in the "Transcription" selector on
-the screen. For details see "Running on CPU" in the README.
+the screen. For details see [Running on the CPU](GUIDE.md#running-on-the-cpu) in the Guide.
 
 ## NVIDIA: the CUDA build was dropped from the releases
 
-On NVIDIA too, use the release bundle (`windows-x64`, Vulkan). We did build a CUDA
+On NVIDIA too, use the release bundle (`windows-x64`, Vulkan). We did prepare a CUDA
 build (`build.ps1 -Backend cuda`), but decided to drop it from the releases.
 llama-cpp-python's cu124 wheel **carries no RTX 50 (Blackwell, sm_120) kernels**, so
 on the newest cards it either does not open or has to lean on PTX JIT; and since
@@ -125,11 +125,11 @@ confirmed by opening the `ggml-cuda.dll` fatbin header in the wheel
 | Ampere | RTX 3050~3090 Ti, A100 | sm_86 · sm_80 | ✓ |
 | Ada Lovelace | RTX 4050~4090 | sm_89 | ✓ |
 | Hopper | H100 | sm_90 | ✓ |
-| Blackwell | RTX 5050~5090 | none (the driver JITs the sm_90 PTX) | **unverified** -- the Vulkan build if it fails |
+| Blackwell | RTX 5050~5090 | none (the driver JITs the sm_90 PTX) | **unverified** -- use the Vulkan build if it fails |
 | Maxwell and older | GTX 900 · pre-700 | none | ✗ use the Vulkan build |
 
 **The driver must be 551.61 or newer** (the CUDA 12.4 runtime). On older drivers the
-translator fails to open a CUDA device -- then either raise the driver or use the
+translator fails to open a CUDA device -- then either update the driver or use the
 Vulkan build. The CUDA toolkit does not need to be installed: the runtimes that are
 needed (cudart64_12, cublas64_12, cublasLt64_12) are inside the bundle (pulled out of
 the `nvidia-*-cu12` PyPI packages and placed next to llama_cpp).
@@ -168,8 +168,8 @@ whisper.cpp-amd puts out a server.
 ## Members-only streams
 
 Give the cookie file path as an environment variable. For details and the
-procedure for exporting cookies safely, see "Members-only streams" in the
-README.
+procedure for exporting cookies safely, see [Members-only streams](GUIDE.md#members-only-streams) in the
+Guide.
 
 ```powershell
 $env:MIMIWATCH_YTDLP_COOKIES = "C:\Users\USERNAME\cookies.txt"
@@ -195,11 +195,11 @@ server will not find the models.
 | `ffmpeg` is not found | The PATH of the already-open terminal is stale | Open a new terminal |
 | llama-cpp-python fails to install | No wheel for that Python version | Retry with `-Backend cpu`; if that still fails, use Python 3.12 |
 | No `vulkan` among the backends | The driver is stale | Update the graphics driver. It runs on the CPU without it |
-| The download breaks off | — | Just run it again. A partial download stays as `.part` and resumes. It also works from 「Models · Tools」 on the screen |
+| The download breaks off | — | Just run it again. A partial download stays as `.part` and resumes. It also works from "Models & Tools" on the screen |
 | It stops midway with `NativeCommandError` | A defect in 0.1 (issue #1) | Get the latest version. This was Windows PowerShell 5.1 turning a single stderr line from a command into a terminating error |
 | Transcription fails right after it starts | The model may have failed to load onto the GPU | Check with `bench/doctor.py`, and if only `device=auto` fails, write `"device": "cpu"` into `backends.json` |
-| A live session fails with `OSError: [WinError 6] 핸들이 잘못되었습니다` ("The handle is invalid") | A defect in 0.3.1 | Get the latest version. This was a failure to start ffmpeg in a process launched with a broken standard-error handle (a bundle started without a console, Task Scheduler, a service). To stay on 0.3.1, launch it yourself from a console window |
-| "could not find any audio" in live (older versions: "오디오를 찾지 못했습니다") | **yt-dlp is stale** | Run `.\install.ps1` again. The yt-dlp inside the virtual environment is raised to the latest |
+| A live session fails with `OSError: [WinError 6] The handle is invalid` (in Korean Windows: `핸들이 잘못되었습니다`) | A defect in 0.3.1 | Get the latest version. This was a failure to start ffmpeg in a process launched with a broken standard-error handle (a bundle started without a console, Task Scheduler, a service). To stay on 0.3.1, launch it yourself from a console window |
+| "could not find any audio" in live (older versions: "오디오를 찾지 못했습니다") | **yt-dlp is stale** | Run `.\install.ps1` again. The yt-dlp inside the virtual environment is updated to the latest version |
 
 ## What has been verified and what has not
 
@@ -282,7 +282,7 @@ configuration, and, if you give it a URL, the resolution of that URL too. It
 does not touch the translation model (5GB), so it takes a few seconds.
 
 If only `device=auto` fails and `device=cpu` works, the model failed to load onto
-the GPU. Writing `"device": "cpu"` into `backends.json` is enough ("Running on
-CPU" in the README).
+the GPU. Writing `"device": "cpu"` into `backends.json` is enough ([Running on
+the CPU](GUIDE.md#running-on-the-cpu) in the Guide).
 
 Try it first and let me know if anything snags.

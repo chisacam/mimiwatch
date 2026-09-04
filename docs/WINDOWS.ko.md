@@ -102,15 +102,15 @@ iGPU를 다투는 일을 피할 수 있습니다.
 사실상 같지만 다른 언어는 거부합니다.
 
 `asr_backends`에 넣으면 화면의 「전사」 선택기에 나타납니다. 자세한 것은
-README의 「CPU로 돌리기」를 보십시오.
+[사용 안내의 「CPU로 돌리기」](GUIDE.ko.md#cpu로-돌리기)를 보십시오.
 
 ## NVIDIA: CUDA 판은 릴리스에서 뺐습니다
 
-NVIDIA 도 릴리스 묶음(`windows-x64`, Vulkan)을 쓰십시오. CUDA 판(`build.ps1 -Backend
-cuda`)을 만들어 봤지만 릴리스에서는 빼기로 했습니다. llama-cpp-python 의 cu124 휠은
-**RTX 50(Blackwell, sm_120) 커널을 담지 않아** 최신 카드에서는 열리지 않거나 PTX JIT 에
-기대야 하고, 전사(transcribe.cpp)는 어차피 CUDA 휠이 없어 Vulkan 이라 얻는 것이 번역
-속도뿐인데 묶음이 726MB 로 7배 커집니다. 그 거래는 맞지 않습니다.
+NVIDIA도 릴리스 묶음(`windows-x64`, Vulkan)을 쓰십시오. CUDA 판(`build.ps1 -Backend
+cuda`)을 만들어 봤지만 릴리스에서는 빼기로 했습니다. llama-cpp-python의 cu124 휠은
+**RTX 50(Blackwell, sm_120) 커널을 담지 않아** 최신 카드에서는 열리지 않거나 PTX JIT에
+기대야 하고, 전사(transcribe.cpp)는 어차피 CUDA 휠이 없어 Vulkan이라 얻는 것이 번역
+속도뿐인데 묶음이 726MB로 7배 커집니다. 그 거래는 맞지 않습니다.
 
 직접 만들 수는 있습니다(`.\packaging\build.ps1 -Backend cuda`, 또는 `.\install.ps1
 -Backend cuda`). 그때 지원되는 GPU 는 아래 표대로이고, 이것은 휠의 `ggml-cuda.dll`
@@ -166,7 +166,7 @@ transcribe.cpp가 NPU 백엔드를 갖거나, whisper.cpp-amd가 서버를 내�
 ## 멤버십 전용 방송
 
 쿠키 파일 경로를 환경변수로 주면 됩니다. 자세한 것과 쿠키를 안전하게
-내보내는 절차는 README의 「멤버십 전용 방송」을 보십시오.
+내보내는 절차는 [사용 안내의 「멤버십 전용 방송」](GUIDE.ko.md#멤버십-전용-방송)을 보십시오.
 
 ```powershell
 $env:MIMIWATCH_YTDLP_COOKIES = "C:\Users\USERNAME\cookies.txt"
@@ -270,6 +270,6 @@ PowerShell의 오류 스트림을 아예 거치지 않습니다.
 건드리지 않으므로 몇 초면 끝납니다.
 
 `device=auto`만 실패하고 `device=cpu`는 되면, GPU에 모델을 못 올린 것입니다.
-`backends.json`에 `"device": "cpu"`를 적으면 됩니다(README의 「CPU로 돌리기」).
+`backends.json`에 `"device": "cpu"`를 적으면 됩니다([사용 안내의 「CPU로 돌리기」](GUIDE.ko.md#cpu로-돌리기)).
 
 처음 돌려 보시고 걸리는 곳이 있으면 알려 주십시오.

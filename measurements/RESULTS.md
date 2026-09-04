@@ -313,8 +313,8 @@ measured alongside.
 
 Whisper appears to fall into what the documentation calls "falling back to
 running them one at a time", and on top of that the waste of padding to the
-longest piece when the pieces differ in length seems to be added. That Japanese,
-which has more pieces and a wider spread of lengths, got far worse points in
+longest piece when the pieces differ in length seems to be added. The fact that Japanese,
+which has more pieces and a wider spread of lengths, degraded much more points in
 that direction.
 
 ## 17. Quality: the lower you go, the further it drifts
@@ -485,8 +485,8 @@ Left as it is, a viewer can go and look it up; made up, they never know it is
 wrong.
 
 **This is not the temperature's fault.** TranslateGemma was run at 0.0 (greedy)
-and Gemma 4 at 0.2. The side that was sampled more deterministically made more
-up.
+and Gemma 4 at 0.2. The side that was sampled more deterministically made up
+more.
 
 The same direction shows in the length too. These are the median output/source
 character counts.
@@ -646,7 +646,7 @@ bigger effect.**
 The implementation goes like this.
 
 - The five genres (`General` `Tech talk · seminar` `Game stream`
-  `Chat · variety` `Song · lyrics`) are picked in 「＋ Add video」. They apply to
+  `Chat · variety` `Song · lyrics`) are picked in "＋ Add video". They apply to
   both live and VOD.
 - The chosen genre stays with the transcription. It is not asked again when
   translating with another backend.
@@ -820,7 +820,7 @@ that does not collapse on a collab stream -- stands. The clipping of Korean
 proper nouns confirmed in section 10 (`데이터독` → `데이터`) is still there too.
 But a machine that struggles with the default has to have an option.
 
-It goes into `backends.json` and is picked from the 「Transcription」 picker on
+It goes into `backends.json` and is picked from the "Transcription" picker on
 screen.
 
 ```json
@@ -828,7 +828,7 @@ screen.
   "model": "SenseVoiceSmall-Q8_0.gguf", "device": "cpu" }
 ```
 
-## 34. For English, 74MB is enough
+## 34. For English, 74 MB is enough
 
 An English-only light model was measured too. The sample is three 18-second
 chunks from the Datadog talk (`jrLVa1Md4GU`).
@@ -953,7 +953,7 @@ written wrong -- that recording was Korean, so there was nothing to carry over.
 Switching to a Japanese recording still gave 0.
 
 The cause had nothing to do with tab ingest. **A live session with the source
-language left on 「Auto-detect」 was going untranslated, whatever kind it was.**
+language left on "Auto-detect" was going untranslated, whatever kind it was.**
 
 The language `tcpp_asr.TranscribeCppASR.transcribe()` puts on the subtitle was
 `self.forced_lang`. That is the right value if the language was pinned, but on
@@ -975,8 +975,8 @@ if not src or src == self.viewer_lang:
 ```
 
 There was one more of the same on the refinement path. `stream.Refiner` was
-passing `self.asr.forced_lang` straight through, so even with the final fixed
-the refined line still went out with no language.
+passing `self.asr.forced_lang` straight through, so even after fixing the final
+cue, the refined line still went out with no language.
 
 **Why it went unseen this long.** No error is raised. Subtitles pile up
 normally and only the translation quietly drops out. And most of the tests we
@@ -1019,7 +1019,7 @@ opens when a person picks, so only the stream was swapped in).
 **One thing was caught here.** A new `AudioContext` is born `suspended` because
 of Chrome's autoplay policy. In that state the worklet never runs once, so the
 sample count is 0, and no error is raised anywhere -- the screen says
-「receiving」 and only the subtitles do not grow. `ctx.resume()` was added, and
+"receiving" and only the subtitles do not grow. `ctx.resume()` was added, and
 if no sound arrives within 4 seconds it now says so.
 
 Values confirmed end to end with a real recording (50 seconds, Japanese,
@@ -1035,7 +1035,7 @@ refinement on):
 ## 40. Chrome does not tell us the title of the shared tab
 
 A session started from tab sound is left in the list as no more than
-「Tab audio」. That one line is all there is to tell what was listened to, so two
+"Tab audio". That one line is all there is to tell what was listened to, so two
 of them standing side by side cannot be told apart.
 
 The name of the chosen target was expected to come in on the `label` of the
@@ -1050,12 +1050,12 @@ session that is actually sharing, it goes like this.
 **It is an opaque identifier, not the tab title.** `surface` is `browser`, so a
 tab was indeed picked; it is Chrome that does not hand the title over. The
 filtering rule was left as it was -- using that string as the title is worse
-than 「Tab audio」. Picking a window or a screen brings that name in, and another
+than "Tab audio". Picking a window or a screen brings that name in, and another
 Chromium build may give the title, so the function was left in place to use it
 if it comes.
 
 So the name went the way of **fixing it afterwards**. `POST /api/live/title` and
-「✎ Name」 beside the title. A finished session can be fixed too -- in place if
+"✎ Name" beside the title. A finished session can be fixed too -- in place if
 it is an in-memory session, otherwise in the store. What you were listening to
 usually becomes a problem when you look at the list after listening to it all,
 so this one will be used more often.
@@ -1095,7 +1095,7 @@ and a high voice v5 sees most of it as silence.** The weakness Silero's own v6
 release notes write down — "instrumental music that sounds like a human voice,
 very high voices (synthetic, cartoon, children)" — is exactly this genre. That
 genre is this tool's main target, so **we stay on v4 (the k2 re-export,
-643KB).** v5 sits in the 「Models & Tools」 list as an option only
+643KB).** v5 sits in the "Models & Tools" list as an option only
 (`MIMIWATCH_VAD_MODEL=silero_vad_v5.onnx`), so someone who only watches talks
 and lectures can pick it when false positives on noise bother them. v6.2
 (improved on high and cartoon voices) is not supported by sherpa-onnx yet, so it
@@ -1114,7 +1114,7 @@ collab, MPSTWzF2ZKU, 126 segments on the broadcast profile.
 | Tightened | 0/126 | 0 | 2,212 | 45.9s |
 | Tightened + condition_on_prev_tokens=False | 0/126 | 0 | 2,166 | 45.4s |
 
-Raising the thresholds dropped **not a single segment into empty** — on a
+Raising the thresholds produced **not a single empty segment** — on a
 4-second chunk the no_speech probability never climbs that high. The 20 segments
 where the two settings differ were all garbage output from places where several
 people talk over each other (`isi を作って Six` ↔ `BBの固を持って…`), and
@@ -1275,14 +1275,14 @@ split helps not only the latency but the translation.
 `ココロ` is written `心` in the transcription, the translation becomes `마음`
 ("heart"). Sometimes it gets it right (`心ちゃんみんな心ちゃんよ` → `코코짱 모두
 코코짱이야`), sometimes it gets it wrong (`心 ごめん` → `마음 미안해`, "Sorry,
-heart"). This is the ground for the 「glossary」 experiment -- collecting the
+heart"). This is the ground for the "glossary" experiment -- collecting the
 proper nouns within a session and handing them to the prompt -- and the first
 thing to try next.
 
 # Should a VOD get a refinement pass? (2026-09-03)
 
-Section 44 wrote 「the shorter the cut the worse it gets, and **the refinement
-pass brings it back at 12~25 s**」, but that bringing-back was an inference, not
+Section 44 wrote "the shorter the cut the worse it gets, and **the refinement
+pass brings it back at 12~25 s**", but that bringing-back was an inference, not
 measured at the time. The VOD path (`transcribe_vod.transcribe`) has no
 refinement and no latency constraint either, so "attaching it would be a gain"
 follows naturally. We measured the two things for real.
@@ -1310,7 +1310,7 @@ section 43.
   differs by sample -- English improves a lot, 47.2 → 33.1, while `You＆合図`
   gets worse, 49.3 → 54.1. That is larger than the ±1p variation section 43
   quoted, but it is a figure dragged along by one sample, so this table alone
-  does not yield the conclusion 「attach it to VODs as well」.
+  does not yield the conclusion "attach it to VODs as well".
 
 ## 49. But porting live's refinement over as it is makes the subtitles worse
 
@@ -1362,7 +1362,7 @@ same value as the baseline). We judged non-overlapping lines to be worth more
 than the 0.6p lost and kept the clamping. chrF is still 2.8p above the baseline,
 and above the 4-second split (31.3) as well.
 
-## 50. An aside: section 47's 「4 seconds is 2p better」 is in large part the window boundary
+## 50. An aside: section 47's "4 seconds is 2p better" is in large part the window boundary
 
 We rescored the same stored results with only the window width changed (the two
 right-hand columns of the table above).
@@ -1376,23 +1376,23 @@ at a 60-second window; widen the window and it shrinks, take the window away and
 it flips. **The observation itself -- that a 12-second line run together with no
 punctuation gives the translator trouble -- stands** (section 47's example
 sentence is unchanged). Only do not quote its size as 2p. And because section
-49's re-split beats the 4-second split, the direction 「shorten the VOD split to
-4 seconds」 is dropped.
+49's re-split beats the 4-second split, the direction "shorten the VOD split to
+4 seconds" is dropped.
 
 ## 51. Conclusions
 
 1. **Refinement is worth it, confirmed** (section 48). The judgement section 44
    deferred now stands.
-2. **Porting live's `Refiner` to a VOD as it is, is the wrong port** (section
+2. **Porting live's `Refiner` directly to a VOD is the wrong approach** (section
    49). One line per group is fine in live because that line goes by in a
    moment; a VOD subtitle stays, and is a thing you navigate to.
-3. **「refine → re-split on the segment timings」 is now attached as the VOD
+3. **"refine → re-split on the segment timings" is now attached as the VOD
    default** (`transcribe_vod.refine_cues`). The runtime already hands the
    values out (`t0_ms`/`t1_ms` in `transcribe_cpp.Result.segments`), and the
    adapter's knob is `tcpp_asr.TranscribeCppASR.transcribe(segments=True)` --
    off by default, switched on for the refinement pass only. There is no reason
    for live's short chunks to take a different decode path as well.
-4. **It can be turned off.** 「Polish with refined lines」 on the screen (the
+4. **It can be turned off.** "Polish with refined lines" on the screen (the
    same box as live), `--no-refine`, and `refine` on `POST /api/transcribe`.
    There are places where a 30~50% longer transcription is not worth it.
 5. **Refinement does not run on the light default transcriber.** The model has
@@ -1421,8 +1421,8 @@ sentence is unchanged). Only do not quote its size as 2p. And because section
 
 ## 52. Confirmed on a broadcast sample (29-minute ASMR)
 
-This is the spot section 51 left open with 「one sample (an animated film), so
-provisional」. We looked again with one real recorded broadcast -- 29 minutes of
+This is the spot section 51 left open with "one sample (an animated film), so
+provisional". We looked again with one real recorded broadcast -- 29 minutes of
 白上フブキ's ear-cleaning ASMR (`vuvdEqKK3KY`), Japanese. **There are no
 ground-truth subtitles, so CER and chrF cannot be computed.** What can be looked
 at is the structure, the retention rate, and the eye. whisper-large-v3-turbo,
@@ -1437,7 +1437,7 @@ talk profile, VAD 0.3, the same path as the server
 - **The lines become readable.** Lines over 7 seconds go 44 → 8. One 12-second
   final line (`まままま、耳掃除をサボりましたねまぁ、ダメですよ、耳掃除サボっちゃよいしょ、よいしょ`)
   splits into three lines with punctuation on them. The opposite direction of
-  section 49's 「one line per group is not a subtitle」 -- it means that a long
+  section 49's "one line per group is not a subtitle" -- it means that a long
   final line, too, is heavy as a subtitle.
 - **No characters are lost** (3,105 → 3,255). Matched by nearby timing (±4 s),
   the retention rate is 82~85% both ways, and the places where it came out low
@@ -1463,7 +1463,7 @@ talk profile, VAD 0.3, the same path as the server
   are a median of 3.4 s (that document's premise, that a VOD cuts at 12 s, does
   not hold for a broadcast whose dialogue is cut short). It is not a problem
   with the way refinement inherits the tags but a limit of the tags themselves,
-  and 「Attach speaker tags」 is off by default. Touching the threshold on a
+  and "Attach speaker tags" is off by default. Touching the threshold on a
   sample with no ground truth is fitting rather than measuring, so we did not
   touch it.
 

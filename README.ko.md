@@ -121,7 +121,7 @@ CPU 설정, 멤버십 전용 방송, 브라우저 확장, 판올림, 문제가 �
 - [`docs/PACKAGING.ko.md`](docs/PACKAGING.ko.md) — 묶음 배포와 판올림
 - [`docs/WINDOWS.ko.md`](docs/WINDOWS.ko.md) — 윈도우에서 다른 점
 - [`docs/REQUIREMENTS.ko.md`](docs/REQUIREMENTS.ko.md) — 요구사항과 설계 판단
-- [`measurements/RESULTS.md`](measurements/RESULTS.md) — 모델 선정과 성능 실측
+- [`measurements/RESULTS.ko.md`](measurements/RESULTS.ko.md) — 모델 선정과 성능 실측
 - [`AGENTS.md`](AGENTS.md) — 코드를 고치는 사람과 에이전트를 위한 규칙
 
 ## 출처

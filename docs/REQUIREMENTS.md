@@ -36,7 +36,7 @@ The flow splits completely according to the nature of the input. That branch is 
 2. The server extracts audio only and **transcribes the whole thing faster than realtime**. hayamimi's offline benchmark puts the RTF around 0.05, so an hour-long video finishes within a few minutes.
 3. When transcription ends, a subtitle list is produced with a **media-relative timestamp** on every utterance.
 4. When the user starts playback, the YouTube iframe's `getCurrentTime()` is matched against the subtitle timestamps, so it **synchronises automatically**.
-5. The two-pass refinement pass and speaker separation can both be applied in full, because there is no realtime constraint.
+5. The two-pass refinement and speaker separation can both be applied in full, because there is no realtime constraint.
 
 **This flow needs no manual offset.**
 
@@ -94,7 +94,7 @@ m3u8 URL      ──> audio extraction (ffmpeg)
 | **R2.3** | The user must be able to pin the source language. We actually hit the problem of language detection getting stuck on a single-language stream in the 2026-08-27 seminar capture, and hayamimi's `--mode single --lang` option solves it. | required |
 | **R2.4** | Automatic language detection must also be selectable. | required |
 | **R2.5** | The transcription engine must be replaceable with an external HTTP endpoint. | optional |
-| **R2.6** | In the VOD flow, the two-pass refinement pass and speaker separation are applied. | recommended |
+| **R2.6** | In the VOD flow, the two-pass refinement and speaker separation are applied. | recommended |
 
 ### 4-3. Translation
 
@@ -158,7 +158,7 @@ m3u8 URL      ──> audio extraction (ffmpeg)
 | `subtitle_server.py`'s SSE `/events` | **The default path for receiving subtitles.** In measurement, SSE delivered 92 items while the WebSocket return path delivered only 15. The screen is written anew, but it receives over this path. |
 | `RoutedASR` | Loaded and used as a library. The settings corresponding to `--mode single --lang` are exposed. |
 | `translate_m2m.py` | Wrapped as one of the translator implementations. The Japanese-pinned call path is not used; the new layer calls it directly. |
-| `OVERLAY_HTML` | Reference only. It is a standalone page meant for an OBS browser source, so the component that lays over the video is written anew. |
+| `OVERLAY_HTML` | Reference only. It is a standalone page meant for an OBS browser source, so the component that overlays the video is written anew. |
 
 **New dependencies**: `yt-dlp`, `ffmpeg`. Neither tool is currently installed on this system.
 
@@ -174,7 +174,7 @@ YouTube live HLS provides `EXT-X-PROGRAM-DATE-TIME` on every 2-second segment. T
 **7-2. Unit of translation — settled on the refined line**
 Quality actually recovers at the refinement stage. We confirmed a case where a final subtitle's `ちいかはね` was restored to `ちいかわが今はやってます` in the refined line.
 
-**But a new problem follows from it.** The two-pass refinement pass waits for 2 seconds or more of silence before it runs, and silence never comes for a speaker who talks without a break. In both streams refinement was pushed back by up to 20 seconds, and the share of lines over 5 seconds was 40 percent and 50 percent respectively. It reproduced with two different speakers, so it is structural.
+**But a new problem follows from it.** The two-pass refinement waits for 2 seconds or more of silence before it runs, and silence never comes for a speaker who talks without a break. In both streams refinement was pushed back by up to 20 seconds, and the share of lines over 5 seconds was 40 percent and 50 percent respectively. It reproduced with two different speakers, so it is structural.
 
 **Response**: translate and display the final subtitle first, and quietly replace it when the refined line arrives. It requires no modification to hayamimi, it keeps something on screen at all times, and it fits the display style that leaves the previous sentence in small type.
 
@@ -246,7 +246,7 @@ by itself.
 - **Everything else**: automatic fallback to hayamimi RoutedASR
 - The reasoning and the measurements for the candidates that dropped out
   (Fun-ASR, SenseVoice, Voxtral, Moonshine, Qwen3, Cohere) are in
-  `measurements/RESULTS.md` chapters 11~14
+  `measurements/RESULTS.md` sections 11~14
 
 ### 8-4. Persisting work state — done (2026-08-28)
 

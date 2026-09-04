@@ -29,9 +29,10 @@ them again. Someone who was running from the repository keeps using the same
 models. **On the first run, a banner at the top of the screen says "nothing
 needed for transcription is here yet" and "First-time setup" appears, which lets
 you pick the transcription and translation engines and downloads only the models
-that combination needs.** The
-default is the light CPU engines (SenseVoice Small + M2M-100, about 730MB). To
-pick more, it is "Manage › ⚙ Engine management › Models and tools".
+that combination needs.**
+
+The default is the light CPU engines (SenseVoice Small + M2M-100, about 730MB). To
+pick more, go to "Manage › ⚙ Engines › Models & Tools".
 
 As for ffmpeg, if the system has it that is what is used (the Homebrew location
 is checked too), and if not, a single static build is downloaded from the same
@@ -41,7 +42,7 @@ we are not the ones distributing it, the user downloads it.
 ## Where the files land
 
 Running from the repository and running as a bundle differ. The inside of a
-bundle is read-only, so the settings and the store come out into the user area.
+bundle is read-only, so the settings and the store are placed in the user directory.
 The rules live in one place, `paths.py`.
 
 | | From the repository (`./run.sh`) | As a bundle |

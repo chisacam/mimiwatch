@@ -104,7 +104,7 @@ Open http://localhost:8900. For another port, `PORT=8951 ./run.sh`
 (on Windows `.\run.ps1 -Port 8951`). If you changed the model location at
 install time, give the same environment variable when running too.
 
-To turn it off, press **"⏻ Quit"** at the right end of the top bar. It closes
+To turn it off, press **"⏻ Shut down"** at the right end of the top bar. It closes
 the streams it is receiving properly first, then stops the server. `Ctrl-C` in
 the terminal takes the same path.
 

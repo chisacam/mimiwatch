@@ -15,11 +15,11 @@ mimiwatch\mimiwatch.exe  Windows -- 두 번 누르면 콘솔 창이 하나 뜨�
 
 ## 묶음에 무엇이 들고 무엇이 들지 않는가
 
-**듭니다**: 파이썬, 서버와 화면, 네 런타임(transcribe.cpp·llama.cpp·sherpa-onnx·
+**포함 항목**: 파이썬, 서버와 화면, 네 런타임(transcribe.cpp·llama.cpp·sherpa-onnx·
 CTranslate2), yt-dlp, CA 인증서 묶음. 맥은 Metal, 윈도우는 Vulkan(+CPU)이 들어
 있습니다. 약 110MB(맥), zip으로 45MB 남짓입니다.
 
-**들지 않습니다**: 모델(6.3GB)과 ffmpeg. 모델은 어차피 프로그램 밖
+**제외 항목**: 모델(6.3GB)과 ffmpeg. 모델은 어차피 프로그램 밖
 (`~/.local/share/mimiwatch/models`, 윈도우 `%LOCALAPPDATA%\mimiwatch\models`)에
 두는 것이 원칙이라, 판을 바꿔도 다시 받지 않습니다. 저장소에서 돌리던 사람의
 모델도 그대로 씁니다. **첫 실행 때 화면 위쪽에 「전사에 필요한 것이 아직
@@ -29,7 +29,7 @@ CTranslate2), yt-dlp, CA 인증서 묶음. 맥은 Metal, 윈도우는 Vulkan(+CP
 「관리 › ⚙ 엔진 관리 › 모델·도구」입니다.
 
 ffmpeg는 시스템에 있으면 그것을 쓰고(홈브루 자리도 봅니다), 없으면 같은
-화면에서 정적 빌드 한 파일을 받습니다. 묶음에 넣지 않는 것은 GPL 배포 문제를
+화면에서 단일 정적 빌드 파일을 받습니다. 묶음에 넣지 않는 것은 GPL 배포 문제를
 피하기 위해서입니다 -- 우리가 배포하는 것이 아니라 사용자가 받는 것입니다.
 
 ## 파일이 어디에 놓이는가
@@ -174,16 +174,16 @@ whisper를 올렸고, 묶음 안의 yt-dlp로 유튜브 주소를 풀었고, 설
 확인해 태그가 더 새로우면 화면에 알리고, 「받기 → 다시 시작하며 적용」이면:
 
 1. 이 플랫폼의 자산(`mimiwatch-<판>-macos-arm64.zip` / `-windows-x64.zip`)을
-   사용자 영역 `updates/` 에 받습니다. `.part` 이어 받기는 모델과 같습니다.
+   사용자 영역 `updates/`에 받습니다. `.part` 이어받기는 모델과 같습니다.
    윈도우의 `-cuda`/`-cpu` 변형은 자동 판올림 대상이 아닙니다.
 2. 교체 스크립트(`updates/apply.sh`·`apply.ps1`)를 띄우고 서버가 스스로
-   꺼집니다. 스크립트는 프로세스가 끝나기를 기다렸다가 옛 묶음을 `.old` 로
+   꺼집니다. 스크립트는 프로세스가 끝나기를 기다렸다가 옛 묶음을 `.old`로
    물리고 새 것을 그 자리에 놓은 뒤 **같은 인자로** 다시 띄웁니다. 맥은
-   압축을 `ditto` 로 풀어(.app 의 심볼릭 링크·서명 보존) `xattr -cr` 까지
+   압축을 `ditto`로 풀어(.app의 심볼릭 링크·서명 보존) `xattr -cr`까지
    해 주므로 게이트키퍼 안내를 다시 거치지 않습니다.
 3. 실패하면 옛 묶음을 되돌립니다. 무슨 일이 있었는지는 `updates/apply.log`.
 
-모델·설정·자막 DB 는 묶음 밖(사용자 영역)이라 판을 갈아도 그대로입니다.
-확인을 끄려면 `backends.json` 의 `"update_check": false` 또는
+모델·설정·자막 DB는 묶음 밖(사용자 영역)이라 판을 갈아도 그대로입니다.
+확인을 끄려면 `backends.json`의 `"update_check": false` 또는
 `MIMIWATCH_NO_UPDATE_CHECK=1`. 저장소에서 돌 때는 알림만 하고 적용은
 거절합니다(`git pull` 안내).

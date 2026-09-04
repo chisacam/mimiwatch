@@ -6,9 +6,9 @@
 <link rel="stylesheet" href="/static/app.css">
 <body>
 
-<!-- 위쪽에는 지금 무엇을 보고 있고 무엇이 돌고 있는지만 둡니다.
-     영상 목록과 추가·삭제는 왼쪽 패널로 옮겼고, 엔진과 언어 설정은
-     「관리」 아래로 모았습니다. -->
+<!-- The top bar holds only what is being watched right now and what is running.
+     The video list and add/delete moved into the left panel, and the engine and
+     language settings were gathered under "Manage". -->
 <header class="bar">
   <div class="brand">mimi<em>watch</em></div>
   <button id="toggle-library" class="seg" data-i18n="header.videos"
@@ -16,16 +16,17 @@
 
   <div class="now">
     <b id="now-title" data-i18n="header.now.empty"></b>
-    <!-- 탭 소리에는 가져올 제목이 없습니다. 크롬이 트랙 label 에 탭 제목이
-         아니라 불투명한 식별자를 주기 때문입니다(실측). 그래서 이름은
-         나중에 고칠 수 있어야 합니다. -->
+    <!-- Tab audio carries no title to take. Chrome puts an opaque identifier in
+         the track label rather than the tab title (measured). So the name has
+         to be fixable afterwards. -->
     <button id="rename-live" class="seg" hidden data-i18n="header.rename"
             data-i18n-attr="title:header.rename.title"></button>
     <div id="live-badge" class="live-badge" hidden>● LIVE <button id="live-stop" data-i18n="header.live.stop"></button></div>
   </div>
 
-  <!-- 처리 상태는 위쪽에 둡니다. 예전에는 우하단에 떠 있어서, 전사가
-       도는지도 중단 단추가 어디 있는지도 눈에 잘 띄지 않았습니다. -->
+  <!-- Job status goes at the top. It used to float at the bottom right, where
+       neither the fact that transcription was running nor where the Stop button
+       was caught the eye. -->
   <div id="job" class="job" hidden>
     <span class="job-label" data-i18n="job.retranslating"></span>
     <span class="job-bar"><i id="job-fill"></i></span>
@@ -35,17 +36,19 @@
   </div>
 
   <div id="live-notice" class="live-notice" hidden></div>
-  <!-- 첫 실행: 전사에 필요한 모델이 아직 없습니다. 예전에는 세션을 시작해야
-       FileNotFoundError 로 알았습니다. 묶음으로 받은 사람에게는 설치 스크립트가
-       없으므로 여기서 받게 합니다. -->
+  <!-- First run: the models transcription needs are not here yet. This used to
+       be discovered only by starting a session and getting a FileNotFoundError.
+       Someone who took the bundle has no install script, so let them download
+       from here. -->
   <div id="setup-notice" class="live-notice setup-notice" hidden>
     <span id="setup-text" data-i18n="setup.notice.noModels"></span>
     <button id="setup-start" class="seg primary-seg" data-i18n="setup.notice.start"></button>
     <button id="setup-download" class="seg" data-i18n="setup.notice.download"></button>
     <button id="setup-open" class="seg" data-i18n="setup.notice.models"></button>
   </div>
-  <!-- 판올림. 하루 한 번 깃허브 릴리스를 확인해 새 판이 있으면 여기 알립니다.
-       받기·적용은 묶음으로 돌 때만 -- 저장소에서 돌 때는 git pull 안내만 합니다. -->
+  <!-- Update. Once a day the GitHub releases are checked, and a newer version is
+       announced here. Download and apply only when running as a bundle -- in
+       repo mode it only points at git pull. -->
   <div id="update-notice" class="live-notice" hidden>
     <span id="update-text"></span>
     <button id="update-download" class="seg primary-seg" hidden data-i18n="update.download"></button>
@@ -90,14 +93,15 @@
 
   <button id="toggle-panel" class="seg" data-i18n="header.panel"
           data-i18n-attr="title:header.panel.title"></button>
-  <!-- 묶음으로 쓰면 터미널이 없어 Ctrl-C 로 끌 수 없습니다. 눈에 띄는 자리에 둡니다.
-       받는 중인 방송을 먼저 제대로 닫고 서버를 멈춘 뒤, 이 창(과 대본 창)도 닫습니다. -->
+  <!-- Run as a bundle there is no terminal, so Ctrl-C cannot shut it down. Put it
+       somewhere visible. Broadcasts still being received are closed cleanly
+       first, then the server stops, then this window (and the script window). -->
   <button id="quit" class="seg quit" data-i18n="header.quit"
           data-i18n-attr="title:header.quit.title"></button>
 </header>
 
 <main id="layout">
-  <!-- 영상 관리. 자막 내역과 같은 방식으로 접고 펼칩니다. -->
+  <!-- Video management. Collapses and expands the same way the subtitle log does. -->
   <aside class="library" id="library">
     <div class="panel-head">
       <h2 data-i18n="library.title"></h2>
@@ -109,10 +113,11 @@
 
   <section class="stage">
     <div id="player-wrap" class="mv-1">
-      <!-- 타일은 tiles.js 가 이 틀에서 찍어 냅니다(멀티뷰는 여러 벌). 타일이 하나일
-           때는 띠(.tile-bar)도 덮개(.tile-cover)도 보이지 않아 예전의 #player +
-           #overlay 와 같은 화면입니다. 덮개는 초점이 아닌 타일에만 남아, 누르면 초점이
-           옮겨 가고 초점 타일의 플레이어 조작은 그대로 됩니다. -->
+      <!-- tiles.js stamps tiles out of this template (several of them for
+           multiview). With one tile neither the bar (.tile-bar) nor the cover
+           (.tile-cover) is visible, so the screen is what the old #player +
+           #overlay was. The cover stays only on unfocused tiles; clicking it
+           moves the focus, and the focused tile's player controls still work. -->
       <template id="tile-tpl">
         <div class="tile">
           <div class="tile-player"></div>
@@ -129,13 +134,14 @@
             <button class="tile-close seg" data-i18n-attr="title:tile.close.title">✕</button>
           </div>
           <div class="tile-cover" data-i18n-attr="title:tile.cover.title"></div>
-          <!-- 끌어다 놓는 동안만 나타나는 막. iframe 위로는 drop 이 오지 않으므로 이것이 받습니다. -->
+          <!-- A film that appears only while something is being dragged. A drop never reaches an iframe, so this catches it. -->
           <div class="tile-drop"></div>
         </div>
       </template>
 
-      <!-- 전체화면에서는 상자 밖의 조절기가 그려지지 않습니다. 자막 모드만
-           상자 안에도 둡니다. 창 모드에서는 아래 조절기가 있으므로 숨깁니다. -->
+      <!-- In fullscreen the controls outside the box are not drawn. Keep the
+           subtitle mode inside the box too. In windowed mode the controls below
+           are there, so hide these. -->
       <div id="fs-controls" class="fs-controls">
         <span class="glabel" data-i18n="controls.subtitle"></span>
         <div class="fs-row seg-row">
@@ -152,7 +158,7 @@
                   data-i18n-attr="title:fs.cueReset.title"></button>
         </div>
         <hr>
-        <!-- 멀티뷰: 배치와 초점. 타일이 둘 이상일 때만 보입니다. -->
+        <!-- Multiview: layout and focus. Visible only with two or more tiles. -->
         <div class="fs-row seg-row" id="fs-mv" hidden>
           <button class="seg" data-layout="2" data-i18n="controls.layout.vertical"></button>
           <button class="seg" data-layout="2h" data-i18n="controls.layout.horizontal"></button>
@@ -167,11 +173,12 @@
         <button id="fs-exit" class="seg" data-i18n="fs.exit"></button>
       </div>
 
-      <!-- 조절기를 다시 부르는 자리.
-           iframe이 상자를 덮고 있어 영상 위의 마우스 움직임은 우리에게
-           오지 않습니다. 그래서 iframe 위에 얹은 이 띠가 필요합니다.
-           자막은 아래 가운데, 유튜브 제어줄은 맨 아래에 있으므로 둘 다
-           피해 오른쪽 가장자리의 가운데 높이에 둡니다. -->
+      <!-- Where the controls are called back.
+           The iframe covers the box, so mouse movement over the video never
+           reaches us. Hence this strip laid on top of the iframe.
+           The subtitles sit bottom-centre and the YouTube control row at the
+           very bottom, so it avoids both and sits at the right edge, halfway
+           down. -->
       <div id="fs-hotzone" class="fs-hotzone" aria-hidden="true"></div>
     </div>
 
@@ -185,16 +192,17 @@
       </div>
       <label class="slider"><span data-i18n="controls.fontSize"></span> <input id="size" type="range" min="16" max="56" value="30"></label>
       <label class="slider"><span data-i18n="controls.background"></span> <input id="dim" type="range" min="0" max="100" value="55"></label>
-      <!-- 자리 조절은 슬라이더가 아니라 자막을 직접 끄는 것으로 합니다.
-           단추는 되돌리는 쪽만 남깁니다. -->
+      <!-- Position is adjusted by dragging the subtitles themselves, not with a
+           slider. The only button left is the one that puts them back. -->
       <button id="cue-reset" class="seg" data-cue-reset data-i18n="controls.cueReset"
               data-i18n-attr="title:controls.cueReset.title"></button>
       <label class="check"><input id="show-prev" type="checkbox" checked> <span data-i18n="controls.showPrev"></span></label>
       <label class="slider" id="offset-wrap"><span data-i18n="controls.offset"></span> <input id="offset" type="range" min="-3" max="3" step="0.1" value="0"><b id="offset-val">0.0s</b></label>
       <button id="fullscreen" class="seg" data-i18n="controls.fullscreen"
               data-i18n-attr="title:controls.fullscreen.title"></button>
-      <!-- 멀티뷰. 「＋ 타일」은 초점이 라이브일 때, 배치는 타일이 둘 이상일 때 보입니다.
-           초점은 타일을 누르거나 1~4 키로 옮깁니다. -->
+      <!-- Multiview. "Add tile" is visible when the focus is live, the layout when
+           there are two or more tiles. The focus moves by clicking a tile or with
+           the 1~4 keys. -->
       <button id="mv-add" class="seg" hidden data-i18n="controls.addTile"
               data-i18n-attr="title:controls.addTile.title"></button>
       <div class="group" id="mv-group" hidden>
@@ -218,10 +226,10 @@
       <label class="check"><input id="follow" type="checkbox" checked> <span data-i18n="panel.follow"></span></label>
     </div>
 
-    <!-- 자막 내역에서 줄을 누르면 무슨 일이 일어나는가.
-         기본은 예전 그대로 「그 지점으로 이동」입니다. 고치거나 고를 일은
-         모드를 켠 동안에만 하도록 가릅니다 -- 읽다가 잘못 눌러서 편집기가
-         열리거나 재생 위치가 튀는 일이 없어야 합니다. -->
+    <!-- What happens when a line in the subtitle log is clicked.
+         The default is what it has always been, "seek there". Editing and
+         picking are fenced off behind a mode that has to be turned on -- reading
+         must never open the editor or jump the playhead by a misclick. -->
     <div class="script-modes" role="group" data-i18n-attr="aria-label:panel.modes.aria">
       <button class="seg" data-smode="read" data-i18n="panel.mode.read"
               data-i18n-attr="title:panel.mode.read.title"></button>
@@ -231,7 +239,7 @@
               data-i18n-attr="title:panel.mode.tr.title"></button>
     </div>
 
-    <!-- 번역 모드에서만 보입니다. 고른 줄 수와 할 일. -->
+    <!-- Visible in translation mode only. How many lines are picked and what to do with them. -->
     <div id="tr-bar" class="tr-bar" hidden>
       <b id="tr-count" data-i18n="panel.tr.count.zero"></b>
       <span class="grow"></span>
@@ -240,7 +248,7 @@
       <button id="tr-go" class="seg primary-seg" data-i18n="panel.tr.go"></button>
     </div>
 
-    <!-- 편집 모드에서만 보입니다. 잘못 인식돼 지운 자리(누락된 대사)를 직접 채웁니다. -->
+    <!-- Visible in edit mode only. Fills in by hand the places misrecognised and dropped (missing lines). -->
     <div id="edit-bar" class="tr-bar" hidden>
       <b data-i18n="panel.edit.hint"></b>
       <span class="grow"></span>
@@ -248,8 +256,9 @@
               data-i18n-attr="title:panel.edit.add.title"></button>
     </div>
 
-    <!-- 따로 띄운 창에서만 보이는 조절기. 영상이 없으므로 화면 위 자막 대신
-         자막 내역 자체를 읽기 좋게 만드는 것들만 둡니다. -->
+    <!-- Controls visible only in the popped-out window. There is no video there,
+         so instead of the on-screen subtitles it holds only what makes the
+         subtitle log itself easier to read. -->
     <div id="script-tools" class="script-tools">
       <div class="fs-row seg-row">
         <button class="seg" data-sview="both" data-i18n="controls.mode.both"></button>
@@ -273,7 +282,7 @@
     <label><span data-i18n="add.source"></span>
       <select name="source">
         <option value="url" data-i18n="add.source.url"></option>
-        <option value="tab" data-i18n="add.source.tab"><!-- 멤버십 전용 --></option>
+        <option value="tab" data-i18n="add.source.tab"><!-- members-only --></option>
         <option value="file" data-i18n="add.source.file"></option>
       </select>
       <small id="source-hint" data-i18n="add.source.hint.url"></small>
@@ -291,9 +300,9 @@
       <select name="genre"></select>
       <small id="genre-hint" data-i18n="add.genre.hint"></small>
     </label>
-    <!-- 딱지를 글자와 한 덩어리로 묶습니다. 이 label 은 세로 flex 라
-         (다른 「…전용」 딱지가 붙은 둘은 label.inline 이라 가로입니다)
-         그냥 두면 딱지가 혼자 한 줄을 차지하며 늘어납니다. -->
+    <!-- Binds the tag and the text into one lump. This label is a vertical flex
+         (the other two carrying an "… only" tag are label.inline, so horizontal),
+         and left alone the tag takes a whole line to itself and stretches. -->
     <label><span><span data-i18n="add.profile"></span> <small class="tag" data-i18n="add.tag.liveOnly"></small></span>
       <select name="profile"></select>
       <small data-i18n="add.profile.hint"></small>
@@ -356,10 +365,10 @@
   </form>
 </dialog>
 
-<!-- 초기 설정. 사양은 기계마다 달라 기본값 하나가 다 맞을 수 없습니다. 기본은
-     가벼운 CPU 엔진(SenseVoice Small + M2M-100)이고, 여기서 무거운 쪽으로 올리면
-     그 조합에 필요한 것을 받기 시작합니다. 「관리 › ⚙ 엔진 관리 › 초기 설정 다시」로
-     언제든 다시 엽니다. -->
+<!-- First-time setup. Machines differ, so no single default fits them all. The
+     default is the light CPU pair (SenseVoice Small + M2M-100), and moving up to
+     the heavier side from here starts downloading what that combination needs.
+     "Manage › ⚙ Engines › Run first-time setup again" reopens it at any time. -->
 <dialog id="setup-dialog">
   <form method="dialog" id="setup-form">
     <h3 data-i18n="setup.title"></h3>
@@ -467,9 +476,10 @@
     </section>
   </div>
 
-  <!-- 허깅페이스의 GGUF 하나를 받아 엔진으로 등록합니다. 전사는 transcribe.cpp가
-       읽는 GGUF, 번역은 llama.cpp가 읽는 채팅 모델이어야 합니다 -- 그것은 받은 뒤
-       처음 쓸 때 드러납니다. -->
+  <!-- Takes one GGUF from Hugging Face and registers it as an engine. For
+       transcription it has to be a GGUF transcribe.cpp reads, for translation a
+       chat model llama.cpp reads -- which only shows once it has been downloaded
+       and first used. -->
   <form id="model-form" hidden>
     <div class="dlg-head">
       <h3 data-i18n="model.title"></h3>
@@ -528,15 +538,16 @@
   </form>
 </dialog>
 
-<!-- `async` 입니다. 이것을 동기로 두면 파서가 여기서 멈춰, 구글에서
-     자막 내역을 받아 오는 동안 화면에 아무것도 그려지지 않습니다. 실측에서
-     이 한 줄이 4396ms 를 잡아먹었고 domInteractive 가 4435ms 였습니다 --
-     우리 CSS·JS 는 각 10ms, API 응답은 각 1~10ms 였는데도 그랬습니다.
-     app.js 의 whenApiReady() 가 onYouTubeIframeAPIReady 와 폴링으로 늦게
-     오는 경우를 이미 다루므로, 막아 세울 이유가 없습니다. -->
+<!-- `async`, deliberately. Left synchronous the parser stops here, and nothing at
+     all is painted while the script is fetched from Google. Measured, this one
+     line ate 4396ms and domInteractive was 4435ms -- with our own CSS and JS at
+     10ms each and the API responses at 1~10ms each. app.js's whenApiReady()
+     already handles it arriving late, through onYouTubeIframeAPIReady and
+     polling, so there is no reason to block on it. -->
 <script async src="https://www.youtube.com/iframe_api"></script>
-<!-- 확장과 공유하는 한 벌들. 자막 그리기(overlay), 라이브 자막 저장소(cuestore),
-     탭 소리 올리기(capture). 확장 폴더의 사본을 bench/ext_check.py 가 맞댑니다. -->
+<!-- The sets shared with the extension. Subtitle drawing (overlay), the live cue
+     store (cuestore), tab audio upload (capture). bench/ext_check.py holds the
+     copies in the extension folder against these. -->
 <!-- The string table comes first: overlay.js and every app module call t()
      while they build their first frame, and a missing table renders keys. -->
 <script src="/static/i18n.js"></script>
@@ -548,10 +559,10 @@
 <script src="/static/overlay.js"></script>
 <script src="/static/cuestore.js"></script>
 <script src="/static/capture.js"></script>
-<!-- 화면 논리. 한 파일(app.js, 2700줄)이던 것을 관심사별로 나눴습니다. 전부 일반
-     스크립트로 전역을 함께 쓰므로 순서가 뜻을 가집니다 -- state.js 가 먼저,
-     main.js(bind·init)가 마지막입니다. 나머지는 함수 선언뿐이라 순서에 기대지
-     않습니다. -->
+<!-- The screen logic. What used to be one file (app.js, 2700 lines) split up by
+     concern. They are all plain scripts sharing one global scope, so the order
+     means something -- state.js first, main.js (bind and init) last. The rest are
+     nothing but function declarations, so they do not depend on the order. -->
 <script src="/static/app/state.js"></script>
 <script src="/static/app/adapters.js"></script>
 <script src="/static/app/tiles.js"></script>

@@ -1,20 +1,21 @@
-/* 탭에서 들리는 소리를 오디오 스레드에서 받아 메인 스레드로 넘깁니다.
+/* Takes the tab's sound on the audio thread and hands it to the main thread.
  *
- * 하는 일은 이것뿐입니다. 모아 두기·int16 변환·전송은 전부 app.js가 합니다 --
- * 오디오 콜백은 128 표본마다 돌아오므로 여기서 무거운 일을 하면 소리가
- * 끊깁니다. 그러면 받아 적을 것도 같이 끊깁니다.
+ * That is all it does. Buffering, int16 conversion and upload are app.js's job
+ * entirely -- the audio callback comes back every 128 samples, so heavy work
+ * here breaks the sound up. And what breaks up the sound breaks up what there
+ * is to transcribe with it.
  *
- * 표본율 변환은 하지 않습니다. AudioContext를 16000Hz로 열면 크롬이 알아서
- * 리샘플해 주므로, 여기 들어오는 것은 이미 16kHz 모노입니다.
+ * It does no sample-rate conversion. Open the AudioContext at 16000Hz and
+ * Chrome resamples on its own, so what arrives here is already 16kHz mono.
  */
 class CaptureProcessor extends AudioWorkletProcessor {
   process(inputs) {
-    // 채널은 하나입니다. 노드를 만들 때 channelCount:1 로 잡아 두어,
-    // 스테레오를 접는 일은 Web Audio 가 합니다 -- 여기서 손으로 왼쪽만
-    // 집으면 오른쪽에 치우친 목소리를 통째로 놓칩니다.
+    // There is one channel. The node is built with channelCount:1, so folding
+    // stereo down is Web Audio's job -- picking the left channel by hand here
+    // would lose a voice panned right entirely.
     const ch = inputs[0] && inputs[0][0];
-    // slice(0)는 사본입니다. 이 버퍼는 다음 호출에서 재사용되므로 그대로
-    // 넘기면 메인 스레드가 읽기 전에 다른 소리로 덮입니다.
+    // slice(0) is a copy. This buffer is reused on the next call, so handing it
+    // over as it is has another sound overwrite it before the main thread reads.
     if (ch && ch.length) this.port.postMessage(ch.slice(0));
     return true;
   }

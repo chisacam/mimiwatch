@@ -1,6 +1,7 @@
-/* 유튜브 주소에서 영상 id를 뽑습니다. 확장의 배경 워커와 content script가 함께
- * 씁니다 -- 두 벌이었을 때 한쪽만 호스트를 확인했습니다. 유튜브가 아닌 주소,
- * 못 읽는 주소는 빈 문자열입니다.
+/* Pulls the video id out of a YouTube URL. The extension's service worker and
+ * its content script share it -- when there were two copies, only one of them
+ * checked the host. A URL that is not YouTube's, or one that cannot be read,
+ * gives the empty string.
  *
  *     MimiYtId.videoIdOf("https://www.youtube.com/watch?v=abc")   // "abc"
  *     MimiYtId.videoIdOf("https://www.youtube.com/live/abc")      // "abc"

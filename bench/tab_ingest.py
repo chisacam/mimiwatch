@@ -1,17 +1,19 @@
-"""브라우저가 올린 탭 오디오로 자막이 나오는지 끝까지 확인합니다.
+"""Check end to end that tab audio uploaded by the browser produces subtitles.
 
-멤버십 전용 방송은 서버가 받을 수 없습니다. 대신 사용자가 이미 듣고 있는
-탭의 소리를 브라우저가 올려 주는 길을 냈는데, 그 길이 실제로 자막까지
-이어지는지는 사람이 탭을 공유해 봐야만 알 수 있는 것처럼 보입니다.
+A members-only broadcast is something the server cannot fetch. Instead there is
+a path where the browser uploads the sound of the tab the user is already
+listening to, and whether that path really reaches subtitles looks like
+something only a person sharing a tab could tell.
 
-그렇지 않습니다. 브라우저가 하는 일은 16kHz 모노 int16 PCM을
-`POST /api/ingest/<세션>` 으로 흘려보내는 것뿐이므로, 여기서는 이미
-받아 둔 녹음을 같은 방식으로 올려 같은 것을 확인합니다.
+It is not. All the browser does is push 16kHz mono int16 PCM to
+`POST /api/ingest/<session>`, so here an already recorded file is uploaded the
+same way and the same thing is checked.
 
     .venv/bin/python bench/tab_ingest.py [wav]
 
-저장소를 건드리지 않습니다 -- 예전에 시험용 세션이 진짜 DB에 남아 화면의
-「옛 방송」 목록에 떴습니다. 세션도 자막도 메모리에만 씁니다.
+It does not touch the store -- a test session once stayed in the real DB and
+showed up in the on-screen list of old broadcasts. Session and cues are written
+to memory only.
 """
 from __future__ import annotations
 
@@ -33,8 +35,9 @@ PORT = int(os.environ.get("MIMIWATCH_TEST_PORT", "8931"))
 BASE = f"http://127.0.0.1:{PORT}"
 WAV = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "data", "71SnC4H-G1Q.wav")
 SECONDS = float(os.environ.get("TAB_TEST_SECONDS", "40"))
-# 녹음 앞머리는 인사나 대기 화면이라 말이 없는 경우가 많습니다. 말이 오가는
-# 구간을 골라야 "실시간을 따라가는가"를 실제로 봅니다.
+# The head of a recording is often a greeting or a waiting screen with no
+# speech. Picking a stretch where talk goes back and forth is what actually
+# shows whether it "keeps up with real time".
 OFFSET_S = float(os.environ.get("TAB_TEST_OFFSET", "0"))
 CHUNK_S = 2.0
 
@@ -60,7 +63,7 @@ def post(path, payload=None, raw=None):
 
 
 def read_pcm(path, seconds):
-    """16kHz 모노 int16 바이트. 브라우저가 보내는 것과 같은 모양입니다."""
+    """16kHz mono int16 bytes. The same shape the browser sends."""
     with wave.open(path, "rb") as w:
         if w.getframerate() != 16000 or w.getnchannels() != 1 or w.getsampwidth() != 2:
             raise SystemExit(f"16kHz 모노 16bit가 아닙니다: {path} "
@@ -70,9 +73,10 @@ def read_pcm(path, seconds):
 
 
 def main():
-    # ── 저장소를 막습니다 ────────────────────────────────────────────
-    # 이 시험은 서버 프로세스 안에서 돌지 않으므로, 여기서 막는 것은
-    # 아래 [0]의 자기 점검용입니다. 서버 쪽은 아래에서 따로 셉니다.
+    # ── Block the store ──────────────────────────────────────────────
+    # This check does not run inside the server process, so what is blocked
+    # here is for [0]'s own self-check below. The server side is counted
+    # separately further down.
     print(f"\n대상: {os.path.basename(WAV)} · {OFFSET_S:.0f}초부터 "
           f"{SECONDS:.0f}초 · {BASE}\n")
 
@@ -88,14 +92,16 @@ def main():
 
     before = {r["id"] for r in store.sessions(200)}
 
-    # ── 1. 탭 세션 만들기 ────────────────────────────────────────────
+    # ── 1. Make a tab session ────────────────────────────────────────
     print("\n[1] 탭 세션을 만든다")
     res = post("/api/live/capture", {
-        # 언어는 자동 판별에 맡깁니다. 녹음마다 다르고, 틀린 언어를 못 박으면
-        # 받아 적은 것이 엉망이 되어 "길이 이어졌는가"를 못 보게 됩니다.
-        # 정제도 켭니다. 확정본과 정제본은 언어를 각자 붙이므로, 끄면
-        # 둘 중 한쪽만 보게 됩니다 -- 실제로 정제 경로에서 언어가 빠져
-        # 번역이 통째로 사라진 적이 있습니다.
+        # The language is left to auto-detection. It differs per recording, and
+        # nailing down the wrong one turns the transcription into a mess, which
+        # hides whether "the path connected".
+        # Refinement is on as well. Final and refined lines each attach their
+        # own language, so with it off only one of the two is seen -- the
+        # language really did go missing on the refinement path once, and the
+        # translation vanished wholesale.
         "title": "탭 수신 시험", "lang": None, "viewer_lang": "ko",
         "backend": cfg["active"], "asr": cfg.get("asr_active") or "",
         "refine": True, "genre": "general", "profile": "broadcast",
@@ -106,7 +112,7 @@ def main():
     sid = res["id"]
     check(res.get("source") == "tab", "source가 tab이다")
 
-    # 모델을 올리는 데 시간이 걸립니다.
+    # Loading the models takes a while.
     for _ in range(120):
         st = json.loads(urllib.request.urlopen(
             BASE + f"/api/live/status/{sid}", timeout=10).read())
@@ -120,7 +126,7 @@ def main():
         post("/api/live/stop", {"id": sid})
         return 1
 
-    # ── 2. 소리를 올린다 ─────────────────────────────────────────────
+    # ── 2. Upload the sound ──────────────────────────────────────────
     print("\n[2] PCM을 올린다")
     pcm = read_pcm(WAV, SECONDS)
     step = int(16000 * CHUNK_S) * 2
@@ -132,17 +138,17 @@ def main():
             check(False, f"올리다 거절당했다: {r['error']}")
             break
         sent += 1
-        # 실전과 같은 속도로 보냅니다. 몰아서 부으면 큐가 흡수해 버려
-        # 실시간을 따라가는지를 못 봅니다.
+        # Send at the same pace as the real thing. Pouring it in all at once
+        # is absorbed by the queue, which hides whether it keeps up with real time.
         time.sleep(max(0, CHUNK_S - (time.time() - t0 - (sent - 1) * CHUNK_S)))
     check(sent > 0, f"{sent}덩어리를 올렸다 ({sent * CHUNK_S:.0f}초분)")
     check(not r.get("error"), f"마지막 응답이 정상이다 ({r})")
     check((r.get("dropped_s") or 0) == 0,
           f"버린 오디오가 없다 (dropped={r.get('dropped_s')}s)")
 
-    # ── 3. 자막이 나왔는가 ───────────────────────────────────────────
+    # ── 3. Did subtitles come out ────────────────────────────────────
     print("\n[3] 자막이 나온다")
-    # 마지막 덩어리가 VAD를 통과하고 해독될 시간을 줍니다.
+    # Give the last chunk time to pass VAD and be decoded.
     time.sleep(8)
     st = json.loads(urllib.request.urlopen(
         BASE + f"/api/live/status/{sid}", timeout=10).read())
@@ -156,10 +162,11 @@ def main():
     for c in rows[:5]:
         print(f"        · [{c.get('lang') or '?'}] {c['text'][:66]}")
     check(any(len(t) > 3 for t in texts), "빈 줄만 나오지는 않았다")
-    # 말한 언어가 곧 보는 언어면 옮길 것이 없습니다. 그런 녹음에서
-    # 번역 건수를 요구하면 멀쩡한 길을 실패로 적게 됩니다.
-    # 자동 판별이면 세션의 source_lang은 비어 있습니다. 실제로 무슨 말이었는지는
-    # 자막 줄이 들고 있습니다.
+    # If the spoken language is already the viewing language there is nothing
+    # to carry over. Demanding a translation count on such a recording records
+    # a perfectly good path as a failure.
+    # With auto-detection the session's source_lang is empty. What was actually
+    # spoken is carried by the subtitle lines.
     spoken = st.get("source_lang") or next(
         (c.get("lang") for c in rows if c.get("lang")), "")
     check(bool(spoken), f"자막에 언어가 붙어 있다 ({spoken!r})")
@@ -168,12 +175,12 @@ def main():
     else:
         print(f"  ----  번역할 것이 없음 (말한 언어 {spoken!r} = 보는 언어)")
 
-    # ── 4. 없는 세션에 올리면 ────────────────────────────────────────
+    # ── 4. Uploading to a session that does not exist ────────────────
     print("\n[4] 없는 세션에 올리면")
     r = post("/api/ingest/nope-not-a-session", raw=b"\x00" * 64)
     check(bool(r.get("error")), f"거절한다 ({r})")
 
-    # ── 5. 뒷정리 ────────────────────────────────────────────────────
+    # ── 5. Clean up ──────────────────────────────────────────────────
     print("\n[5] 정리")
     post("/api/live/stop", {"id": sid})
     time.sleep(3)
@@ -181,9 +188,9 @@ def main():
         BASE + f"/api/live/status/{sid}", timeout=10).read())
     check(st.get("state") in ("stopped", "stopping"), f"멈췄다 ({st.get('state')})")
 
-    # 서버 쪽은 진짜 DB에 씁니다. 시험이 남긴 것을 여기서 지웁니다 --
-    # 예전에 이 자리를 비워 두었다가 화면의 「옛 방송」에 시험 세션이
-    # 그대로 떴습니다.
+    # The server side writes to the real DB. What the check left behind is
+    # deleted here -- this spot was once left empty and the test session showed
+    # up among the old broadcasts on screen.
     after = {r["id"] for r in store.sessions(200)}
     leaked = after - before
     for lid in leaked:

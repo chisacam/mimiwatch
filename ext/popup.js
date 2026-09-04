@@ -1,15 +1,16 @@
-/* 확장 팝업. 지금 이 탭에 대해 할 일을 답합니다.
+/* The extension popup. It answers what to do about this tab.
  *
- *   - 이미 받아 둔 자막 중 무엇을 얹을까
- *   - 이 탭에서 새로 받아 적기 (주소로, 또는 이 탭 소리로)
- *   - 자막 모양
+ *   - which of the subtitles already received to lay on
+ *   - transcribe anew on this tab (from the URL, or from this tab's sound)
+ *   - subtitle look
  *
- * 목록 관리·엔진 설정·스크립트 편집은 여기 없습니다. mimiwatch 페이지가
- * 그대로 맡습니다 -- 그것까지 팝업에 지으면 두 벌이 됩니다.
+ * Managing the library, engine settings and script editing are not here. The
+ * mimiwatch page takes those as they are -- building them into the popup as
+ * well would make two copies.
  *
- * 새로 시작하는 것은 여기 둡니다. 확장은 이미 어느 탭인지 알고 있어서
- * 주소를 다시 붙여 넣을 이유가 없고, 멤버십 전용 방송은 이 탭의 소리로만
- * 받을 수 있기 때문입니다.
+ * Starting anew belongs here. The extension already knows which tab it is, so
+ * there is no reason to paste a URL in again, and a members-only stream can
+ * only be received from this tab's sound.
  */
 const $ = (id) => document.getElementById(id);
 
@@ -18,51 +19,59 @@ const toTab = (tabId, msg) =>
   new Promise((r) => chrome.tabs.sendMessage(tabId, msg, () => r(chrome.runtime.lastError ? null : true)));
 
 let tabId = null;
-/* 이 탭이 유튜브인가. init 밖에 두는 것은 언어가 바뀌었을 때 「유튜브 탭에서
- * 열어야」를 그 언어로 다시 적기 위해서입니다 -- 그 문구는 팝업을 여는 순간
- * 한 번 그려지고 그대로 남습니다. */
+/* Is this tab YouTube. It sits outside init so that when the language changes,
+ * "Open this on a YouTube tab" can be rewritten in that language -- that string
+ * is drawn once the moment the popup opens and then stays. */
 let onYouTube = false;
 let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55, offset: 0,
               panel: false };
-/* 새 세션을 시작할 때 쓰는 값. 자막 모양(prefs)과 나눠 둡니다 -- 저쪽은
- * 지금 보이는 것을 바꾸고, 이쪽은 다음에 시작할 것을 정합니다. */
-/* 정제는 **꺼 둔 채로 시작합니다.** mimiwatch 페이지의 기본값과 다릅니다.
- * 저쪽은 녹화본도 다루지만 확장은 라이브만 시작하고, 라이브에서는 정제가
- * 대개 손해입니다 -- 발화 한 무리가 끝나기를 2초 기다렸다 합쳐서 다시
- * 받아 적으므로, 말이 빠르게 오가면 자막이 늦게 자리를 잡고 이미 읽은 줄이
- * 통째로 바뀝니다. */
+/* The values used when starting a new session. Kept apart from the subtitle
+ * look (prefs) -- that side changes what is showing now, this side settles what
+ * starts next. */
+/* Refinement **starts switched off.** That differs from the mimiwatch page's
+ * default. That side handles VODs too, while the extension only starts live, and
+ * on live refinement is usually a loss -- it waits 2 seconds for one utterance
+ * group to end, joins it and transcribes it again, so when the talk goes quickly
+ * back and forth the subtitle settles late and a line already read changes
+ * entirely. */
 let start = { lang: "", genre: "general", refine: false, profile: "broadcast",
-              // 번역 대상 언어. 예전에는 "ko"로 박혀 있어 한국어 사용자만
-              // 확장을 쓸 수 있었습니다. mimiwatch 페이지의 「내 언어」와 같은 값.
+              // The language to translate into. It used to be nailed to "ko",
+              // so only Korean speakers could use the extension. The same value
+              // as "My language" on the mimiwatch page.
               viewerLang: "ko" };
 const SKEY = "startPrefs";
 
-/* 화면에 쓸 언어는 서버가 들고 있습니다(설정의 `ui_lang`). 팝업이 뜨는 순간에는
- * 아직 모르므로 표는 영어로 시작하고, 첫 조회가 돌아온 뒤에 정해집니다 -- 그래서
- * 우리가 적는 문구는 언어가 정해진 다음에 그려야 하고, 나중에 바뀌면(다른 서버로
- * 옮기는 등) 다시 그려야 합니다.
+/* The language for the screen is held by the server (`ui_lang` in the config).
+ * The popup does not know it the moment it comes up, so the table starts in
+ * English and settles once the first query comes back -- which means the strings
+ * we write have to be drawn after the language is settled, and redrawn if it
+ * changes later (moving to a different server, and the like).
  *
- * 알아낸 값은 저장해 둡니다. 배경 워커와 content script 에는 서버에 언어를 물을
- * 자리가 없는데(하나는 화면이 없고, 하나는 서버에 직접 닿지 않습니다) 그쪽 문구도
- * 같은 언어여야 합니다. */
+ * What it works out is stored. The service worker and the content script have
+ * nowhere to ask the server for a language (one has no screen, the other does
+ * not reach the server directly) and their strings have to be in the same
+ * language. */
 const LANG_KEY = "uiLang";
 
 async function useLang(code) {
-  // 모르는 코드(빈 문자열 포함)면 i18n 이 브라우저의 짐작으로 갑니다. 표를
-  // 바꾸는 것은 이 첫 줄뿐이라 부르는 쪽이 기다릴 것은 없습니다.
+  // An unknown code (the empty string included) has i18n go with the browser's
+  // guess. Changing the table is this first line alone, so the caller has
+  // nothing to wait for.
   const lang = MW_I18N.setLang(code || "");
-  // 같은 값을 다시 적지 않습니다. storage 는 값이 그대로여도 변화 알림을
-  // 띄우고, 그 알림이 붙어 있는 유튜브 탭들과 잠든 워커를 깨웁니다.
+  // The same value is not written again. storage raises a change notification
+  // even for an unchanged value, and that notification wakes every attached
+  // YouTube tab and the sleeping worker.
   const got = await chrome.storage.local.get(LANG_KEY);
   if (got[LANG_KEY] !== lang) chrome.storage.local.set({ [LANG_KEY]: lang });
 }
 
-/* 읽어 오는 중인가. 그동안은 언어가 바뀌어도 다시 그리지 않습니다. */
+/* Is it loading. While it is, a language change does not redraw. */
 let loading = false;
 
-/* 언어가 바뀌면 우리가 적은 것을 다시 적습니다. 붙박이 문구는 i18n 이 손보지만
- * 고르개 항목·상태줄·단추 이름은 여기서 지은 것입니다. 읽어 오는 중에는
- * 건너뜁니다 -- loadFromServer 가 곧 전부 다시 그립니다. */
+/* When the language changes, what we wrote is rewritten. Fixed strings are
+ * i18n's to touch, but the picker entries, the status line and the button names
+ * are built here. While loading it is skipped -- loadFromServer redraws
+ * everything in a moment. */
 MW_I18N.onChange(() => {
   if (loading) return;
   if (!onYouTube) fail(t("popup.errNotYouTube"));
@@ -101,25 +110,29 @@ async function init() {
   if (sp[SKEY]) Object.assign(start, sp[SKEY]);
 
   await loadFromServer();
-  // 유튜브 탭이 아니면 시작할 것도 없습니다.
+  // Nothing to start if it is not a YouTube tab.
   $("start-box").classList.toggle("busy", !onYouTube);
 }
 
-/* 서버에서 읽어 오는 것 전부. 처음 열 때와 「서버」 주소를 바꿀 때 부릅니다.
+/* Everything read from the server. Called on first open and when the "Server"
+ * address is changed.
  *
- * 예전에는 주소를 바꾸면 고르개만 다시 채웠습니다. 서버가 8900 에 없어 처음에
- * 실패했으면 장르·콘텐츠 유형은 빈 채로 남고 변화 알림도 옛 주소를 듣고
- * 있어서, 주소를 고쳐도 팝업은 여전히 쓸 수 없었습니다. */
+ * Changing the address used to refill the picker alone. If the server was not on
+ * 8900 and the first read failed, the genre and content type were left empty and
+ * the change notification was still listening to the old address, so fixing the
+ * address still left the popup unusable. */
 async function loadFromServer() {
   loading = true;
   $("pick").length = 1;
-  // 장르·콘텐츠 유형을 **먼저** 읽습니다. 그 답에 화면 언어가 실려 오므로,
-  // 고르개 항목처럼 우리가 문구를 지어 붙이는 것은 그 뒤에 그려야 합니다 --
-  // 순서가 반대였을 때는 팝업을 열 때마다 목록만 영어로 잠깐 남았습니다.
+  // The genres and content types are read **first**. The UI language rides on
+  // that answer, so anything whose strings we build ourselves, like the picker
+  // entries, has to be drawn after it -- with the order the other way round the
+  // list alone stayed in English for a moment every time the popup opened.
   await fillChoices();
   await fillPicker();
-  // 고르개를 채운 **뒤에** 값을 앉힙니다. 비어 있는 select 에 value 를 넣으면
-  // 그냥 버려집니다 -- 그래서 매번 처음으로 되돌아가 보였습니다.
+  // The values are seated **after** the pickers are filled. A value put into an
+  // empty select is simply thrown away -- which is why it looked as though it
+  // went back to the start every time.
   $("lang").value = start.lang || "";
   $("genre").value = start.genre || "general";
   if (!$("genre").value) $("genre").selectedIndex = 0;
@@ -135,10 +148,11 @@ async function loadFromServer() {
   loading = false;
 }
 
-/* 팝업이 열려 있는 동안 서버의 변화(새 세션·상태·영상)를 받아 고르개를 다시
- * 채웁니다. 팝업은 열 때마다 목록을 새로 읽으므로 대개는 충분하지만, 열어 둔
- * 채로 mimiwatch 페이지나 다른 탭에서 방송을 시작하면 그 세션이 보이지
- * 않았습니다. 확장 페이지는 host_permissions 덕에 CORS 없이 서버에 붙습니다. */
+/* While the popup is open it takes the server's changes (a new session, state,
+ * video) and refills the picker. The popup reads the list afresh every time it
+ * opens, so that is usually enough, but a stream started on the mimiwatch page
+ * or another tab while it was left open did not show. An extension page attaches
+ * to the server without CORS thanks to host_permissions. */
 let serverEs = null;
 let refillTimer = null;
 
@@ -153,7 +167,8 @@ function watchServer() {
     let m;
     try { m = JSON.parse(ev.data); } catch (_) { return; }
     if (m.type !== "session" && m.type !== "video") return;
-    // 자막 한 줄마다 오므로 잠깐 모아서 한 번에 다시 채웁니다.
+    // One arrives per subtitle line, so they are gathered for a moment and
+    // refilled in one go.
     clearTimeout(refillTimer);
     refillTimer = setTimeout(refillPicker, 500);
   };
@@ -162,30 +177,33 @@ function watchServer() {
 async function refillPicker() {
   const was = $("pick").value;
   $("pick").length = 1;
-  await fillPicker();                       // 서버가 아는 것과 이 탭이 보는 것으로 다시
+  await fillPicker();                       // afresh, from what the server knows and this tab watches
   if (!$("pick").value && was && [...$("pick").options].some((o) => o.value === was)) {
-    $("pick").value = was;                  // 고르고 있던 것은 그대로
+    $("pick").value = was;                  // what was selected stays
   }
   await syncHideButton();
   refreshState();
 }
 
-/* 장르와 콘텐츠 유형은 서버가 들고 있습니다. 팝업에 붙박이로 적어 두면
- * 서버에서 늘리거나 값을 손볼 때마다 어긋납니다 -- 특히 콘텐츠 유형은
- * 실제로 몇 초에 끊을지가 그 표에 들어 있습니다. */
+/* The genres and content types are held by the server. Nailed into the popup
+ * they would fall out of step every time the server adds one or touches a value
+ * -- especially the content type, whose table holds how many seconds it actually
+ * splits at. */
 let profiles = [];
-/* 고르개에 올린 세션들의 상태. 「이어받기」를 멈춘 방송에만 살리는 데 씁니다. */
+/* The state of the sessions put in the picker. Used to bring "Resume" alive for
+ * a stopped stream only. */
 let sessionInfo = {};
 const RUNNING = ["starting", "loading", "running"];
 
 async function fillChoices() {
   const r = await send({ type: "backends" });
-  // 화면 언어도 이 답에 실려 옵니다. 서버에 닿지 못했으면 브라우저의 짐작으로
-  // 갑니다 -- 그때 뜨는 오류 문구도 사람이 읽을 언어여야 합니다.
+  // The UI language rides on this answer too. If the server was not reached it
+  // goes with the browser's guess -- the error string that shows then has to be
+  // in a language a person reads as well.
   useLang(r && r.ok ? r.data.ui_lang : "");
   if (!r || !r.ok) return;
   const g = $("genre");
-  g.length = 0;                             // 주소를 바꿔 다시 읽을 때 겹치지 않게
+  g.length = 0;                             // so a re-read after an address change does not pile up
   for (const x of (r.data.genres || [])) {
     g.append(new Option(MW_I18N.pick(x, "label") || x.id, x.id));
   }
@@ -200,8 +218,9 @@ async function fillChoices() {
   if (!p.length) p.append(new Option(t("popup.profileBroadcast"), "broadcast"));
 }
 
-/* 고른 유형이 실제로 몇 초에 끊는지 적어 둡니다. 「일반 방송」이 4초라는
- * 것을 모르면 왜 자막이 잘게 끊기는지 알 수 없습니다. */
+/* Writes down how many seconds the chosen type actually splits at. Not knowing
+ * that "General stream" is 4 s leaves no way to tell why the subtitles come out
+ * in such small pieces. */
 function syncProfileHint() {
   const x = profiles.find((p) => p.id === $("profile").value);
   $("profile-hint").textContent = x
@@ -209,8 +228,8 @@ function syncProfileHint() {
     : t("popup.hintProfileNone");
 }
 
-/* 서버가 들고 있는 것을 한 목록으로. 라이브 세션이 위, 녹화본이 아래입니다 --
- * 지금 얹고 싶은 것은 대개 방금 받아 적은 쪽입니다. */
+/* What the server holds, in one list. Live sessions on top, VODs below -- what
+ * you want to lay on now is usually whatever was just transcribed. */
 async function fillPicker() {
   const sel = $("pick");
   const [s, v] = await Promise.all([send({ type: "sessions" }), send({ type: "videos" })]);
@@ -224,9 +243,10 @@ async function fillPicker() {
   for (const x of (s.data || []).filter((x) => x.cues || RUNNING.includes(x.state))) {
     sessionInfo[x.id] = x;
     const running = RUNNING.includes(x.state);
-    // 멈춘 것은 그렇게 적어 둡니다. 「이어받기」가 무엇을 가리키는지 보이게요.
-    // 꼬리만 따로 잇지 않고 항목 전체를 한 문구로 둡니다 -- 말 순서가 언어마다
-    // 다르므로 반쪽을 붙여 짓는 것은 한 언어에서만 맞습니다.
+    // A stopped one says so, to make visible what "Resume" points at. The tail
+    // is not joined on separately; the whole entry is one string -- word order
+    // differs by language, so building it out of halves is right in one language
+    // only.
     const key = running ? "popup.pickLines"
       : x.stopped_by === "ended" ? "popup.pickLinesEnded" : "popup.pickLinesStopped";
     sel.append(new Option(t(key, { title: x.title || x.id, n: x.cues || 0 }),
@@ -241,20 +261,22 @@ async function fillPicker() {
   syncResumeButton();
 }
 
-/* 고른 것이 멈춘 방송이면 시작 단추가 이어받기로 바뀝니다. 끝난 방송은 이어받을 것이
- * 없습니다 -- 전체 영상 전사는 mimiwatch 페이지에서 합니다. */
+/* When what is picked is a stopped stream, the start buttons turn into resume. A
+ * finished stream has nothing to resume -- transcribing the whole video is done
+ * on the mimiwatch page. */
 function syncResumeButton() {
   const v = $("pick").value || "";
   const st = v.startsWith("live:") ? sessionInfo[v.slice(5)] : null;
   const can = !!st && !RUNNING.includes(st.state) && st.stopped_by !== "ended";
-  // 멈춘 방송을 골라 두었으면 「새로 받아 적기」 단추 **둘 다** 이어받기가 됩니다 -- 출처는 바꿔
-  // 이어받을 수 있습니다(주소로 받던 방송이 멤버십 전용으로 바뀌면 탭 소리로). 예전에는 그
-  // 상태로 「주소로」를 누르면 같은 방송이 새 세션으로 갈라졌습니다.
+  // With a stopped stream picked, **both** "Transcribe anew on this tab" buttons become resume --
+  // the source can be switched on resume (a stream received from a URL that turns members-only,
+  // onto the tab's sound). Pressing "From this URL" in that state used to split the same stream
+  // off into a new session.
   $("start-url").textContent = t(can ? "popup.resumeFromUrl" : "popup.fromUrl");
   $("start-tab").textContent = t(can ? "popup.resumeFromTab" : "popup.fromTab");
   $("start-url-cookies").textContent =
     t(can ? "popup.resumeWithCookies" : "popup.fromUrlWithCookies");
-  // 「수신이 끊겨 멈춤」은 문구 뒤에 덧붙이지 않고 그 경우의 문구를 따로 둡니다.
+  // "it stopped because the stream cut out" is not tacked onto the end of the string; that case gets its own.
   $("start-hint").textContent = can
     ? t(st.stopped_by === "stream" ? "popup.hintResumePickStream" : "popup.hintResumePick")
     : st && st.stopped_by === "ended" ? t("popup.hintEnded")
@@ -269,8 +291,9 @@ async function refreshState() {
       return;
     }
     if (!r.mounted) { $("state").textContent = t("popup.statePickToOverlay"); return; }
-    // 「안 보인다」는 여러 가지입니다. 붙었는지, 크기가 있는지, 그릴 자막이
-    // 있는지를 구별해 적습니다 -- 그래야 어디를 봐야 할지 알 수 있습니다.
+    // "It does not show" means several things. Whether it is attached, whether
+    // it has a size, whether there is a subtitle to draw -- they are reported
+    // apart, because that is what tells you where to look.
     const bits = [t("popup.stateCues", { n: r.cues })];
     bits.push(t(r.live ? (r.receiving ? "popup.stateReceiving" : "popup.stateStreamEnded")
                        : "popup.stateVod"));
@@ -298,8 +321,8 @@ $("pick").addEventListener("change", async (e) => {
   syncResumeButton();
   const r = await send({ type: "watch", tabId, value: e.target.value });
   if (r && !r.ok) { fail(r.error || t("popup.errAttach")); return; }
-  // 페이지가 아직 우리 것을 들고 있지 않아 새로고침했습니다. 조용히 하면
-  // 화면이 저 혼자 다시 뜬 것처럼 보이므로 그렇다고 적어 둡니다.
+  // The page was not holding ours yet, so it was reloaded. Doing that quietly
+  // looks like the screen came back by itself, so it says so.
   if (r && r.reloaded) $("state").textContent = t("popup.stateReloaded");
   await syncHideButton();
   setTimeout(refreshState, r && r.reloaded ? 1800 : 600);
@@ -320,20 +343,21 @@ $("panel").addEventListener("change", (e) => {
   prefs.panel = e.target.checked; pushPrefs(); setTimeout(refreshState, 500);
 });
 $("reset-pos").addEventListener("click", () => { prefs.pos = null; pushPrefs(); });
-/* 두 가지 일을 한 단추가 하고 있었습니다. 「치우기」라고 적어 두고 화면에서만
- * 내렸는데, 그것을 누른 사람은 받아 적기가 끝난 줄 알았습니다. 서버에서는
- * 계속 돌고 있었고요. 나눕니다.
+/* One button was doing two jobs. It said "Put away" and only took it off the
+ * screen, and whoever pressed it thought transcription had ended. It was still
+ * running on the server. They are split apart.
  *
- * 내리는 쪽은 **토글**입니다. 내리기만 하고 되돌릴 길을 주지 않으면 목록에서
- * 다시 찾아 고르는 수밖에 없는데, 세션이 스무 개쯤 쌓이면 그것이 일입니다.
- * 고르개는 「무엇을」에 답하고, 이 단추는 「지금 화면에 있나」에 답합니다 --
- * 그래서 내려도 고르개는 그대로 둡니다. */
+ * The taking-down side is a **toggle**. Taking it down with no way back leaves
+ * nothing but finding it in the list and picking it again, and once twenty-odd
+ * sessions have piled up that is work. The picker answers "what", and this
+ * button answers "is it on the screen now" -- so taking it down leaves the
+ * picker as it was. */
 async function syncHideButton() {
   const now = await send({ type: "watching", tabId });
   const on = !!(now && now.data);
   $("hide").textContent = t(on ? "popup.hide" : "popup.show");
   $("hide").title = t(on ? "popup.hideTitle" : "popup.showTitle");
-  // 얹을 것이 없으면 누를 것도 없습니다.
+  // Nothing to press if there is nothing to lay on.
   $("hide").disabled = !on && !$("pick").value;
   return on;
 }
@@ -354,11 +378,12 @@ $("stop").addEventListener("click", async () => {
   $("stop").disabled = false;
   if (r && !r.ok) { fail(r.error || t("popup.errStop")); return; }
   fail("");
-  // 화면에서도 내립니다. 받아 적기가 끝났는데 자막만 떠 있으면 아직 도는
-  // 것처럼 보입니다. 쌓인 것은 서버에 그대로 남아 다시 고를 수 있습니다.
+  // It comes down from the screen too. Subtitles still up when transcription
+  // has ended look as though it is still running. What piled up stays on the
+  // server and can be picked again.
   //
-  // 여기서는 고르개도 비웁니다. 내리기와 달리 그 세션은 이제 받지 않으므로
-  // 「다시 얹기」가 가리킬 것이 없습니다.
+  // Here the picker is emptied as well. Unlike taking it down, that session is
+  // no longer being received, so "Put back on page" has nothing to point at.
   await send({ type: "watch", tabId, value: "" });
   $("pick").value = "";
   await syncHideButton();
@@ -367,11 +392,13 @@ $("stop").addEventListener("click", async () => {
   await fillPicker();
   setTimeout(refreshState, 400);
 });
-/* 멈춘 세션을 같은 세션으로 이어 붙입니다. 라이브는 사용자가 잠깐 멈추고
- * 돌아오는 일이 잦고, 서버가 죽어 끊기기도 합니다. 그때 새 세션을 시작하면
- * 자막이 두 벌로 갈리므로, 확장에서도 이어받을 수 있어야 합니다. 탭 소리로 받던
- * 세션이면 이 탭의 소리를 다시 잡습니다 -- 서버는 그 소리를 되감을 수 없습니다. */
-/* `source` 가 비어 있으면 저장된 출처 그대로, "tab"/"hls" 면 그 출처로 바꿔 이어받습니다. */
+/* Appends onto the same session that was stopped. On live the user often pauses
+ * for a moment and comes back, and the server dies and cuts it off as well.
+ * Starting a new session then splits the subtitles into two sets, so it has to
+ * be possible to resume from the extension too. For a session received from the
+ * tab's sound it captures this tab's sound again -- the server cannot rewind
+ * that sound. */
+/* An empty `source` resumes from the stored source; "tab"/"hls" switches to that source. */
 async function resumePicked(source, tab) {
   const value = $("pick").value;
   const id = value.startsWith("live:") ? value.slice(5) : "";
@@ -398,10 +425,11 @@ async function resumePicked(source, tab) {
   setTimeout(refreshState, 800);
 }
 
-/* ---------- 이 탭에서 새로 시작 ---------- */
+/* ---------- starting anew on this tab ---------- */
 
-/* 고르개의 세션이 멈춘 것이면 새로 시작하는 대신 그 세션에 이어 붙입니다. 시작 방식이
- * 곧 이어받는 출처입니다 -- 저장된 출처와 달라도 됩니다. */
+/* If the session in the picker is a stopped one, it appends onto that session
+ * instead of starting anew. How it is started is the source it resumes from --
+ * which may differ from the stored source. */
 function pickedResumable() {
   const v = $("pick").value || "";
   const st = v.startsWith("live:") ? sessionInfo[v.slice(5)] : null;
@@ -413,8 +441,9 @@ async function startWith(type, opts = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
   if (opts.cookies) {
-    // 멤버십 전용 방송: 지금 이 브라우저의 로그인 쿠키를 서버에 넘긴 뒤 주소로 갑니다. 켜 두는
-    // 것이 아니라 이 한 번만입니다 -- 서버에 남은 파일은 mimiwatch 페이지에서 지웁니다.
+    // A members-only stream: it hands this browser's login cookies to the server right now and
+    // then goes from the URL. Not a switch left on, just this once -- the file left on the
+    // server is erased on the mimiwatch page.
     $("start-hint").textContent = t("popup.hintPushingCookies");
     const c = await send({ type: "pushCookies" });
     if (!c || !c.ok) { fail((c && c.error) || t("popup.errCookies")); $("start-hint").textContent = ""; return; }
@@ -428,9 +457,9 @@ async function startWith(type, opts = {}) {
   $("start-hint").textContent = t("popup.hintStarting");
   const r = await send({
     type, tabId: tab.id, url: tab.url,
-    // 탭 제목이 곧 세션 이름입니다. 확장은 크롬이 감추는 그 제목을
-    // 그냥 읽을 수 있습니다 -- 페이지 쪽에서는 트랙 label 이 불투명한
-    // 식별자라 「탭 오디오」로만 남았습니다.
+    // The tab title is the session name. The extension can simply read the
+    // title Chrome hides -- on the page side the track label is an opaque
+    // identifier, so it only ever stayed "Tab audio".
     title: (tab.title || "").replace(/\s+-\s+YouTube$/, ""),
     lang: start.lang || null, genre: start.genre || "general",
     refine: !!start.refine, profile: start.profile || "broadcast",
@@ -445,8 +474,8 @@ async function startWith(type, opts = {}) {
   $("start-hint").textContent = t(r.reloaded
     ? "popup.hintStartedReloaded"
     : r.skippedReload
-      // 탭 소리를 잡는 중이라 새로고침하지 않았습니다. 그러면 자막이
-      // 화면에 붙지 않으므로, 무엇을 해야 하는지 적어 둡니다.
+      // The tab's sound is being captured, so it was not reloaded. The subtitle
+      // will not attach to the screen then, so it says what to do about it.
       ? "popup.hintStartedNeedsReload"
       : "popup.hintStarted");
   $("pick").length = 1;
@@ -469,8 +498,9 @@ $("start-url").addEventListener("click", () => startWith("startUrl"));
 $("start-url-cookies").addEventListener("click", () => startWith("startUrl", { cookies: true }));
 $("start-tab").addEventListener("click", () => startWith("startCapture"));
 
-/* 서버 주소를 바꾸면 전부 다시 읽습니다. 배경 워커는 저장된 주소를 요청마다
- * 읽고, 붙어 있는 유튜브 탭들은 배경이 새 주소로 다시 붙게 합니다. */
+/* Changing the server address re-reads everything. The service worker reads the
+ * stored address on every request, and the attached YouTube tabs are made to
+ * reattach on the new address by the background. */
 $("base").addEventListener("change", async (e) => {
   const base = e.target.value.trim().replace(/\/+$/, "") || "http://localhost:8900";
   e.target.value = base;

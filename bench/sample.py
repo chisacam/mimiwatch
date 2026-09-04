@@ -30,17 +30,19 @@ def cues(name):
         return json.load(f)["cues"]
 
 
-# 표본에 담아 둘 직전 자막의 개수. 실제로 몇 줄을 넘길지는 여기서 정하지
-# 않습니다 -- `run_prompt.py`가 이 목록을 뒤에서부터 잘라 씁니다. 몇 줄이
-# 최적인지가 측정 대상이므로, 표본은 넉넉히 담아 두고 자르는 쪽을 바꿉니다.
+# How many preceding subtitle lines the sample carries. How many actually get
+# handed over is not decided here -- `run_prompt.py` trims this list from the
+# end. How many lines is optimal is itself what is being measured, so the sample
+# keeps plenty and the trimming side is what varies.
 CONTEXT_LINES = 8
 
 
 def pick(name, lang, n):
     """Spread the picks across the whole recording, short lines included.
 
-    각 줄에 직전 자막도 함께 담습니다. 표본은 시간축을 건너뛰며 뽑지만
-    문맥은 원본에서 실제로 그 줄 앞에 있던 것이어야 합니다.
+    Each line carries the subtitles right before it as well. The sample is
+    picked by skipping along the time axis, but the context has to be what
+    actually stood in front of that line in the original.
     """
     rows = [c for c in cues(name) if (c.get("text") or "").strip()]
     if not rows:
@@ -63,8 +65,9 @@ def pick(name, lang, n):
 
 
 def build():
-    # 5절에서 옮겨 온 기준점에는 앞 줄이 없습니다. 문맥 없는 경우도
-    # 실제로 생기므로(세션 첫 줄) 그대로 둡니다.
+    # The anchors carried over from section 5 have no preceding lines. The
+    # case of no context really does occur (the first line of a session), so
+    # they are left as they are.
     items = [{"src_lang": l, "text": t, "source": "RESULTS.md", "start": None,
               "context": []}
              for l, t in ANCHORS]

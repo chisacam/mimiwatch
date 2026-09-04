@@ -1,4 +1,4 @@
-"""설정(backends.json)을 읽고 쓰는 규칙."""
+"""The rules for reading and writing the config (backends.json)."""
 import json
 import os
 
@@ -28,7 +28,7 @@ def test_save_is_atomic_and_locked():
 
 def test_seed_brings_new_engines_but_not_deleted_ones():
     ex = _example()
-    # 예시의 전사 엔진 하나를 빠뜨린 설정. seeded에 없으면 들여오고, 있으면 아닙니다.
+    # A config missing one of the example's transcription engines. Absent from seeded it is brought in, present it is not.
     lite = [b for b in ex["asr_backends"] if b["id"] != "tcpp-best"][0]["id"]
     base = {**ex, "asr_backends": [b for b in ex["asr_backends"] if b["id"] != lite]}
     with open(config.CONFIG, "w", encoding="utf-8") as f:
@@ -36,7 +36,7 @@ def test_seed_brings_new_engines_but_not_deleted_ones():
     assert lite in {b["id"] for b in config.load()["asr_backends"]}
 
     with open(config.CONFIG, "w", encoding="utf-8") as f:
-        json.dump({**base, "seeded": [lite]}, f)        # 사용자가 지웠던 것
+        json.dump({**base, "seeded": [lite]}, f)        # Something the user deleted
     assert lite not in {b["id"] for b in config.load()["asr_backends"]}
 
 
@@ -53,7 +53,7 @@ def test_upsert_and_delete():
 
 
 def test_set_active_and_setup_flag():
-    assert config.active("asr") == "tcpp-lite"            # 예시의 기본은 가벼운 CPU 엔진
+    assert config.active("asr") == "tcpp-lite"            # The example defaults to the light CPU engine
     assert config.active("tr") == "local-m2m100"
     assert "error" in config.set_active("asr", "nope")
     config.set_active("asr", "tcpp-best")
@@ -74,8 +74,8 @@ def test_deleting_active_falls_back_to_example_default():
     cfg["active"] = "remote"
     config.save(cfg)
     got = config.delete("tr", "remote")
-    assert got["active"] == _example()["active"]      # local-m2m100이 아니라 예시의 기본
-    # 예시 기본까지 지운 뒤에는 지울 수 없는 기본으로.
+    assert got["active"] == _example()["active"]      # The example's default, not local-m2m100
+    # Once the example's default is deleted too, it falls back to the one that cannot be deleted.
     cfg = config.load()
     cfg["backends"] = [b for b in cfg["backends"] if b["id"] != _example()["active"]]
     cfg["backends"].append({"id": "remote2", "backend": "openai", "base_url": "h", "model": "m"})

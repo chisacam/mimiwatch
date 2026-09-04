@@ -1,17 +1,23 @@
-"""사람이 만든 **번역 자막**(예: 한국어 SAMI)을 정답으로, 전사→번역 끝단을 채점합니다.
+"""Score the transcription-to-translation end with human-made **translated subtitles**
+(a Korean SAMI file, say) as the ground truth.
 
     .venv/bin/python bench/gold_e2e.py data/gold/kagami.wav data/gold/kagami.ko.smi
     .venv/bin/python bench/gold_e2e.py ... --vad-threshold 0.5 --tag vad0.5
     .venv/bin/python bench/gold_e2e.py ... --translate local-gemma --genre general
 
-전사 정답이 없는 표본(애니메이션·드라마)에서도 셀 수 있는 것 둘입니다.
+Two things that can still be counted on a sample with no transcription ground truth
+(animation, drama).
 
-  대사 포착률   정답 자막의 각 큐 시각에 전사 구간이 겹치는 비율. VAD 가 대사를 놓치면 떨어집니다.
-                효과음·BGM 이 섞인 116분에서 VAD 문턱을 재는 데 씁니다.
-  chrF          번역 결과와 사람 번역을 60초 창으로 묶어 글자 n-gram(1~6) F2. 절대값은 팬자막의
-                의역 때문에 낮고, 번역 엔진·장르 프롬프트·전사 설정 사이의 **차이**를 봅니다.
+  dialogue capture rate   The fraction of the ground-truth cues whose time a transcription
+                          span overlaps. It falls when VAD misses dialogue. Used to measure
+                          the VAD threshold over 116 minutes mixed with sound effects and BGM.
+  chrF                    Character n-gram (1-6) F2 between the translation and the human one,
+                          grouped into 60 s windows. The absolute value is low because fan
+                          subtitles paraphrase, so look at the **difference** between
+                          translation engines, genre prompts and transcription settings.
 
-전사 결과는 `<wav>.<tag>.asr.json` 에 저장해 번역 설정만 바꿔 다시 돌릴 때 재사용합니다.
+The transcription is saved to `<wav>.<tag>.asr.json` and reused when only the translation
+setting changes on a rerun.
 """
 from __future__ import annotations
 import argparse, html, json, os, re, sys, time, unicodedata, wave
@@ -26,10 +32,10 @@ from live import PROFILES
 SR = 16000
 
 
-# ---- 정답 자막 -------------------------------------------------------------------
+# ---- ground-truth subtitles ------------------------------------------------------
 
 def read_smi(path: str) -> list[dict]:
-    """SAMI → [{start, end, text}]. 빈 큐(&nbsp;)가 앞 큐의 끝을 정합니다."""
+    """SAMI -> [{start, end, text}]. An empty cue (&nbsp;) sets the end of the cue before it."""
     raw = open(path, encoding="utf-8-sig", errors="replace").read()
     cues = []
     for m in re.finditer(r"<Sync\s+Start=(\d+)[^>]*>(.*?)(?=<Sync\s|</BODY>)", raw, re.S | re.I):
@@ -40,7 +46,7 @@ def read_smi(path: str) -> list[dict]:
             cues[-1]["end"] = start
         if not body:
             continue
-        # 화면 글자([마음의 교실])·제작진 크레딧은 대사가 아닙니다.
+        # On-screen text ([마음의 교실]) and production credits are not dialogue.
         if re.fullmatch(r"\[.*\]", body) or "@" in body:
             continue
         cues.append({"start": start, "end": start + 4.0, "text": body})
@@ -64,7 +70,7 @@ def read_ref(path: str) -> list[dict]:
     return [c for c in cues if c["text"]]
 
 
-# ---- 전사 -----------------------------------------------------------------------
+# ---- transcription ---------------------------------------------------------------
 
 def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float,
                do_refine: bool = False, merged: bool = False) -> list[dict]:
@@ -93,9 +99,10 @@ def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float,
         c = pcm[i:i + 1600]; vad.accept_waveform(c); hist.push(c); drain()
     vad.flush(); drain()
     fast_n = len(out)
-    # 정제는 확정본이 다 나온 뒤에 붙습니다. 녹화본에는 오디오가 통째로 있어
-    # 라이브의 30초 링 한도가 없지만, 무리를 묶는 규칙은 같게 두었습니다 --
-    # 다르게 두면 라이브에서 재 둔 것과 비교가 성립하지 않습니다.
+    # Refinement comes after every final is out. A VOD has the whole audio, so the
+    # 30 s ring limit of live does not apply, but the rule that groups utterances is
+    # kept identical -- make it different and the comparison against what was
+    # measured on live no longer holds.
     if do_refine:
         print(f"    정제 {fast_n}구간...", file=sys.stderr, flush=True)
         out = (refine_pass.refine_merged(pcm, spans, [o["text"] for o in out], asr)
@@ -105,10 +112,10 @@ def transcribe(wav: str, spec: dict, lang: str, profile: str, threshold: float,
             "audio_s": len(pcm) / SR, "elapsed_s": round(time.time() - t0, 1)}
 
 
-# ---- 지표 -----------------------------------------------------------------------
+# ---- metrics ---------------------------------------------------------------------
 
 def coverage(ref: list[dict], segs: list[dict], slack: float = 0.5) -> tuple[int, int]:
-    """정답 큐 중 그 시각(±slack)에 전사 구간이 겹치는 것의 수."""
+    """How many ground-truth cues have a transcription span overlapping their time (+-slack)."""
     starts = np.array([s["start"] for s in segs]); ends = np.array([s["end"] for s in segs])
     hit = 0
     for c in ref:
@@ -149,7 +156,7 @@ def windowed_chrf(ref: list[dict], hyp: list[dict], win: float) -> float:
     return sum(scores) / max(1, len(scores))
 
 
-# ---- 번역 -----------------------------------------------------------------------
+# ---- translation -----------------------------------------------------------------
 
 def translate_all(segs: list[dict], backend_id: str, genre: str, src: str, tgt: str) -> None:
     import translate as mw_translate

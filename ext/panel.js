@@ -1,26 +1,28 @@
-/* 채팅 자리에 대본을 세웁니다.
+/* Puts the subtitle log up in the chat column.
  *
- * **왜 mimiwatch 의 대본 창을 액자로 끼우지 않았는가.** 그러려고 했습니다 --
- * 이미 만들어 둔 `?script=…` 화면을 그대로 쓰면 한 줄도 새로 지을 필요가
- * 없으니까요. 유튜브의 CSP 에는 frame-src 도 default-src 도 없어서 막지
- * 않는데, 정작 https 페이지가 http 를 액자로 끼우는 것이 혼합 콘텐츠로
- * 막힙니다. `127.0.0.1` 과 `localhost` 둘 다 about:blank 로 남았습니다.
- * 그래서 여기서 직접 그립니다.
+ * **Why mimiwatch's script panel was not framed in.** That was the plan -- using
+ * the `?script=…` screen already built means not one line to write anew.
+ * YouTube's CSP has neither frame-src nor default-src, so it does not block it;
+ * what does is an https page framing http, blocked as mixed content. Both
+ * `127.0.0.1` and `localhost` stayed at about:blank. So it is drawn here
+ * directly.
  *
- * 읽기 전용입니다. 고치기·재번역·내보내기는 mimiwatch 페이지에 있습니다 --
- * 여기까지 옮기면 두 벌이 되고, 이 자리에서 필요한 것은 읽는 일입니다.
+ * It is read-only. Editing, retranslating and exporting are on the mimiwatch
+ * page -- bringing them over here would make two copies, and what is needed in
+ * this spot is reading.
  */
 (function (root) {
   "use strict";
 
   const ID = "mimiwatch-panel";
-  // 유튜브의 오른쪽 열. 라이브면 채팅이, 아니면 관련 영상이 들어 있습니다.
+  // YouTube's right-hand column. On live it holds the chat, otherwise the
+  // related videos.
   const findColumn = () => document.querySelector("#secondary-inner") ||
                            document.querySelector("#secondary");
   const findChat = () => document.querySelector("ytd-live-chat-frame#chat") ||
                          document.querySelector("#chat");
 
-  /* 작은 도우미. createElement + className + textContent 를 한 줄로. */
+  /* A small helper. createElement + className + textContent in one line. */
   function el(tag, cls, text) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -29,20 +31,22 @@
   }
 
   let node = null, list = null, head = null;
-  // 머리에 적어 둔 것들. 언어가 바뀌면 다시 적어야 하는데, 그때 다시 세우면
-  // 읽던 자리가 통째로 날아갑니다 -- 붙잡아 두고 글자만 갈아 끼웁니다.
+  // The things written into the heading. They have to be rewritten when the
+  // language changes, and putting the panel back up then would throw the reading
+  // position away entirely -- so they are held on to and only the text is swapped.
   let follLabel = null, shown = 0;
-  let rows = new Map();          // 자막 번호 → 줄 요소
-  let hidden = null;             // 우리가 감춘 채팅. 되돌릴 때 씁니다.
+  let rows = new Map();          // cue id → row element
+  let hidden = null;             // the chat we hid. Used to put it back.
   let onSeek = null;
   let follow = true;
 
-  /* 문서에 남은 우리 것을 **전부** 걷어 냅니다.
+  /* Sweeps up **everything** of ours left in the document.
    *
-   * 하나만 추적하면 놓칩니다. 유튜브는 화면을 갈아 끼우며 오른쪽 열을
-   * 통째로 떼었다 다시 붙이는데, 떼여 있는 동안 `node.isConnected` 가
-   * false 라 새 것을 하나 더 만들고, 옛 것이 되붙으면 그때부터 둘이 됩니다.
-   * 추적하는 것은 새 것뿐이라 옛 것은 체크를 꺼도 사라지지 않았습니다. */
+   * Tracking only one misses them. YouTube swaps the screen out and takes the
+   * whole right-hand column off and puts it back, and while it is off
+   * `node.isConnected` is false so one more is made; once the old one comes back
+   * there are two from then on. Only the new one is tracked, so the old one did
+   * not go away even with the checkbox switched off. */
   function sweep() {
     document.querySelectorAll("#" + ID).forEach((e) => e.remove());
   }
@@ -58,17 +62,18 @@
     node.className = "mw-panel";
     head = document.createElement("div");
     head.className = "mw-panel-head";
-    // innerHTML 을 쓰지 않습니다. 유튜브는 Trusted Types 를 켜 두었고
-    // (`require-trusted-types-for 'script'`), 그 문서에서 innerHTML 에
-    // 문자열을 넣으면 거부됩니다. content script 가 면제되는지는 크롬 판에
-    // 따라 다르므로 아예 기대지 않습니다.
+    // It does not use innerHTML. YouTube has Trusted Types switched on
+    // (`require-trusted-types-for 'script'`), and putting a string into
+    // innerHTML on that document is refused. Whether a content script is exempt
+    // depends on the Chrome version, so it does not lean on it at all.
     head.append(el("b", "", t("extpanel.title")),
                 el("span", "mw-count", t("extpanel.count", { n: 0 })));
     const foll = el("label", "mw-follow");
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = true;
-    // 체크상자와 글자 사이의 한 칸입니다. 문구가 아니라 자리이므로 표 밖에 둡니다.
+    // The one space between the checkbox and the text. It is layout, not a
+    // string, so it stays outside the table.
     follLabel = document.createTextNode(" " + t("extpanel.follow"));
     foll.append(box, follLabel);
     head.appendChild(foll);
@@ -76,13 +81,13 @@
     list.className = "mw-panel-list";
     node.append(head, list);
 
-    // 채팅이 있으면 그 자리를 대신 씁니다. 나란히 두면 둘 다 좁아져서
-    // 어느 쪽도 읽을 수 없습니다.
+    // If there is a chat, its place is taken instead. Side by side both get
+    // narrow and neither can be read.
     const chat = findChat();
     if (chat && chat.style.display !== "none") {
       hidden = chat;
-      // 채팅의 높이를 물려받습니다. 그 자리에 들어가는 것이므로 크기도
-      // 그 자리의 것이어야 어색하지 않습니다.
+      // It inherits the chat's height. It goes into that spot, so its size has
+      // to be that spot's too or it looks out of place.
       const h = chat.getBoundingClientRect().height;
       if (h > 200) node.style.height = Math.round(h) + "px";
       chat.style.display = "none";
@@ -93,8 +98,8 @@
       follow = e.target.checked;
       if (follow) pin();
     });
-    // 사용자가 위로 올려 읽기 시작하면 따라가기를 멈춥니다. 읽는 중에
-    // 바닥으로 끌려 내려가면 그 줄을 다시 찾아야 합니다.
+    // Following stops once the user scrolls up to read. Being dragged down to
+    // the bottom mid-read means finding that line again.
     list.addEventListener("scroll", () => {
       const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
       if (atEnd !== follow) {
@@ -108,17 +113,18 @@
   function unmount() {
     sweep();
     if (hidden) { hidden.style.display = ""; hidden = null; }
-    // 우리가 감춘 것이 아니더라도, 우리 때문에 감춰진 채 남은 채팅은
-    // 되돌려 놓습니다. 화면이 갈아 끼워지면 hidden 이 옛 요소를 가리키게
-    // 되어 진짜 채팅이 감춰진 채로 남습니다.
+    // Even a chat we did not hide ourselves is put back if it was left hidden
+    // because of us. When the screen is swapped out, hidden comes to point at
+    // the old element and the real chat is left hidden.
     const chat = findChat();
     if (chat && chat.style.display === "none") chat.style.display = "";
     node = list = head = follLabel = null;
     rows = new Map();
   }
 
-  /* 언어가 바뀌었습니다. 머리에 적어 둔 우리 문구만 다시 적습니다 -- 자막
-   * 본문과 시각은 언어와 무관하고, 다시 그리면 읽던 자리가 흔들립니다. */
+  /* The language has changed. Only our own strings in the heading are rewritten
+   * -- the subtitle text and the times have nothing to do with language, and
+   * redrawing shakes the reading position. */
   function relabel() {
     if (!node) return;
     head.querySelector("b").textContent = t("extpanel.title");
@@ -146,9 +152,9 @@
       const body = document.createElement("div");
       body.append(el("div", "mw-tx"), el("div", "mw-tr"));
       row.append(el("div", "mw-t"), body);
-      // 대본에서 누르면 그 지점으로. 여기서는 진짜 <video> 를 잡을 수 있어
-      // 그냥 됩니다 -- mimiwatch 페이지의 대본 창에서는 붙일 영상이 없어
-      // 하지 못하는 일입니다.
+      // Press a line in the log and it goes to that point. Here the real <video>
+      // can be grabbed, so it just works -- something the script panel on the
+      // mimiwatch page cannot do, having no video to attach to.
       row.addEventListener("click", () => {
         if (onSeek) onSeek((c.start != null ? c.start : c.t) || 0);
       });
@@ -158,9 +164,9 @@
     return row;
   }
 
-  /* 자막을 그립니다. 통째로 다시 그리지 않고 바뀐 줄만 손봅니다 -- 라이브는
-   * 몇 초에 한 줄씩 오는데 그때마다 수백 줄을 다시 지으면 읽던 자리가
-   * 흔들립니다. */
+  /* Draws the subtitles. It does not redraw the lot but touches only the lines
+   * that changed -- live brings a line every few seconds, and rebuilding
+   * hundreds of lines each time shakes the reading position. */
   function render(cues, opts) {
     if (!node) return;
     const trKey = (opts && opts.trKey) || "_";
@@ -178,7 +184,7 @@
       if (tr.textContent !== trText) tr.textContent = trText;
       row.classList.toggle("mw-note", c.kind === "note");
     }
-    // 정제본이 흡수한 줄, 지운 줄.
+    // Lines a refined line absorbed, and lines dropped.
     for (const [id, row] of rows) {
       if (!alive.has(id)) { row.remove(); rows.delete(id); }
     }
@@ -191,12 +197,13 @@
     mount, unmount, render,
     mounted: () => !!(node && node.isConnected),
     setSeek: (fn) => { onSeek = fn; },
-    /* 들고 있던 줄을 전부 버립니다.
+    /* Throws away every line held.
      *
-     * **화면에서도 지웁니다.** 지도만 비우면 그 다음 render 가 이미 붙어
-     * 있는 줄 위에 같은 것을 다시 붙입니다 -- 녹화본을 고르면 자막이 한
-     * 벌 더 얹혀 두 번씩 나왔습니다. 세션을 바꿀 때, 다른 영상으로 옮길
-     * 때, 유튜브가 화면을 갈아 끼울 때 부릅니다. */
+     * **It erases them from the screen too.** Emptying only the map has the
+     * next render attach the same lines on top of ones already there -- picking
+     * a VOD laid one more set of subtitles on and each came out twice. Called on
+     * a session change, on a move to a different video, and when YouTube swaps
+     * the screen out. */
     reset: () => {
       rows = new Map();
       if (list) list.textContent = "";

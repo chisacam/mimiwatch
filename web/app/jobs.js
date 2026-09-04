@@ -1,9 +1,12 @@
-/* mimiwatch 화면 — 배경 작업(전사·번역)의 시작과 진행률 표시.
+/* mimiwatch front end — starting background jobs (transcription, translation)
+ * and showing their progress.
  *
- * web/app.js 를 관심사별로 나눈 파일입니다. 전부 일반 <script> 로 index.html 이
- * 적는 순서대로 읽히며 전역 범위를 함께 씁니다 -- 모듈 문법을 쓰지 않는 것은
- * 확장과 공유하는 overlay.js 와 같은 이유입니다. 서로 부르는 것은 전부
- * 실행 시점의 함수 호출이라 파일 순서는 main.js 가 마지막이기만 하면 됩니다. */
+ * One of the files web/app.js was split into by concern. They are all plain
+ * <script>s, read in the order index.html writes them down, and they share one
+ * global scope -- module syntax is avoided here for the same reason as in
+ * overlay.js, which is shared with the extension. Everything they call in each
+ * other is a function call made at run time, so the file order only has to put
+ * main.js last. */
 
 async function runTranslateJob(video, backend) {
   const box = $("job");
@@ -26,8 +29,8 @@ async function runTranslateJob(video, backend) {
     $("job-fill").style.width = pct + "%";
     $("job-count").textContent = t("jobs.count.skipped",
       { done: st.done, total: st.total, skipped: st.skipped });
-    // Say plainly which model produced the lines so far. "폴백 중"에 대한
-    // 의심을 숫자로 답합니다.
+    // Say plainly which model produced the lines so far. It answers the
+    // suspicion behind "falling back" with numbers.
     const srcEl = $("job-source");
     srcEl.classList.toggle("local", !!st.degraded);
     srcEl.textContent = st.degraded
@@ -36,8 +39,8 @@ async function runTranslateJob(video, backend) {
       ? t("jobs.source.remoteAndLocal", { n: st.by_remote, local: st.by_local })
       : t("jobs.source.remote", { n: st.by_remote });
     box.classList.toggle("error", !!st.degraded);
-    // 서버가 재시작되면 작업 스레드는 사라지고 상태만 남습니다. 계속 폴링하면
-    // 영원히 끝나지 않으므로 종료 상태로 취급합니다.
+    // When the server restarts, the job thread is gone and only its state is
+    // left behind. Polling on would never end, so treat it as a final state.
     if (st.state === "error" || st.state === "interrupted") { jobError(st.error); return; }
     if (st.state === "cancelled") {
       $("job-count").textContent = t("jobs.cancelled.saved",
@@ -61,21 +64,23 @@ async function runTranslateJob(video, backend) {
   }
 }
 
-/* 이 창이 시작해 폴링으로 보고 있는 작업. bus.js 가 같은 작업의 알림을 받아도
- * 두 번 그리지 않게 표시해 둡니다. */
+/* The job this window started and is watching by polling. It is marked so
+ * that bus.js does not draw the same job a second time when an announcement
+ * for it arrives. */
 function trackJob(id) {
   state.jobId = id;
   state.jobLocal = true;
 }
 
-/* 다른 창(또는 확장)에서 시작한 작업을 같은 상자에 그립니다. 값은 서버가
- * 밀어 주는 스냅샷입니다. 이 창이 제 작업을 보는 중이면 그쪽이 우선입니다. */
+/* Draws a job started in another window (or in the extension) in the same box.
+ * The numbers are the snapshot the server pushes. If this window is watching a
+ * job of its own, that one wins. */
 function renderForeignJob(st) {
   if (state.jobId && state.jobId !== st.id && state.jobLocal) return;
   const box = $("job");
   if (st.state === "running") {
     state.jobId = st.id;
-    state.jobLocal = false;           // 「중단」은 이 id 로 나가되, 폴링은 하지 않습니다
+    state.jobLocal = false;           // "Stop" goes out with this id, but we do not poll
     box.hidden = false;
     box.classList.toggle("error", !!st.degraded);
     $("job-cancel").hidden = false;
@@ -117,8 +122,8 @@ async function submitAdd(e) {
   if (e.submitter && e.submitter.value === "cancel") return;
   const f = e.target;
 
-  // 탭 소리는 받을 주소가 없습니다. probe도 건너뜁니다 -- 무엇을 듣고 있는지
-  // 아는 것은 사용자뿐이고, 서버는 그 탭에 닿을 수 없습니다.
+  // Tab audio has no URL to fetch. It skips the probe too -- only the user
+  // knows what they are listening to, and the server cannot reach that tab.
   if (f.source.value === "tab") {
     const title = f.tab_title.value.trim();
     f.tab_title.value = "";
@@ -126,9 +131,10 @@ async function submitAdd(e) {
     return;
   }
 
-  // 로컬 파일: 선택기는 경로를 알려 주지 않으므로 몸통째 올리고, 서버가 놓아 둔
-  // 경로로 여느 녹화본과 같은 전사를 시작합니다. 경로를 아는 파일은 주소 칸에
-  // 경로를 붙여 넣으면 이 사본 없이 그 자리에서 읽습니다.
+  // A local file: the picker never reveals a path, so the body goes up whole
+  // and the transcription starts from where the server put it, exactly as for
+  // any other VOD. A file whose path is known can be pasted into the URL field
+  // instead and is read where it lies, without this copy.
   if (f.source.value === "file") {
     const media = f.media.files[0];
     if (!media) { jobError(t("jobs.error.noFile")); return; }
@@ -159,8 +165,9 @@ async function submitAdd(e) {
   f.url.value = "";
 
   if (f.dataset.mode === "tile") {
-    // 「＋ 타일」: 지금 보는 방송 옆에 붙입니다. 라이브만 됩니다 -- 녹화본은 전사가
-    // 끝나야 볼 것이 생기므로 옆에 두고 볼 것이 아닙니다.
+    // "⊞ Add tile": puts it beside the stream being watched. Live only -- a VOD
+    // has nothing to show until its transcription finishes, so it is not
+    // something to keep alongside.
     if (!probe.is_live) { jobError(t("jobs.error.tileLiveOnly")); return; }
     await addTile(url, f.lang.value || null, probe);
     return;
@@ -181,8 +188,9 @@ async function submitAdd(e) {
   await watchTranscribe(res.id);
 }
 
-/* 「주소에서 받기」와 「다른 탭 소리」는 필요한 것이 다릅니다. 쓰지 않는 칸을
- * 남겨 두면 무엇을 채워야 하는지가 흐려지므로 그때그때 바꿉니다. */
+/* "From a URL" and "Audio from another tab" need different things. Leaving the
+ * unused field standing blurs what has to be filled in, so the fields change
+ * with the source. */
 function setAddSource(v) {
   const tab = v === "tab", file = v === "file";
   $("url-field").hidden = tab || file;
@@ -191,20 +199,20 @@ function setAddSource(v) {
   $("source-hint").textContent = tab ? t("jobs.source.hint.tab")
     : file ? t("jobs.source.hint.file")
     : t("jobs.source.hint.url");
-  // 녹화본은 주소·파일로만 만듭니다. 탭 소리는 언제나 라이브입니다.
+  // A VOD only ever comes from a URL or a file. Tab audio is always live.
   document.querySelector('#add-form input[name="speakers"]')
     .closest("label").hidden = tab;
 }
 
-/* 파일 몸통을 그대로 POST 합니다. fetch 로는 올리는 진행률을 볼 수 없어
- * XHR 입니다 -- 몇 GB 짜리 wav 를 올리는 동안 화면이 죽은 것처럼 보이면
- * 안 됩니다. 진행은 전사 작업과 같은 위쪽 상자에 그립니다. */
+/* POSTs the file body as it is. fetch cannot report upload progress, hence XHR
+ * -- the page must not look dead while a wav of several GB goes up. The
+ * progress is drawn in the same box up top as a transcription job. */
 function uploadLocalFile(file) {
   return new Promise((resolve) => {
     const box = $("job");
     box.hidden = false;
     box.classList.remove("error");
-    $("job-cancel").hidden = true;          // 아직 서버 작업이 아니라 중단할 id 가 없습니다
+    $("job-cancel").hidden = true;          // not a server job yet, so there is no id to stop
     box.querySelector(".job-label").textContent =
       t("jobs.uploading", { name: file.name.slice(0, 28) });
     $("job-source").textContent = "";
@@ -280,12 +288,13 @@ async function cancelJob() {
   document.querySelector(".job-label").textContent = t("jobs.cancelling");
 }
 
-/* 실패를 위쪽 막대에 띄웁니다.
+/* Shows a failure in the bar up top.
  *
- * 예전에는 hidden을 풀지 않아서, 진행 상자가 이미 떠 있을 때만 보였습니다.
- * 주소를 잘못 넣는 것처럼 시작도 못 한 실패는 그래서 조용히 묻혔습니다.
- * 라벨도 "재번역 실패"로 고정되어 있었는데, 이 함수는 전사·주소 해석
- * 실패에도 쓰입니다. */
+ * It used to leave hidden alone, so it was only visible when the progress box
+ * already stood there. A failure that never got started -- a mistyped URL, say
+ * -- was therefore buried in silence. The label was pinned to "Re-translation
+ * failed" as well, while this function also serves failures of transcription
+ * and of URL resolution. */
 function jobError(msg) {
   const box = $("job");
   box.hidden = false;

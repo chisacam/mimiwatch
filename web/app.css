@@ -35,16 +35,18 @@ select{
 .status b{color:var(--accent); font-weight:600}
 .status.warn b{color:var(--warn)}
 
-/* 재시작 안내는 상태줄과 자리를 나눕니다. 같은 칸에 쓰면 자막 한 줄마다
-   오는 상태 갱신이 덮어써서, 누르기도 전에 사라집니다. */
+/* The restart notice gets a slot of its own, apart from the status line. Written
+   into the same slot, the status updates that arrive with every subtitle line
+   overwrite it, and it is gone before it can be clicked. */
 .live-notice{
   display:flex; align-items:center; gap:.5rem;
   font-size:.74rem; color:var(--warn);
 }
 .live-notice[hidden]{display:none}
 
-/* 세 칸입니다: 영상 목록 | 무대 | 스크립트. 양옆은 각각 접힙니다.
- * 접는 방식을 두 패널이 같게 두어야 하나를 익히면 다른 하나도 압니다. */
+/* Three columns: video list | stage | script. Both sides collapse separately.
+ * The two panels have to collapse the same way, so that learning one teaches
+ * the other. */
 main{
   flex:1; display:grid; grid-template-columns:300px minmax(0,1fr) 380px;
   min-height:0; transition:grid-template-columns .22s ease;
@@ -62,11 +64,11 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 @media (prefers-reduced-motion:reduce){ main,.panel,.library{transition:none} }
 #toggle-panel,#toggle-library{white-space:nowrap}
 
-/* ---------- 위쪽 막대: 지금 무엇을 보는가 ---------- */
+/* ---------- top bar: what is being watched right now ---------- */
 .status{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .now{
   display:flex; align-items:center; gap:.55rem;
-  min-width:0;                 /* 제목이 먼저 줄어들고 단추는 남습니다 */
+  min-width:0;                 /* the title shrinks first and the buttons survive */
   flex:0 1 auto;
 }
 #now-title{
@@ -74,8 +76,8 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 #now-title.empty{color:var(--dim); font-weight:400}
-/* 제목 자리를 그대로 물려받습니다. 크기가 달라지면 고치는 동안 막대가
-   출렁이고, 좁은 창에서는 줄까지 바뀝니다. */
+/* Inherits the title's slot exactly. A different size makes the bar lurch while
+   the name is being edited, and in a narrow window even rewraps it. */
 .title-edit{
   flex:1 1 auto; min-width:8rem; max-width:32rem;
   font:600 .86rem/1.4 inherit; font-family:inherit;
@@ -84,13 +86,14 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 }
 #rename-live{font-size:.72rem; padding:.2rem .45rem}
 
-/* 「관리」는 눌러야 열립니다. 위쪽은 지금 상태를 읽는 자리이지
- * 설정을 만지는 자리가 아닙니다. */
+/* "Manage" only opens on a click. The top bar is where the current state is
+ * read, not where settings are touched. */
 .menu-wrap{position:relative}
-/* `position:fixed` 입니다. absolute 로 두면 헤더의 `overflow:hidden` 이
- * 메뉴를 잘라 냅니다 -- 헤더 높이 밖으로 나가는 부분이 통째로 안 보입니다.
- * z-index 문제가 아니라 잘라내기 문제라 쌓임 순서를 올려도 소용없습니다.
- * fixed 는 그 조상의 overflow에 걸리지 않으므로, 자리만 JS로 잡아 줍니다. */
+/* `position:fixed`, deliberately. Left absolute, the header's `overflow:hidden`
+ * clips the menu -- everything past the header's height is simply not there.
+ * That is a clipping problem, not a z-index problem, so raising the stacking
+ * order does nothing. fixed is not caught by an ancestor's overflow, so only
+ * the position has to be worked out in JS. */
 .menu{
   position:fixed; z-index:50;
   display:flex; flex-direction:column; gap:.55rem;
@@ -104,7 +107,7 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .field.col select{width:100%}
 .seg.wide{width:100%; text-align:center}
 
-/* ---------- 왼쪽: 영상 목록 ---------- */
+/* ---------- left: the video list ---------- */
 .library{
   border-right:1px solid var(--line); background:var(--panel);
   display:flex; flex-direction:column; min-height:0;
@@ -114,9 +117,10 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   display:grid; grid-template-columns:76px 1fr auto; align-items:center; gap:.55rem;
   padding:.55rem .8rem; cursor:pointer; border-left:2px solid transparent;
 }
-/* 유튜브가 주는 썸네일입니다. 플레이어를 이미 임베드하고 있으므로 브라우저는
- * 어차피 구글과 통신합니다 -- 새로 생기는 통신 상대가 아닙니다. 실패하면
- * 자리만 남기고 조용히 빕니다(m3u8 직접 입력에는 영상 id가 없습니다). */
+/* The thumbnail YouTube hands out. The player is already embedded, so the
+ * browser talks to Google anyway -- this is not a new party to talk to. On
+ * failure it stays quietly empty and keeps only the space (an m3u8 typed in
+ * directly has no video id). */
 .video-row .vth{
   width:76px; aspect-ratio:16/9; border-radius:5px; background:#0d1017;
   object-fit:cover; display:block;
@@ -140,24 +144,25 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .video-row.live.stopped .vt::before{content:"○ "; color:var(--dim)}
 .video-list .empty{padding:1.2rem .9rem; font-size:.76rem; color:var(--dim); line-height:1.6}
 
-/* hidden 속성은 언제나 숨김입니다. 요소의 display:flex 가 브라우저 기본의 display:none 을
- * 이겨서, 대화상자의 「이름」 칸이 주소 모드에서도 보이고 배치 단추가 타일 하나일 때도
- * 보였습니다. */
+/* The hidden attribute always hides. An element's own display:flex beat the
+ * browser default's display:none, so the dialog's "Name" field showed in URL
+ * mode and the layout buttons showed with a single tile. */
 [hidden]{display:none !important}
 
 .stage{display:flex; flex-direction:column; min-height:0; padding:1rem 1.2rem 1.1rem; gap:.9rem}
 #player-wrap{
   position:relative; flex:1; min-height:0; background:#000;
   border:1px solid var(--line); border-radius:10px; overflow:hidden;
-  /* 타일(tiles.js)이 앉는 격자. 타일 하나면 칸도 하나라 예전과 같습니다. */
+  /* The grid the tiles (tiles.js) sit in. One tile is one cell, so it is what it always was. */
   display:grid; gap:2px; grid-template-columns:1fr; grid-template-rows:1fr;
 }
 .tile{position:relative; min-width:0; min-height:0; background:#000; overflow:hidden}
 .tile-player,.tile-player > *{position:absolute; inset:0; width:100%; height:100%}
-/* 자막은 초점 타일에만 그립니다. .overlay 의 자리 규칙(아래)은 이제 타일 기준입니다. */
+/* Subtitles are drawn on the focused tile only. .overlay's positioning rules (below) are now relative to a tile. */
 .tile:not(.focused) .overlay{display:none}
-/* 초점이 아닌 타일을 덮는 투명한 막. 누르면 초점이 옮겨 갑니다. 초점 타일에는
- * 없어서 그 플레이어의 조작(재생·일시정지)이 그대로 닿습니다. */
+/* A transparent film over the unfocused tiles. Clicking it moves the focus. The
+ * focused tile has none, so that player's controls (play, pause) are reachable
+ * as they are. */
 .tile-cover{position:absolute; inset:0; z-index:2; cursor:pointer}
 .tile.focused .tile-cover{display:none}
 .tile-bar{
@@ -171,13 +176,14 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .tile:not(.focused) .tile-sound{display:none}
 .tile.stopped .tile-state{color:var(--warn)}
 .tile-bar .tile-close{pointer-events:auto; padding:0 .45rem; line-height:1.4}
-.mv-1 .tile-bar{display:none}          /* 타일 하나 = 예전 화면 그대로 */
-/* 전체화면에서는 조절기와 함께 나타났다 사라집니다. */
+.mv-1 .tile-bar{display:none}          /* one tile = exactly the old screen */
+/* In fullscreen it appears and disappears together with the controls. */
 #player-wrap:fullscreen .tile-bar{opacity:0; transition:opacity .18s ease}
 #player-wrap:fullscreen.fs-active .tile-bar{opacity:1}
 .tile > .player-error{z-index:1}
-/* 끌어다 놓기. 타일(자리 바꾸기)이나 목록 줄(타일로 붙이기)을 끄는 동안 모든 타일 위에
- * 받는 막이 뜹니다 -- iframe 은 drop 이벤트를 우리에게 주지 않습니다. */
+/* Drag and drop. While a tile (swap places) or a list row (attach as a tile) is
+ * being dragged, a catching film appears over every tile -- an iframe does not
+ * hand us the drop event. */
 .tile-drop{display:none; position:absolute; inset:0; z-index:5; border:2px dashed transparent;
   background:rgba(6,8,12,.25); transition:border-color .12s ease, background .12s ease}
 #player-wrap.dragging .tile-drop{display:block}
@@ -186,14 +192,16 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .tile-cover{cursor:grab}
 .video-row{cursor:grab}
 
-/* 배치. 1+2 / 1+3 에서는 초점 타일이 큰 자리(big)를 차지하고 나머지는 빈 칸으로
- * 흘러듭니다 -- 초점을 옮기면 .focused 만 바뀌고 DOM 은 그대로입니다. */
-/* #player-wrap 의 기본 격자(id 선택자)를 이겨야 하므로 id 를 함께 적습니다. */
-#player-wrap.mv-2{grid-template-rows:1fr 1fr}          /* 상하: 가로로 넓은 방송은 이쪽이 크게 보입니다 */
-#player-wrap.mv-2h{grid-template-columns:1fr 1fr}      /* 좌우 */
+/* Layouts. In 1+2 / 1+3 the focused tile takes the big area and the rest flow
+ * into the empty cells -- moving the focus changes only .focused, the DOM stays
+ * as it is. */
+/* This has to beat #player-wrap's own grid (an id selector), so the id is spelled out too. */
+#player-wrap.mv-2{grid-template-rows:1fr 1fr}          /* stacked: a wide broadcast looks bigger this way */
+#player-wrap.mv-2h{grid-template-columns:1fr 1fr}      /* side by side */
 #player-wrap.mv-2x2{grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr}
-/* 1+2 / 1+3: 큰 것(초점)이 위, 작은 것들이 아래 한 줄. 가로로 넓은 영상은 세로로 쌓는
- * 쪽이 크게 보입니다 -- 옆에 세우면 큰 칸이 폭에 막혀 위아래가 남습니다. */
+/* 1+2 / 1+3: the big one (the focus) on top, the small ones in one row below. A
+ * wide video looks bigger stacked -- put side by side, the big cell is bounded
+ * by width and leaves space above and below. */
 #player-wrap.mv-1p2{grid-template-columns:1fr 1fr; grid-template-rows:2fr 1fr;
         grid-template-areas:"big big" ". ."}
 #player-wrap.mv-1p3{grid-template-columns:1fr 1fr 1fr; grid-template-rows:2fr 1fr;
@@ -201,35 +209,37 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .mv-1p2 .tile.focused,.mv-1p3 .tile.focused{grid-area:big}
 .video-row.mv .vt::after{content:" ⊞"; color:var(--accent)}
 
-/* 전체화면이 되는 것은 iframe이 아니라 이 상자입니다.
+/* What goes fullscreen is this box, not the iframe.
  *
- * 유튜브의 전체화면 단추를 누르면 **iframe**이 전체화면 요소가 되고,
- * 브라우저는 그 요소의 하위 트리만 그립니다. 자막 오버레이는 iframe 밖에
- * 있으므로 그대로 사라집니다. 상자째 키우면 영상과 자막이 같은 트리 안에
- * 들어갑니다. */
+ * Press YouTube's own fullscreen button and the **iframe** becomes the
+ * fullscreen element, and the browser draws only that element's subtree. The
+ * subtitle overlay lives outside the iframe, so it simply disappears. Blowing
+ * up the whole box puts the video and the subtitles inside one tree. */
 #player-wrap:fullscreen{ border:0; border-radius:0; background:#000 }
 #player-wrap:-webkit-full-screen{ border:0; border-radius:0; background:#000 }
 
-/* 자막 덩어리는 끌어서 아무 자리에나 놓을 수 있습니다.
+/* The subtitle block can be dragged anywhere.
  *
- * 그러려면 좌우로 꽉 찬 띠가 아니라 글자만큼만 차지하는 덩어리여야 합니다 --
- * left:0/right:0 인 채로는 가로로 옮길 여지 자체가 없습니다. 그래서 폭을
- * max-content 로 줄이고, 예전에 padding:0 6% 이 만들던 좌우 여백은
- * max-width:88% 로 대신합니다(줄바꿈 폭이 그대로입니다).
+ * For that it has to be a block as wide as its text, not a strip filling the
+ * width -- with left:0/right:0 there is no room to move sideways at all. So the
+ * width shrinks to max-content, and the side margins padding:0 6% used to make
+ * are taken over by max-width:88% (the wrapping width is unchanged).
  *
- * left/bottom 의 실제 값은 JS의 applyCuePos 가 매번 넣습니다. 여기 적힌
- * 50%/6% 는 아직 저장값을 못 읽은 첫 순간의 자리입니다 -- 아래 가운데. */
+ * The real values of left/bottom are put in by JS's applyCuePos every time. The
+ * 50%/6% written here is where it sits for the first instant, before the saved
+ * value has been read -- bottom centre. */
 .overlay{
   position:absolute; left:50%; bottom:6%; transform:translateX(-50%);
   width:max-content; max-width:88%;
   display:flex; flex-direction:column; align-items:center; gap:.3rem;
   pointer-events:none; text-align:center; z-index:3;
 }
-/* 포인터를 가져가는 것은 실제로 보이는 글자줄뿐입니다.
+/* Only the text lines actually visible take the pointer.
  *
- * 덩어리 전체가 가져가면 자막 옆의 빈 자리를 눌러도 유튜브에 닿지 않아,
- * 재생/일시정지가 죽는 구역이 생깁니다. 빈 줄은 :empty 로 이미 사라지므로
- * 자막이 없는 동안에는 막는 곳도 없습니다. */
+ * If the whole block took it, a click on the empty space beside the subtitles
+ * would not reach YouTube, and there would be a dead zone for play/pause. Empty
+ * lines are already gone by :empty, so while there are no subtitles nothing
+ * blocks anything. */
 .cue-prev,.cue-main,.cue-src{ pointer-events:auto; cursor:grab }
 .overlay.dragging .cue-prev,
 .overlay.dragging .cue-main,
@@ -248,22 +258,25 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 }
 .cue-prev:empty,.cue-main:empty,.cue-src:empty{display:none}
 
-/* 전체화면 전용 조절기.
+/* Controls for fullscreen only.
  *
- * 전체화면 요소의 하위 트리만 그려지므로, 상자 밖의 조절기는 그때 사라집니다.
- * 자막 모드만이라도 상자 안에서 바꿀 수 있어야 합니다. 창 모드에서는 바로
- * 아래에 같은 단추가 있으니 내보이지 않습니다. */
-/* 전체화면 조절기는 **오른쪽 가장자리에 세로로** 섭니다.
+ * Only the fullscreen element's subtree is drawn, so the controls outside the
+ * box disappear then. At the very least the subtitle mode has to be changeable
+ * from inside the box. In windowed mode the same buttons are right below, so
+ * these are not shown. */
+/* The fullscreen controls stand **vertically at the right edge**.
  *
- * 처음에는 아래쪽 가운데에 가로로 두었는데, 그 자리가 곧 자막 자리입니다.
- * 자막은 화면 아래 가운데에 있으므로, 조절기는 높이의 한가운데로 비켜서고
- * 폭도 좁게 잡아야 겹치지 않습니다. 배경도 옅게 둡니다 -- 떠 있는 동안에도
- * 영상이 비쳐야 합니다. */
+ * They were at the bottom centre horizontally at first, and that is exactly
+ * where the subtitles are. The subtitles sit bottom centre, so the controls
+ * step aside to halfway down and keep a narrow width so the two do not overlap.
+ * The background stays faint too -- the video has to show through even while
+ * they are up. */
 .fs-controls{
   display:none; position:absolute; right:1.2rem; top:50%; transform:translateY(-50%);
-  /* 띠(2) < 자막(3) < 조절기(4). 자막이 띠 위에 있어야 오른쪽 가장자리로
-   * 끌어다 놓은 자막을 다시 잡을 수 있고, 조절기가 자막 위에 있어야 자막이
-   * 그 자리에 겹쳐 있어도 슬라이더에 손이 닿습니다. */
+  /* strip (2) < subtitles (3) < controls (4). The subtitles have to be above the
+   * strip so subtitles dragged to the right edge can be grabbed again, and the
+   * controls above the subtitles so the sliders stay reachable even when the
+   * subtitles overlap that spot. */
   z-index:4; width:11rem;
   flex-direction:column; gap:.5rem; padding:.7rem .75rem;
   background:rgba(6,8,12,.42); border:1px solid rgba(255,255,255,.14);
@@ -272,7 +285,7 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   opacity:0; transition:opacity .18s ease, background .18s ease;
   pointer-events:none;
 }
-/* 실제로 만지는 동안에는 또렷하게. */
+/* Clear while they are actually being touched. */
 .fs-controls:hover{ background:rgba(6,8,12,.82) }
 .fs-row{ display:flex; flex-direction:column; align-items:stretch; gap:.3rem }
 .fs-row.seg-row{ flex-direction:row; flex-wrap:wrap; gap:.25rem }
@@ -282,16 +295,16 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .fs-controls hr{ border:0; border-top:1px solid rgba(255,255,255,.12); margin:.1rem 0 }
 #player-wrap:fullscreen .fs-controls,
 #player-wrap:-webkit-full-screen .fs-controls{ display:flex }
-/* 마우스가 움직일 때만 뜹니다. 영상 위에 계속 떠 있으면 방해가 됩니다. */
+/* Up only while the mouse moves. Standing over the video permanently, they are in the way. */
 #player-wrap.fs-active .fs-controls{ opacity:1; pointer-events:auto }
 
-/* 조절기를 다시 부르는 띠.
+/* The strip that calls the controls back.
  *
- * 영상 위의 마우스 움직임은 우리에게 오지 않습니다 -- iframe이 상자를 덮고
- * 있고, 그 안은 교차 출처라 이벤트가 넘어오지 않습니다. 그래서 iframe 위에
- * 얹은 이 띠로 받습니다. 조절기가 서는 자리를 덮되, 자막(아래 가운데)과
- * 유튜브 제어줄(맨 아래)은 건드리지 않도록 오른쪽 가장자리의 가운데
- * 높이에만 둡니다. */
+ * Mouse movement over the video never reaches us -- the iframe covers the box,
+ * and what is inside it is cross-origin, so no event crosses over. So this
+ * strip laid on top of the iframe catches it. It covers where the controls
+ * stand, but sits only at the right edge halfway down, so as not to touch the
+ * subtitles (bottom centre) or the YouTube control row (the very bottom). */
 .fs-hotzone{
   display:none; position:absolute; right:0; top:50%; transform:translateY(-50%);
   width:16rem; height:60%;
@@ -335,17 +348,20 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   flex:1; overflow-y:auto; padding:.5rem 0 3rem; scrollbar-width:thin;
   --script-size:13px;
 }
-/* 대본 창에서 원문·번역 중 한쪽만 읽고 싶을 때. 자막 모드와는 다른
- * 축입니다 -- 저쪽은 화면 위 자막, 이쪽은 스크립트 자체입니다. */
+/* For reading only the source or only the translation in the script window. A
+ * different axis from the subtitle mode -- that one is the subtitles on screen,
+ * this one is the script itself. */
 .script.hide-src .tx{display:none}
 .script.hide-tr .tr{display:none}
 .script.hide-src .line,.script.hide-tr .line{padding-top:.4rem; padding-bottom:.4rem}
 
-/* ---------- 대본 창 ----------
+/* ---------- Script mode window ----------
  *
- * 임베드가 막힌 방송(멤버십 등)은 유튜브에서 보고 대본만 여기서 읽습니다.
- * 별도 페이지를 새로 쓰지 않고 같은 앱을 이 모드로 띄웁니다 -- SSE, 정제본
- * 흡수, 번역 도착 처리를 복사하면 고칠 곳이 두 군데가 됩니다. */
+ * A broadcast whose embedding is blocked (members-only and the like) is watched
+ * on YouTube and only the script is read here. Rather than writing a separate
+ * page, the same app is opened in this mode -- copying SSE, refined-line
+ * absorption and the handling of arriving translations would mean two places to
+ * fix. */
 .script-tools{display:none}
 body.script-only .bar > *:not(.now):not(#live-notice):not(#lang-status):not(.spacer),
 body.script-only .library,
@@ -354,11 +370,11 @@ body.script-only #open-script-window,
 body.script-only #open-export,
 body.script-only #rename-live,
 body.script-only #job{display:none}
-/* 그리드를 그대로 두고 칸을 0으로 만들려 했더니 두 가지가 걸렸습니다.
- * `main` 에 걸린 grid-template-columns 전환이 값을 붙들고 놓지 않았고,
- * `display:none` 인 항목은 그리드에서 아예 빠지므로 남은 패널이 첫 칸
- * (0px)으로 밀려났습니다. 이 모드에서는 칸이 하나뿐이니 그리드를 쓸
- * 이유가 없습니다. */
+/* Keeping the grid and zeroing the columns instead ran into two things. The
+ * grid-template-columns transition on `main` held on to its value and would not
+ * let go, and an item with `display:none` drops out of the grid entirely, so
+ * the surviving panel was pushed into the first column (0px). In this mode
+ * there is only one column, so there is no reason to use a grid at all. */
 body.script-only main{display:flex; transition:none}
 body.script-only .panel{border-left:0; flex:1; min-width:0}
 body.script-only .script-tools{
@@ -370,8 +386,9 @@ body.script-only .script-tools .seg{flex:1 1 auto}
 body.script-only .script .tx{font-size:var(--script-size)}
 body.script-only .script .tr{font-size:calc(var(--script-size) - 1px)}
 body.script-only .bar{padding:.45rem .8rem}
-/* 팝업은 세로로 길게 열리지만 늘리는 것을 막을 수는 없습니다. 넓힌 창에서
- * 한 줄이 화면 끝까지 뻗으면 읽기가 나빠지므로 글줄 길이만 묶어 둡니다. */
+/* The popup opens tall and narrow, but nothing stops it being widened. In a
+ * widened window a line stretching to the far edge reads badly, so only the
+ * measure is held down. */
 body.script-only .line,
 body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 .line{
@@ -380,14 +397,14 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 }
 .line:hover{background:#171b25}
 
-/* 스크립트 모드 고르개. 패널 머리 바로 아래에 한 줄. */
+/* The script mode picker. One row right under the panel head. */
 .script-modes{
   flex:none; display:flex; gap:.3rem; padding:.4rem 1rem .5rem;
   border-bottom:1px solid var(--line);
 }
 .script-modes .seg{flex:1; font-size:.74rem; padding:.25rem .4rem}
 
-/* 번역 모드의 아래 띠. 고른 줄 수와 할 일. */
+/* The lower strip in translation mode. How many lines are picked and what to do with them. */
 .tr-bar{
   flex:none; display:flex; align-items:center; gap:.4rem;
   padding:.45rem 1rem; border-bottom:1px solid var(--line);
@@ -397,7 +414,7 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 .tr-bar .grow{flex:1}
 .tr-bar .seg{font-size:.72rem; padding:.2rem .5rem}
 .tr-bar b{color:var(--accent)}
-/* 고르는 동안에는 글자를 끌어 선택하는 것이 방해가 됩니다. */
+/* While picking, dragging to select text is in the way. */
 .script.mode-tr .line{cursor:pointer; user-select:none}
 .script.mode-tr .line::before{
   content:"☐"; position:absolute; right:.5rem; top:.35rem;
@@ -405,12 +422,12 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 }
 .script.mode-tr .line.picked::before{content:"☑"; color:var(--accent)}
 .script.mode-tr .line.picked{background:#15202b}
-/* 사람이 고친 번역은 건너뜁니다. 고를 수는 있게 두되 그렇다고 알립니다. */
+/* A translation a person edited is skipped. It can still be picked, but it says so. */
 .script.mode-tr .line.kept::before{content:"✎"; color:var(--warn)}
 
-/* ---------- 자막 고치기 ---------- */
-/* 줄마다 달려 있지만 얹어 놓기만 합니다. 늘 보이면 스크립트가 단추밭이
-   되고, 읽는 것이 이 패널의 본래 일입니다. */
+/* ---------- editing subtitles ---------- */
+/* It hangs on every line but is only laid over it. Always visible, the script
+   turns into a field of buttons, and reading is what this panel is for. */
 .line{position:relative}
 .line-edit{
   position:absolute; right:.45rem; top:.35rem; opacity:0;
@@ -418,9 +435,9 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
   border:1px solid var(--line); border-radius:6px;
   padding:.05rem .3rem; font-size:.7rem; cursor:pointer; font-family:inherit;
 }
-/* 읽기 모드에서는 아예 없습니다. 스크립트의 본래 일은 읽는 것이고, 줄마다
-   단추가 떠 있으면 그 일이 방해받습니다. 편집 모드에서는 늘 보입니다 --
-   그 모드를 켠 이유가 그것이니까요. */
+/* In read mode it is not there at all. What the script is for is reading, and a
+   button hovering on every line gets in the way of that. In edit mode it is
+   always visible -- that is why that mode was turned on. */
 .script:not(.mode-edit) .line-edit{display:none}
 .script.mode-edit .line-edit{opacity:1}
 .script.mode-edit .line{cursor:text}
@@ -446,7 +463,7 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 .ce-bar .grow{flex:1}
 .ce-bar .seg{font-size:.72rem; padding:.2rem .5rem}
 .ce-bar .danger{color:var(--warn); border-color:#52201d}
-/* 원문을 고친 뒤 번역이 옛 문장의 것으로 남아 있다는 표시. */
+/* The mark saying the source was edited and the translation is still the old sentence's. */
 .tr-stale{
   margin-left:.4rem; font-size:.68rem; font-weight:600;
   color:var(--warn); opacity:.85; white-space:nowrap;
@@ -467,8 +484,9 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 .player-error br{ display:none }
 
 /* ---------- re-translation job ---------- */
-/* 처리 상태는 위쪽 막대 안에 한 줄로 섭니다. 우하단에 떠 있던 때는
- * 전사가 도는지도, 중단 단추가 어디 있는지도 눈에 띄지 않았습니다. */
+/* Job status stands as one row inside the top bar. Floating at the bottom right,
+ * neither the fact that transcription was running nor where the Stop button was
+ * caught the eye. */
 .job{
   display:flex; align-items:center; gap:.5rem;
   padding:.25rem .55rem; border:1px solid var(--line); border-radius:8px;
@@ -556,17 +574,19 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
  * after the session was stopped. */
 .live-badge[hidden]{display:none}
 .live-badge{
-  /* 줄어들지 않습니다. 좁은 창에서 이것이 눌리면 「● LIVE」가 두 줄로
-     꺾여 막대가 두 배로 높아지고, 정작 제목은 그만큼 좁아집니다.
-     양보하는 쪽은 언제나 제목입니다 -- 저쪽에는 말줄임이 있습니다. */
+  /* It never shrinks. Squeezed in a narrow window, "● LIVE" breaks over two
+     lines, the bar doubles in height, and the title gets narrower by exactly
+     that much anyway. The one that gives way is always the title -- it has an
+     ellipsis. */
   flex:none; white-space:nowrap;
   display:flex; align-items:center; gap:.6rem;
   font-family:var(--mono); font-size:.72rem; font-weight:700; color:#ff5f56;
   border:1px solid #52201d; background:#2a1210; border-radius:100px;
   padding:.22rem .5rem .22rem .7rem; letter-spacing:.06em;
 }
-/* display:flex 가 [hidden] 을 이깁니다. 라이브가 아닐 때도 배지가 떠 있었는데,
-   이제 세션 상태에 따라 감추는 자리가 생겨서 눈에 띄었습니다. */
+/* display:flex beats [hidden]. The badge used to stand there even when nothing
+   was live, and it became visible once there was somewhere that hides it
+   according to the session state. */
 .live-badge[hidden]{display:none}
 .live-badge button{
   background:transparent; border:1px solid #52201d; color:#e8a09b;
@@ -637,36 +657,40 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   font-weight:700; border-radius:6px; padding:.45rem 1.1rem; font-size:.82rem;
   cursor:pointer; font-family:inherit;
 }
-/* 전사·번역 선택기가 헤더에 나란히 있던 시절에는 폭을 묶어 두어야 했습니다
- * -- 긴 엔진 이름이 헤더를 밀어냈기 때문입니다. 이제는 「관리」 메뉴 안에
- * 세로로 서므로 그 제약이 오히려 셋의 길이를 어긋나게 만들었습니다.
- * 메뉴 안에서는 셋이 같은 폭(.field.col select{width:100%})으로 섭니다. */
+/* Back when the transcription and translation pickers stood side by side in the
+ * header, their widths had to be pinned -- a long engine name pushed the header
+ * out. Now they stand vertically inside the "Manage" menu, where that
+ * constraint only made the three of them different lengths. Inside the menu all
+ * three stand at the same width (.field.col select{width:100%}). */
 @media (max-width:1040px){
   .bar .brand{display:none}
 }
 
-/* 좁은 창. 대본 창이 460px으로 열리는데, 위쪽 막대를 한 줄에 다 세우면
- * 제목이 12px까지 눌리고 상태줄이 396px을 가져갑니다(실측). 그 줄에서
- * 정작 알아야 하는 것은 무엇을 보고 있는가입니다.
+/* Narrow windows. The script window opens at 460px, and standing the whole top
+ * bar on one row squeezes the title down to 12px while the status line takes
+ * 396px (measured). What that row actually has to tell you is what is being
+ * watched.
  *
- * 그래서 줄을 나눕니다. 제목이 한 줄을 통째로 쓰고, 상태와 안내가 그
- * 아래에 섭니다. 잘리는 것은 여전히 제목이지만 이제 460px을 다 씁니다.
- * 대본 창만이 아니라 좁혀 놓은 본 창에도 같이 걸립니다 -- 두 곳이 같은
- * 이유로 좁고, 답도 같습니다. */
+ * So the row is split. The title takes a whole row to itself, and the status
+ * and the notices stand below it. What gets cut is still the title, but now it
+ * uses the full 460px. This catches not only the script window but the main
+ * window narrowed down as well -- both are narrow for the same reason, and the
+ * answer is the same. */
 @media (max-width:720px){
   .bar{flex-wrap:wrap; row-gap:.3rem; padding:.5rem .8rem}
   .bar > .now{flex:1 1 100%; min-width:0}
   .bar > #lang-status,
   .bar > #live-notice{flex:1 1 100%; min-width:0; white-space:normal}
-  /* 남는 자리를 밀어내는 칸입니다. 줄이 나뉘면 밀어낼 자리가 없고,
-     혼자 한 줄을 차지해 막대만 높아집니다. */
+  /* The cell that pushes the leftover space away. Once the row is split there
+     is nothing left to push, and it takes a row of its own, making the bar
+     taller for nothing. */
   .bar > .spacer{display:none}
   .panel-head{flex-wrap:wrap; row-gap:.35rem}
 }
 
 
-/* ---------- 모델 · 도구 ---------- */
-/* 첫 실행 띠. 라이브 안내(.live-notice)와 같은 자리·모양을 쓰되 단추가 둘 들어갑니다. */
+/* ---------- models · tools ---------- */
+/* The first-run strip. It uses the same slot and shape as the live notice (.live-notice), but takes two buttons. */
 .setup-notice{display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
 .setup-notice[hidden]{display:none}
 .setup-notice .seg{font-size:.72rem; padding:.2rem .55rem}
@@ -674,14 +698,17 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 .model-row .name{min-width:0}
 .model-row .meta{white-space:normal}
 .model-row.st-missing .name, .model-row.st-partial .name{color:var(--dim)}
-.model-row.st-missing.required .meta::before{content:"필요 · "; color:var(--warn)}
+/* The name already carries "·required" from the string table (engines.js), so this
+   only colours the line -- a second copy of the word could not follow the language. */
+.model-row.st-missing.required .meta{color:var(--warn)}
 .model-row.st-error .meta{color:var(--warn)}
 .model-row.st-downloading .meta{color:var(--accent)}
 .model-bar{display:block; width:100%; margin-top:.3rem}
 #model-form-error{color:var(--warn)}
 
-/* 목록 줄 오른쪽의 단추 묶음: ▶ 이어받기 · ⟳ 다시 전사 · 🗑. 마우스를 올렸을 때만
- * 보입니다 -- 목록은 읽는 자리이고 단추는 가끔 쓰는 것입니다. */
+/* The button group at the right of a list row: ▶ resume · ⟳ transcribe again ·
+ * 🗑. Visible only on hover -- the list is somewhere to read, and the buttons
+ * are used now and then. */
 .video-row .vact{display:flex; gap:.1rem; align-items:center}
 .video-row .vact button{
   opacity:0; border:1px solid transparent; background:none; color:var(--dim);
@@ -691,7 +718,7 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 .video-row .vact .vres:hover{border-color:var(--accent); color:var(--accent)}
 .video-row .vact .vre:hover{border-color:var(--line); color:var(--text)}
 
-/* ---------- 초기 설정 ---------- */
+/* ---------- first-time setup ---------- */
 #setup-dialog{background:var(--panel); color:var(--text); border:1px solid var(--line);
   border-radius:12px; padding:1.1rem 1.25rem; width:min(560px, 92vw)}
 #setup-dialog::backdrop{background:rgba(4,6,10,.7)}
@@ -708,7 +735,7 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 .setup-choice input{margin-top:.25rem}
 .setup-choice small{font-family:var(--mono); font-size:.66rem; color:var(--dim)}
 
-/* ---------- 종료 ---------- */
+/* ---------- shutdown ---------- */
 .bar .quit{border-color:#5a2b2b; color:#e07a7a; margin-left:.35rem}
 .bar .quit:hover{background:#2a1616; color:#ff9c95}
 .bar .quit:disabled{opacity:.6; cursor:default}

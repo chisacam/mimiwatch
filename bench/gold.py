@@ -1,17 +1,21 @@
-"""정답 자막이 있는 표본으로 전사 설정을 채점합니다 (CER · 일본어/한국어, WER · 영어).
+"""Score a transcription setting on samples that have ground-truth subtitles
+(CER for Japanese/Korean, WER for English).
 
-    .venv/bin/python bench/gold.py                       # data/gold/*.wav 전부, 기본 설정
-    .venv/bin/python bench/gold.py --asr tcpp-lite      # 설정의 다른 엔진으로
+    .venv/bin/python bench/gold.py                       # every data/gold/*.wav, default setting
+    .venv/bin/python bench/gold.py --asr tcpp-lite      # with another engine from the config
     .venv/bin/python bench/gold.py --profile talk --pad 0.3 --whisper '{"no_speech_thold": 0.84}'
     .venv/bin/python bench/gold.py --model Fun-ASR-MLT-Nano-2512-Q8_0.gguf --device cpu
 
-정답은 같은 이름의 `.ja.srt`(또는 `.ja-*.srt`, `.vtt`) 입니다 -- 유튜브의 **수동** 자막을
-yt-dlp 로 받아 둔 것입니다. 구간 경계는 저마다 다르므로 자막 전체를 한 줄로 이어 붙여
-비교합니다. 정규화: NFKC, 공백·구두점 제거. 일본어는 한자/가나 표기 차이(晴る/はる)를
-글자 오류로 셉니다 -- 노래 가사 자막은 특히 그러니 절대값보다 **설정 사이의 차이**를 보십시오.
+The ground truth is a `.ja.srt` (or `.ja-*.srt`, `.vtt`) of the same name -- YouTube's
+**manual** subtitles fetched with yt-dlp. Segment boundaries differ from one to the next,
+so the whole subtitle is joined into one line for the comparison. Normalisation: NFKC,
+whitespace and punctuation removed. In Japanese a kanji/kana spelling difference (晴る/はる)
+counts as a character error -- song lyric subtitles especially so, so look at the
+**difference between settings** rather than at the absolute value.
 
-라이브와 같은 길로 자릅니다: VAD(프로필) → 앞 1초 선행 → 조각별 해독. `--pad` 는 VAD 가
-끝이라 한 뒤 붙이는 뒤패딩(초)로, 지금 라이브 경로에는 없는 실험 손잡이입니다.
+The audio is cut the same way live cuts it: VAD (profile) -> 1 s of preroll -> decode per
+piece. `--pad` is the trailing padding (in seconds) added after VAD calls the end, an
+experimental knob that the live path does not currently have.
 """
 from __future__ import annotations
 import argparse, glob, json, os, re, sys, time, unicodedata, wave
@@ -61,25 +65,27 @@ def read_ref(wav: str) -> tuple[str, str]:
             lang = pat[1:3]
             lines = []
             for ln in open(hits[0], encoding="utf-8"):
-                # 유튜브의 스타일 자막(가라오케식)은 제로폭 문자를 채우고, 한자마다 읽기를
-                # 괄호로 달고(目(め)覚(ざ)め), 한 줄을 화면에 띄우는 동안 큐마다 되풀이합니다.
-                # 노래한 가사 한 벌만 남기려고 셋을 걷어 냅니다. 크레딧(作詞：…)도 노래가 아닙니다.
+                # YouTube's styled (karaoke-like) subtitles pack in zero-width characters,
+                # hang a reading in parentheses on every kanji (目(め)覚(ざ)め), and repeat the
+                # same line in every cue while it stays on screen. All three are stripped so
+                # that one copy of the sung line is left. Credits (作詞：…) are not the song either.
                 ln = re.sub(r"[\u200b\u200c\u2060\ufeff]", "", ln).strip()
                 if not ln or ln.isdigit() or "-->" in ln or ln.startswith(("WEBVTT", "Kind:", "Language:")):
                     continue
                 ln = re.sub(r"<[^>]+>", "", ln)
-                ln = re.sub(r"[（(][ぁ-ゖァ-ヺー]+[）)]", "", ln)          # 후리가나
+                ln = re.sub(r"[（(][ぁ-ゖァ-ヺー]+[）)]", "", ln)          # furigana
                 if "：" in ln or "／" in ln:
-                    continue                                       # 크레딧·제목 줄
+                    continue                                       # credit / title line
                 if ln in lines[-3:]:
-                    continue                                       # 화면에 머무는 동안의 되풀이
+                    continue                                       # repeat while it stays on screen
                 lines.append(ln)
             return lang, " ".join(lines)
     raise FileNotFoundError(f"{base}.<lang>.srt 가 없습니다")
 
 
 def segments(pcm: np.ndarray, profile: str, pad_s: float, threshold: float | None = None):
-    """(해독할 조각들, 그 조각의 표본 구간). 구간은 정제 패스가 무리를 묶는 데 씁니다."""
+    """(pieces to decode, the sample span of each piece). The spans are what the refinement
+    pass uses to group utterances."""
     ms, mx = PROFILES[profile]["min_silence"], PROFILES[profile]["max_speech"]
     vad = stream.build_vad(min_silence=ms, max_speech=mx, threshold=threshold)
     hist = stream.AudioHistory()
@@ -90,12 +96,12 @@ def segments(pcm: np.ndarray, profile: str, pad_s: float, threshold: float | Non
             s = vad.front; a = np.asarray(s.samples, dtype=np.float32)
             start, end = s.start, s.start + len(a)
             pending.append((start, end)); vad.pop()
-        # 뒤패딩: 끝난 구간 뒤로 pad 초가 더 들어온 뒤에 잘라 냅니다.
+        # Trailing padding: cut a finished span out only once pad more seconds have arrived.
         have = hist.offset + len(hist.buf)
         while pending and (final or have >= pending[0][1] + int(pad_s * 16000)):
             start, end = pending.pop(0)
             end2 = min(end + int(pad_s * 16000), have)
-            out.append(hist.slice(start, end2))          # slice 가 앞 1초 선행을 붙입니다
+            out.append(hist.slice(start, end2))          # slice attaches the 1 s of preroll
             spans.append((start, end2))
 
     for i in range(0, len(pcm), 1600):
@@ -149,9 +155,10 @@ def main():
         speech_s = sum(len(s) for s in segs) / 16000
         t0 = time.time()
         parts = [asr.transcribe(s, 16000)["text"] for s in segs]
-        # 정제 패스는 확정본을 낸 뒤에 붙습니다 -- 라이브와 같은 차례입니다.
-        # 44절이 「짧게 끊어 잃은 것을 정제가 되살린다」고 미룬 판단을 여기서
-        # 실제로 잽니다. 무리 수도 함께 적습니다(구간이 몇 개로 합쳐졌는지).
+        # The refinement pass comes after the finals are out -- the same order as live.
+        # The judgement section 44 deferred, that "refinement wins back what cutting
+        # short lost", is actually measured here. The number of utterance groups is
+        # recorded too (how many spans got merged into one).
         groups = 0
         if a.refine:
             cues = [{"start": lo / 16000, "end": hi / 16000, "lang": "", "text": t}

@@ -1,4 +1,4 @@
-"""정제기 스레드의 수명과 모델 공유."""
+"""The refiner thread's lifetime, and model sharing."""
 import gc
 import threading
 import weakref
@@ -20,10 +20,10 @@ def test_refiner_close_releases_the_model():
     ref = weakref.ref(asr)
     before = threading.active_count()
     r.close()
-    r.close()                                    # 두 번 불러도 됩니다
+    r.close()                                    # Calling it twice is fine
     del asr, r
     gc.collect()
-    assert ref() is None                         # 예전에는 스레드가 붙잡아 살아 있었습니다
+    assert ref() is None                         # The thread used to hold on and keep it alive
     assert threading.active_count() == before - 1
 
 
@@ -114,4 +114,4 @@ def test_run_stream_flushes_and_refines_at_end_of_audio():
     chunks = [np.zeros(1600, dtype=np.float32)] * 3
     stream.run_stream(chunks, vad, FakeASR(), None, stream.AudioHistory(), ref)
     assert vad.flushed == 1
-    assert ref.forced[-1] is True                # 소리가 끝나면 마지막 무리도 정제
+    assert ref.forced[-1] is True                # When the audio ends, the last group is refined too

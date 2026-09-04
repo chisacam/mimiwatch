@@ -1,24 +1,29 @@
-/* mimiwatch 화면 — 플레이어 어댑터: 유튜브·트위치·m3u8 을 한 모양으로.
+/* The mimiwatch screen — player adapters: YouTube, Twitch and m3u8 in one
+ * shape.
  *
- * web/app.js 를 관심사별로 나눈 파일입니다. 전부 일반 <script> 로 index.html 이
- * 적는 순서대로 읽히며 전역 범위를 함께 씁니다 -- 모듈 문법을 쓰지 않는 것은
- * 확장과 공유하는 overlay.js 와 같은 이유입니다. 서로 부르는 것은 전부
- * 실행 시점의 함수 호출이라 파일 순서는 main.js 가 마지막이기만 하면 됩니다.
+ * This is web/app.js split up by concern. All of them are plain <script> tags,
+ * read in the order index.html lists them, sharing one global scope -- module
+ * syntax is avoided for the same reason as in overlay.js, which is shared with
+ * the extension. Everything they call on each other is a function call at run
+ * time, so the file order only has to keep main.js last.
  *
- * 화면이 플레이어에게 묻는 것은 넷뿐입니다 -- 지금 몇 초인가(getCurrentTime),
- * 어디로 가라(seekTo·playVideo), 소리를 끄고 켜라(setMuted), 치워라(destroy).
- * 메서드 이름을 유튜브 IFrame API 와 같게 둔 것은 그 넷을 부르는 자리
- * (state.js 의 renderCue, script-panel.js 의 줄 클릭)를 고치지 않으려는 것입니다.
- * 멀티뷰에서는 타일마다 어댑터가 하나씩이고 `state.player` 는 초점 타일의 것입니다.
+ * The screen asks the player four things and no more -- what second is it now
+ * (getCurrentTime), go there (seekTo, playVideo), mute and unmute (setMuted),
+ * clear yourself away (destroy). The method names are kept the same as the
+ * YouTube IFrame API's so that the places calling those four (renderCue in
+ * state.js, the line click in script-panel.js) do not have to change. In
+ * multiview there is one adapter per tile and `state.player` is the focused
+ * tile's.
  *
  *   { kind, ready, mount(host, src, {muted, onError}) -> Promise,
  *     load(src)?, getCurrentTime(), seekTo(t), playVideo(), setMuted(b), destroy() }
  *
- * `src` 는 srcOf() 가 만든 { site, video_id | channel | url } 입니다. */
+ * `src` is the { site, video_id | channel | url } that srcOf() builds. */
 
-/* 외부 스크립트를 한 번만 읽습니다. 유튜브는 index.html 이 미리 읽지만
- * 트위치·hls.js 는 첫 타일이 필요로 할 때 읽습니다 -- 안 쓰는 사람에게까지
- * 내려받게 할 이유가 없습니다. 10초가 지나면 실패로 칩니다. */
+/* Read an external script once only. YouTube's is read ahead of time by
+ * index.html, but Twitch's and hls.js are read when the first tile needs them
+ * -- there is no reason to make someone who never uses them download them.
+ * Past 10 seconds it counts as a failure. */
 const _scriptLoads = {};
 
 function loadScriptOnce(url, isReady) {
@@ -41,9 +46,10 @@ function loadScriptOnce(url, isReady) {
 
 let _hostSeq = 0;
 
-/* 어느 사이트의 무엇을 틀어야 하는가. 세션 상태(/api/live/status)나 probe 결과,
- * 멀티뷰 멤버 -- 어느 것을 넣어도 같은 답이 나옵니다. 서버가 site 를 알려 주지만
- * 새 세션은 yt-dlp 가 답하기 전이라 비어 있을 수 있어 주소로도 짚습니다. */
+/* What to play, and from which site. Session status (/api/live/status), a
+ * probe result, a multiview member -- put any of them in and the same answer
+ * comes out. The server does tell us site, but on a new session it can be
+ * empty because yt-dlp has not answered yet, so the URL is read as well. */
 function srcOf(x) {
   if (!x) return { site: "none" };
   const url = x.url || "";
@@ -60,18 +66,22 @@ function srcOf(x) {
   return { site: "none" };
 }
 
-/* 라이브에서 끝점 너머로 찍지 않게 잘라 줍니다.
+/* Clamp a seek in a live stream so it never lands past the live edge.
  *
- * 라이브 임베드를 끝점 뒤로 보내면 「끝났다」로 앉아 버립니다 -- 유튜브는 화면에
- * 다시 재생(↻) 단추만 남기고 멎고, 자막만 계속 갱신되는 상태가 됩니다(0.3.1 보고).
- * 되돌릴 길이 플레이어를 다시 만드는 것뿐이라(adapters 의 상태 0 감시) 애초에
- * 그 자리로 보내지 않는 것이 낫습니다.
+ * Send a live embed past the edge and it sits down as "ended" -- YouTube stops
+ * with nothing but a replay (↻) button left on screen, while the subtitles go
+ * on updating (reported in 0.3.1). The only way back is to build the player
+ * again (the state 0 watch in adapters), so it is better not to send it there
+ * in the first place.
  *
- * 찍는 자리는 자막 줄 클릭(script-panel.js)이지만 거기만 고치지 않고 어댑터에서
- * 자릅니다 -- 타일을 옮기거나 더하는 길에서 눌린 클릭까지 전부 이 문을 지납니다.
+ * The place that seeks is the subtitle line click (script-panel.js), but the
+ * clamp lives in the adapter rather than there alone -- every click, including
+ * the ones pressed while tiles are being moved or added, goes through this
+ * door.
  *
- * 되감기는 그대로 둡니다. 막는 것은 **끝점을 앞지르는 것**뿐입니다. 끝점을 모르면
- * (아직 메타데이터 전, getDuration()이 0) 자를 근거가 없으므로 그대로 보냅니다.
+ * Rewinding is left alone. What is blocked is **overshooting the edge**, and
+ * only that. If the edge is unknown (before the metadata, getDuration() is 0)
+ * there is no ground to clamp on, so the seek goes through as it is.
  */
 const LIVE_EDGE_MARGIN_S = 5;
 
@@ -92,9 +102,10 @@ function adapterFor(src) {
   return noneAdapter();
 }
 
-/* 틀 것이 없는 타일 -- 탭 소리 세션, 임베드할 수 없는 소스. `ready` 가 영영
- * false 라 renderCue() 가 이 타일에는 자막을 그리지 않습니다(예전의 탭 세션과
- * 같습니다). 안내문은 부르는 쪽이 playerError() 로 얹습니다. */
+/* A tile with nothing to play -- a tab-audio session, a source that cannot be
+ * embedded. `ready` stays false forever, so renderCue() draws no subtitles on
+ * this tile (the same as the tab session of old). The notice is laid on by the
+ * caller with playerError(). */
 function noneAdapter() {
   return {
     kind: "none", ready: false, live: false,
@@ -104,10 +115,11 @@ function noneAdapter() {
   };
 }
 
-/* 유튜브. IFrame API 는 넘겨준 요소를 iframe 으로 **바꿔 치우므로** 타일마다
- * 고유 id 의 빈 요소를 하나 만들어 줍니다. 초점이 아닌 타일은 소리를 끈 채
- * 자동 재생합니다 -- 브라우저는 소리 없는 자동 재생만 허용합니다. 초점 타일은
- * 예전과 같이 아무 인자 없이 만들어 사용자가 재생을 누릅니다. */
+/* YouTube. The IFrame API **replaces** the element handed to it with an
+ * iframe, so one empty element with a unique id is made per tile. A tile that
+ * does not hold the focus autoplays muted -- a browser allows autoplay only
+ * without sound. The focused tile is built with no such argument, as before,
+ * and the user presses play. */
 function ytAdapter() {
   const a = { kind: "youtube", ready: false, live: false, player: null };
   a.mount = async (host, src, opts = {}) => {
@@ -119,14 +131,15 @@ function ytAdapter() {
     const el = document.createElement("div");
     el.id = "yt-host-" + (++_hostSeq);
     host.appendChild(el);
-    // fs:0 은 유튜브의 전체화면 단추를 지웁니다. 그 단추는 **iframe**을
-    // 전체화면 요소로 만드는데, 브라우저는 전체화면 요소의 하위 트리만
-    // 그리므로 iframe 밖에 있는 자막 오버레이가 통째로 사라집니다.
-    // iframe 안은 교차 출처라 그 단추를 가로챌 수 없으니, 지우고 우리
-    // 단추를 대신 둡니다.
+    // fs:0 removes YouTube's fullscreen button. That button makes the
+    // **iframe** the fullscreen element, and a browser draws only the subtree
+    // of the fullscreen element, so the subtitle overlay that sits outside the
+    // iframe disappears entirely. Inside the iframe is cross-origin and the
+    // button cannot be intercepted, so it is removed and our own button put
+    // there instead.
     const vars = { rel: 0, modestbranding: 1, playsinline: 1, fs: 0 };
     if (opts.muted) { vars.mute = 1; vars.autoplay = 1; }
-    else if (opts.autoplay) vars.autoplay = 1;      // 소리 켠 자동 재생 -- 사용자 조작 직후에만 통합니다
+    else if (opts.autoplay) vars.autoplay = 1;      // autoplay with sound -- only goes through right after a user gesture
     await new Promise((resolve) => {
       let done = false;
       const settle = () => { if (!done) { done = true; resolve(); } };
@@ -135,14 +148,16 @@ function ytAdapter() {
         events: {
           onReady: () => {
             a.ready = true;
-            // fs:0 은 단추를 지울 뿐입니다. allowfullscreen 을 떼면 iframe은
-            // 어떤 경로로도 전체화면 요소가 될 수 없습니다 -- 그래야 자막이
-            // 사라지는 상태 자체가 만들어지지 않습니다.
+            // fs:0 only removes the button. With allowfullscreen taken off,
+            // the iframe cannot become the fullscreen element by any route at
+            // all -- that way the state where the subtitles disappear is never
+            // reached in the first place.
             const f = host.querySelector("iframe");
             if (f) f.removeAttribute("allowfullscreen");
-            // 초점이 아닌 타일은 소리 없이 자동 재생합니다. playerVars 의 autoplay 만으로는
-            // 시작하지 않는 경우가 있어(사용자 조작 없이 뒤늦게 만들어진 플레이어) 여기서
-            // 한 번 더 시킵니다 -- 음소거 재생은 브라우저가 막지 않습니다.
+            // A tile without the focus autoplays without sound. autoplay in
+            // playerVars alone sometimes does not start it (a player built
+            // late, with no user gesture), so it is asked once more here -- a
+            // browser does not block muted playback.
             if (opts.muted) { a.player.mute(); a.player.playVideo(); }
             settle();
           },
@@ -152,14 +167,16 @@ function ytAdapter() {
           },
         },
       });
-      // 임베드가 막힌 영상은 onReady 가 오지 않을 수 있습니다. 마운트를
-      // 기다리는 쪽이 영영 서 있지 않게 합니다.
+      // A video whose embedding is blocked may never send onReady. This
+      // keeps whoever waits on the mount from standing there forever.
       setTimeout(settle, 15000);
     });
-    // 버퍼링 감시. 멀티뷰에서 타일을 닫거나 자리를 바꾼 뒤 남은 라이브 플레이어가 버퍼링에
-    // 갇혀 영영 도는 일이 있었습니다(같은 방송의 임베드 둘 중 하나를 지웠을 때 재현됨;
-    // 새로고침하면 풀림). 15초 넘게 버퍼링이면 같은 iframe 안에서 방송을 다시 붙입니다 --
-    // 새로고침이 하던 일을 그 타일만 합니다. 1분에 한 번만, 라이브에만.
+    // The buffering watch. After a tile was closed or the tiles were moved
+    // around in multiview, a live player left behind could get caught
+    // buffering and spin forever (reproduced by deleting one of two embeds of
+    // the same stream; a reload cleared it). Buffering for more than 15
+    // seconds re-attaches the stream inside the same iframe -- what a reload
+    // did, done for that tile alone. Once a minute at most, and live only.
     if (opts.live) {
       let buffering = 0, healed = 0, stage = 0, ended = 0;
       const diag = () => {
@@ -180,72 +197,83 @@ function ytAdapter() {
         let st;
         try { st = a.player.getPlayerState(); } catch (_) { return; }
         if (st === 1) { buffering = 0; stage = 0; ended = 0; return; }
-        // 상태 0 은 「끝났다」입니다 -- 화면에 다시 재생(↻) 단추만 남고 가만히 있습니다.
-        // 라이브에는 그렇게 앉아 있을 이유가 없습니다. 방송이 정말 끝났다면 받아 적는
-        // 쪽도 함께 끝나는데, 0.3.1 에서 **자막은 계속 갱신되는 채로** 화면만 이 상태로
-        // 남는 것이 보고되었습니다. 버퍼링 감시는 상태 3 만 보고 있어 이 자리를 통째로
-        // 놓쳤습니다 -- 스피너가 도는 정지만 잡고, 멈춰 선 정지는 못 잡았습니다.
+        // State 0 is "ended" -- nothing but a replay (↻) button left on
+        // screen, sitting still. A live stream has no reason to sit like that.
+        // If the stream really has ended, the transcribing side ends with it,
+        // but 0.3.1 reported the screen left in this state **while the
+        // subtitles went on updating**. The buffering watch was looking at
+        // state 3 only and missed this spot entirely -- it caught the stall
+        // with a spinner turning, never the stall standing still.
         //
-        // 세 번까지만 손을 씁니다(1차 다시 붙이기, 2·3차 다시 만들기). 정말 끝난 방송에
-        // 9초마다 새 플레이어를 앉히지 않기 위해서입니다. 다시 재생되면(상태 1) 0 으로
-        // 돌아가 다음 번을 위해 세 번이 다시 찹니다.
+        // Three attempts at most (the 1st re-attaches, the 2nd and 3rd
+        // rebuild). This is so a genuinely finished stream does not get a new
+        // player seated every 9 seconds. Once it plays again (state 1) the
+        // count goes back to 0 and the three refill for next time.
         if (st === 0) {
           buffering = 0;
           if (ended >= 3 || Date.now() - healed < 9000) return;
           healed = Date.now();
           ended++;
-          console.warn(`[yt] ${src.video_id} 라이브인데 「끝났다」고 앉았습니다 (${ended}번째)`,
+          console.warn(`[yt] ${src.video_id} is live but sat down saying "ended" (attempt ${ended})`,
                        JSON.stringify(diag()));
           if (ended === 1) {
-            // 라이브에서 loadVideoById 는 끝점으로 갑니다. iframe 을 그대로 두므로 가장 쌉니다.
-            console.warn(`[yt] ${src.video_id} loadVideoById 로 다시 붙습니다`);
-            try { a.player.loadVideoById(src.video_id); return; } catch (_) { /* 다음 단계로 */ }
+            // On a live stream loadVideoById goes to the edge. It leaves the iframe alone, so it is the cheapest.
+            console.warn(`[yt] ${src.video_id} reattaching with loadVideoById`);
+            try { a.player.loadVideoById(src.video_id); return; } catch (_) { /* on to the next stage */ }
           }
           const back = !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
-          console.warn(`[yt] ${src.video_id} 플레이어를 다시 만듭니다 (${back ? "소리 켠 자동 재생" : "▶ 를 눌러 주십시오"})`);
+          console.warn(`[yt] ${src.video_id} rebuilding the player (${back ? "autoplay with sound" : "press ▶"})`);
           if (a._remount) a._remount(false, back);
           return;
         }
         if (st !== 3) { buffering = 0; return; }
         buffering += 3;
-        // 타일을 닫거나 배치를 바꾼 직후의 정지는 거의 확실히 그 재배치가 부른 것이므로(다른
-        // 타일을 닫았을 때 소리 켠 플레이어가 데이터를 들고도 멎는 것이 재현됨) 3초만 봅니다.
+        // A stall right after a tile was closed or the layout changed is
+        // almost certainly caused by that relayout (reproduced: close another
+        // tile and the unmuted player stalls even while holding the data), so
+        // only 3 seconds are watched.
         const recent = Date.now() - (window.__tilesChangedAt || 0) < 20000;
         if (buffering < (recent ? 3 : 6) || Date.now() - healed < 9000) return;
         healed = Date.now();
         buffering = 0;
         stage++;
         const d = diag();
-        console.warn(`[yt] ${src.video_id} ${recent ? "재배치 뒤 3" : "6"}초 넘게 버퍼링 (${stage}번째)`, JSON.stringify(d));
-        // 재배치 직후의 정지를 한 번 겪은 브라우저는 그 뒤로 재배치 때 초점 플레이어를 미리 새로
-        // 만듭니다(tiles.js applyLayout). 멎지 않는 환경은 이 표시가 없어 깜빡이지 않습니다.
+        console.warn(`[yt] ${src.video_id} buffering for over ${recent ? "3 s after a reorder" : "6 s"} (attempt ${stage})`, JSON.stringify(d));
+        // A browser that has hit a stall right after a relayout once builds
+        // the focused player anew, up front, on every later relayout
+        // (applyLayout in tiles.js). An environment that never stalls carries
+        // no such mark and so never flickers.
         if (recent && d.muted === false) {
-          try { savePrefs({ ...loadPrefs(), ytRelayoutStall: true }); } catch (_) { /* 저장 못 해도 회복은 함 */ }
+          try { savePrefs({ ...loadPrefs(), ytRelayoutStall: true }); } catch (_) { /* recovery happens even if the save does not */ }
         }
-        // 멎는 것은 거의 언제나 **소리를 켠** 플레이어였습니다(초점을 옮기면 스피너도 따라감).
-        // 진단값은 미디어를 받고 있었고(loaded>0) 사용자 조작도 있었다고 하므로 자동 재생 차단은
-        // 아닙니다. 유튜브 임베드가 「음소거 재생 → 소리 켜기」 전환에서 스트림을 다시 맞추다
-        // 라이브 끝을 앞질러(t > dur) 갇히는 모양입니다. 같은 플레이어에 다시 붙여도 안 풀리므로
-        // 플레이어를 새로 만듭니다 -- 1차: 소리 켠 채 자동 재생(직전 조작 덕에 허용됨),
-        // 2차: 재생 단추 상태(사용자가 iframe 안에서 누름 = 새로고침이 하던 일).
-        // 음소거 플레이어의 정지는 같은 플레이어에 다시 붙이는 것으로 충분했습니다.
+        // What stalls was almost always the player **with the sound on**
+        // (move the focus and the spinner follows it). The diagnostics say
+        // media was arriving (loaded>0) and there had been a user gesture, so
+        // it is not autoplay being blocked. It looks as though the YouTube
+        // embed, realigning the stream across the "muted playback -> sound on"
+        // switch, overshoots the live end (t > dur) and gets caught.
+        // Re-attaching to the same player does not clear it, so the player is
+        // built anew -- 1st: autoplay with the sound on (allowed thanks to the
+        // gesture just before), 2nd: the play-button state (the user presses
+        // inside the iframe = what a reload did). For a muted player's stall,
+        // re-attaching to the same player was enough.
         if (d.muted === true) {
-          console.warn(`[yt] ${src.video_id} loadVideoById 로 다시 붙습니다`);
-          try { a.player.loadVideoById(src.video_id); } catch (_) { /* 다음 단계로 */ }
+          console.warn(`[yt] ${src.video_id} reattaching with loadVideoById`);
+          try { a.player.loadVideoById(src.video_id); } catch (_) { /* on to the next stage */ }
           return;
         }
         const autoplay = stage === 1 && !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
-        console.warn(`[yt] ${src.video_id} 플레이어를 다시 만듭니다 (${autoplay ? "소리 켠 자동 재생" : "▶ 를 눌러 주십시오"})`);
+        console.warn(`[yt] ${src.video_id} rebuilding the player (${autoplay ? "autoplay with sound" : "press ▶"})`);
         if (a._remount) a._remount(false, autoplay);
         if (!autoplay) stage = 0;
       }, 3000);
     }
   };
-  /* 감시 2단계가 부릅니다: 부르는 쪽(tiles.js 의 mountTile)이 이 타일을 다시 앉힐 수 있게 걸어 둡니다. */
+  /* Called by stage 2 of the watch: hung here so the caller (mountTile in tiles.js) can seat this tile again. */
   a._remount = null;
   a.load = (src) => { if (a.player && a.ready) a.player.loadVideoById(src.video_id); };
   a.getCurrentTime = () => (a.player && a.ready ? a.player.getCurrentTime() : 0);
-  // 라이브의 끝점은 getDuration() 입니다 -- 유튜브는 방송이 시작한 뒤 흐른 시간을 답합니다.
+  // A live stream's edge is getDuration() -- YouTube answers with the time elapsed since the stream began.
   a.seekTo = (t) => {
     if (!a.player || !a.ready) return;
     a.player.seekTo(liveSafeSeek(a, t, () => a.player.getDuration()), true);
@@ -257,21 +285,23 @@ function ytAdapter() {
   };
   a.destroy = () => {
     if (a._watch) { clearInterval(a._watch); a._watch = null; }
-    try { if (a.player) a.player.destroy(); } catch (_) { /* 이미 사라진 iframe */ }
+    try { if (a.player) a.player.destroy(); } catch (_) { /* an iframe already gone */ }
     a.player = null;
     a.ready = false;
   };
   return a;
 }
 
-/* 생 m3u8. 서버는 예전부터 받아 적었지만 화면은 검은 상자였습니다 -- 유튜브
- * 플레이어에 넣을 영상 id 가 없으니까요. 이제 <video> 에 hls.js 를 붙여 틉니다.
- * hls.js 는 /static/vendor/ 에 묶여 있고(Apache-2.0) 첫 타일이 필요로 할 때 읽습니다.
- * 사파리는 HLS 를 스스로 틀므로 그때는 그냥 src 로 줍니다.
+/* Raw m3u8. The server has been transcribing these all along, but the screen
+ * was a black box -- there is no video id to put in the YouTube player. Now
+ * hls.js is attached to a <video> and it plays. hls.js is bundled in
+ * /static/vendor/ (Apache-2.0) and read when the first tile needs it. Safari
+ * plays HLS by itself, and there it is simply handed the src.
  *
- * CORS 는 우리가 어쩔 수 없습니다. 방송 서버가 다른 출처의 fetch 를 막으면
- * hls.js 는 열지 못합니다 -- 그때도 자막은 서버가 ffmpeg 으로 받아 적으므로
- * 오른쪽 자막 내역은 그대로 쌓입니다. 그렇게 안내합니다. */
+ * CORS is out of our hands. If the stream's server blocks a cross-origin fetch,
+ * hls.js cannot open it -- even then the server transcribes with ffmpeg, so
+ * the subtitle log on the right piles up as usual. That is what the notice
+ * says. */
 function hlsAdapter() {
   const a = { kind: "hls", ready: false, live: false, video: null, hls: null };
   a.mount = async (host, src, opts = {}) => {
@@ -279,7 +309,7 @@ function hlsAdapter() {
     const v = document.createElement("video");
     v.playsInline = true;
     v.controls = true;
-    v.setAttribute("controlslist", "nofullscreen");   // 전체화면은 우리 단추로 -- 자막이 함께 커져야 합니다
+    v.setAttribute("controlslist", "nofullscreen");   // fullscreen goes through our button -- the subtitles have to grow with it
     v.muted = !!opts.muted;
     v.autoplay = true;
     host.appendChild(v);
@@ -309,10 +339,10 @@ function hlsAdapter() {
       a.hls.attachMedia(v);
     }
     a.ready = true;
-    v.play().catch(() => { /* 자동 재생이 막혔으면 사용자가 누릅니다 */ });
+    v.play().catch(() => { /* if autoplay is blocked the user presses play */ });
   };
   a.getCurrentTime = () => (a.video ? a.video.currentTime : 0);
-  // 라이브 <video> 는 duration 이 Infinity 입니다. 끝점은 seekable 의 마지막 구간 끝입니다.
+  // A live <video> has duration Infinity. The edge is the end of the last seekable range.
   a.seekTo = (t) => {
     if (!a.video) return;
     a.video.currentTime = liveSafeSeek(a, t, () => {
@@ -323,7 +353,7 @@ function hlsAdapter() {
   a.playVideo = () => { if (a.video) a.video.play().catch(() => {}); };
   a.setMuted = (m) => { if (a.video) a.video.muted = !!m; };
   a.destroy = () => {
-    try { if (a.hls) a.hls.destroy(); } catch (_) { /* 이미 닫힘 */ }
+    try { if (a.hls) a.hls.destroy(); } catch (_) { /* already closed */ }
     a.hls = null;
     if (a.video) { a.video.pause(); a.video.removeAttribute("src"); a.video.remove(); }
     a.video = null;
@@ -332,14 +362,16 @@ function hlsAdapter() {
   return a;
 }
 
-/* 트위치. 공식 Embed JS(player.twitch.tv/js/embed/v1.js)를 첫 타일이 필요로 할 때 읽습니다.
- * iframe 만 얹는 길도 있지만 소리를 끄고 켜는 문서화된 방법이 이쪽뿐입니다
- * (setMuted). `parent` 는 우리 페이지의 호스트 이름 -- 서버는 localhost 와
- * 127.0.0.1 로만 열리고 트위치는 그 둘을 부모로 허용합니다.
+/* Twitch. The official Embed JS (player.twitch.tv/js/embed/v1.js) is read when
+ * the first tile needs it. Laying down a bare iframe is another road, but the
+ * documented way to mute and unmute exists only on this one (setMuted).
+ * `parent` is our page's host name -- the server opens on localhost and
+ * 127.0.0.1 only, and Twitch allows both of those as a parent.
  *
- * 트위치의 iframe 은 allowfullscreen 을 달고 나옵니다. 그것을 떼어 두어 플레이어의
- * 전체화면 단추가 iframe 만 키우지 않게 합니다 -- 그러면 자막이 사라집니다. 못
- * 떼어도 onFullscreenChange 의 가드가 되돌립니다. */
+ * Twitch's iframe comes out carrying allowfullscreen. It is taken off so that
+ * the player's fullscreen button does not blow up the iframe alone -- that
+ * makes the subtitles disappear. If it cannot be taken off, the guard in
+ * onFullscreenChange puts things back. */
 function twitchAdapter() {
   const a = { kind: "twitch", ready: false, live: false, player: null, obs: null };
   a.mount = async (host, src, opts = {}) => {
@@ -388,7 +420,7 @@ function twitchAdapter() {
   a.destroy = () => {
     if (a.obs) a.obs.disconnect();
     a.obs = null;
-    try { if (a.player && a.player.destroy) a.player.destroy(); } catch (_) { /* 이미 사라짐 */ }
+    try { if (a.player && a.player.destroy) a.player.destroy(); } catch (_) { /* already gone */ }
     a.player = null;
     a.ready = false;
   };
@@ -396,17 +428,19 @@ function twitchAdapter() {
 }
 
 
-/* 로컬 파일. 서버의 /api/media/<id> 가 원본을 Range 로 내주므로 <video> 에
- * 그대로 뭅니다 -- hls 어댑터에서 hls.js 를 뺀 모양입니다. 음성 파일(mp3 등)도
- * <video> 로 틉니다: 화면은 검고 조절기만 보이지만, 자막 오버레이가 그 위에
- * 얹히므로 오히려 그 검은 상자가 자막의 자리입니다. */
+/* A local file. The server's /api/media/<id> hands out the original over
+ * Range, so it is bitten straight onto a <video> -- the hls adapter with hls.js
+ * taken out. Audio files (mp3 and the like) play through <video> too: the
+ * picture is black with only the controls showing, but the subtitle overlay
+ * sits on top of it, so that black box is if anything exactly where the
+ * subtitles belong. */
 function mediaAdapter() {
   const a = { kind: "media", ready: false, live: false, video: null };
   a.mount = async (host, src, opts = {}) => {
     const v = document.createElement("video");
     v.playsInline = true;
     v.controls = true;
-    v.setAttribute("controlslist", "nofullscreen");   // 전체화면은 우리 단추로 -- 자막이 함께 커져야 합니다
+    v.setAttribute("controlslist", "nofullscreen");   // fullscreen goes through our button -- the subtitles have to grow with it
     v.muted = !!opts.muted;
     v.preload = "metadata";
     v.src = src.url;

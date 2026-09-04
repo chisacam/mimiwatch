@@ -1,19 +1,22 @@
-"""자막을 손으로 고칠 때의 규칙을 확인합니다.
+"""Check the rules that hold when a subtitle is edited by hand.
 
-전사는 틀립니다. 잡음을 말로 듣고, 고유명사를 엉뚱하게 적고, 번역은 그
-위에서 한 번 더 어긋납니다. 고치는 길에는 조용히 망가지는 자리가 몇 군데
-있어서 그것들을 여기서 봅니다.
+Transcription gets things wrong. It hears noise as speech, writes proper nouns
+as something else, and the translation goes wrong once more on top of that. The
+editing path has a few places where things break quietly, and those are what is
+looked at here.
 
-  - 원문을 고치면 붙어 있는 번역은 **옛 문장의 것**이 됩니다. 지우지 않고
-    표시만 남겨야 하고, 번역을 손으로 맞추면 그 표시가 내려가야 합니다.
-  - 뭉텅이 재번역이 사람이 고친 번역을 덮으면 안 됩니다. `edited` 에 남는
-    표시가 그 판단의 근거입니다.
-  - 시작 시각만 옮기면 끝 시각이 뒤에 남아 **끝이 시작보다 앞선** 자막이
-    나옵니다. SRT 도구는 그런 줄을 버리거나 파일을 통째로 거부합니다.
+  - Editing the source text leaves the attached translation as **the old
+    sentence's**. It must not be erased, only marked, and correcting the
+    translation by hand must take that mark back down.
+  - A bulk re-translation must not overwrite a translation a person edited. The
+    mark left in `edited` is the ground for that decision.
+  - Moving only the start time leaves the end time behind, producing a subtitle
+    whose **end precedes its start**. SRT tools drop such a line, or refuse the
+    whole file.
 
     .venv/bin/python bench/edit_check.py
 
-진짜 저장소를 건드리지 않습니다 -- 임시 사본에서만 씁니다.
+It does not touch the real store -- it writes only in a temporary copy.
 """
 from __future__ import annotations
 
@@ -88,7 +91,7 @@ def main():
         check(got["end"] > got["t"], f"끝({got['end']:.2f}) > 시작({got['t']:.2f})")
 
         print("\n[6] 내보내기가 거꾸로 된 구간을 손본다")
-        # 저장소를 직접 망가뜨려, edit_cue 를 거치지 않은 경로도 막히는지 봅니다.
+        # Corrupt the store directly, to see that a path not going through edit_cue is blocked too.
         store.update_cue(OWNER, 1, start=50.0, end=2.0)
         meta, rows = export.collect(OWNER)
         bad = [r for r in rows if r["end"] <= r["start"]]
@@ -109,11 +112,13 @@ def main():
         check(store.cue_count(OWNER) == n0 - 1, f"한 줄 줄었다 ({n0} -> {n0-1})")
         check(2 not in ids, "그 줄이 없다")
         check(1 in ids and 3 in ids, f"남은 번호는 다시 매기지 않는다 ({ids})")
-        # 남은 줄의 순서는 번호순이 아니라 **시각순**입니다. 예전에는 이 자리에서
-        # `ids == sorted(ids)` 를 함께 봤는데, 바로 위 [6]이 1번 줄의 시작을 50초로
-        # 밀어 놓으므로 그 요구는 store.cues() 의 약속을 거스릅니다 -- 사람이 써 넣은
-        # 줄(insert_cue)은 번호가 늘 마지막이면서 시각은 빈 자리 어딘가라, 번호순으로
-        # 내면 내보내기 순서와 번역 문맥이 어긋납니다(store.cues 도크스트링).
+        # The remaining lines are ordered **by time**, not by id. This spot used
+        # to check `ids == sorted(ids)` as well, but [6] just above pushes line
+        # 1's start out to 50 s, so that demand runs against what store.cues()
+        # promises -- a line a person wrote in (insert_cue) always gets the last
+        # id while its time is somewhere in a gap, so handing them back in id
+        # order throws off both the export order and the translation context
+        # (store.cues docstring).
         ts = [c["t"] for c in store.cues(OWNER)]
         check(ts == sorted(ts), f"남은 줄은 시각순이다 ({ts})")
         check(not store.delete_cue(OWNER, 2), "이미 없는 줄은 False")
@@ -131,7 +136,7 @@ def main():
         check("text" not in got["edited"],
               f"기계 번역 뒤 표시가 걷힌다 ({got['edited']!r})")
         check(got["translations"]["g"] == "새 번역", "번역이 갈렸다")
-        # 사람이 고친 표시는 기계 번역이 지우지 않습니다.
+        # A machine translation does not erase the mark that a person edited it.
         store.edit_cue(o2, 1, tr="사람 번역", backend="g")
         store.save_translation(o2, 1, "g", "기계가 또 씀")
         check("tr" in store.cues(o2)[0]["edited"],

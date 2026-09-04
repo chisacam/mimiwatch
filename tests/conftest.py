@@ -1,12 +1,14 @@
-"""시험 공통 준비.
+"""Shared test setup.
 
-모델은 올리지 않습니다. 저장소(`data/`)와 설정(`backends.json`)은 시험마다
-임시 디렉터리로 돌려 진짜 것을 건드리지 않습니다 -- 예전에 시험용 세션이
-진짜 DB에 남아 화면의 「지난 방송」 목록에 뜬 적이 있습니다.
+No model is ever loaded. The store (`data/`) and the config (`backends.json`)
+are redirected to a temporary directory for each test so that the real ones are
+never touched -- test sessions used to survive in the real DB and show up in
+the "Past streams" list on screen.
 
-전사 런타임(transcribe_cpp, sherpa_onnx)이 없는 기계(CI)에서는 가짜 모듈을
-끼워 import만 되게 합니다. 시험이 그것들을 실제로 부르면 곧바로 실패합니다 --
-그러면 그 시험이 모델을 올리려 한 것이니 고쳐야 합니다.
+On a machine without the transcription runtimes (transcribe_cpp, sherpa_onnx),
+such as CI, stub modules are installed so that an import still works. A test
+that actually calls into them fails on the spot -- that means the test tried to
+load a model, and the test is what needs fixing.
 """
 from __future__ import annotations
 
@@ -20,9 +22,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 
-# 가짜를 끼운 이름. 나중에 `importlib.util.find_spec` 으로 다시 찾으면 안 됩니다 --
-# 아래에서 sys.modules 에 넣는 것은 __spec__ 이 없는 맨 모듈이라 그 자리에서
-# ValueError 가 납니다. 끼운 쪽이 적어 두는 것이 유일하게 정확한 기록입니다.
+# The names that got a stub. Do not look them up again later with
+# `importlib.util.find_spec` -- what goes into sys.modules below is a bare
+# module with no __spec__, so that call raises ValueError right there. The side
+# that installed the stub writing it down is the only accurate record.
 _STUBBED: set[str] = set()
 
 
@@ -59,11 +62,13 @@ def _stub_native():
 _stub_native()
 
 
-# 위 가짜는 **이 프로세스의** sys.modules 에만 들어갑니다. 자식 프로세스로 명령줄을
-# 돌려 보는 시험(test_cli_help)은 그것을 물려받지 못해, 런타임이 없는 기계에서는
-# `import sherpa_onnx` 에서 죽었습니다 -- 파서가 멀쩡한데도 「명령줄이 깨졌다」로 읽힙니다.
-# 그쪽에는 같은 내용을 **파일로** 적어 PYTHONPATH 로 건네줍니다. 없는 것만 적으므로
-# 런타임이 깔린 기계에서는 진짜가 그대로 쓰입니다.
+# The stubs above land in **this process's** sys.modules only. A test that runs
+# the command line in a child process (test_cli_help) does not inherit them, so
+# on a machine without the runtimes it died at `import sherpa_onnx` -- which
+# reads as "the command line is broken" even though the parser is fine. For that
+# side the same content is written out **as files** and handed over on
+# PYTHONPATH. Only the missing ones are written, so on a machine where the
+# runtimes are installed the real ones are used as before.
 _SHERPA_STUB = '"""시험용 가짜. 이름만 있으면 됩니다 -- 쓰는 자리는 모두 함수 안입니다."""\n'
 
 _TCPP_STUB = '''"""시험용 가짜 전사 런타임. import 만 되게 하고, 실제로 부르면 죽습니다."""
@@ -89,7 +94,7 @@ class UnsupportedRequest(Exception):
 
 
 def _write_native_stubs(d):
-    """가짜로 때운 런타임만 파일로 적고 그 경로를 냅니다. 하나도 없으면 None."""
+    """Write out only the runtimes that got a stub and return that path. None if there were none."""
     if "sherpa_onnx" in _STUBBED:
         (d / "sherpa_onnx.py").write_text(_SHERPA_STUB, encoding="utf-8")
     if "transcribe_cpp" in _STUBBED:
@@ -111,13 +116,13 @@ import translate  # noqa: E402
 
 @pytest.fixture(scope="session")
 def native_stub_path(tmp_path_factory):
-    """자식 프로세스에 건넬 가짜 런타임 경로. 이 기계에 다 깔려 있으면 None."""
+    """Path of the stub runtimes to hand to a child process. None if this machine has them all."""
     return _write_native_stubs(tmp_path_factory.mktemp("native_stubs"))
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
-    """저장소와 설정을 임시 디렉터리로."""
+    """Redirect the store and the config to a temporary directory."""
     data = tmp_path / "data"
     data.mkdir()
     monkeypatch.setattr(store, "DATA", str(data))
@@ -136,7 +141,7 @@ def isolated(tmp_path, monkeypatch):
 
 
 class FakeTranslator(translate.Translator):
-    """번역 대신 `T:` 를 앞에 붙입니다. 무엇을 어떤 문맥으로 물었는지 남깁니다."""
+    """Prefixes `T:` instead of translating. Records what was asked with which context."""
 
     name = "fake"
 
@@ -151,7 +156,7 @@ class FakeTranslator(translate.Translator):
 
 @pytest.fixture
 def fake_translate(monkeypatch):
-    """`translate.build`를 가짜로. 만들어진 번역기들을 돌려줍니다."""
+    """Fake out `translate.build`. Returns the translators it made."""
     made: list[FakeTranslator] = []
 
     def build(spec, genre=None):
@@ -165,7 +170,7 @@ def fake_translate(monkeypatch):
 
 
 def wait_job(job_id: str, timeout: float = 10.0) -> dict:
-    """작업이 끝날 때까지 기다립니다. 배경 스레드라 폴링합니다."""
+    """Wait until the job is done. It runs on a background thread, so poll."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         st = jobs.job_status(job_id)
@@ -177,7 +182,7 @@ def wait_job(job_id: str, timeout: float = 10.0) -> dict:
 
 @pytest.fixture
 def session():
-    """모델 없이 발행 경로만 시험할 수 있는 라이브 세션. 이벤트는 `emitted`에 쌓입니다."""
+    """A live session that exercises the publish path alone, with no model. Events pile up in `emitted`."""
     s = live.LiveSession("https://example.invalid/live", "ja", "ko", "local-m2m100")
     s.emitted = []
     real_emit = s.emit
@@ -187,14 +192,14 @@ def session():
         real_emit(e)
 
     s.emit = emit
-    # 번역 스레드가 뜨지 않게. 번역기가 None이면 `_translate`가 곧 돌아섭니다.
+    # Keep the translation thread from starting. With a None translator `_translate` turns back at once.
     s._tr = None
     return s
 
 
 @pytest.fixture
 def fake_ffmpeg():
-    """ffmpeg 프로세스 흉내. stdout에 n_chunks * 0.1초의 무음."""
+    """Stand-in for the ffmpeg process. n_chunks * 0.1 s of silence on stdout."""
     import io
 
     class FakeFF:

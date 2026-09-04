@@ -1,23 +1,29 @@
-/* mimiwatch 화면 — 탭 소리 받기(getDisplayMedia → 16kHz PCM → /api/ingest)와 탭 세션의 이름.
+/* The mimiwatch screen — capturing tab audio (getDisplayMedia → 16kHz PCM →
+ * /api/ingest) and naming a tab session.
  *
- * web/app.js 를 관심사별로 나눈 파일입니다. 전부 일반 <script> 로 index.html 이
- * 적는 순서대로 읽히며 전역 범위를 함께 씁니다 -- 모듈 문법을 쓰지 않는 것은
- * 확장과 공유하는 overlay.js 와 같은 이유입니다. 서로 부르는 것은 전부
- * 실행 시점의 함수 호출이라 파일 순서는 main.js 가 마지막이기만 하면 됩니다. */
+ * This is web/app.js split up by concern. All of them are plain <script> tags,
+ * read in the order index.html lists them, sharing one global scope -- module
+ * syntax is avoided for the same reason as in overlay.js, which is shared with
+ * the extension. Everything they call on each other is a function call at run
+ * time, so the file order only has to keep main.js last. */
 
-/* ---------- 탭 오디오 받기 -------------------------------------------
+/* ---------- capturing tab audio ----------
  *
- * 멤버십 전용 방송은 서버가 받을 수 없습니다. yt-dlp에 쿠키를 물려도 유튜브가
- * 열린 탭의 쿠키를 계속 갈아 치우고, 애초에 그 길은 약관을 비껴갑니다.
+ * A members-only stream is one the server cannot receive. Feeding cookies to
+ * yt-dlp does not help either -- YouTube keeps swapping the open tab's cookies
+ * out, and that road skirts the terms of service to begin with.
  *
- * 대신 사용자가 이미 듣고 있는 소리를 받습니다. 공유 대화상자에서 본인이
- * 직접 탭을 고르므로 우회가 아니고, 쿠키도 필요 없습니다. 크롬 계열 전용
- * 입니다 -- 탭 오디오 공유를 주는 브라우저가 그쪽뿐입니다.
+ * Instead the sound the user is already listening to is captured. The user
+ * picks the tab themselves in the sharing dialog, so it is not a way round
+ * anything, and no cookies are needed. Chromium browsers only -- they are the
+ * only ones that offer tab audio sharing.
  *
- * 서버가 받는 것은 16kHz 모노 int16 PCM입니다. AudioContext를 16000으로 열면
- * 크롬이 리샘플까지 해 주므로 여기서 표본율을 만질 일이 없습니다. */
-/* 그래프·int16 변환·2초마다 올리기는 확장과 공유하는 web/capture.js
- * (MimiCapture)가 합니다. 여기서는 스트림을 얻는 일과 화면 알림만 맡습니다. */
+ * What the server receives is 16kHz mono int16 PCM. Open the AudioContext at
+ * 16000 and Chrome does the resampling as well, so the sample rate never has
+ * to be touched here. */
+/* The graph, the int16 conversion and the upload every 2 seconds are done by
+ * web/capture.js (MimiCapture), which is shared with the extension. What is
+ * left here is getting the stream and the on-screen notices. */
 function stopCapture() {
   const c = state.capture;
   state.captureSession = null;
@@ -26,23 +32,25 @@ function stopCapture() {
   MimiCapture.stop(c);
 }
 
-/* 탭을 고르게 합니다. **세션을 만들기 전에** 부릅니다.
+/* Have the user pick a tab. Called **before the session is created**.
  *
- * 두 가지 이유가 있습니다. getDisplayMedia는 사용자 조작 직후에만 열리는데
- * 그 유효기간이 몇 초뿐이라, 서버 왕복을 먼저 하면 창이 안 뜰 수 있습니다.
- * 그리고 여기서 취소하면 아직 아무것도 만들지 않았으므로 치울 것도 없습니다.
+ * There are two reasons. getDisplayMedia only opens right after a user
+ * gesture, and that gesture is good for a few seconds only, so a server round
+ * trip first can leave the dialog never appearing. And cancelling here has
+ * nothing to clear away, because nothing has been created yet.
  *
- * 돌려주는 것은 MediaStream이거나, 못 얻었으면 null입니다. */
+ * What comes back is a MediaStream, or null if none was obtained. */
 async function requestTabAudio() {
   let media;
   try {
-    // video:true가 필요합니다. 크롬은 오디오만 요청하면 탭 선택지를 아예
-    // 내놓지 않습니다. 받은 화면은 쓰지 않고 버립니다.
+    // video:true is required. Ask Chrome for audio alone and it does not
+    // offer the tab choice at all. The video that comes back is thrown away
+    // unused.
     media = await navigator.mediaDevices.getDisplayMedia({
       video: true, audio: true,
     });
   } catch (err) {
-    if (err && err.name === "NotAllowedError") return null;   // 사용자가 취소
+    if (err && err.name === "NotAllowedError") return null;   // the user cancelled
     jobError(t("capture.error.getAudio", { error: (err && err.message) || err }));
     return null;
   }
@@ -54,23 +62,24 @@ async function requestTabAudio() {
   return media;
 }
 
-/* 탭 세션의 안내는 **화면 자리**에만 씁니다.
+/* The notice for a tab session is written in the **player area** only.
  *
- * 위쪽 막대에도 같은 말을 띄웠더니 한 화면에 두 번 나왔습니다. 그 자리는
- * 좁고(대본 창에서는 460px입니다) 눌러야 할 것을 알리는 데 써야 하므로,
- * 설명은 비어 있는 플레이어 자리로 내립니다. 어차피 그 자리는 이 흐름에서
- * 검은 사각형으로 남습니다.
+ * Putting the same words in the top bar as well showed them twice on one
+ * screen. That bar is narrow (460px in the script window) and has to be kept
+ * for telling the user what to press, so the explanation goes down into the
+ * empty player area. In this flow that area stays a black rectangle anyway.
  *
- * 시작할 때와 이어받을 때 모두 부릅니다 -- 이어받기는 attachLive 를 지나며
- * clearPlayerError() 로 이 안내를 지우고 갑니다. */
+ * Called both on start and on resume -- resume goes through attachLive, which
+ * wipes this notice with clearPlayerError() on its way. */
 function tabStageNotice(tail, tile = focusedTile()) {
   playerError(t("capture.stage.notice") + (tail ? " " + tail : ""), null, tile);
 }
 
-/* 이름 고치기.
+/* Renaming.
  *
- * 탭 소리에만 답니다. 주소로 받는 세션은 yt-dlp 가 제목을 가져오고, 이어받을
- * 때 다시 가져오므로 여기서 고쳐 봐야 되돌아갑니다. */
+ * Offered for tab audio only. A session received from a URL has its title
+ * fetched by yt-dlp, and fetched again on resume, so a name fixed here would
+ * only go back. */
 function syncRenameButton() {
   const live = state.live;
   $("rename-live").hidden = !(live && live.source === "tab");
@@ -91,7 +100,7 @@ function renameLive() {
 
   let closed = false;
   const done = async (save) => {
-    if (closed) return;          // blur 와 Enter 가 겹쳐 두 번 들어옵니다
+    if (closed) return;          // blur and Enter overlap and come in twice
     closed = true;
     const text = input.value.trim();
     input.replaceWith(box);
@@ -104,8 +113,9 @@ function renameLive() {
     setNowTitle(text);
     if (state.doc) state.doc.title = text;
     if (live.probe) live.probe.title = text;
-    // 목록의 그 줄도 같이 고칩니다. 목록을 통째로 다시 그리면 받는 중인
-    // 세션의 임시 줄이 사라졌다 돌아오며 깜빡입니다.
+    // Fix that row of the library along with it. Redrawing the whole library
+    // has the temporary row of a session being received vanish and come back,
+    // which flickers.
     const row = $("video-list").querySelector(
       `.video-row[data-value="${CSS.escape("live:" + live.id)}"]`);
     if (row) {
@@ -121,18 +131,20 @@ function renameLive() {
   input.addEventListener("blur", () => done(true));
 }
 
-/* 공유받은 대상의 이름 -- 쓸 수 있으면.
+/* The name of what was shared -- if it can be used at all.
  *
- * **탭에서는 못 씁니다.** 크롬은 탭을 캡처할 때 label 에 탭 제목이 아니라
- * 불투명한 식별자를 넣습니다. 실제로 받은 값입니다:
+ * **For a tab it cannot.** When Chrome captures a tab it puts an opaque
+ * identifier in label, not the tab's title. This is a value actually seen:
  *
  *     web-contents-media-stream://8D6FD737C5BFC47DBCE78F63FA28FECB
  *
- * 그것을 제목으로 쓰면 「탭 오디오」보다 나쁘므로 걸러 내고 빈 값을
- * 돌려줍니다. 이름은 「＋ 추가」에서 적거나 나중에 「✎ 이름」으로 고칩니다.
+ * Using that as the title is worse than "Tab audio", so it is filtered out and
+ * an empty string comes back. The name is written in "＋ Add", or fixed later
+ * with "✎ Name".
  *
- * 그래도 이 함수를 남겨 둡니다. 창이나 화면을 고르면 그쪽 이름이 오고,
- * 다른 크로미움 판이 진짜 제목을 줄 수도 있습니다. 오면 씁니다. */
+ * The function stays all the same. Picking a window or a screen gives that
+ * one's name, and another Chromium build may hand over a real title. If one
+ * comes, it is used. */
 function tabTitleFrom(media) {
   const v = media.getVideoTracks()[0];
   const raw = ((v && v.label) || "").trim();
@@ -143,16 +155,16 @@ function tabTitleFrom(media) {
             .slice(0, 200);
 }
 
-/* 탭이 아니라 창이나 화면 전체를 골랐는가. 소리가 따라오는지는 플랫폼마다
- * 다른데, 탭은 어디서나 따라옵니다. */
+/* Was a window or the whole screen picked instead of a tab? Whether the sound
+ * comes with it differs by platform, but a tab's does everywhere. */
 function isTabSurface(media) {
   const v = media.getVideoTracks()[0];
   const s = v && v.getSettings ? v.getSettings() : null;
-  // 설정을 못 읽으면 탭이라고 봅니다 -- 아니라면 소리가 없어 앞에서 걸립니다.
+  // If the settings cannot be read it is taken for a tab -- if it is not, there is no sound and it was caught above.
   return !s || !s.displaySurface || s.displaySurface === "browser";
 }
 
-/* 받아 둔 스트림을 세션으로 흘려보냅니다. */
+/* Send the stream already obtained down into the session. */
 async function pipeCapture(media, sessionId) {
   stopCapture();
   const cap = await MimiCapture.start({
@@ -162,13 +174,14 @@ async function pipeCapture(media, sessionId) {
       method: "POST", headers: { "Content-Type": "application/octet-stream" },
       body: buf,
     }).then(r => r.json()),
-    // 사용자가 크롬의 「공유 중지」를 누르면 여기로 옵니다. 순서가 중요합니다 --
-    // stopLive가 알림 칸을 비우므로 그 뒤에 씁니다.
+    // This is where it lands when the user presses Chrome's "Stop sharing".
+    // The order matters -- stopLive empties the notice slot, so the notice is
+    // written after it.
     onEnded: () => {
       stopLive();
       showLiveNotice(t("capture.notice.sharingEnded"));
     },
-    // 세션이 없어졌습니다(서버 재시작 등). 공유는 모듈이 이미 놓았습니다.
+    // The session is gone (a server restart, say). The module has already let the sharing go.
     onError: (msg) => {
       state.capture = null;
       showLiveNotice(t("capture.notice.sessionEnded", { error: msg }));
@@ -177,10 +190,11 @@ async function pipeCapture(media, sessionId) {
       t("capture.notice.dropped", { n: Math.round(s) })),
   });
   state.capture = cap;
-  state.captureSession = sessionId;     // 어느 세션의 소리인지. 그 세션이 끝날 때만 놓습니다
+  state.captureSession = sessionId;     // which session's sound this is. Released only when that session ends
 
-  // 소리가 실제로 오는지 확인합니다. AudioContext의 resume()이 막히는 경우가
-  // 있고, 그때 조용히 실패하면 사용자는 전사가 느린 것과 구별하지 못합니다.
+  // Check that sound is actually arriving. AudioContext's resume() is
+  // sometimes blocked, and failing quietly there is indistinguishable, to the
+  // user, from transcription being slow.
   setTimeout(() => {
     if (state.capture === cap && !cap.n && !cap.sent) {
       showLiveNotice(t("capture.notice.silent"));
@@ -188,20 +202,22 @@ async function pipeCapture(media, sessionId) {
   }, 4000);
 }
 
-/* 「＋ 추가」에서 소리 출처를 「이 브라우저의 다른 탭」으로 고르면 여기로
- * 옵니다. 주소가 아니라 탭이 대상이므로 probe도, yt-dlp도 없습니다. */
+/* This is where "＋ Add" lands when the sound source is set to "Sound from
+ * another tab in this browser". The target is a tab and not a URL, so there is
+ * no probe and no yt-dlp. */
 async function startTabCapture(title, lang) {
-  // 대본 창을 먼저 잡습니다. 이 흐름에는 붙일 영상이 없어서 본 화면에
-  // 남겨 둘 이유가 없는데, 공유 창을 고르고 난 뒤에는 팝업이 막힙니다.
-  // 아래 requestTabAudio 보다 앞이어야 하는 이유가 그것뿐입니다.
+  // Grab the script window first. This flow has no video to attach, so there
+  // is no reason to leave the user on the main screen, and once the sharing
+  // dialog has been through, popups are blocked. That is the only reason this
+  // has to come before requestTabAudio below.
   const pending = openPendingScriptWindow();
   state.scriptWin = pending;
 
-  // 공유 창. 여기서 취소하면 아무 일도 일어나지 않습니다.
+  // The sharing dialog. Cancel here and nothing at all happens.
   const media = await requestTabAudio();
   if (!media) { if (pending) pending.close(); state.scriptWin = null; return; }
   stopLive();
-  // 이름을 적었으면 그것을 씁니다. 비웠으면 고른 탭의 제목을 가져옵니다.
+  // Use the name if one was written. Left empty, the picked tab's title is fetched.
   const name = title || tabTitleFrom(media);
   const res = await (await fetch("/api/live/capture", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -229,14 +245,15 @@ async function startTabCapture(title, lang) {
     viewer_lang: $("viewer-lang").value, translated: false,
     backends_done: [state.backend], live: true,
   });
-  t.src = { site: "none" };          // 붙일 영상이 없습니다
+  t.src = { site: "none" };          // there is no video to attach
   showTileInPanels(t);
   addLiveToPicker(probe, res.id);
   await attachLive(t);
   await pipeCapture(media, res.id);
   tabStageNotice(isTabSurface(media) ? "" :
-    // 창이나 화면 전체도 소리가 오면 받습니다. 다만 무엇이 섞여 들어올지
-    // 알 수 없으므로, 그렇게 골랐다는 것만 짚어 둡니다.
+    // A window or the whole screen is captured too if the sound comes with
+    // it. There is no telling what will be mixed in, though, so this just
+    // points out that such a choice was made.
     //
     // `const t` below shadows the lookup for this whole function body, so the
     // long name is the one that works here.
@@ -244,9 +261,10 @@ async function startTabCapture(title, lang) {
   aimScriptWindow(pending, res.id);
 }
 
-/* 잡아 둔 빈 창을 대본으로 돌립니다. 팝업이 막혀 못 잡았으면 위쪽 막대로
- * 알립니다 -- 「⧉ 대본 창」을 누르는 것은 새 조작이므로 그때는 열립니다.
- * 그 한 줄은 눌러야 할 것을 알리는 말이라 막대에 남깁니다. */
+/* Turn the empty window already grabbed into the script window. If a blocked
+ * popup meant none could be grabbed, the top bar says so -- pressing "⧉ Pop
+ * out" is a fresh gesture, so it opens then. That one line is telling the user
+ * what to press, so it stays in the bar. */
 function aimScriptWindow(pending, sessionId) {
   if (pending && !pending.closed) {
     pending.location = `/?script=${encodeURIComponent("live:" + sessionId)}`;

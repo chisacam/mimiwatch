@@ -1,12 +1,14 @@
-"""49절의 「무리째 한 줄」 정제를 재현합니다. 출하 경로에는 없는 변형입니다.
+"""Reproduce section 49's "one line per whole group" refinement. It is a variant
+the shipping path does not have.
 
-출하되는 정제는 `transcribe_vod.refine_cues` 이고, 그것은 다시 해독한 결과를
-런타임의 구간 시각으로 **되쪼갭니다**. 49절은 되쪼개기 없이 무리 하나를 한 줄로
-내보내면 어떻게 되는지를 재고 그 답으로 되쪼개기를 고른 자리이므로, 그 비교를
-다시 돌릴 수 있어야 합니다 -- 그래서 진 쪽만 여기 남깁니다.
+The refinement that ships is `transcribe_vod.refine_cues`, and it **re-splits** the
+re-decoded result along the runtime's span times. Section 49 is where measuring what
+happens when a group goes out as a single line without the re-split led to choosing the
+re-split, so that comparison has to stay runnable -- which is why the losing side is kept
+here.
 
-무리를 묶는 규칙은 베끼지 않고 출하 코드에서 가져다 씁니다(`vod.refine_groups`).
-두 벌이 따로 움직이면 비교가 성립하지 않습니다.
+The rule that groups utterances is not copied; it is taken from the shipping code
+(`vod.refine_groups`). If the two copies move independently, the comparison does not hold.
 """
 from __future__ import annotations
 
@@ -20,7 +22,8 @@ SR = stream.SAMPLE_RATE
 
 def refine_merged(pcm: np.ndarray, spans: list[tuple[int, int]], texts: list[str],
                   asr) -> list[dict]:
-    """무리 하나를 자막 한 줄로. 되돌림 규칙은 `refine_cues` 와 같습니다."""
+    """One utterance group into one subtitle line. The fall-back rule is the same
+    as in `refine_cues`."""
     out: list[dict] = []
     pre = int(stream.PREROLL_S * SR)
     for g in vod.refine_groups(spans):

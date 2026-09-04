@@ -1,11 +1,14 @@
-"""Silero VAD v4(k2 재수출, 643KB) 와 v5(2.3MB) 를 같은 표본에 물려 구간 분할을 맞대어 봅니다.
+"""Put Silero VAD v4 (the k2 re-export, 643KB) and v5 (2.3MB) on the same sample
+and compare how each splits it into spans.
 
     .venv/bin/python bench/vad_ab.py [data/*.wav ...]
 
-재는 것: 구간 수, 평균·중앙 길이, 상한(max_speech)에 걸린 구간 비율, 말로 판정한 총 초,
-그리고 소요 시간. 정답 라벨은 없으므로 "어느 쪽이 맞다"가 아니라 "얼마나 다르게 자르는가"
-를 봅니다 -- 상한에 걸리는 비율이 낮고 구간이 문장 길이에 가까우면 whisper 가 편합니다.
-v5 가 없으면 sherpa-onnx 릴리스에서 받습니다(2.3MB).
+What is measured: the number of spans, their mean and median length, the fraction of spans
+that hit the ceiling (max_speech), the total seconds judged to be speech, and the time
+taken. There are no ground-truth labels, so this is not about "which one is right" but
+about "how differently they cut" -- a low fraction hitting the ceiling with spans close to
+sentence length is what whisper is comfortable with. If v5 is absent it is fetched from the
+sherpa-onnx releases (2.3MB).
 """
 from __future__ import annotations
 import os, sys, time, urllib.request, wave, statistics as st

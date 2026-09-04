@@ -1,14 +1,15 @@
-"""전사를 CPU로 돌렸을 때와 GPU로 돌렸을 때를 잽니다.
+"""Measure transcription run on the CPU against transcription run on the GPU.
 
-`device` 설정이 실제로 경로를 바꾸는지, 그리고 CPU 쪽이 쓸 만한 속도인지
-확인하기 위한 것입니다. **여기서 나온 배수는 이 기계의 것**이고 다른
-하드웨어로 옮겨지지 않습니다 -- 노트북 내장 그래픽과 개별 GPU는 사정이
-전혀 다릅니다. 낮은 사양에서 고를 때는 그 기계에서 다시 재십시오.
+The point is to confirm that the `device` setting really does change the path,
+and that the CPU side is fast enough to be usable. **The multiples printed here
+belong to this machine** and do not carry over to other hardware -- integrated
+laptop graphics and a discrete GPU are entirely different situations. When
+choosing on a low-spec machine, measure again on that machine.
 
-    .venv/bin/python bench/asr_device.py [wav경로] [초] [모델파일] [언어]
+    .venv/bin/python bench/asr_device.py [wav path] [seconds] [model file] [language]
 
-세 번째 인자로 다른 전사 모델을 지정할 수 있습니다. 기본 모델이 버거운
-기계에서 가벼운 쪽이 쓸 만한지 볼 때 씁니다.
+The third argument can name a different transcription model. Use it to see
+whether the light one is usable on a machine that struggles with the default.
 
     .venv/bin/python bench/asr_device.py data/x.wav 20 SenseVoiceSmall-Q8_0.gguf
 """
@@ -24,10 +25,11 @@ DEFAULT_WAV = "data/MPSTWzF2ZKU.wav"
 
 
 def load(path: str, seconds: float, offset: float = 600.0) -> np.ndarray:
-    """가운데쯤에서 잘라 옵니다.
+    """Cut from somewhere around the middle.
 
-    첫 몇 초는 인사말이나 무음이라 모델을 가르지 못합니다. 다만 파일이
-    기본 오프셋보다 짧을 수 있으므로 길이에 맞춰 접습니다.
+    The first few seconds are a greeting or silence, which cannot tell the
+    models apart. The file may be shorter than the default offset, though, so
+    the offset is folded back to fit the length.
     """
     with wave.open(path, "rb") as w:
         sr, n = w.getframerate(), w.getnchannels()
@@ -57,7 +59,7 @@ def main():
         if model:
             spec["model"] = model
         asr = tcpp_asr.build_live_asr(spec, lang)
-        asr.transcribe(pcm[:sr], sr, speech_s=1.0, live=False)   # 예열
+        asr.transcribe(pcm[:sr], sr, speech_s=1.0, live=False)   # warm-up
         t0 = time.time()
         out = asr.transcribe(pcm, sr, speech_s=secs, live=False)
         took = time.time() - t0

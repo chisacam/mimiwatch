@@ -1,4 +1,4 @@
-"""네 가지 프롬프트 조합을 한 표에 놓습니다."""
+"""Put the four prompt combinations into one table."""
 from __future__ import annotations
 import json, os, statistics, sys
 
@@ -24,5 +24,5 @@ for tup in rows:
         continue
     outs = [esc(r["out"] or r["error"]) for r in tup]
     if len(set(outs)) == 1:
-        continue                      # 넷이 똑같으면 볼 것이 없습니다
+        continue                      # if all four are identical there is nothing to look at
     print(f"| {esc(tup[0]['text'])} | " + " | ".join(outs) + " |")

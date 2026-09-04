@@ -1,19 +1,20 @@
-"""같은 모델·같은 표본에 프롬프트만 바꿔 가며 돌립니다.
+"""Run the same model over the same sample, changing only the prompt.
 
-`run.py`는 모델을 바꿔 재는 기록이므로 건드리지 않습니다. 여기서 바뀌는
-것은 프롬프트뿐이고 모델·양자화·temperature·표본은 모두 같습니다. 프리셋과
-문맥 블록은 `translate.py`의 것을 그대로 쓰므로, 여기서 좋게 나온 것이
-그대로 앱에서 나오는 것입니다.
+`run.py` is the record of measurements across models, so it stays untouched.
+The only thing that changes here is the prompt -- model, quantisation,
+temperature and sample are all the same. The presets and the context block are
+taken straight from `translate.py`, so whatever comes out well here is what
+comes out of the app.
 
-네 가지를 잽니다.
+Four things are measured.
 
-  generic      지금까지의 프롬프트, 문맥 없음 (기준선)
-  preset       장르 프리셋, 문맥 없음
-  generic-ctx  지금까지의 프롬프트 + 직전 자막 3줄
-  preset-ctx   장르 프리셋 + 직전 자막 3줄
+  generic      the prompt used so far, no context (baseline)
+  preset       genre preset, no context
+  generic-ctx  the prompt used so far + the previous 3 subtitle lines
+  preset-ctx   genre preset + the previous 3 subtitle lines
 
-프리셋과 문맥을 따로 재는 이유는, 둘을 한꺼번에 켜서 좋아지면 어느 쪽이
-일했는지 알 수 없기 때문입니다.
+Preset and context are measured separately because if both are turned on at
+once and the result improves, there is no telling which of them did the work.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ import stream, translate                                   # noqa: E402
 TGT = "ko"
 MODEL = "gemma-4-E4B_q4_0-it.gguf"
 
-# 표본의 출처마다 어느 장르가 맞는지. 앱에서는 사람이 고르는 값입니다.
+# Which genre fits each source of the sample. In the app this is what a person picks.
 GENRE_BY_SOURCE = {
     "MPSTWzF2ZKU.json": "gaming",
     "71SnC4H-G1Q.json": "music",
@@ -43,12 +44,13 @@ MODES = {
     "preset-ctx":  (True,  True),
 }
 
-# `ctxN` (예: ctx0, ctx1, ctx5)은 프리셋을 켜고 문맥 줄 수만 바꿉니다.
-# 3이라는 수는 처음에 판단으로 정한 것이라, 실제로 몇 줄이 맞는지 잽니다.
+# `ctxN` (ctx0, ctx1, ctx5 and so on) turns the preset on and varies only the
+# number of context lines. The number 3 was first set by judgement, so this
+# measures how many lines is actually right.
 
 
 def parse_mode(mode):
-    """(프리셋 사용 여부, 문맥 줄 수)"""
+    """(whether to use the preset, number of context lines)"""
     if mode.startswith("ctx"):
         return True, int(mode[3:])
     use_preset, use_ctx = MODES[mode]
@@ -56,15 +58,15 @@ def parse_mode(mode):
 
 
 def main(mode, tag=""):
-    """temperature가 0이 아니므로 한 번의 결과는 표본 하나일 뿐입니다.
-    `tag`로 같은 조건을 여러 번 돌려 따로 남깁니다."""
+    """temperature is not 0, so one result is only one sample.
+    `tag` runs the same condition several times and keeps each one apart."""
     use_preset, n_ctx = parse_mode(mode)
     with open(os.path.join(HERE, "sample.json"), encoding="utf-8") as f:
         items = json.load(f)
 
-    # 프롬프트가 바뀔 때마다 5GB를 다시 올리면 비교가 느려지기만 합니다.
-    # 하나를 올려 두고 줄마다 self.prompt만 갈아 끼웁니다 -- LocalGemma가
-    # 프롬프트를 인스턴스 속성으로 들고 있어 그대로 됩니다.
+    # Loading 5GB again every time the prompt changes only makes the comparison
+    # slower. One is loaded and only self.prompt is swapped per line -- LocalGemma
+    # holds the prompt as an instance attribute, so this just works.
     tr = translate.LocalGemma(model_path=os.path.join(stream.model_dir(), MODEL))
     tr._ensure()
 
@@ -72,8 +74,8 @@ def main(mode, tag=""):
     for i, item in enumerate(items):
         genre = GENRE_BY_SOURCE[item["source"]] if use_preset else "general"
         tr.prompt = translate.genre_prompt(genre)
-        # 표본은 8줄까지 담고 있습니다. 뒤에서부터 필요한 만큼만 씁니다 --
-        # 가까운 줄이 먼 줄보다 문맥으로서 값어치가 큽니다.
+        # The sample carries up to 8 lines. Only as many as needed are taken from
+        # the end -- a nearby line is worth more as context than a distant one.
         ctx = (item.get("context") or [])[-n_ctx:] if n_ctx else None
         t = time.time()
         try:

@@ -1,21 +1,24 @@
-"""정답 표본을 다시 만듭니다: 유튜브의 **수동** 자막이 있는 영상의 자막과 16kHz 오디오.
+"""Rebuild the ground-truth samples: the subtitles and 16kHz audio of videos
+that carry YouTube's **manual** subtitles.
 
-    .venv/bin/python bench/gold_fetch.py            # 아래 목록 전부 → data/gold/
-    .venv/bin/python bench/gold_fetch.py <영상id> ja
+    .venv/bin/python bench/gold_fetch.py            # the whole list below -> data/gold/
+    .venv/bin/python bench/gold_fetch.py <video id> ja
 
-data/ 는 저장소에 두지 않으므로(저작물) 이 스크립트가 표본의 출처입니다. 첫 표본 넷은
-전부 뮤직비디오입니다 -- 원어 자막을 공식으로 제공하는 영상이 그쪽에 몰려 있어서이고,
-노래는 전사의 가장 어려운 경우라 절대값은 높습니다. 설정 사이의 **차이**를 보는 용도입니다.
+data/ is not kept in the repository (copyrighted material), so this script is where the
+samples come from. The first four samples are all music videos -- that is where videos
+officially carrying subtitles in the original language are concentrated -- and singing is
+the hardest case for transcription, so the absolute values are high. They are for looking
+at the **difference** between settings.
 """
 from __future__ import annotations
 import os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import stream
 
-# (영상 id, 자막 언어). 2026-08-29 현재 수동 자막이 있음을 확인한 것들.
-GOLD = [("_xwOiIMM2a4", "ja"),   # 音乃瀬奏 - You＆合図 (가라오케식 스타일 자막)
-        ("BgPBgTEvi08", "ja"),   # TAK - ニャニャニャチュニャ (반복 가사)
-        ("CkvWJNt77mU", "ja"),   # ヨルシカ - 晴る (반주 위의 노랫소리, 자막 트랙 이름이 ja-*)
+# (video id, subtitle language). Confirmed to have manual subtitles as of 2026-08-29.
+GOLD = [("_xwOiIMM2a4", "ja"),   # 音乃瀬奏 - You＆合図 (karaoke-like styled subtitles)
+        ("BgPBgTEvi08", "ja"),   # TAK - ニャニャニャチュニャ (repetitive lyrics)
+        ("CkvWJNt77mU", "ja"),   # ヨルシカ - 晴る (singing over accompaniment, subtitle track named ja-*)
         ("_PSjoVXFGAQ", "en")]   # Mili - Fly, My Wings
 
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "gold")

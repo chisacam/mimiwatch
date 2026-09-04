@@ -1,11 +1,12 @@
-"""모델 없이 돌 수 있는 검사를 한 번에 돕니다.
+"""Run every check that works without a model, in one go.
 
     .venv/bin/python bench/check_all.py
 
-하는 일: 모든 파이썬 모듈 컴파일 → `bench/*_check.py` 류의 검사 스크립트를
-차례로 실행 → `tests/`가 있고 pytest가 깔려 있으면 그것도. 하나라도 실패하면
-종료 코드 1입니다. 모델을 올리거나 네트워크에 나가는 것(`tab_ingest.py`,
-`asr_device.py`, `doctor.py`)은 여기 넣지 않습니다.
+What it does: compile every Python module -> run the `bench/*_check.py` style
+check scripts in order -> and pytest too, if `tests/` exists and pytest is
+installed. Any single failure means exit code 1. Anything that loads a model or
+goes out to the network (`tab_ingest.py`, `asr_device.py`, `doctor.py`) does not
+belong here.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import sys
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 저장소를 건드리지 않고, 모델도 올리지 않는 검사만.
+# Only checks that leave the store alone and load no model.
 CHECKS = ["edit_check", "export_check", "ext_check", "live_errors"]
 
 

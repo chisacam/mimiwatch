@@ -1,12 +1,15 @@
-/* mimiwatch 화면 — 왼쪽 영상·방송 목록.
+/* mimiwatch front end — the list of videos and streams down the left.
  *
- * web/app.js 를 관심사별로 나눈 파일입니다. 전부 일반 <script> 로 index.html 이
- * 적는 순서대로 읽히며 전역 범위를 함께 씁니다 -- 모듈 문법을 쓰지 않는 것은
- * 확장과 공유하는 overlay.js 와 같은 이유입니다. 서로 부르는 것은 전부
- * 실행 시점의 함수 호출이라 파일 순서는 main.js 가 마지막이기만 하면 됩니다. */
+ * One of the files web/app.js was split into by concern. They are all plain
+ * <script>s, read in the order index.html writes them down, and they share one
+ * global scope -- module syntax is avoided here for the same reason as in
+ * overlay.js, which is shared with the extension. Everything they call in each
+ * other is a function call made at run time, so the file order only has to put
+ * main.js last. */
 
-/* 목록의 행에서 부릅니다. 예전에는 헤더의 단추가 "지금 열려 있는 것"만
- * 지울 수 있었는데, 그러면 목록에서 보는 것과 지워지는 것이 어긋납니다. */
+/* Called from a row of the list. The button used to sit in the header, where it
+ * could only delete "the one currently open" -- so what you were looking at in
+ * the list and what got deleted were two different things. */
 async function deleteVideo(id, title) {
   if (!confirm(t("library.video.delete.confirm",
                  { title: (title || "").slice(0, 50) }))) return;
@@ -15,18 +18,20 @@ async function deleteVideo(id, title) {
     body: JSON.stringify({ id }),
   })).json();
   if (res.error) { alert(res.error); return; }
-  // 지운 것이 지금 보고 있는 것이면 다른 것을 엽니다. 아니면 목록만
-  // 다시 그리고 화면은 그대로 둡니다.
+  // If what was deleted is what is on screen, open something else. Otherwise
+  // only the list is redrawn and the screen is left alone.
   const open = state.doc && state.doc.id === id && !isLiveDoc();
   const list = await (await fetch("/api/videos")).json();
   if (open && !list.length) { location.reload(); return; }
   await refreshVideoList(open ? list[0].id : undefined);
 }
 
-/* 지난 방송을 지웁니다. 받는 중인 세션은 서버가 거절합니다 -- 먼저 「중단」.
+/* Deletes a past stream. The server refuses a session that is still receiving
+ * -- "Stop" comes first.
  *
- * 예전에는 세션을 지울 길이 없어 목록이 자라기만 했습니다. 시험용 세션과
- * 실패한 세션이 쌓여 진짜 방송이 한도 밖으로 밀려났습니다. */
+ * There used to be no way to delete a session at all, so the list only ever
+ * grew. Test sessions and failed sessions piled up until the real streams were
+ * pushed past the limit. */
 async function deleteSession(sid, title) {
   if (!confirm(t("library.session.delete.confirm",
                  { title: (title || "").slice(0, 50) }))) return;
@@ -35,7 +40,7 @@ async function deleteSession(sid, title) {
     body: JSON.stringify({ id: sid }),
   })).json();
   if (res.error) { alert(res.error); return; }
-  // 지운 것이 지금 보고 있는 것이면 화면을 비웁니다. 자막은 이제 없습니다.
+  // If what was deleted is what is on screen, clear the screen. The subtitles are gone now.
   if (state.live && state.live.id === sid) {
     detachLive();
     state.doc = null; state.cues = []; state.idx = -1;
@@ -46,15 +51,17 @@ async function deleteSession(sid, title) {
   await refreshVideoList();
 }
 
-/* 목록은 <select>가 아니라 행으로 그립니다.
+/* The list is drawn as rows, not as a <select>.
  *
- * 고르기만 하던 때는 select로 충분했지만, 지우기와 상태 표시가 같은 자리에
- * 있어야 하고 제목도 한 줄로 잘리지 않아야 합니다. 삭제 단추가 헤더에
- * 따로 있으면 "지금 열려 있는 것"만 지울 수 있어, 목록에서 보이는 것과
- * 지워지는 것이 어긋납니다. */
-/* 줄 오른쪽의 단추 묶음. 멈춘 방송에는 ▶ 이어받기와 ⟳ 전체 영상 전사, 녹화본에는
- * ⟳ 다시 전사, 끝난 것에는 🗑. 받는 중인 줄에는 아무것도 없습니다 -- 「중단」이
- * 먼저입니다. 처음 그릴 때와 상태가 바뀔 때(updateSessionRow) 같은 것을 씁니다. */
+ * A select was enough while picking was all it did, but deleting and the state
+ * badge have to sit in the same place, and a title must not be cut down to one
+ * line. With the delete button off in the header it can only delete "the one
+ * currently open", so what you see in the list and what gets deleted are two
+ * different things. */
+/* The button group at the right of a row. A stopped stream gets ▶ resume and
+ * ⟳ transcribe the whole video, a VOD gets ⟳ re-transcribe, and anything
+ * finished gets 🗑. A row still receiving gets nothing -- "Stop" comes first.
+ * The first draw and every state change (updateSessionRow) use this same one. */
 function rowActions({ value, session, title, stopped, deletable, videoId, st }) {
   const box = document.createElement("span");
   box.className = "vact";
@@ -80,7 +87,7 @@ function rowActions({ value, session, title, stopped, deletable, videoId, st }) 
                          (st && st.source_lang) || "", title));
     }
   } else if (!session) {
-    // 저장된 주소를 씁니다. 유튜브가 아닌 녹화본(m3u8 등)은 id 로 주소를 지을 수 없습니다.
+    // Use the stored URL. For a VOD that is not on YouTube (m3u8 and the like) no URL can be built from the id.
     const url = (st && st.url) || `https://www.youtube.com/watch?v=${value}`;
     add("vre", "⟳", t("library.action.retranscribe.tip"), () =>
       openRetranscribe(url, (st && st.source_lang) || "", title));
@@ -101,28 +108,28 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   row.dataset.value = value;
   if (session) row.dataset.session = session;
   row.dataset.title = title;
-  // 멀티뷰 묶음의 멤버는 ⊞ 표시를 달고, 누르면 묶음을 통째로 엽니다(openFromList).
+  // A member of a multiview bundle carries an ⊞ mark, and pressing it opens the whole bundle (openFromList).
   const group = (st && st.group) || "";
   row.dataset.group = group;
   if (group) row.classList.add("mv");
 
-  // 제목만 있는 목록에서는 어느 방송인지 한눈에 오지 않습니다. 유튜브가
-  // 주는 썸네일을 그대로 씁니다 -- 플레이어를 이미 임베드하고 있으므로
-  // 브라우저는 어차피 구글과 통신합니다.
+  // In a list of nothing but titles it does not come at a glance which stream
+  // is which. We use the thumbnail YouTube hands out as it is -- the player is
+  // embedded already, so the browser talks to Google either way.
   const th = document.createElement("img");
   th.className = "vth";
   th.alt = "";
   th.decoding = "async";
-  // 플레이어 임베드가 먼저입니다. 목록 그림 열넉 장이 같은 호스트로
-  // 몰리면 그 뒤에 줄을 서게 됩니다.
+  // The player embed comes first. If a dozen-odd list pictures all rush the
+  // same host, the embed ends up queueing behind them.
   th.fetchPriority = "low";
-  // `loading="lazy"` 는 쓰지 않습니다. 이 요소는 DOM에 붙기 전에 src를
-  // 받는데, 그러면 브라우저가 지연을 풀 시점을 제대로 잡지 못해 22장 중
-  // 한 장만 뜨고 나머지는 매달려 있었습니다. 한 장이 10KB 남짓이라
-  // 미루어서 얻는 것도 없습니다.
+  // `loading="lazy"` is not used. This element gets its src before it is in
+  // the DOM, and the browser then never works out when to lift the delay: one
+  // picture out of 22 appeared and the rest hung there. At about 10KB apiece
+  // there is nothing to win by putting them off either.
   if (videoId) th.src = `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/mqdefault.jpg`;
   else th.classList.add("blank");
-  // 못 받아도 자리는 남깁니다. 줄 높이가 들쭉날쭉하면 목록이 읽기 나빠집니다.
+  // Keep the space even when it does not load. Ragged row heights make the list harder to read.
   th.addEventListener("error", () => { th.removeAttribute("src"); th.classList.add("blank"); });
   row.appendChild(th);
 
@@ -142,19 +149,20 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   row.appendChild(rowActions({ value, session, title, stopped, deletable, videoId, st }));
 
   row.addEventListener("click", () => openFromList(value));
-  // 플레이어 영역에 끌어다 놓으면 지금 보는 방송 옆에 타일로 붙습니다(tiles.js 의 dropRow).
+  // Dragged onto the player area, it attaches as a tile beside the stream being watched (dropRow in tiles.js).
   row.draggable = true;
   row.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("text/mimiwatch-row", value);
     e.dataTransfer.effectAllowed = "copy";
-    setTimeout(() => $("player-wrap").classList.add("dragging"), 0);   // tiles.js 와 같은 이유
+    setTimeout(() => $("player-wrap").classList.add("dragging"), 0);   // same reason as in tiles.js
   });
   row.addEventListener("dragend", () => $("player-wrap").classList.remove("dragging"));
   return row;
 }
 
-/* 목록의 세션 줄 하나를 서버가 보낸 상태로 고칩니다. 줄 수, 상태, 이름.
- * 목록을 통째로 다시 그리지 않으므로 마우스를 올려 둔 줄이 흔들리지 않습니다. */
+/* Fixes one session row of the list up with the state the server sent: the line
+ * count, the state, the name. The list is not redrawn whole, so the row under
+ * the pointer does not jump. */
 function updateSessionRow(row, s) {
   const running = LIVE_RUNNING.includes(s.state);
   const m = row.querySelector(".vm");
@@ -170,12 +178,12 @@ function updateSessionRow(row, s) {
     row.dataset.title = title;
     const t = row.querySelector(".vt");
     if (t) t.textContent = title;
-    // 멀티뷰에서는 묶음의 줄이 전부 켜져 있으므로 「켜진 줄」이 아니라 「초점 세션」일 때만
-    // 위쪽 제목을 바꿉니다.
+    // In multiview every row of the bundle is lit, so the title up top changes
+    // for the focused session only, not for any lit row.
     if (state.live && state.live.id === s.id && !document.querySelector(".title-edit")) setNowTitle(title);
   }
-  // 단추 묶음은 상태에 따라 다릅니다. 받는 중이던 줄이 끝나면 ▶·⟳·🗑 이 생겨야
-  // 하고, 이어받아 다시 받는 중이면 사라져야 합니다.
+  // The button group depends on the state. A row that was receiving has to grow
+  // ▶·⟳·🗑 once it ends, and lose them again once it resumes and is receiving.
   row.lastElementChild.replaceWith(rowActions({
     value: "live:" + s.id, session: s.id, title, stopped: !running,
     deletable: !running, videoId: s.video_id || "", st: s,
@@ -187,10 +195,10 @@ function openFromList(value) {
   const sid = row && row.dataset.session;
   markVideoRow(value);
   if (sid) {
-    // 화면에 이미 타일로 있으면 초점만 옮깁니다. 묶음의 멤버면 묶음을 통째로 엽니다.
+    // If it is already on screen as a tile, only move the focus. If it is a member of a bundle, open the whole bundle.
     const t = tileBySession(sid);
     if (t) { setFocus(t); return; }
-    // 대본 창은 세션 하나만 읽습니다 -- 묶음을 통째로 열면 보이지 않는 타일마다 SSE 를 엽니다.
+    // The Script window reads one session only -- opening the whole bundle would open an SSE per tile nobody sees.
     if (row.dataset.group && !state.scriptOnly && (!state.mv || state.mv.id !== row.dataset.group)) {
       openMultiview(row.dataset.group).then(ok => { if (!ok) resumeLive(sid); });
       return;
@@ -199,24 +207,26 @@ function openFromList(value) {
     return;
   }
   if (state.live) {
-    // 녹화본을 열어도 라이브 수신은 끊지 않습니다. 사용자가 「중단」을 누른
-    // 것이 아니고, 목록의 녹화본은 이미 전사·번역이 끝난 것이라 방송 쪽에
-    // 부담이 되지 않습니다. 화면만 떼고(detach) 서버는 계속 받습니다 --
-    // 목록의 그 방송 줄을 다시 누르면 이어서 봅니다.
+    // Opening a VOD does not cut the live reception. The user did not press
+    // "Stop", and a VOD in the list is already transcribed and translated, so
+    // it puts no load on the stream side. Only the screen lets go (detach)
+    // while the server keeps receiving -- pressing that stream's row in the
+    // list again picks it up where it left off.
     //
-    // 탭 소리만 예외입니다. 그 스트림은 이 창에 매여 있어 다른 것을 여는
-    // 순간 어차피 끊기므로, 서버에도 끝났다고 말해 줍니다.
+    // Tab audio is the one exception. That stream is tied to this window and
+    // breaks the moment something else is opened anyway, so we tell the server
+    // it is over as well.
     if (state.live.source === "tab") stopLive();
     else detachLive();
   } else {
-    // 끝난 방송의 임시 줄은 다른 것을 열면 치웁니다.
+    // The temporary row of a finished stream is cleared away once something else is opened.
     dropLiveOption(value);
   }
   loadVideo(value);
 }
 
 function markVideoRow(value) {
-  // 멀티뷰면 묶음의 멤버 줄이 전부 켜집니다 -- 화면에 다 떠 있으니까요.
+  // In multiview every member row of the bundle lights up -- they are all on screen, after all.
   const gid = state.mv && state.mv.id;
   $("video-list").querySelectorAll(".video-row").forEach(r =>
     r.classList.toggle("on", r.dataset.value === value || (!!gid && r.dataset.group === gid)));
@@ -225,7 +235,7 @@ function markVideoRow(value) {
   setNowTitle(row ? row.dataset.title : null);
 }
 
-/* 위쪽 막대는 "지금 무엇을 보고 있는가"를 답하는 자리입니다. */
+/* The bar up top is the place that answers "what am I watching right now". */
 function setNowTitle(title) {
   const el = $("now-title");
   el.textContent = title || t("library.nowTitle.empty");
@@ -234,24 +244,25 @@ function setNowTitle(title) {
 }
 
 async function refreshVideoList(selectId, pre) {
-  // 시작할 때는 이미 받아 둔 것을 넘겨받습니다. 예전에는 init 이 두 요청을
-  // 보내고 여기서 같은 둘을 또 보냈습니다.
+  // At start-up it is handed what has already been fetched. init used to send
+  // two requests and this function then sent the same two again.
   const [list, sessions] = pre || await Promise.all([
     fetch("/api/videos").then(r => r.json()),
     fetch("/api/live/sessions").then(r => r.json()),
   ]);
   const box = $("video-list");
-  // 멀티뷰에서는 묶음의 줄이 전부 켜져 있어 「첫 켜진 줄」이 초점이 아닐 수 있습니다.
-  // 지금 보는 것(초점 세션)을 기준으로 잡습니다.
+  // In multiview every row of the bundle is lit, so the first lit row need not
+  // be the focused one. We go by what is being watched (the focused session).
   const current = box.querySelector(".video-row.on");
   const keep = state.live ? "live:" + state.live.id : (current && current.dataset.value);
   box.textContent = "";
 
-  // 라이브 세션에는 큐 파일이 없어서, 예전에는 탭을 닫으면 그 방송의 자막이
-  // 통째로 사라졌습니다. 이제 서버가 들고 있으므로 목록에 올려 다시 엽니다.
-  // 한 줄도 못 받은 세션은 열어 봐야 볼 것이 없으니 뺍니다.
-  // 한 줄도 못 받은 세션은 열어 봐야 볼 것이 없으니 뺍니다 -- 받는 중인 것은
-  // 예외입니다. 다른 창에서 막 시작한 방송이 첫 자막 전에도 보여야 합니다.
+  // A live session has no cue file, so closing the tab used to take that
+  // stream's subtitles with it, all of them. The server holds them now, so the
+  // session goes into the list and can be opened again. A session that never
+  // got a single line has nothing to show and is left out -- except while it is
+  // receiving: a stream just started in another window must be visible before
+  // its first subtitle.
   sessions.filter(s => s.cues || LIVE_RUNNING.includes(s.state)).forEach(s => {
     const running = LIVE_RUNNING.includes(s.state);
     box.appendChild(videoRow({
@@ -259,12 +270,12 @@ async function refreshVideoList(selectId, pre) {
       title: s.title || s.url, videoId: s.video_id || "",
       meta: running ? t("library.row.lines", { n: s.cues })
         : t("library.row.linesState", { n: s.cues, state: LIVE_STATE[s.state] || s.state }),
-      // 끝난 방송만 지울 수 있습니다. 받는 중인 것은 「중단」이 먼저입니다.
+      // Only a finished stream can be deleted. One still receiving needs "Stop" first.
       live: true, stopped: !running, deletable: !running, st: s,
     }));
   });
   list.forEach(v => {
-    // 로컬 파일은 probe 때 길이를 모릅니다(ffprobe 는 준비물이 아님). 전사가 잰 것을 씁니다.
+    // For a local file the probe does not know the duration (ffprobe is not a prerequisite). We use what the transcription measured.
     const secs = v.duration || v.audio_seconds;
     const mins = secs ? t("library.row.minutes", { n: Math.round(secs / 60) }) : "";
     box.appendChild(videoRow({

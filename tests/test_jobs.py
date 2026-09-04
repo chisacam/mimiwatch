@@ -1,4 +1,4 @@
-"""배경 작업: 번역 루프 한 벌이 손편집을 지키는가, 실패가 작업을 멈춰 세우지 않는가."""
+"""Background jobs: does the single translate loop protect hand edits, and does a failure leave the job standing?"""
 import numpy as np
 
 import asr as mw_asr
@@ -23,7 +23,7 @@ def _seed_video():
 
 def test_full_translate_keeps_hand_edits(fake_translate):
     _seed_video()
-    r = jobs.start_retranslate(VID, "local-m2m100", None, None)     # /api/translate 경로
+    r = jobs.start_retranslate(VID, "local-m2m100", None, None)     # The /api/translate path
     st = wait_job(r["id"])
     assert st["state"] == "done" and st["kept"] == 1 and st["done"] == 2
     rows = store.cues(VID)
@@ -48,7 +48,7 @@ def test_all_hand_edited_full_translate_is_done_job(fake_translate):
     r = jobs.start_retranslate(VID, "local-m2m100", None, None)
     assert r["kept"] == 1 and r["total"] == 0
     assert jobs.job_status(r["id"])["state"] == "done"
-    # 골라서 돌린 것이면 할 일이 없다고 말합니다.
+    # Asked for a picked subset, it says there is nothing to do.
     assert "error" in jobs.start_retranslate(VID, "local-m2m100", [1], None)
 
 
@@ -85,8 +85,8 @@ def test_cancel_stops_translation(monkeypatch):
 
 
 def test_cancel_all_and_wait_idle_stop_running_jobs(monkeypatch):
-    """서버 종료가 부르는 길: 도는 작업을 전부 취소 표시하고 멎기를 기다립니다.
-    작업이 모델을 붙든 채 남으면 종료 시 ggml 소멸자가 abort 하던 문제의 방어선입니다."""
+    """The path a server shutdown takes: mark every running job cancelled and wait for it to stop.
+    It is the guard against a job left holding a model, where ggml's destructor used to abort at exit."""
     import time
 
     import translate
@@ -105,7 +105,7 @@ def test_cancel_all_and_wait_idle_stop_running_jobs(monkeypatch):
     assert jobs.wait_idle(5.0) is True
     assert jobs.running() == []
     assert jobs.job_status(r["id"])["state"] == "cancelled"
-    # 도는 것이 없으면 곧바로 참입니다. 두 번 불러도 빈 목록입니다.
+    # With nothing running it is true at once. Called twice, the list is empty.
     assert jobs.cancel_all() == []
     assert jobs.wait_idle(0.0) is True
 
@@ -136,7 +136,7 @@ def test_retranscribe_keeps_translations_and_edits_for_same_text(monkeypatch, fa
     rows = store.cues(VID)
     assert [c["translations"]["local-m2m100"] for c in rows] == ["T:a", "T:b"]
 
-    # 사람이 두 번째 줄의 번역을 맞춰 두었습니다. 같은 영상을 다시 넣어도 남아야 합니다.
+    # A person corrected the second line's translation. Feeding the same video in again must keep it.
     store.edit_cue(VID, 2, tr="사람", backend="local-m2m100")
     r = jobs.start_transcribe("https://x", "ja", "ko", "local-m2m100", "")
     st = wait_job(r["id"])
@@ -144,8 +144,8 @@ def test_retranscribe_keeps_translations_and_edits_for_same_text(monkeypatch, fa
     rows = store.cues(VID)
     assert rows[1]["translations"]["local-m2m100"] == "사람" and "tr" in rows[1]["edited"]
     assert rows[0]["translations"]["local-m2m100"] == "T:a"
-    assert st["kept"] == 2                       # 물려받은 번역 2줄
-    # 이 엔진으로 이미 번역된 줄은 다시 돌리지 않았습니다.
+    assert st["kept"] == 2                       # 2 lines of inherited translation
+    # A line already translated by this engine is not run again.
     assert st["total"] == 0
 
 

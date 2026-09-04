@@ -1,5 +1,6 @@
-"""모델·도구 관리(modelhub). 네트워크에 나가지 않습니다 -- 내려받기는 가짜 서버
-함수로 갈아 끼우고, 목록·상태·이어 받기·취소·삭제·허깅페이스 추가의 규칙만 봅니다."""
+"""Model and tool management (modelhub). Nothing goes to the network -- the download
+is swapped for a fake server function, and only the rules are examined: listing,
+status, resume, cancel, delete and adding from Hugging Face."""
 import io
 import json
 import os
@@ -19,7 +20,7 @@ def model_dir(tmp_path, monkeypatch):
     tdir = tmp_path / "tools"
     monkeypatch.setenv("MIMIWATCH_MODEL_DIR", str(mdir))
     monkeypatch.setattr(paths, "tools_dir", lambda: str(tdir))
-    # 시험 사이에 상태가 새지 않게.
+    # Keep state from leaking between tests.
     modelhub._progress.clear()
     modelhub._cancel.clear()
     modelhub._queued.clear()
@@ -27,7 +28,7 @@ def model_dir(tmp_path, monkeypatch):
 
 
 class FakeResponse(io.BytesIO):
-    """urllib 응답 흉내. 상태 코드와 헤더만 있으면 됩니다."""
+    """Stand-in for a urllib response. A status code and headers are all it needs."""
 
     def __init__(self, data: bytes, status=200, headers=None):
         super().__init__(data)
@@ -53,13 +54,13 @@ def _wait(pred, timeout=5.0):
 def test_catalog_and_defaults_follow_the_light_config():
     ids = {e["id"] for e in modelhub.CATALOG}
     assert {"silero-vad", "whisper-large-v3-turbo", "gemma-4-e4b", "m2m100", "ffmpeg"} <= ids
-    # 예시 설정의 기본은 가벼운 CPU 엔진입니다. 필수도 기본 세트도 그것을 따릅니다.
+    # The example config defaults to the light CPU engines. Both the required and the default set follow that.
     need = modelhub.required_ids()
     assert need == ["silero-vad", "sensevoice-small", "m2m100", "ffmpeg"]
     default = modelhub.default_ids()
     assert "sensevoice-small" in default and "m2m100" in default
     assert "gemma-4-e4b" not in default and "whisper-large-v3-turbo" not in default
-    assert "ffmpeg" not in default                                      # 도구는 따로
+    assert "ffmpeg" not in default                                      # Tools are counted separately
     assert "gemma-4-e4b" in modelhub.default_ids(with_gemma=True)
 
 
@@ -68,7 +69,7 @@ def test_required_follows_the_active_engines(monkeypatch):
     config.set_active("tr", "local-gemma")
     need = modelhub.required_ids()
     assert "whisper-large-v3-turbo" in need and "gemma-4-e4b" in need
-    assert "sensevoice-small" not in need and "m2m100" in need          # 대체 경로는 늘 필요
+    assert "sensevoice-small" not in need and "m2m100" in need          # The fallback path is always needed
     ov = modelhub.overview()
     flagged = {i["id"] for i in ov["items"] if i.get("required")}
     assert flagged == set(need)
@@ -83,7 +84,7 @@ def test_setup_options_and_apply(monkeypatch):
     tr = {o["id"]: o for o in opts["tr"]}
     assert tr["local-gemma"]["model"]["id"] == "gemma-4-e4b"
     assert tr["local-m2m100"]["model"]["id"] == "m2m100"
-    assert tr["gemma4-e4b"]["model"] is None                            # 원격은 받을 것이 없습니다
+    assert tr["gemma4-e4b"]["model"] is None                            # A remote engine has nothing to download
 
     queued = []
     monkeypatch.setattr(modelhub, "download", lambda ids, token=None: (queued.extend(ids), {"queued": ids})[1])
@@ -104,7 +105,7 @@ def test_status_reads_files_and_parts(model_dir):
     (model_dir / "silero_vad.onnx.part").rename(model_dir / "silero_vad.onnx")
     assert modelhub.status(e)["state"] == "ready"
     ov = modelhub.overview()
-    assert ov["ready"] is False            # whisper·m2m100·ffmpeg 가 아직 없습니다
+    assert ov["ready"] is False            # whisper, m2m100 and ffmpeg are still missing
     assert ov["model_dir"] == str(model_dir)
 
 
@@ -136,7 +137,7 @@ def test_download_writes_part_then_renames_and_publishes(model_dir, monkeypatch)
             events.append(json.loads(q.get_nowait()))
         kinds = [e["state"] for e in events if e.get("type") == "model"]
         assert "downloading" in kinds and kinds[-1] == "ready"
-        assert modelhub.download(["silero-vad"])["skipped"] == ["silero-vad"]   # 있으면 건너뜁니다
+        assert modelhub.download(["silero-vad"])["skipped"] == ["silero-vad"]   # Already there, so it is skipped
     finally:
         bus.unsubscribe(q)
 
@@ -169,7 +170,7 @@ def test_download_failure_is_reported_and_retryable(model_dir, monkeypatch):
     assert _wait(lambda: modelhub.status(modelhub.find("silero-vad"))["state"] == "error")
     st = modelhub.status(modelhub.find("silero-vad"))
     assert "network down" in st["error"]
-    # 다시 받기를 청하면 지난 실패는 지워지고 다시 줄에 섭니다.
+    # Asking for the download again clears the past failure and puts it back in the queue.
     payload = b"ok" * 10
     monkeypatch.setattr(modelhub, "_open", lambda u, h=None, timeout=60.0:
                         FakeResponse(payload, 200, {"Content-Length": str(len(payload))}))
@@ -199,9 +200,9 @@ def test_other_files_are_listed_and_deletable(model_dir):
 
 
 def test_add_custom_validates_then_registers_an_engine(model_dir, monkeypatch):
-    assert "error" in modelhub.add_custom("tr", "bad", "x.gguf")            # 저장소 모양
-    assert "error" in modelhub.add_custom("asr", "a/b", "model.bin")        # gguf 만
-    assert "error" in modelhub.add_custom("zz", "a/b", "m.gguf")            # 종류
+    assert "error" in modelhub.add_custom("tr", "bad", "x.gguf")            # Repository shape
+    assert "error" in modelhub.add_custom("asr", "a/b", "model.bin")        # gguf only
+    assert "error" in modelhub.add_custom("zz", "a/b", "m.gguf")            # Kind
 
     monkeypatch.setattr(modelhub, "_hf_size", lambda repo, file, headers: 42)
     payload = b"G" * 42
@@ -211,14 +212,14 @@ def test_add_custom_validates_then_registers_an_engine(model_dir, monkeypatch):
                               label="Whisper small", device="cpu")
     assert got["added"] == "custom:hf-whisper-small-q8-0" and got["engine"] == "hf-whisper-small-q8-0"
     assert _wait(lambda: modelhub.status(modelhub.find(got["added"]))["state"] == "ready")
-    # 받은 뒤 엔진 설정에 들어갑니다 -- 파일 이름만, 장치는 고른 대로.
+    # Once downloaded it goes into the engine config -- the file name alone, on the device that was picked.
     spec = config.find("asr", "hf-whisper-small-q8-0")
     assert spec and spec["backend"] == "tcpp" and spec["model"] == "whisper-small-Q8_0.gguf"
     assert spec["device"] == "cpu"
-    # 같은 id 로 다시 넣을 수는 없습니다.
+    # The same id cannot be added twice.
     assert "error" in modelhub.add_custom("asr", "someone/whisper-small-gguf",
                                           "whisper-small-Q8_0.gguf", engine_id="hf-whisper-small-q8-0")
-    # 지우면 파일·목록·엔진 설정이 함께 사라집니다.
+    # Deleting takes the file, the listing and the engine config together.
     assert modelhub.delete(got["added"])["deleted"]
     assert modelhub.find(got["added"]) is None
     assert config.find("asr", "hf-whisper-small-q8-0") is None
@@ -239,11 +240,11 @@ def test_snapshot_dir_downloads_every_file(model_dir, monkeypatch):
     modelhub.download(["m2m100"])
     assert _wait(lambda: modelhub.status(modelhub.find("m2m100"))["state"] == "ready")
     got = sorted(os.listdir(model_dir / "mojicast-m2m100-ct2"))
-    assert got == ["model.bin", "sentencepiece.model"]     # README 는 받지 않습니다
+    assert got == ["model.bin", "sentencepiece.model"]     # README is not downloaded
 
 
 def test_delete_file_id_cannot_escape_the_model_dir(model_dir, tmp_path):
-    """`file:..` 이 모델 디렉터리의 부모(사용자 영역 전체)를 지우던 결함."""
+    """The bug where `file:..` deleted the model directory's parent -- the whole user area."""
     model_dir.mkdir()
     (tmp_path / "IMPORTANT.txt").write_text("x")
     (model_dir / "SenseVoiceSmall-Q8_0.gguf").write_bytes(b"m")
@@ -251,10 +252,10 @@ def test_delete_file_id_cannot_escape_the_model_dir(model_dir, tmp_path):
         assert "error" in modelhub.delete("file:" + bad), bad
     assert (tmp_path / "IMPORTANT.txt").exists()
     assert model_dir.exists()
-    # 목록이 관리하는 이름은 file: 로 지울 수 없습니다 -- 정식 id 로만.
+    # A name the catalog manages cannot be deleted through file: -- only through its proper id.
     assert "error" in modelhub.delete("file:SenseVoiceSmall-Q8_0.gguf")
     assert (model_dir / "SenseVoiceSmall-Q8_0.gguf").exists()
-    # 링크는 링크만 지우고 가리키는 곳은 두어야 합니다.
+    # A symlink must lose the link alone and leave what it points at.
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "keep").write_text("k")
@@ -274,14 +275,14 @@ def test_cancel_while_queued_skips_the_download(model_dir, monkeypatch):
         return FakeResponse(b"x" * 10, 200, {"Content-Length": "10"})
 
     monkeypatch.setattr(modelhub, "_open", fake_open)
-    modelhub.download(["silero-vad", "campplus"])       # 첫째가 gate 에서 멈춰 있는 동안
+    modelhub.download(["silero-vad", "campplus"])       # While the first one is held at the gate
     assert modelhub.status(modelhub.find("campplus"))["state"] == "queued"
     assert modelhub.cancel("campplus")["cancelled"] == "campplus"
     gate.set()
     assert _wait(lambda: modelhub.status(modelhub.find("silero-vad"))["state"] == "ready")
     time.sleep(0.1)
     assert modelhub.status(modelhub.find("campplus"))["state"] == "missing"
-    assert len(got) == 1                                   # 둘째는 받지 않았습니다
+    assert len(got) == 1                                   # The second one was never downloaded
 
 
 def test_add_custom_rejects_catalog_names_and_bad_paths(monkeypatch):

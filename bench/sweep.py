@@ -1,16 +1,20 @@
-"""문맥 줄 수를 바꿔 가며 무엇이 달라지는지 봅니다.
+"""Vary the number of context lines and look at what changes.
 
-품질을 자동으로 점수 낼 방법이 없으므로 세 가지 대리 지표를 봅니다.
+There is no automatic way to score quality, so three proxy metrics are used.
 
-  실패      `looks_broken`에 걸려 번역이 버려진 줄. 오염이 심해지면 늡니다.
-  길이폭발  원문의 세 배를 넘는 출력. 모델이 참고 줄까지 옮겼을 때의 모양입니다.
-  원문유출  출력에 일본어 가나가 남은 줄. 문맥을 깊게 주면 모델이 옮기는
-            대신 원문을 되돌려 줍니다(`って。` -> `って`). 이것이 가장
-            나쁜 실패입니다 -- `looks_broken`이 잡지 못합니다. 비어 있지도,
-            길지도 않고, `⁇`도 없으니까요.
-  변화      ctx0(문맥 없음) 대비 글자까지 달라진 줄. 문맥이 실제로 일한 양입니다.
+  failure        Lines whose translation was thrown away by `looks_broken`. It
+                 rises as the contamination gets worse.
+  length blow-up Output more than three times the source. This is the shape it
+                 takes when the model has translated the reference lines too.
+  source leak    Lines where Japanese kana remain in the output. Given deep
+                 context the model hands the source back instead of translating
+                 it (`って。` -> `って`). This is the worst failure --
+                 `looks_broken` cannot catch it. It is not empty, not long, and
+                 has no `⁇`.
+  change         Lines that differ character for character from ctx0 (no
+                 context). This is how much the context actually did.
 
-지표가 판정을 대신하지는 않습니다. 어느 줄이 달라졌는지는 사람이 봅니다.
+A metric does not stand in for a judgement. Which lines changed is for a person to see.
 """
 import json, os, statistics, sys
 
@@ -21,8 +25,8 @@ load = lambda n: json.load(open(os.path.join(HERE, f"out_prompt_ctx{n}.json"),
 runs = {n: load(n) for n in NS}
 base = runs[0]
 
-# 히라가나·가타카나. 한자는 세지 않습니다 -- 한국어 번역에 한자가 남는
-# 것은 드물지만 정당할 수 있고, 가나는 그렇지 않습니다.
+# Hiragana and katakana. Kanji are not counted -- kanji left in a Korean
+# translation is rare but can be legitimate, while kana is not.
 KANA = [(0x3040, 0x30ff)]
 
 
@@ -47,7 +51,7 @@ for n in NS:
     for r in leaked:
         print(f"|   ↳ | | | `{r['text']}` → `{r['out']}` | | |")
 
-if len(sys.argv) > 1:                    # 특정 줄이 어떻게 변해 가는지
+if len(sys.argv) > 1:                    # how one particular line changes across the runs
     key = sys.argv[1]
     idx = [i for i, r in enumerate(base) if r["text"].startswith(key)]
     for i in idx:

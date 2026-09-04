@@ -1,17 +1,21 @@
-/* mimiwatch 화면 — 엔진 선택기와 「엔진 관리」 대화상자, 장르·콘텐츠 유형 선택기, 서버 종료.
+/* mimiwatch front end — the engine pickers and the Engines dialog, the genre
+ * and content-type pickers, and shutting the server down.
  *
- * web/app.js 를 관심사별로 나눈 파일입니다. 전부 일반 <script> 로 index.html 이
- * 적는 순서대로 읽히며 전역 범위를 함께 씁니다 -- 모듈 문법을 쓰지 않는 것은
- * 확장과 공유하는 overlay.js 와 같은 이유입니다. 서로 부르는 것은 전부
- * 실행 시점의 함수 호출이라 파일 순서는 main.js 가 마지막이기만 하면 됩니다. */
+ * One of the files web/app.js was split into by concern. They are all plain
+ * <script>s, read in the order index.html writes them down, and they share one
+ * global scope -- module syntax is avoided here for the same reason as in
+ * overlay.js, which is shared with the extension. Everything they call in each
+ * other is a function call made at run time, so the file order only has to put
+ * main.js last. */
 
 /* ---------- translation backends ---------- */
 async function loadBackends() {
   applyBackends(await (await fetch("/api/backends")).json());
 }
 
-/* 받아 온 설정을 화면에 앉힙니다. 시작할 때는 세 요청을 나란히 보내므로
- * 받는 것과 적용하는 것을 나눠 두어야 합니다. */
+/* Seats the config that came back on the screen. At start-up the three
+ * requests go out side by side, so fetching and applying have to be two
+ * separate things. */
 function applyBackends(cfg) {
   state.backends = cfg.backends;
   const p = loadPrefs();
@@ -26,7 +30,7 @@ function applyBackends(cfg) {
   if (p0.refine != null) state.refine = !!p0.refine;
   document.querySelector('#add-form input[name="refine"]').checked = state.refine;
   renderAsrPicker();
-  booted = true;      // 여기부터는 state가 설정과 맞춰졌으므로 저장해도 됩니다
+  booted = true;      // from here on state agrees with the config, so it is safe to save
   const ids = cfg.backends.map(b => b.id);
   // A remembered backend can disappear when the config is edited or renamed.
   // Falling back keeps a stale preference from asking the server for a
@@ -43,7 +47,7 @@ function renderBackendPicker() {
   state.backends.forEach(b => {
     const o = document.createElement("option");
     o.value = b.id;
-    // "(미번역)" means "this backend has not run over this file yet", which
+    // "(not translated)" means "this backend has not run over this file yet", which
     // is a statement about a finished transcript. A live session translates
     // as it goes, so the label would be wrong the moment the first line
     // lands.
@@ -53,9 +57,9 @@ function renderBackendPicker() {
     pick.appendChild(o);
   });
   pick.value = state.backend;
-  // 대화상자 쪽도 같은 값을 가리켜야 합니다. "(미번역)" 표시는 열려 있는
-  // 영상에 대한 말이라 대화상자에는 붙이지 않습니다 -- 거기서 고르는 것은
-  // 아직 없는 영상의 엔진입니다.
+  // The dialog has to point at the same value. The "(not translated)" mark is a
+  // statement about the video that is open, so it is not put in the dialog --
+  // what is picked there is the engine for a video that does not exist yet.
   fillEngineSelect(document.querySelector('#add-form select[name="backend"]'),
                    state.backends, state.backend, LOCKED.tr);
   // Nothing to translate when the speaker already uses the viewer's language.
@@ -88,9 +92,9 @@ async function selectBackend(id) {
   buildScript(); applyModeForDoc(); renderBackendPicker();
 }
 
-/* 장르는 「콘텐츠 유형」과 다른 축입니다. 유형은 발화를 몇 초에 끊을지를
- * 정하고(라이브 전용), 장르는 그 발화를 어떤 어휘로 옮길지를 정합니다 --
- * 녹화본에도 필요합니다. */
+/* Genre is a different axis from the content type. The type decides how many
+ * seconds of speech to cut at (live only), the genre decides what vocabulary
+ * that speech is carried over into -- which a VOD needs as well. */
 function renderGenrePicker() {
   const sel = document.querySelector('#add-form select[name="genre"]');
   if (!sel) return;
@@ -130,8 +134,9 @@ function currentGenre() {
   return (sel && sel.value) || "general";
 }
 
-/* 열려 있는 영상의 장르를 선택기에 되비칩니다. 되비치지 않으면 다른 영상에
- * 마지막으로 고른 값이 남아, 다시 번역할 때 엉뚱한 프롬프트가 갑니다. */
+/* Reflects the genre of the video that is open back into the picker. Without
+ * that, the value last picked for some other video stays behind and the wrong
+ * prompt goes out on a re-translation. */
 function syncGenreToDoc() {
   const sel = document.querySelector('#add-form select[name="genre"]');
   const g = (state.doc || {}).genre;
@@ -162,20 +167,22 @@ function renderProfilePicker() {
  * delete an engine was to pretend to add a video. */
 function openSettings() {
   showEngineList();
-  loadModels();        // 열 때마다 새로 읽습니다. 파일을 손으로 넣었을 수 있습니다
+  loadModels();        // read afresh on every open -- a file may have been put there by hand
   loadCookies();
   if (!$("settings-dialog").open) $("settings-dialog").showModal();
 }
 
-/* 서버를 명시적으로 끕니다.
+/* Shuts the server down explicitly.
  *
- * 프로세스를 죽이는 것과 다릅니다. 서버가 받는 중인 방송을 먼저 닫아
- * 「종료됨」으로 기록한 뒤에 멈추므로, 사용자가 스스로 끈 것과 서버가 죽은
- * 것이 지난 방송 목록에서 구분됩니다. */
+ * This is not the same as killing the process. The server closes the streams it
+ * is receiving first and records them as "ended" before it stops, so the list of
+ * past streams tells a shutdown the user asked for apart from a server that
+ * died. */
 async function shutdownServer() {
-  // 이 탭이 라이브를 보고 있지 않아도 서버는 받고 있을 수 있습니다 -- 다른
-  // 탭에서 시작했거나, 이 탭을 열기 전부터 돌고 있었거나. 그래서 여기서는
-  // 문구만 고르고, 실제로 몇 건을 닫았는지는 응답에서 받습니다.
+  // The server may well be receiving even when this tab is not watching a live
+  // stream -- it was started in another tab, or it was already running before
+  // this tab was opened. So all that is chosen here is the wording; how many
+  // were actually closed comes back in the answer.
   const msg = state.live
     ? t("engines.shutdown.confirm.live")
     : t("engines.shutdown.confirm");
@@ -188,18 +195,20 @@ async function shutdownServer() {
   $("quit").disabled = true;
   $("quit").textContent = t("engines.shutdown.busy");
 
-  let stopped = null;                     // null = 답을 못 받음
+  let stopped = null;                     // null = no answer came back
   try {
     const r = await fetch("/api/shutdown", { method: "POST" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     stopped = (await r.json()).sessions_stopped || 0;
   } catch (e) {
-    // 답이 없다고 종료된 것은 아닙니다. 서버가 정말 멈췄으면 다음 요청도
-    // 실패하고, 살아 있으면 답합니다 -- 물어보고 나서 적습니다.
+    // No answer does not mean it shut down. If the server really stopped, the
+    // next request fails too; if it is alive, it answers -- so we ask before we
+    // write anything down.
     //
-    // 예전에는 여기서 곧바로 "종료됨"이라고 적었는데, 그러면 서버가 이
-    // 경로를 모르는 판(구버전이 돌고 있어 404가 나는 경우)에도 껐다고
-    // 말하게 됩니다. 껐다고 믿고 자리를 뜨면 방송은 계속 받아집니다.
+    // This used to write "shut down" right here, which said it had shut down
+    // even when the server did not know this route (an older version running,
+    // answering 404). Believing that and walking away, the stream goes on being
+    // received.
     const alive = await fetch("/api/backends", { cache: "no-store" })
       .then(r => r.ok).catch(() => false);
     if (alive) {
@@ -213,8 +222,8 @@ async function shutdownServer() {
     }
   }
 
-  // 여기까지 왔으면 서버는 멈췄습니다. 새로고침해도 돌아올 곳이 없으므로
-  // 화면을 그대로 두고 무엇이 끝났는지만 적습니다.
+  // Having come this far, the server has stopped. A reload has nowhere to go
+  // back to, so the screen is left as it is and only what ended is written down.
   $("shutdown-group").classList.add("done");
   hint.textContent = [
     stopped ? t("engines.shutdown.done.n", { n: stopped }) : t("engines.shutdown.done"),
@@ -235,15 +244,17 @@ function restartHint() {
     ? t("engines.shutdown.restart.bundle") : t("engines.shutdown.restart.repo");
 }
 
-/* 서버가 멈춘 뒤 창을 닫습니다. 묶음으로 쓰는 사람에게 남는 것은 이 탭뿐이라, 서버만 끄고
- * 탭을 두면 "아직 켜져 있나" 싶습니다.
+/* Closes the window once the server has stopped. For someone running the bundle
+ * this tab is all that is left, and stopping only the server while the tab
+ * stands there reads as "is it still running?".
  *
- * 크롬은 스크립트가 열지 않은 탭도 **방문 기록이 하나뿐이면** `window.close()` 로 닫게
- * 해 줍니다 -- 묶음이 브라우저로 여는 탭이 그렇습니다. 즐겨찾기로 들어와 여러 페이지를
- * 거친 탭은 닫히지 않으므로, 그때는 닫히지 않았다고 화면에 적습니다. */
+ * Chrome lets `window.close()` close even a tab a script did not open **as long
+ * as it has a single history entry** -- which is what the tab the bundle opens
+ * in the browser is. A tab reached from a bookmark and walked through several
+ * pages does not close, and the screen then says so. */
 function closeWindows(stopped) {
   if (state.scriptWin && !state.scriptWin.closed) {
-    try { state.scriptWin.close(); } catch (_) { /* 다른 출처면 못 닫습니다 */ }
+    try { state.scriptWin.close(); } catch (_) { /* a different origin cannot be closed */ }
   }
   setTimeout(() => {
     window.close();
@@ -281,7 +292,7 @@ function showEngineList() {
   renderEngineList("tr");
 }
 
-// 지울 수 없는 기본 엔진. 목록에서 사라지면 고를 것이 없어집니다.
+// The default engines, which cannot be deleted. Gone from the list, there would be nothing left to pick.
 const LOCKED = { asr: "tcpp-best", tr: "local-m2m100" };
 
 function enginesOf(kind) {
@@ -388,11 +399,13 @@ function adoptConfig(cfg) {
   renderBackendPicker();
 }
 
-/* 엔진 선택기는 두 자리에 있습니다 -- 「관리」 메뉴와 「영상 추가」 대화상자.
+/* The engine picker sits in two places -- the "Manage ▾" menu and the "Add
+ * video" dialog.
  *
- * 넣는 순간 그 엔진으로 전사가 시작되므로, 넣기 전에 고를 수 있어야 합니다.
- * 예전에는 헤더에서만 고를 수 있어서, 대화상자를 열어 둔 채로는 바꿀 수
- * 없었습니다. 두 자리가 같은 값을 가리키므로 어느 쪽에서 고르든 같습니다. */
+ * Transcription starts with that engine the moment a video goes in, so it has
+ * to be pickable before it goes in. It used to be pickable in the header only,
+ * and with the dialog open there was no way to change it. Both places point at
+ * the same value, so picking in either is the same thing. */
 function fillEngineSelect(sel, entries, current, fallback) {
   if (!sel) return current;
   sel.textContent = "";
@@ -412,9 +425,11 @@ function renderAsrPicker() {
                    state.asrBackends, state.asr, LOCKED.asr);
 }
 
-/* 「관리」에서 고른 엔진을 서버의 기본값으로도 적습니다. 확장은 서버의 기본값으로 세션을
- * 시작하므로, 여기서 적지 않으면 화면에서 무엇을 골랐든 확장은 경량 엔진으로 시작합니다.
- * 실패는 조용히 지나갑니다 -- 화면의 선택은 이미 바뀌었고, 예전 서버(끝점 없음)일 수 있습니다. */
+/* Writes the engine picked under "Manage ▾" down as the server's default as well.
+ * The extension starts a session with the server's default, so without this the
+ * extension starts on the light engine no matter what was picked on the screen.
+ * A failure passes in silence -- the choice on the screen has already changed,
+ * and the server may be an older one (no such endpoint). */
 function syncActive(kind, id) {
   fetch("/api/active", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -438,12 +453,13 @@ function setBackendPickers(id) {
   if (b) b.value = id;
 }
 
-/* ---------- 모델 · 도구 ----------
- * 모델은 프로그램 밖에 둡니다(paths.py). 예전에는 설치 스크립트가 받아 주었고
- * 화면에는 무엇이 있는지 볼 자리가 없었습니다 -- 파일이 없으면 세션이
- * FileNotFoundError 로 끝나고 "./install.sh 를 실행하십시오"라는 말만 남았습니다.
- * 묶음(PyInstaller)으로 받은 사람에게는 그 스크립트조차 없으므로, 여기서 받고
- * 지우고 허깅페이스에서 더 가져옵니다. 진행은 서버가 bus 로 밀어 줍니다. */
+/* ---------- models and tools ----------
+ * The models live outside the program (paths.py). The install script used to
+ * fetch them and the screen had nowhere to show what was there -- a missing
+ * file ended the session in a FileNotFoundError, leaving nothing but "run
+ * ./install.sh". Someone who took the bundle (PyInstaller) does not even have
+ * that script, so downloading, deleting and pulling more from Hugging Face all
+ * happen here. The server pushes the progress over the bus. */
 
 function fmtBytes(n) {
   if (!n) return "";
@@ -454,7 +470,7 @@ function fmtBytes(n) {
 
 async function loadModels() {
   try { applyModels(await (await fetch("/api/models")).json()); }
-  catch (_) { /* 서버가 이 끝점을 모르는 예전 판. 구역은 비어 있습니다. */ }
+  catch (_) { /* An older version whose server does not know this endpoint. The section stays empty. */ }
 }
 
 function applyModels(ov) {
@@ -465,8 +481,9 @@ function applyModels(ov) {
   refreshSetupNotice();
 }
 
-/* 위쪽 띠. 전사에 반드시 필요한 것(VAD·whisper·M2M-100·ffmpeg)이 하나라도 없으면
- * 세웁니다. 받는 중이면 그 진행을 같은 자리에 적습니다. */
+/* The strip up top. It stands whenever even one of the things transcription
+ * cannot do without (VAD, whisper, M2M-100, ffmpeg) is absent. While a download
+ * runs, its progress is written in the same place. */
 function refreshSetupNotice() {
   const ov = state.models;
   const box = $("setup-notice");
@@ -514,7 +531,7 @@ function renderModelList() {
   const ov = state.models;
   if (!box || !ov) return;
   box.textContent = "";
-  // 종류별로 묶어 보입니다. 전사 → 번역 → 보조 → 도구 → 목록에 없는 파일.
+  // Shown grouped by kind: transcription → translation → auxiliary → tools → files not in the catalog.
   const order = { asr: 0, tr: 1, aux: 2, tool: 3, other: 4 };
   const head = { asr: "engines.model.kind.asr", tr: "engines.model.kind.tr",
                  aux: "engines.model.kind.aux", tool: "engines.model.kind.tool",
@@ -592,9 +609,10 @@ async function postModel(url, body) {
   return res;
 }
 
-/* `ids` 는 배열이거나 "default"(기본 세트). `open` 이면 대화상자를 열어 진행을
- * 보게 합니다 -- 위쪽 띠의 「기본 모델 받기」가 그렇습니다. 5GB는 몇 분 걸리고,
- * 그 사이 무엇이 오는지 보이지 않으면 멎은 것으로 보입니다. */
+/* `ids` is either an array or "default" (the default set). With `open` the
+ * dialog is opened so the progress can be watched -- which is what "Download
+ * for the current settings" in the strip up top does. 5GB takes minutes, and
+ * with nothing visible of what is coming it looks stalled. */
 async function downloadModels(ids, open = false) {
   const res = await postModel("/api/models/download", { ids });
   if (open && !res.error) openSettings();
@@ -607,8 +625,9 @@ async function deleteModel(it) {
   await postModel("/api/models/delete", { id: it.id });
 }
 
-/* bus 로 온 항목 하나의 새 상태. 목록의 그 항목만 바꿔 넣고, 필수 항목이
- * 갖춰졐는지 다시 봅니다. 목록 밖의 항목(새로 추가된 것)이면 전부 다시 읽습니다. */
+/* The new state of one item, as it arrived over the bus. Only that item of the
+ * list is swapped in, and whether the required ones are all there is looked at
+ * again. An item that is not in the list (a newly added one) rereads the lot. */
 function onModelEvent(m) {
   const ov = state.models;
   if (!ov) { loadModels(); return; }
@@ -620,7 +639,7 @@ function onModelEvent(m) {
   const row = document.querySelector(`#model-list .model-row[data-model="${CSS.escape(m.id)}"]`);
   if (row) row.replaceWith(modelRow(rest));
   refreshSetupNotice();
-  // 받기가 끝난 모델이 엔진 설정에 항목을 넣었을 수 있습니다(허깅페이스 추가).
+  // A model whose download finished may have put an entry into the engine config (added from Hugging Face).
   if (rest.state === "ready" && rest.custom) loadBackends();
 }
 
@@ -661,11 +680,13 @@ async function saveModel(e) {
   }
 }
 
-/* ---------- 초기 설정 ----------
- * 사양은 기계마다 다릅니다. 기본은 가벼운 CPU 엔진(SenseVoice Small + M2M-100)이지만
- * GPU 가 있는 기계라면 whisper 와 Gemma 가 훨씬 낫습니다. 첫 실행에 고르게 하고,
- * 고른 조합에 필요한 모델만 받습니다. 예전에는 무거운 쪽이 기본이라 6GB 를 받고서야
- * 이 기계에서는 버겁다는 것을 알았습니다. */
+/* ---------- first-time setup ----------
+ * What a machine can do differs from machine to machine. The default is the
+ * light CPU pair (SenseVoice Small + M2M-100), but on a machine with a GPU
+ * whisper and Gemma are far better. The first run lets them choose, and only
+ * the models the chosen pair needs are downloaded. The heavy pair used to be
+ * the default, so 6GB came down before anyone learned it was too much for this
+ * machine. */
 
 async function openSetup() {
   const opts = await (await fetch("/api/setup")).json();
@@ -698,7 +719,7 @@ function renderSetupChoices(kind, list, current) {
       bits.push(o.model.label);
       bits.push(o.model.state === "ready" ? t("engines.model.state.ready")
                 : t("engines.setup.willDownload", { size: fmtBytes(o.model.size) }));
-      // M2M-100 은 CTranslate2 를 CPU 로 고정해 씁니다(translate.py).
+      // M2M-100 uses CTranslate2 pinned to the CPU (translate.py).
       bits.push(o.backend === "local" || o.device === "cpu" ? "CPU" : t("engines.setup.gpuIfAvailable"));
     }
     meta.textContent = bits.join(" · ");
@@ -708,8 +729,8 @@ function renderSetupChoices(kind, list, current) {
   });
 }
 
-/* 고른 조합으로 새로 받을 용량. 「이대로 시작」 옆에 적어 두면 5GB 를 받게 될지
- * 미리 압니다. */
+/* How much the chosen pair will newly download. Written beside "Start with
+ * this", it says up front whether 5GB is about to come down. */
 function syncSetupTotal() {
   const opts = state.setupOpts;
   if (!opts) return;
@@ -723,7 +744,7 @@ function syncSetupTotal() {
       bytes += o.model.size || 0; names.push(o.model.label);
     }
   });
-  // M2M-100 은 번역 대체 경로가 늘 필요합니다. Gemma 를 골라도 함께 받습니다.
+  // M2M-100 is always needed as the translation fallback path. It comes down alongside Gemma too.
   const m2m = (state.models || { items: [] }).items.find(i => i.id === "m2m100");
   if (m2m && m2m.state !== "ready" && !names.includes(m2m.label)) {
     bytes += m2m.size || 0;
@@ -745,19 +766,21 @@ async function submitSetup(e) {
                            tr: f.elements["setup-tr"].value, download: true }),
   })).json();
   if (res.error) { alert(res.error); return; }
-  // 기본 엔진이 바뀌었으니 선택기도 그리로 맞춥니다.
+  // The default engines have changed, so the pickers are brought over to them.
   await loadBackends();
   setAsr(f.elements["setup-asr"].value);
   state.backend = f.elements["setup-tr"].value;
   setBackendPickers(state.backend);
   persist();
   await loadModels();
-  if ((res.queued || []).length) openSettings();     // 내려받기 진행을 보여 줍니다
+  if ((res.queued || []).length) openSettings();     // shows the download progress
 }
 
-/* ---------- 유튜브 로그인 쿠키 ----------
- * 확장이 넘겨 준 쿠키가 서버에 있는지 보여 주고 지웁니다. 내용은 서버가 내보내지 않습니다 --
- * 있음/없음·개수·받은 시각만. 계정의 열쇠라서 쓸 일이 끝나면 지우는 것이 맞습니다. */
+/* ---------- the YouTube login cookies ----------
+ * Shows whether the cookies the extension handed over are on the server, and
+ * deletes them. The server never gives the contents out -- only present or not,
+ * how many, and when they arrived. They are the keys to an account, so deleting
+ * them once they have served their purpose is the right thing. */
 async function loadCookies() {
   let st;
   try { st = await (await fetch("/api/cookies")).json(); } catch (_) { return; }

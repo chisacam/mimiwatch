@@ -1,10 +1,13 @@
-"""Whisper 해독 손잡이 A/B: 기본값 vs 일본어 강화 임계값(WhisperJAV 관행).
+"""A/B of the whisper decoding knobs: defaults vs the Japanese-hardened
+thresholds (the WhisperJAV practice).
 
     .venv/bin/python bench/whisper_ab.py data/MPSTWzF2ZKU.wav 600 1200
 
-VAD(broadcast 프로필)로 자른 구간마다 두 설정으로 해독해 비교합니다. 정답 자막이 없으므로
-재는 것은 (1) 빈 결과로 떨어진 구간 수 -- no_speech 판정, (2) 4-gram 다양도 검사에 걸린
-반복 환각 수, (3) 글자 수와 해독 시간, (4) 두 설정의 결과가 다른 구간의 예시입니다.
+Every span cut by VAD (broadcast profile) is decoded under both settings and compared.
+There are no ground-truth subtitles, so what is measured is (1) how many spans fell to an
+empty result -- the no_speech decision, (2) how many repetition hallucinations the 4-gram
+diversity check caught, (3) character count and decoding time, and (4) examples of spans
+where the two settings disagree.
 """
 from __future__ import annotations
 import os, sys, time, wave

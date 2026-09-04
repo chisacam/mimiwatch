@@ -1,4 +1,4 @@
-"""내보내기: 어느 엔진의 번역을 담는가, 끝 시각을 어떻게 짓는가."""
+"""Export: whose engine's translation goes in, and how the end times are invented."""
 import export
 import store
 
@@ -44,8 +44,8 @@ def test_live_end_times_are_invented_within_bounds():
         store.save_cue("s", {"id": i, "kind": "final", "t": t, "text": f"l{i}", "lang": "ja"})
     _, rows = export.collect("live:s")
     ends = [r["end"] - r["start"] for r in rows]
-    assert ends[0] == export.END_MIN_S            # 바짝 붙은 줄은 최소 길이
-    assert ends[1] == export.END_MAX_S            # 다음 줄까지 9.7초지만 위를 막음
-    assert ends[3] == export.END_MAX_S            # 마지막 줄
+    assert ends[0] == export.END_MIN_S            # A line right on top of the next gets the minimum length
+    assert ends[1] == export.END_MAX_S            # 9.7 s until the next line, but the ceiling caps it
+    assert ends[3] == export.END_MAX_S            # The last line
     body = export.render({"title": "t"}, rows, "srt", "both")[0].decode()
     assert body.count("-->") == 4

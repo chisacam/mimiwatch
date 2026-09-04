@@ -1,33 +1,35 @@
-/* 서버와 이야기하는 쪽. content script 를 대신해 localhost 로 나갑니다.
+/* The side that talks to the server. It goes out to localhost on the content
+ * script's behalf.
  *
- * **왜 여기서 하는가.** content script 의 fetch 는 그 페이지(youtube.com)의
- * 출처로 나갑니다. 그러면 우리 서버가 `Access-Control-Allow-Origin` 으로
- * youtube.com 을 허락해야 하는데, 그 순간 유튜브 페이지에서 도는 모든
- * 스크립트가 우리 서버의 쓰기 API에 닿을 수 있게 됩니다. 서비스 워커의
- * fetch 는 확장의 출처로 나가고 `host_permissions` 가 CORS 를 건너뛰므로,
- * 서버는 아무것도 열어 줄 필요가 없습니다.
+ * **Why it happens here.** A fetch from the content script goes out with that
+ * page's (youtube.com) origin. Our server would then have to allow youtube.com
+ * through `Access-Control-Allow-Origin`, and the moment it does, every script
+ * running on the YouTube page can reach our server's write API. A fetch from
+ * the service worker goes out with the extension's origin and `host_permissions`
+ * skips CORS, so the server has to open nothing.
  *
- * **EventSource 를 쓰지 않습니다.** MV3 서비스 워커에는 없습니다. 대신
- * fetch 의 몸통을 흘려 읽으며 SSE 를 직접 풉니다 -- 형식이 단순하고
- * (`data: ...\n\n`), 다시 붙는 규칙을 우리가 정할 수 있어 오히려 낫습니다.
+ * **It does not use EventSource.** An MV3 service worker has none. Instead it
+ * reads the fetch body as a stream and parses SSE by hand -- the format is
+ * simple (`data: ...\n\n`) and we get to set the reconnect rule ourselves,
+ * which is better anyway.
  *
- * **왜 워커가 안 죽는가.** MV3 서비스 워커는 가만히 두면 30초쯤 뒤에
- * 내려갑니다. 포트가 연결되어 있고 그 위로 메시지가 오가면 그 시계가
- * 다시 돕니다. 자막은 몇 초에 한 줄씩 오고, 조용한 동안에는 아래
- * KEEPALIVE_MS 마다 한 번 찔러 둡니다.
+ * **Why the worker does not die.** An MV3 service worker goes down after about
+ * 30 seconds if left alone. A connected port with messages passing over it
+ * restarts that clock. Subtitles arrive a line every few seconds, and during the
+ * quiet it is poked once every KEEPALIVE_MS below.
  */
 
-/* 문구는 표에서 꺼내 씁니다. 서비스 워커에는 window 도 DOM 도 없지만 i18n 은
- * 전역을 globalThis 에 얹고 DOM 을 건드리는 자리마다 지키고 있으므로 여기서도
- * `t()` 가 그대로 됩니다. */
+/* Strings come out of the table. A service worker has neither window nor DOM,
+ * but i18n puts its global on globalThis and guards every place it touches the
+ * DOM, so `t()` works here as it does elsewhere. */
 importScripts("i18n.js", "strings-ext.js");
 
 const BASE_KEY = "serverBase";
 const LANG_KEY = "uiLang";
 const DEFAULT_BASE = "http://localhost:8900";
 const KEEPALIVE_MS = 20000;
-// 끊겼을 때 다시 붙기까지. 서버를 재시작하는 동안 몇 번 실패하는 것이
-// 정상이므로 조용히 기다립니다.
+// How long before reattaching after a break. Failing a few times while the
+// server restarts is normal, so it waits quietly.
 const RETRY_MS = 3000;
 
 async function base() {
@@ -35,11 +37,12 @@ async function base() {
   return got[BASE_KEY] || DEFAULT_BASE;
 }
 
-/* 여기서 지은 오류 문구는 팝업의 오류줄에 그대로 뜹니다. 그러니 팝업과 같은
- * 언어여야 하는데, 워커에는 물어볼 화면이 없습니다 -- 서버에서 언어를 받아 온
- * 팝업이 적어 둔 값을 읽습니다. 아직 아무도 물어본 적이 없으면 브라우저의
- * 짐작으로 갑니다. 워커는 30초쯤 쉬면 내려가고 깰 때마다 이 파일이 다시 도므로,
- * 답하기 전에 한 번은 기다립니다. */
+/* Error strings built here show on the popup's error line verbatim. So they
+ * have to be in the same language as the popup, and the worker has no screen to
+ * ask -- it reads the value the popup wrote down after getting the language from
+ * the server. If nobody has asked yet, it goes with the browser's guess. The
+ * worker goes down after about 30 s idle and this file runs again on every wake,
+ * so it waits once before answering. */
 async function loadLang() {
   const got = await chrome.storage.local.get(LANG_KEY);
   MW_I18N.setLang(got[LANG_KEY] || "");
@@ -73,24 +76,26 @@ const post = (path, body) => api(path, {
   body: JSON.stringify(body),
 });
 
-/* ---------- 팝업과 content script 가 물어보는 것 ---------- */
+/* ---------- what the popup and the content script ask for ---------- */
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-  // offscreen 문서로 가는 것은 우리 것이 아닙니다. chrome.runtime.sendMessage 는
-  // 확장 안의 **모든** 수신자에게 갑니다. 이 자리에서 「모르는 요청」이라고
-  // 답해 버리면 offscreen 의 진짜 답과 경주가 되고, 먼저 닿는 쪽이 이깁니다.
+  // Anything headed for the offscreen document is not ours.
+  // chrome.runtime.sendMessage goes to **every** receiver in the extension.
+  // Answering "unknown request" from here would race the offscreen document's
+  // real answer, and whichever arrives first wins.
   if (msg && msg.target === "offscreen") return;
   (async () => {
     try {
-      await langReady;                      // 답하기 전에 어느 언어인지 알아 둡니다
+      await langReady;                      // know which language before answering
       if (msg.type === "sessions") reply({ ok: true, data: await api("/api/live/sessions") });
       else if (msg.type === "videos") reply({ ok: true, data: await api("/api/videos") });
       else if (msg.type === "backends") reply({ ok: true, data: await api("/api/backends") });
       else if (msg.type === "base") reply({ ok: true, data: await base() });
       else if (msg.type === "setBase") {
         await chrome.storage.local.set({ [BASE_KEY]: msg.base });
-        // 붙어 있는 유튜브 탭들은 옛 주소의 자막 줄기를 쥐고 있습니다. 새
-        // 주소로 다시 붙게 합니다. content script 가 없는 탭은 조용히 실패합니다.
+        // The YouTube tabs attached are holding a cue stream on the old address.
+        // Make them reattach on the new one. A tab with no content script fails
+        // quietly.
         const tabs = await chrome.tabs.query({ url: "https://www.youtube.com/*" });
         await Promise.all(tabs.map((t) =>
           chrome.tabs.sendMessage(t.id, { type: "reattach" }).catch(() => {})));
@@ -98,16 +103,16 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       } else if (msg.type === "watch") {
         reply({ ok: true, ...(await setWatch(msg.tabId, msg.value || "")) });
       } else if (msg.type === "dropWatch") {
-        // content script 가 스스로 내렸습니다(다른 영상으로 옮김). 자기 탭
-        // 번호는 모르지만 우리는 sender 로 압니다. 화면은 이미 그쪽이
-        // 치웠으므로 기억만 지웁니다 -- 여기서 detach 를 도로 보내면
-        // 방금 내린 것을 한 번 더 내리는 셈입니다.
+        // The content script took itself down (it moved to a different video).
+        // It does not know its own tab number, but we know it from sender. It
+        // has already cleared the screen, so only the memory is erased --
+        // sending a detach back from here would take down what just came down.
         const id = sender && sender.tab && sender.tab.id;
         if (id) await chrome.storage.local.set({ ["tab:" + id]: "" });
         reply({ ok: true });
       } else if (msg.type === "whatToWatch") {
-        // content script 가 방금 떠서 스스로 묻습니다. 자기 탭 번호는
-        // 모르지만 우리는 sender 로 압니다.
+        // The content script has just come up and is asking on its own. It does
+        // not know its own tab number, but we know it from sender.
         const id = sender && sender.tab && sender.tab.id;
         const k = "tab:" + id;
         const v = id ? (await chrome.storage.local.get(k))[k] || "" : "";
@@ -132,19 +137,22 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       reply({ ok: false, error: String((e && e.message) || e) });
     }
   })();
-  return true;            // 비동기로 답합니다
+  return true;            // answers asynchronously
 });
 
-/* 이 탭이 무엇을 볼지 정하고, 그것을 content script 에 알립니다.
+/* Decides what this tab watches and tells the content script about it.
  *
- * **닿았는지 확인합니다.** content script 가 없을 수 있습니다 -- 확장을 다시
- * 로드한 직후(열려 있던 탭은 옛 것을 계속 씁니다), 유튜브가 아닌 탭, 방금
- * 열려 아직 뜨지 않은 탭. 예전에는 조용히 실패하고 끝이라, 사용자에게는
- * 「골랐는데 아무 일도 안 난다」로 보였고 페이지를 새로고침해야 나왔습니다.
+ * **It checks that it arrived.** The content script may not be there -- right
+ * after reloading the extension (tabs already open keep using the old one), a
+ * tab that is not YouTube, a tab that just opened and has not come up yet. It
+ * used to fail quietly and that was that, which to the user looked like "I
+ * picked it and nothing happens", and the page had to be reloaded before it
+ * showed.
  *
- * 닿지 않았으면 우리가 새로고침합니다. 저장은 이미 되어 있으므로 새로 뜬
- * content script 가 스스로 읽어 갑니다(whatToWatch). **닿았으면 하지
- * 않습니다** -- 보고 있던 자리가 튀는 것은 그 자체로 손해입니다. */
+ * If it did not arrive we reload the tab ourselves. The choice is already
+ * stored, so the freshly started content script reads it on its own
+ * (whatToWatch). **If it did arrive, we do not** -- the viewing position
+ * jumping is a loss in itself. */
 async function setWatch(tabId, value, opts) {
   await chrome.storage.local.set({ ["tab:" + tabId]: value });
   try {
@@ -152,12 +160,12 @@ async function setWatch(tabId, value, opts) {
     const r = await chrome.tabs.sendMessage(
       tabId, value ? { type: "attach", value, videoId } : { type: "detach" });
     if (r && r.ok) return { delivered: true };
-  } catch (_) { /* 아래에서 다룹니다 */ }
-  if (!value) return { delivered: false };   // 내리는 것은 새로고침할 일이 아닙니다
-  // 탭 소리를 잡는 중에는 새로고침하지 않습니다. 잡아 둔 스트림은 그 탭에
-  // 매여 있어서, 새로고침하면 방금 시작한 받아 적기가 끊깁니다. 자막은
-  // 곧 오는데 화면에만 안 붙는 것과, 받는 것 자체가 끊기는 것은 다른
-  // 이야기입니다.
+  } catch (_) { /* handled below */ }
+  if (!value) return { delivered: false };   // taking it down is no reason to reload
+  // No reload while the tab's sound is being captured. The captured stream is
+  // tied to that tab, so a reload cuts off the transcription that just started.
+  // A subtitle that is coming but simply not attaching to the screen, and
+  // receiving itself being cut off, are two different stories.
   if (opts && opts.noReload) return { delivered: false, skippedReload: true };
   try {
     await chrome.tabs.reload(tabId);
@@ -167,25 +175,26 @@ async function setWatch(tabId, value, opts) {
   }
 }
 
-/* 주소에서 영상 id 를 뽑습니다. 세션이 어느 영상의 것인지 알아야, 다른
- * 영상으로 옮겼을 때 옛 자막을 계속 얹는 일을 막을 수 있습니다. content
- * script 와 같은 한 벌(ytid.js)입니다. */
+/* Pulls the video id out of the URL. Knowing which video a session belongs to
+ * is what stops old subtitles from going on being laid down after a move to a
+ * different video. The same copy the content script uses (ytid.js). */
 importScripts("ytid.js");
 const videoIdOf = MimiYtId.videoIdOf;
 
-/* 이 자막이 어느 영상의 것인가. 모르면 빈 문자열입니다 -- 그때는 판별하지
- * 못했다는 뜻이고, 내리지 않고 묻습니다. */
+/* Which video these subtitles belong to. The empty string when unknown -- that
+ * means it could not be told, and then it asks rather than taking them down. */
 async function expectedVideo(value) {
   if (!value) return "";
-  // 녹화본은 고른 값이 곧 영상 id 입니다.
+  // For a VOD the chosen value is the video id itself.
   if (!value.startsWith("live:")) return value;
   const sid = value.slice(5);
   const k = "vid:" + sid;
   const got = (await chrome.storage.local.get(k))[k];
   if (got) return got;
   try {
-    // 주소로 시작한 세션은 서버가 yt-dlp 로 영상 id 를 알아 둡니다.
-    // 탭 소리로 시작한 세션에는 없습니다(받아 올 주소가 없으니까요).
+    // For a session started from a URL the server learns the video id through
+    // yt-dlp. A session started from the tab's sound has none (there is no URL
+    // to receive from).
     const st = await api(`/api/live/status/${encodeURIComponent(sid)}`);
     return st.video_id || "";
   } catch (_) {
@@ -193,15 +202,16 @@ async function expectedVideo(value) {
   }
 }
 
-/* ---------- 유튜브 로그인 쿠키 넘기기 ----------
+/* ---------- handing the YouTube login cookies over ----------
  *
- * 멤버십 전용 방송을 「주소로」 받으려면 서버의 yt-dlp 에 로그인 쿠키가 있어야 합니다. 확장은
- * `cookies` 권한으로 HttpOnly 쿠키까지 읽을 수 있으므로, 사용자가 누른 그 순간의 쿠키를
- * Netscape 형식으로 만들어 서버에 넘깁니다. **누를 때만** 합니다 -- 켜 두는 스위치가 아닙니다.
- * 매번 새로 읽으므로 유튜브가 탭의 쿠키를 갈아 치워도(회전) 그 시점의 최신 것이 갑니다.
+ * Receiving a members-only stream "From this URL" needs the server's yt-dlp to have the login
+ * cookies. The extension can read even HttpOnly cookies with the `cookies` permission, so it
+ * builds the cookies as of the moment the user pressed into Netscape format and hands them to
+ * the server. **Only on a press** -- it is not a switch left on. They are read fresh each time,
+ * so even when YouTube swaps the tab's cookies out (rotation) the newest ones at that moment go.
  *
- * 위험은 사용자의 것입니다: 평소 계정으로 yt-dlp 를 돌리면 유튜브가 봇 확인이나 일시 제한을
- * 걸 수 있습니다. 팝업의 단추 옆에 그렇게 적어 둡니다. */
+ * The risk is the user's: running yt-dlp as an everyday account may get YouTube to put a bot
+ * check or a temporary block on it. The popup says so next to the button. */
 async function pushCookies() {
   const all = [];
   for (const domain of ["youtube.com", "google.com"]) {
@@ -210,8 +220,8 @@ async function pushCookies() {
   if (!all.some((c) => c.name === "SAPISID" || c.name === "__Secure-3PAPISID")) {
     return { ok: false, error: t("popup.errNoLoginCookies") };
   }
-  // Netscape 형식: domain  includeSubdomains  path  secure  expiry  name  value.
-  // HttpOnly 는 curl·yt-dlp 가 쓰는 `#HttpOnly_` 접두로 표시합니다.
+  // Netscape format: domain  includeSubdomains  path  secure  expiry  name  value.
+  // HttpOnly is marked with the `#HttpOnly_` prefix curl and yt-dlp use.
   const lines = all.map((c) => {
     const domain = (c.hostOnly ? "" : ".") + c.domain.replace(/^\./, "");
     return [(c.httpOnly ? "#HttpOnly_" : "") + domain, c.hostOnly ? "FALSE" : "TRUE", c.path,
@@ -222,10 +232,11 @@ async function pushCookies() {
   return { ok: true, count: res.count };
 }
 
-/* ---------- 세션 시작 ---------- */
+/* ---------- starting a session ---------- */
 
-/* 주소로 시작합니다. 서버가 yt-dlp 로 직접 받으므로 브라우저를 닫아도
- * 계속 받아 적습니다. 멤버십 전용 방송은 이 길로 받지 못합니다. */
+/* Starts from a URL. The server receives it directly through yt-dlp, so
+ * transcription goes on even with the browser closed. A members-only stream
+ * cannot be received down this path. */
 async function startFromUrl(msg) {
   const probe = await post("/api/probe", { url: msg.url });
   if (probe.error) return { ok: false, error: probe.error };
@@ -243,14 +254,15 @@ async function startFromUrl(msg) {
   return { ok: true, id: res.id, ...w };
 }
 
-/* 이 탭에서 나는 소리로 시작합니다. 멤버십 전용 방송처럼 서버가 받을 수
- * 없는 것을 위한 길입니다.
+/* Starts from the sound this tab makes. This is the path for what the server
+ * cannot receive, such as a members-only stream.
  *
- * 소리를 실제로 잡는 일은 offscreen 문서가 합니다 -- 서비스 워커에는
- * getUserMedia 도 AudioContext 도 없습니다. */
+ * Actually capturing the sound is the offscreen document's job -- a service
+ * worker has neither getUserMedia nor AudioContext. */
 async function startFromTab(msg) {
-  // offscreen 문서를 **먼저** 띄웁니다. 스트림 id 는 "몇 초 안에 쓰지 않으면 만료"되는데,
-  // 문서를 만드는 데 그만큼 걸릴 수 있습니다. 서버에 세션을 만드는 것도 id 를 받기 전에.
+  // Bring the offscreen document up **first**. A stream id "expires if not used within a few
+  // seconds", and building the document can take that long. Creating the session on the server
+  // also comes before getting the id.
   await ensureOffscreen();
   const cfg = await api("/api/backends");
   const res = await post("/api/live/capture", {
@@ -269,21 +281,23 @@ async function startFromTab(msg) {
     await post("/api/live/stop", { id: res.id });
     return { ok: false, error: (started && started.error) || t("popup.errNoAudio") };
   }
-  // 탭 소리 세션에는 서버가 알 영상 id 가 없습니다(받아 올 주소가 없으니까요).
-  // 시작한 탭의 주소로 우리가 적어 둡니다.
+  // A tab-sound session has no video id for the server to know (there is no URL
+  // to receive from). We write it down ourselves from the starting tab's URL.
   const vid = videoIdOf(msg.url || "");
   if (vid) await chrome.storage.local.set({ ["vid:" + res.id]: vid });
   const w = await setWatch(msg.tabId, "live:" + res.id, { noReload: true });
   return { ok: true, id: res.id, ...w };
 }
 
-/* 멈춘 세션을 같은 세션으로 이어 붙입니다. 서버가 세션을 되살리고(주소로 받던
- * 것은 되감기 창 안이면 빠진 것 없이), 탭 소리로 받던 것이면 이 탭의 소리를 다시
- * 잡아 그 세션에 올립니다. 그 뒤 이 탭에 얹습니다. */
+/* Appends onto the same session that was stopped. The server revives the session
+ * (one received from a URL with nothing missing, if it falls inside the rewind
+ * window), and for one received from the tab's sound it captures this tab's sound
+ * again and uploads it to that session. Then it lays it on this tab. */
 async function resumeSession(msg) {
-  // 서버의 기본 엔진으로 이어받습니다 -- mimiwatch 페이지의 「관리」 선택이 곧 그 값입니다.
-  // `msg.source` 가 있으면 그 출처로 이어받습니다(주소로 받던 것을 탭 소리로, 또는 반대로).
-  // 탭 소리 세션을 주소로 이어받을 때는 지금 탭의 주소를 줍니다 -- 그 세션에는 주소가 없습니다.
+  // Resumes with the server's default engine -- the "Manage" choice on the mimiwatch page is
+  // that value. With `msg.source` set it resumes from that source (one received from a URL onto
+  // the tab's sound, or the other way round). Resuming a tab-sound session from a URL hands it
+  // the current tab's URL -- that session has none.
   const cfg = await api("/api/backends");
   const res = await post("/api/live/resume", {
     id: msg.sessionId, asr: cfg.asr_active, backend: cfg.active,
@@ -292,16 +306,17 @@ async function resumeSession(msg) {
   if (res.error) return { ok: false, error: res.error };
   const tab = res.source === "tab";
   if (tab) {
-    await stopCapture();                  // 다른 세션의 소리를 잡고 있었으면 놓습니다
-    await ensureOffscreen();              // 스트림 id 는 몇 초면 만료되므로 문서를 먼저
+    await stopCapture();                  // release another session's sound if it was held
+    await ensureOffscreen();              // a stream id expires in seconds, so the document first
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
     const started = await chrome.runtime.sendMessage({
       target: "offscreen", type: "capture",
       streamId, sessionId: res.id, base: await base(),
     });
     if (!started || !started.ok) {
-      // 세션은 살아났지만 소리가 가지 않습니다. 끝내지는 않습니다 -- 다시 누르면
-      // 서버는 「이미 받는 중」이라 하므로, 그때는 중단한 뒤 다시 이어받아야 합니다.
+      // The session came back but no sound is going to it. It is not ended --
+      // press again and the server says it is already receiving, so then it has
+      // to be stopped and resumed again.
       return { ok: false, error: (started && started.error)
         || t("popup.errNoAudioResume") };
     }
@@ -316,24 +331,24 @@ async function ensureOffscreen() {
   await chrome.offscreen.createDocument({
     url: "offscreen.html",
     reasons: ["USER_MEDIA"],
-    justification: "탭에서 나는 소리를 받아 로컬 mimiwatch 서버로 보냅니다.",
+    justification: "Takes the sound from the tab and sends it to the local mimiwatch server.",
   });
 }
 
 async function stopCapture() {
   if (await chrome.offscreen.hasDocument()) {
     try { await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" }); }
-    catch (_) { /* 이미 내려갔습니다 */ }
+    catch (_) { /* already down */ }
   }
 }
 
-/* ---------- 자막을 흘려보내는 통로 ---------- */
+/* ---------- the pipe the subtitles flow down ---------- */
 
-/* SSE 를 직접 풉니다. 서버가 보내는 것은 `data: {...}` 한 줄과 빈 줄뿐이라
- * 규격 전체를 다룰 필요가 없습니다. */
-/* `cursor.lastId` 에 마지막으로 받은 `id:` 를 적어 둡니다. 다시 붙을 때
- * `Last-Event-ID` 로 보내면 서버는 그 뒤만 다시 보냅니다 -- 예전에는 서버가
- * 잠깐 멎을 때마다 두 시간치 백로그가 통째로 다시 왔습니다. */
+/* Parses SSE by hand. All the server sends is a `data: {...}` line and a blank
+ * line, so there is no need to handle the whole spec. */
+/* `cursor.lastId` records the last `id:` received. Sent as `Last-Event-ID` on
+ * reattach, it has the server resend only what came after -- two hours of
+ * backlog used to come back whole every time the server paused for a moment. */
 async function pump(url, onEvent, signal, cursor) {
   const headers = {};
   if (cursor && cursor.lastId) headers["Last-Event-ID"] = String(cursor.lastId);
@@ -347,8 +362,8 @@ async function pump(url, onEvent, signal, cursor) {
     if (done) return;
     buf += dec.decode(value, { stream: true });
     let cut;
-    // 이벤트 하나는 빈 줄로 끝납니다. 서버가 조각내어 보낼 수 있으므로
-    // 완전한 덩어리가 모일 때까지 들고 있습니다.
+    // One event ends with a blank line. The server may send it in pieces, so it
+    // is held until a complete chunk has gathered.
     while ((cut = buf.indexOf("\n\n")) >= 0) {
       const chunk = buf.slice(0, cut);
       buf = buf.slice(cut + 2);
@@ -356,14 +371,15 @@ async function pump(url, onEvent, signal, cursor) {
       for (const line of chunk.split("\n")) {
         if (line.startsWith("id:")) id = line.slice(3).trim();
         else if (line.startsWith("data:")) data = line.slice(5).trim();
-        // `: keepalive` 는 흘립니다
+        // `: keepalive` flows past
       }
       if (data === null) continue;
       let ev;
       try { ev = JSON.parse(data); }
-      catch (_) { continue; /* 형식이 깨진 프레임은 버립니다 */ }
-      // 서버가 4.5분마다 스트림을 일부러 닫습니다(서비스 워커의 "한 요청 5분" 규칙).
-      // 끝난 것이 아니라는 표시를 남기고, 부르는 쪽이 곧 다시 붙습니다.
+      catch (_) { continue; /* a malformed frame is thrown away */ }
+      // The server closes the stream deliberately every 4.5 minutes (the service
+      // worker's "5 minutes per request" rule). It leaves a mark saying this is
+      // not the end, and the caller reattaches in a moment.
       if (ev && ev.type === "rotate") { if (cursor) cursor.rotated = true; continue; }
       onEvent(ev);
       if (id && cursor) cursor.lastId = id;
@@ -392,8 +408,8 @@ chrome.runtime.onConnect.addListener((port) => {
     const sid = value.startsWith("live:") ? value.slice(5) : "";
 
     timer = setInterval(() => {
-      // 조용한 동안 워커를 살려 둡니다. 포트 위의 메시지가 유휴 시계를
-      // 다시 돌립니다.
+      // Keeps the worker alive during the quiet. A message over the port
+      // restarts the idle clock.
       if (!closed) { try { port.postMessage({ type: "tick" }); } catch (_) {} }
     }, KEEPALIVE_MS);
 
@@ -407,9 +423,10 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
 
-    // 라이브는 끊길 수 있습니다 -- 서버 재시작, 방송 종료, 잠자기. 조용히
-    // 다시 붙습니다. 서버가 빠진 것(또는 기록 밖이면 쌓인 자막 전부)을 접속
-    // 직후에 다시 보내 주므로 되붙어도 빠지는 줄이 없습니다.
+    // Live can break -- a server restart, the stream ending, sleep. It
+    // reattaches quietly. The server resends what was missed (or, past the log,
+    // every subtitle piled up) right after connecting, so no line drops out of
+    // a reattach.
     const cursor = { lastId: null, rotated: false };
     while (!closed) {
       abort = new AbortController();
@@ -418,8 +435,9 @@ chrome.runtime.onConnect.addListener((port) => {
                    (e) => { if (!closed) port.postMessage({ type: "event", data: e }); },
                    abort.signal, cursor);
         if (closed) return;
-        if (cursor.rotated) { cursor.rotated = false; continue; }   // 곧 Last-Event-ID 로 다시
-        // 끝난 세션은 서버가 백로그를 다 보내고 닫습니다. 정상 종료입니다.
+        if (cursor.rotated) { cursor.rotated = false; continue; }   // back with Last-Event-ID shortly
+        // A finished session has the server send the whole backlog and close.
+        // That is a normal end.
         port.postMessage({ type: "ended" });
         return;
       } catch (e) {

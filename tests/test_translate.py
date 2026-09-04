@@ -1,4 +1,4 @@
-"""번역 계층의 순수 논리: 판정, 프롬프트, 대체 경로."""
+"""The pure logic of the translation layer: the checks, the prompt, the fallback path."""
 import translate as T
 from conftest import FakeTranslator
 
@@ -6,7 +6,7 @@ from conftest import FakeTranslator
 def test_looks_broken():
     assert T.looks_broken("", "abc")
     assert T.looks_broken("⁇⁇", "abc")
-    assert T.looks_broken("x" * 500, "abc")            # 폭주
+    assert T.looks_broken("x" * 500, "abc")            # Runaway
     assert not T.looks_broken("안녕", "こんにちは")
 
 
@@ -17,7 +17,7 @@ def test_render_prompt_with_and_without_context():
     ctx = T.render_prompt(p, "ja", "ko", "はい", ["前の行", "もう一つ"])
     assert "前の行" in ctx and "NOT to be translated" in ctx
     assert ctx.index("前の行") < ctx.index("Now translate only this one")
-    # 옛 모양의 사용자 프롬프트({context} 없음)도 그대로 렌더됩니다.
+    # A user prompt in the old shape (no {context}) still renders as it is.
     assert T.render_prompt("Translate {src}->{tgt}: {text}", "ja", "ko", "x", ["c"]) == "Translate ja->ko: x"
 
 
@@ -43,11 +43,11 @@ def test_fallback_trips_after_consecutive_failures_and_probes_later():
         assert fb.translate(f"l{i}", "ja", "ko") == f"B:l{i}"
         assert fb.last_used == "backup"
     assert fb.tripped and primary.calls == T.WithFallback.TRIP_AFTER
-    # 차단된 뒤에는 원격을 부르지 않습니다.
+    # Once tripped, the remote is not called.
     for i in range(T.WithFallback.RETRY_AFTER - 1):
         fb.translate("x", "ja", "ko")
     assert primary.calls == T.WithFallback.TRIP_AFTER
-    # RETRY_AFTER 줄마다 한 번 찔러 봅니다.
+    # It probes once every RETRY_AFTER lines.
     fb.translate("x", "ja", "ko")
     assert primary.calls == T.WithFallback.TRIP_AFTER + 1
     assert fb.failures == T.WithFallback.TRIP_AFTER + 1

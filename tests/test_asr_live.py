@@ -1,4 +1,4 @@
-"""라이브 인식기: 원격(OpenAI 호환) 어댑터와 갈아 끼우기, 유휴 언로드."""
+"""The live recogniser: the remote (OpenAI-compatible) adapter, swapping engines, idle eviction."""
 import numpy as np
 
 import asr
@@ -26,8 +26,8 @@ def test_remote_live_asr_posts_each_segment(monkeypatch):
     got = a.transcribe(np.zeros(16000, dtype=np.float32), 16000, speech_s=1.0)
     assert got["text"] == "こんにちは" and got["lang"] == "ja" and got["tier"] == "원격"
     assert calls[0]["base_url"] == "http://h:1" and calls[0]["lang"] is None
-    assert calls[0]["bytes"] > 32000                 # 1초 int16 wav
-    # 언어를 고정했으면 그것을 보내고 그것을 돌려줍니다.
+    assert calls[0]["bytes"] > 32000                 # 1 s of int16 wav
+    # With the language pinned, that is what gets sent and what comes back.
     b = asr.OpenAIStreamASR(SPEC, "ko")
     b.transcribe(np.zeros(1600, dtype=np.float32), 16000)
     assert calls[1]["lang"] == "ko"
@@ -42,8 +42,8 @@ def test_remote_live_asr_joins_segments_and_needs_config():
 
 
 def test_live_asr_swaps_between_engines(monkeypatch):
-    """세션이 쥔 것은 LiveASR 하나이고, 속만 바뀝니다 -- run_stream과 Refiner가
-    같은 객체를 계속 보면서도 새 엔진을 쓰게 되는 이유입니다."""
+    """What the session holds is one LiveASR, and only its insides change -- that is how
+    run_stream and the Refiner keep looking at the same object and still use the new engine."""
     calls = []
     monkeypatch.setattr(asr, "post_transcription",
                         _fake_post(calls, {"text": "x", "language": "japanese"}))
@@ -55,7 +55,7 @@ def test_live_asr_swaps_between_engines(monkeypatch):
     assert info["label"] == "원격2" and a.label == "원격2"
     a.transcribe(np.zeros(1600, dtype=np.float32), 16000)
     assert calls[1]["model"] == "large"
-    # 로컬 GGUF 로 바꾸려는데 파일이 없으면 실패하고 쓰던 것이 남습니다.
+    # Switching to a local GGUF whose file is missing fails, and the one in use stays.
     import pytest
     with pytest.raises(FileNotFoundError):
         a.swap({"backend": "tcpp", "model": "no-such-model.gguf"})
@@ -69,12 +69,12 @@ def test_idle_reap_drops_only_unused(monkeypatch):
     a = models.shared(("a",), object)
     models.shared(("b",), object)
     now = 1090.0
-    models.touch(("a",))                             # a 는 쓰는 중
+    models.touch(("a",))                             # a is in use
     now = 1150.0
     gone = models.reap()
     assert gone == [("b",)]
-    assert models.shared(("a",), object) is a        # a 는 그대로
-    assert models.shared(("b",), object) is not None  # b 는 다시 만듭니다
+    assert models.shared(("a",), object) is a        # a is unchanged
+    assert models.shared(("b",), object) is not None  # b is built again
 
 
 def test_idle_reap_is_off_by_default(monkeypatch):

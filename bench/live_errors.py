@@ -1,16 +1,17 @@
-"""라이브 세션이 실패했을 때 무엇이 남는지 확인합니다.
+"""Check what is left behind when a live session fails.
 
-이슈 #1의 두 번째 보고에서, 화면과 로그에 뜬 것은 진짜 원인이 아니라
-`UnboundLocalError: cannot access local variable 'asr'` 였습니다. `_run`의
-`finally`가 `del asr, vad, history, refiner` 를 하는데, try가 그 이름들이
-만들어지기 전에 실패하면 그 `del` 자체가 터집니다. 그러면
+In the second report on issue #1, what showed up on screen and in the log was
+not the real cause but `UnboundLocalError: cannot access local variable 'asr'`.
+The `finally` in `_run` does `del asr, vad, history, refiner`, and if the try
+fails before those names are created, that `del` itself blows up. Then
 
-  - 진짜 예외가 그 오류로 덮여 무엇이 잘못됐는지 알 수 없고,
-  - 뒤따르는 `_release()`와 `_retire()`가 실행되지 않아 3GB짜리 모델이
-    얹힌 채 남습니다.
+  - the real exception is buried under that error and there is no telling what
+    went wrong, and
+  - the `_release()` and `_retire()` that follow never run, so a 3GB model
+    stays loaded.
 
-실패는 흔합니다 -- 주소가 라이브가 아니거나, yt-dlp가 낡았거나, 포맷을
-못 풀거나. 그때마다 원인이 가려지면 보고를 받아도 손댈 곳을 모릅니다.
+Failures are common -- the URL is not live, yt-dlp is stale, the format cannot
+be resolved. Every time the cause is hidden, a report leaves nowhere to look.
 
     .venv/bin/python bench/live_errors.py
 """
@@ -31,32 +32,35 @@ def check(cond, what):
 
 
 def make_session():
-    """모델을 올리지 않고 _run 만 돌릴 수 있는 최소한의 세션.
+    """The smallest session that can run _run without loading a model.
 
-    **실제 생성자를 씁니다.** 예전에는 `__new__` 로 빈 객체를 만들고 속성 이름을
-    손으로 나열했는데, 멀티뷰가 `__init__` 에 `group`·`site`·`channel` 을 더한 뒤로
-    그 목록이 낡아 `status()` 가 AttributeError 로 죽었습니다 -- 라이브 코드가 멀쩡한데
-    검사만 깨진 것이고, 그 자리에서는 「엔진 갈아 끼우기가 고장났다」로 읽힙니다.
-    `__init__` 은 속성 대입뿐이라(스레드를 띄우지도, 모델을 올리지도, 저장소에 쓰지도
-    않습니다) 그대로 불러도 안전하고, 앞으로 속성이 늘어도 이 검사는 따라옵니다.
+    **It uses the real constructor.** It used to build an empty object with
+    `__new__` and list the attribute names by hand, but once multiview added
+    `group`, `site` and `channel` to `__init__` that list went stale and
+    `status()` died with an AttributeError -- the live code was fine and only
+    the check was broken, and from here that reads as "engine swapping is
+    broken". `__init__` is nothing but attribute assignment (it starts no
+    thread, loads no model, writes to no store), so calling it outright is safe,
+    and this check follows along as attributes are added.
 
-    바깥으로 나가는 두 길만 막습니다: 상태 저장(저장소)과 이벤트 발행(SSE).
+    Only the two paths that reach outside are blocked: persisting state (the
+    store) and emitting events (SSE).
     """
     s = live.LiveSession(
         url="https://example.invalid/x", lang="ja", viewer_lang="ko",
         backend_id="local-gemma", asr_backend_id="tcpp-best",
         profile="broadcast", genre="general", refine=True, source="hls")
-    s.id = "t"                  # 검사 출력이 실행마다 달라지지 않도록 고정합니다
+    s.id = "t"                  # Pinned so the check output does not change from run to run
     s._persist = lambda: None
     s.emit = lambda e: None
     return s
 
 
 def run_failing(monkey):
-    """_run 을 실패시키고, 밖으로 새는 예외와 정리 여부를 함께 돌려줍니다."""
+    """Make _run fail, and return both the exception that escaped and whether cleanup ran."""
     released, retired = [], []
     real_retire, real_sub = live._retire, live.subprocess
-    # _retire 는 이제 세션 객체를 받습니다(같은 id 의 이어받은 세션을 밀어내지 않으려고).
+    # _retire now takes the session object (so it does not evict a resumed session of the same id).
     live._retire = lambda s: retired.append(getattr(s, "id", s))
     live.subprocess = monkey
     s = make_session()
@@ -114,8 +118,9 @@ def main():
     check("234" in msg, "어느 포맷을 시도했는지도 남는다")
 
     print("\n[4] 전사 엔진을 갈아 끼워도 세션과 자막이 유지되는가")
-    # 이것이 요점입니다. 예전에는 엔진을 바꾸려면 세션을 다시 시작해야
-    # 했고, 자막은 세션 id로 저장되므로 그때까지의 스크립트가 사라졌습니다.
+    # This is the point. Changing the engine used to mean restarting the
+    # session, and since cues are stored by session id the transcript up to
+    # that moment disappeared.
     swapped = {}
 
     class FakeAsr:
@@ -131,9 +136,9 @@ def main():
     s._recent = [{"t": 1.0, "text": "이미 받아 적은 줄"}]
     before_id = s.id
     live._sessions[s.id] = s
-    # 설정은 config.py가 답합니다. 예전에는 live.py가 backends.json을 직접
-    # 열어서 builtins.open을 갈아 끼웠는데, 이제 그 파일을 읽는 곳은
-    # config 하나라 그쪽 함수를 바꿔 끼우면 됩니다.
+    # config.py answers for the settings. live.py used to open backends.json
+    # itself, so builtins.open had to be swapped out; now config is the only
+    # place that reads that file, so swapping its function is enough.
     lite = {"id": "tcpp-lite", "backend": "tcpp", "model": "SenseVoiceSmall-Q8_0.gguf"}
     real_find_asr = live.config.find_asr
     live.config.find_asr = lambda bid: lite if bid == "tcpp-lite" else None
@@ -174,9 +179,10 @@ def main():
     print("\n[6] 끊긴 세션을 같은 세션으로 이어받는가")
     started = {}
     real_store_session, real_store_cues = live.store.session, live.store.cues
-    # **쓰기 경로도 막습니다.** 읽기만 가짜로 바꿨더니 resume() 안의
-    # _persist() 가 실제 DB에 시험용 세션을 남겼고, 그것이 사용자의 영상
-    # 목록에 「옛 방송」으로 떴습니다. 시험은 저장소를 건드리지 않아야 합니다.
+    # **The write path is blocked too.** With only the reads faked, the
+    # _persist() inside resume() left a test session in the real DB, and it
+    # showed up in the user's video list as an old broadcast. A check must not
+    # touch the store.
     real_save_session, real_save_job = live.store.save_session, live.store.save_job
     live.store.save_session = lambda *a, **k: None
     live.store.save_job = lambda *a, **k: None
@@ -219,15 +225,16 @@ def main():
     live.store.session = real_store_session
     live.store.save_session = real_save_session
 
-    # 시험이 저장소에 아무것도 남기지 않았는지 스스로 확인합니다.
+    # Confirm for ourselves that the check left nothing in the store.
     check(live.store.session("sess-1") is None,
           "시험용 세션이 저장소에 남지 않았다")
 
     print("\n[8] 값이 None 인 자막을 저장해도 세션이 죽지 않는가")
-    # 원본 언어를 자동 판별에 맡기면 lang 이 None 으로 흘러갑니다. cues 열은
-    # NOT NULL 이고, `.get(k, "")` 는 **키가 있고 값이 None 이면** 기본값을
-    # 내지 않으므로 None 이 그대로 바인딩되어 첫 확정 줄에서 세션이
-    # 끝났습니다. 자막 한 줄을 잃는 것이 아니라 방송을 잃는 자리입니다.
+    # Leaving the source language to auto-detection lets lang flow through as
+    # None. The cues column is NOT NULL, and `.get(k, "")` does **not** hand
+    # back the default when the key is present and the value is None, so None
+    # was bound straight through and the session ended on the first final line.
+    # That loses not one subtitle line but the whole broadcast.
     import tempfile, shutil
     tmp = tempfile.mkdtemp()
     real_db, real_data, real_conn = live.store.DB, live.store.DATA, live.store._db
@@ -250,7 +257,7 @@ def main():
         live.store.DB, live.store.DATA, live.store._db = real_db, real_data, real_conn
         shutil.rmtree(tmp, ignore_errors=True)
 
-    # 자동 판별에 맡겨도 어댑터가 None 을 흘리지 않아야 합니다.
+    # Even when left to auto-detection, the adapter must not leak a None.
     import tcpp_asr
     a = tcpp_asr.TranscribeCppASR.__new__(tcpp_asr.TranscribeCppASR)
     for lang in (None, "", "ja"):

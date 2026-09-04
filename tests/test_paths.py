@@ -1,4 +1,4 @@
-"""저장소에서 돌 때와 묶음(PyInstaller)으로 돌 때의 파일 자리, 그리고 도구 찾기."""
+"""Where files sit when running from the repo and when running as a bundle (PyInstaller), and how tools are found."""
 import os
 import stat
 import subprocess
@@ -25,7 +25,7 @@ def test_frozen_layout_moves_config_and_data_under_home(monkeypatch, tmp_path):
     assert paths.data_dir() == str(tmp_path / "data")
     assert paths.model_dir() == str(tmp_path / "models")
     assert paths.tools_dir() == str(tmp_path / "tools")
-    # 모델 자리만 따로 바꿀 수 있습니다.
+    # The model location alone can be moved separately.
     monkeypatch.setenv("MIMIWATCH_MODEL_DIR", "/elsewhere")
     assert paths.model_dir() == "/elsewhere"
 
@@ -37,7 +37,7 @@ def test_ffmpeg_cmd_prefers_path_then_tools_dir(monkeypatch, tmp_path):
         stream.ffmpeg_cmd()
         raise AssertionError("없는데 예외가 나지 않았습니다")
     except FileNotFoundError as exc:
-        assert "Models & Tools" in str(exc)          # 어디서 받으면 되는지 말해 줍니다
+        assert "Models & Tools" in str(exc)          # It says where to get it
     exe = tmp_path / "ffmpeg"
     exe.write_text("#!/bin/sh\n")
     exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
@@ -48,7 +48,7 @@ def test_ffmpeg_cmd_prefers_path_then_tools_dir(monkeypatch, tmp_path):
 
 def test_ytdlp_cmd_prefers_standalone_then_module(monkeypatch, tmp_path):
     stream.reset_tool_cache()
-    monkeypatch.setattr(stream, "deno_path", lambda: None)     # 이 기계의 deno 는 빼고 봅니다
+    monkeypatch.setattr(stream, "deno_path", lambda: None)     # Leave this machine's deno out of it
     monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES", raising=False)
     monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES_BROWSER", raising=False)
     exe = tmp_path / "yt-dlp"
@@ -62,7 +62,7 @@ def test_ytdlp_cmd_prefers_standalone_then_module(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "frozen", lambda: False)
     assert stream.ytdlp_cmd() == [sys.executable, "-m", "yt_dlp"]
     stream.reset_tool_cache()
-    # 묶음 안에서는 자기 자신을 --ytdlp 로 다시 띄웁니다(app.py 가 받습니다).
+    # Inside a bundle it launches itself again with --ytdlp (app.py catches that).
     monkeypatch.setattr(paths, "frozen", lambda: True)
     assert stream.ytdlp_cmd() == [sys.executable, "--ytdlp"]
     stream.reset_tool_cache()
@@ -76,15 +76,15 @@ def test_ytdlp_args_puts_the_url_behind_a_double_dash(monkeypatch):
     monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES", raising=False)
     monkeypatch.delenv("MIMIWATCH_YTDLP_COOKIES_BROWSER", raising=False)
     cmd = stream.ytdlp_args("-f", "234", "-g", url="--version")
-    assert cmd[-2:] == ["--", "--version"]              # 옵션으로 읽히지 않습니다
+    assert cmd[-2:] == ["--", "--version"]              # It is not read as an option
     assert "--no-playlist" in cmd and "--no-warnings" in cmd
     assert cmd.index("-g") < cmd.index("--")
     stream.reset_tool_cache()
 
 
 def test_ytdlp_cmd_passes_the_js_runtime_when_deno_is_found(monkeypatch, tmp_path):
-    """유튜브 JS 챌린지용 deno 를 찾으면 경로를 직접 넘깁니다 -- yt-dlp 는 PATH 만 보는데
-    Finder 에서 띄운 묶음의 PATH 는 짧습니다."""
+    """When the deno for YouTube's JS challenge is found, its path is handed over directly -- yt-dlp
+    looks at PATH only, and a bundle launched from Finder has a short PATH."""
     stream.reset_tool_cache()
     monkeypatch.setattr(paths, "tool", lambda n: None)
     monkeypatch.setattr(stream.importlib.util, "find_spec", lambda n: None)
@@ -98,11 +98,11 @@ def test_ytdlp_cmd_passes_the_js_runtime_when_deno_is_found(monkeypatch, tmp_pat
 
 
 def test_child_io_never_hands_a_child_a_broken_stderr(monkeypatch):
-    """자식에게 물려줄 표준 입출력.
+    """The standard I/O handed down to a child.
 
-    윈도우에서 부모의 표준 핸들이 성치 않으면 `Popen`이 그것을 복제하다
-    `OSError: [WinError 6]`으로 넘어졌습니다 -- 0.3.1의 라이브 세션이
-    ffmpeg을 세우지 못하고 죽은 자리입니다.
+    On Windows, when the parent's standard handles are unsound, `Popen` fell over
+    with `OSError: [WinError 6]` while duplicating them -- the spot where a live
+    session on 0.3.1 died without ever getting ffmpeg up.
     """
     class Broken:
         def fileno(self):
@@ -111,12 +111,12 @@ def test_child_io_never_hands_a_child_a_broken_stderr(monkeypatch):
     monkeypatch.setattr(sys, "stderr", Broken())
     assert stream.child_io() == {"stdin": subprocess.DEVNULL,
                                  "stderr": subprocess.DEVNULL}
-    monkeypatch.setattr(sys, "stderr", None)            # 창 없이 뜬 프로세스
+    monkeypatch.setattr(sys, "stderr", None)            # A process launched with no console
     assert stream.child_io()["stderr"] == subprocess.DEVNULL
-    # 성한 것은 그대로 물려줍니다 -- ffmpeg 의 오류 한 줄이 콘솔이나
-    # mimiwatch.log 에 남아야 다음 보고가 진단 가능해집니다.
+    # A sound one is handed down as it is -- ffmpeg's one line of error has to land
+    # in the console or in mimiwatch.log for the next report to be diagnosable.
     with open(os.devnull, "w") as f:
         monkeypatch.setattr(sys, "stderr", f)
         assert stream.child_io()["stderr"] == f.fileno()
-    # 부르는 쪽이 stderr 를 직접 잡는 자리에서는 두 번 주지 않습니다.
+    # Where the caller takes stderr itself, it is not handed over twice.
     assert stream.child_io(stderr=False) == {"stdin": subprocess.DEVNULL}

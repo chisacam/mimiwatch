@@ -1,27 +1,28 @@
-/* 유튜브 페이지에 얹는 자막의 모양.
+/* The look of the subtitles laid on the YouTube page.
  *
- * mimiwatch 페이지의 app.css 와 같은 값을 쓰되 이름을 따로 둡니다. 유튜브
- * 페이지에는 우리 것이 아닌 규칙이 잔뜩 있고, `.cue-main` 같은 흔한 이름은
- * 언제 부딪칠지 모릅니다. 자리와 끌기는 overlay.js 가 인라인으로 넣으므로
- * 여기에는 모양만 있습니다.
+ * It uses the same values as the mimiwatch page's app.css but keeps the names
+ * apart. The YouTube page is full of rules that are not ours, and there is no
+ * telling when a common name like `.cue-main` will collide. Position and
+ * dragging are put in inline by overlay.js, so only the look is here.
  *
- * `.cue-*` 이름을 함께 다는 것은 overlay.js 가 그 이름으로 세 줄을 찾기
- * 때문입니다. 부딪침을 막는 것은 앞의 `.mw-overlay` 한정입니다. */
+ * The `.cue-*` names are carried alongside because overlay.js finds the three
+ * lines by those names. What keeps collisions out is the `.mw-overlay` in front
+ * of them. */
 .mw-overlay{
   position:absolute; left:50%; bottom:6%; transform:translateX(-50%);
   width:max-content; max-width:88%;
   display:flex; flex-direction:column; align-items:center; gap:5px;
   pointer-events:none; text-align:center;
-  /* 유튜브 컨트롤 바(z-index 60 언저리)보다 아래입니다. 자막이 재생
-     단추를 덮으면 영상을 조작할 수 없습니다. */
+  /* Below YouTube's control bar (z-index around 60). A subtitle covering the
+     play button makes the video impossible to operate. */
   z-index:30;
   font-family:"Pretendard","Apple SD Gothic Neo",system-ui,sans-serif;
   --mw-dim:.55;
 }
 .mw-overlay > div:empty{display:none}
-/* 포인터를 가져가는 것은 실제로 보이는 글자줄뿐입니다. 덩어리 전체가
-   가져가면 자막 옆의 빈 자리를 눌러도 영상에 닿지 않아, 재생·일시정지가
-   죽는 구역이 생깁니다. */
+/* Only the text lines actually visible take the pointer. If the whole block
+   took it, pressing the empty space beside a subtitle would not reach the video,
+   leaving a zone where play and pause are dead. */
 .mw-overlay > div{pointer-events:auto; cursor:grab}
 .mw-overlay.dragging > div{cursor:grabbing}
 
@@ -42,11 +43,12 @@
   border-radius:3px; padding:.08em .3em; margin-right:.35em; vertical-align:.15em;
 }
 
-/* ---------- 채팅 자리에 세우는 자막 내역 ---------- */
-/* 길이는 전부 px 입니다. rem 을 쓰면 host 페이지의 `html` 글꼴 크기에
-   휘둘리는데, 유튜브는 그것을 **10px** 로 둡니다(보통 16px). 그래서 처음에
-   글자가 62.5% 크기로 나왔습니다 -- 12.8px 로 의도한 자막이 8px 이었습니다.
-   남의 페이지에 얹는 것은 그 페이지가 무엇을 하든 제 크기를 지켜야 합니다. */
+/* ---------- the subtitle log put up in the chat column ---------- */
+/* Every length is in px. rem would be at the mercy of the host page's `html`
+   font size, and YouTube sets that to **10px** (usually 16px). That is why the
+   text came out at 62.5% size at first -- a subtitle meant to be 12.8px was 8px.
+   Something laid on someone else's page has to keep its own size whatever that
+   page does. */
 .mw-panel{
   display:flex; flex-direction:column; height:520px; margin-bottom:12px;
   background:#0e1117; color:#e6e9f0; border:1px solid #222836; border-radius:12px;
@@ -77,12 +79,13 @@
 .mw-panel-list .mw-tx{font-size:13px; line-height:1.45}
 .mw-panel-list .mw-tr{font-size:12px; line-height:1.45; color:#5eead4; opacity:.9}
 .mw-panel-list .mw-tr:empty{display:none}
-/* 우리가 적은 안내(못 받은 구간)는 발화가 아닙니다. */
+/* A note we wrote ourselves (a segment not received) is not speech. */
 .mw-panel-list .mw-note .mw-tx{color:#ffb454; font-size:11.5px; font-style:italic}
 
-/* ---------- 물어보는 띠 ----------
-   플레이어 안, 컨트롤 바 위에 잠깐 뜹니다. confirm() 을 쓰지 않는 이유는
-   페이지를 멈춰 세우기 때문입니다 -- 영상 위에서 그러면 재생까지 걸립니다. */
+/* ---------- the asking bar ----------
+   It shows for a moment inside the player, above the control bar. confirm() is
+   not used because it stops the page dead -- and over a video that hangs
+   playback with it. */
 .mw-ask{
   position:absolute; left:50%; top:16px; transform:translateX(-50%);
   z-index:35; display:flex; align-items:center; gap:8px;

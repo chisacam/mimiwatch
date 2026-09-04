@@ -1,13 +1,14 @@
-"""내보낸 자막이 형식을 지키는지 확인합니다.
+"""Check that exported subtitles keep to their format.
 
-라이브 자막에는 끝 시각이 없습니다. 발화가 끝나는 순간을 아는 것은 VAD이고,
-자막은 그보다 늦게 시작 시각만 달고 확정되기 때문입니다. SRT/VTT는 끝 시각을
-요구하므로 export.py가 지어 주는데, 그 규칙이 어긋나면 도구가 자막을 통째로
-버리거나 한 줄이 몇 분씩 붙어 있게 됩니다.
+A live cue has no end time. What knows the moment an utterance ends is the VAD,
+and the cue is finalised later than that carrying only a start time. SRT/VTT
+demand an end time, so export.py invents one, and when that rule goes wrong a
+tool either drops the subtitles wholesale or leaves one line on screen for
+minutes at a time.
 
     .venv/bin/python bench/export_check.py
 
-저장소를 건드리지 않습니다 -- 읽기만 합니다.
+It does not touch the store -- it only reads.
 """
 from __future__ import annotations
 
@@ -35,12 +36,12 @@ def secs(ts: str) -> float:
 
 
 def fake_rows():
-    """규칙이 걸리는 자리만 골라 만든 줄들."""
+    """Lines picked to hit exactly the places where the rules bite."""
     return [
         {"t": 0.0, "text": "첫 줄", "kind": "final", "translations": {"b": "first"}},
-        # 0.3초 뒤에 다음 줄: 최소 길이가 걸립니다
+        # The next line 0.3 s later: the minimum length bites
         {"t": 0.3, "text": "바로 다음", "kind": "final", "translations": {"b": "next"}},
-        # 60초 침묵: 최대 길이가 걸립니다
+        # 60 s of silence: the maximum length bites
         {"t": 60.3, "text": "한참 뒤", "kind": "final", "translations": {}},
         {"t": 61.0, "kind": "note", "text": "⋯ 못 받았습니다 ⋯", "translations": {}},
         {"t": 62.0, "text": "마지막", "kind": "final", "translations": {"b": "last"}},
@@ -62,10 +63,10 @@ def main():
     d = [r["end"] - r["start"] for r in rows]
     check(abs(d[0] - export.END_MIN_S) < 1e-6,
           f"바짝 붙은 줄은 최소 {export.END_MIN_S}초 ({d[0]:.2f})")
-    # 60초를 건너뛰는 것은 두 번째 줄(0.3초)에서 세 번째(60.3초) 사이입니다.
+    # The 60 s jump is between the second line (0.3 s) and the third (60.3 s).
     check(abs(d[1] - export.END_MAX_S) < 1e-6,
           f"오래 비면 최대 {export.END_MAX_S}초 ({d[1]:.2f})")
-    # 세 번째 줄 뒤에는 0.7초 뒤 안내가 붙어 있어 최소 길이가 걸립니다.
+    # A note follows 0.7 s after the third line, so the minimum length bites.
     check(abs(d[2] - export.END_MIN_S) < 1e-6,
           f"안내가 바로 뒤따라도 최소 길이 ({d[2]:.2f})")
     check(abs(d[4] - export.END_MAX_S) < 1e-6, f"마지막 줄도 상한 ({d[4]:.2f})")

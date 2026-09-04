@@ -1,9 +1,11 @@
-/* mimiwatch 화면 — 오른쪽 자막 내역: 줄 그리기, 편집기, 재번역 고르기, 따로 띄운 창.
+/* The mimiwatch screen — the subtitle log on the right: drawing rows, the
+ * editor, picking lines for re-translation, and the popped-out window.
  *
- * web/app.js 를 관심사별로 나눈 파일입니다. 전부 일반 <script> 로 index.html 이
- * 적는 순서대로 읽히며 전역 범위를 함께 씁니다 -- 모듈 문법을 쓰지 않는 것은
- * 확장과 공유하는 overlay.js 와 같은 이유입니다. 서로 부르는 것은 전부
- * 실행 시점의 함수 호출이라 파일 순서는 main.js 가 마지막이기만 하면 됩니다. */
+ * This is web/app.js split up by concern. All of them are plain <script> tags,
+ * read in the order index.html lists them, sharing one global scope -- module
+ * syntax is avoided for the same reason as in overlay.js, which is shared with
+ * the extension. Everything they call on each other is a function call at run
+ * time, so the file order only has to keep main.js last. */
 
 /* ---------- script panel ---------- */
 function buildScript() {
@@ -12,12 +14,13 @@ function buildScript() {
   state.cues.forEach((c, i) => box.appendChild(scriptRow(c, i)));
 }
 
-/* 줄 한 개를 만듭니다.
+/* Makes one row.
  *
- * 녹화본과 라이브가 각자 만들고 있었습니다. 몸통을 채우는 코드가 두 벌이라
- * 화자 표시는 한쪽에만 있었고, 편집을 붙이려면 또 두 벌이 될 뻔했습니다.
- * 다른 것은 무엇으로 줄을 찾느냐뿐입니다 -- 녹화본은 위치(data-i)로,
- * 라이브는 자막 번호(data-id)로. 둘 다 답니다. */
+ * Recordings and live streams each used to make their own. With two copies of
+ * the code that fills the body, the speaker chip existed on one side only, and
+ * adding editing would have made it two copies again. The only difference is
+ * how a row is found -- a recording by position (data-i), live by cue number
+ * (data-id). Both are attached. */
 function scriptRow(c, i) {
   const row = document.createElement("div");
   row.className = "line";
@@ -29,18 +32,20 @@ function scriptRow(c, i) {
   row.append(tEl, body);
   refreshScriptRow(row, c);
   row.addEventListener("click", () => {
-    // 편집 중인 줄에서는 눌러도 움직이지 않습니다. 글자를 고르려던 것이
-    // 재생 위치를 옮겨 버리면 고칠 수가 없습니다.
+    // A row being edited does not seek when clicked. If reaching to select some
+    // text moves the playhead, there is no way to finish the edit.
     if (row.classList.contains("editing")) return;
     if (state.scriptMode === "edit") { openCueEditor(row, c); return; }
-    // 고르는 중에는 움직이지 않습니다. 고르기는 pointerdown 에서 하는데,
-    // 거기서 preventDefault() 를 해도 click 은 그대로 옵니다 -- 그것이 막는
-    // 것은 글자 선택 같은 기본 동작이지 뒤따르는 click 이벤트가 아닙니다.
+    // No seeking while picking. Picking happens on pointerdown, and calling
+    // preventDefault() there still lets the click through -- what that stops is
+    // default behaviour such as text selection, not the click event that
+    // follows.
     if (state.scriptMode === "tr") return;
     if (state.player) { state.player.seekTo(cueStart(c), true); state.player.playVideo(); }
   });
-  // 번역 모드의 고르기. click 이 아니라 pointerdown 에 거는 것은 shift+click 이
-  // 글자 선택을 함께 일으키기 때문입니다 -- 그쪽을 먼저 막아야 합니다.
+  // Picking in translation mode. This hangs on pointerdown rather than click
+  // because shift+click also starts a text selection -- that has to be stopped
+  // first.
   row.addEventListener("pointerdown", (e) => {
     if (state.scriptMode !== "tr") return;
     e.preventDefault();
@@ -51,8 +56,8 @@ function scriptRow(c, i) {
 
 function refreshScriptRow(row, c) {
   row.firstElementChild.textContent = fmt(cueStart(c));
-  // 줄의 짜임은 [시각, 몸통, ✎] 입니다. lastElementChild 로 몸통을 잡으면
-  // 두 번째 호출부터 단추를 지우게 됩니다.
+  // A row is built as [time, body, ✎]. Taking the body with lastElementChild
+  // wipes out the button from the second call onwards.
   const body = row.children[1];
   body.textContent = "";
   const tx = document.createElement("div");
@@ -71,9 +76,10 @@ function refreshScriptRow(row, c) {
     const tr = document.createElement("div");
     tr.className = "tr";
     tr.textContent = trText;
-    // 원문을 고쳤으면 붙어 있는 번역은 **고치기 전 문장**의 번역입니다.
-    // 지우지 않고 그렇게 표시만 합니다 -- 틀린 번역이라도 없는 것보다
-    // 낫고, 다시 번역할지는 사람이 정할 일입니다.
+    // If the source was edited, the translation attached to it is the
+    // translation of the **sentence before the edit**. It is not deleted, only
+    // marked as such -- a wrong translation still beats none, and whether to
+    // translate again is a person's call.
     if (String(c.edited || "").includes("text")) {
       const warn = document.createElement("b");
       warn.className = "tr-stale";
@@ -84,9 +90,10 @@ function refreshScriptRow(row, c) {
     body.appendChild(tr);
   }
   row.classList.toggle("pending", c.kind === "final" && !trText);
-  // 편집 단추. 줄에 얹어 두고 CSS 가 hover 일 때만 보입니다. 다시 그릴
-  // 때마다 새로 답니다 -- 닫힌 값(c)을 물고 있어서 옛것을 남기면 고친
-  // 내용이 아니라 고치기 전 값으로 편집기가 열립니다.
+  // The edit button. It is laid over the row and the CSS shows it on hover
+  // only. It is attached anew on every redraw -- it closes over c, so leaving
+  // the old one behind opens the editor on the value from before the edit
+  // rather than on what was edited.
   row.querySelector(":scope > .line-edit")?.remove();
   const pen = document.createElement("button");
   pen.className = "line-edit";
@@ -96,10 +103,12 @@ function refreshScriptRow(row, c) {
   row.appendChild(pen);
 }
 
-/* 언어를 바꿔도 이미 그려 둔 줄은 그 자리에 그대로 남습니다 -- 녹화본의 자막
- * 내역은 열 때 한 번 그리고 그 줄을 고칠 때까지 다시 그리지 않으므로, 딱지와
- * 편집 단추만 새 언어로 다시 적습니다. 줄을 고르는 중이면 셈도 함께 -- 그쪽은
- * 다음 누름까지 옛 언어로 남습니다. */
+/* Switching the language leaves rows already drawn exactly where they are --
+ * a recording's subtitle log is drawn once when it is opened and not redrawn
+ * until that row is edited, so only the badges and the edit buttons are
+ * rewritten in the new language. The count goes with them while lines are being
+ * picked -- that one would otherwise stay in the old language until the next
+ * click. */
 MW_I18N.onChange(() => {
   const box = $("script");
   if (!box) return;
@@ -117,8 +126,8 @@ function appendScriptLine(c) {
   const box = $("script");
   const existing = box.querySelector(`.line[data-id="${c.id}"]`);
   if (existing) {
-    // 정제본이 같은 id의 줄을 갈아 끼웁니다. 글자 수가 달라지므로 높이도
-    // 달라집니다.
+    // A refined line replaces the row under the same id. The character count
+    // differs, so the height does too.
     refreshScriptRow(existing, c);
     pinScriptToBottom();
     return;
@@ -127,15 +136,16 @@ function appendScriptLine(c) {
   pinScriptToBottom();
 }
 
-/* ---------- 자막 고치기 ----------
+/* ---------- editing subtitles ----------
  *
- * 전사는 틀립니다. 잡음을 말로 듣고, 고유명사를 엉뚱하게 적고, 번역은 그
- * 위에서 한 번 더 어긋납니다. 내보내기까지 붙은 마당에 고칠 방법이 없으면
- * 틀린 채로 나갑니다.
+ * Transcription gets things wrong. It hears noise as speech, writes proper
+ * nouns as something else entirely, and the translation goes wrong once more on
+ * top of that. With export attached as well, no way to fix it means it goes out
+ * wrong.
  *
- * 고치는 것은 서버가 곧바로 저장합니다. 자막은 이제 녹화본이든 라이브든
- * 같은 표에 한 줄씩 들어 있어서, 한 줄을 고치는 데 그 영상 전체를 다시 쓸
- * 일이 없습니다. */
+ * An edit is saved by the server immediately. Cues now sit one row at a time in
+ * the same table whether they came from a recording or from live, so fixing one
+ * line never means rewriting that whole video. */
 function openCueEditor(row, c) {
   if (row.classList.contains("editing")) return;
   const owner = editOwner();
@@ -180,8 +190,8 @@ function openCueEditor(row, c) {
   };
   cancel.addEventListener("click", (e) => { e.stopPropagation(); close(); });
   box.addEventListener("click", (e) => e.stopPropagation());
-  // Ctrl/⌘+Enter 로 저장. 그냥 Enter 는 줄바꿈이어야 합니다 -- 자막 한 줄이
-  // 늘 한 문장은 아닙니다.
+  // Ctrl/⌘+Enter saves. A plain Enter has to be a line break -- one subtitle
+  // line is not always one sentence.
   box.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.preventDefault(); close(); }
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save.click(); }
@@ -224,15 +234,15 @@ function mkbtn(text, cls) {
   return b;
 }
 
-/* 지금 보고 있는 것을 목록이 쓰는 값으로. 서버가 그것으로 표를 찾습니다. */
+/* What is being watched, as the value the list uses. The server finds the table by it. */
 function editOwner() {
   if (state.live) return "live:" + state.live.id;
   if (state.doc && !isLiveDoc()) return state.doc.id;
   return "";
 }
 
-/* 서버가 돌려준 줄을 화면의 기억과 맞춥니다. 라이브는 `t`, 녹화본은
- * `start` 로 들고 있어서 여기서 한 번 맞춰 줍니다. */
+/* Lines up the cue the server returned with what the screen holds. Live keeps it
+ * in `t` and a recording in `start`, so the two are reconciled once here. */
 function applyCueEdit(got) {
   const c = state.cues.find(x => x.id === got.id);
   if (!c) return;
@@ -249,15 +259,16 @@ function applyCueEdit(got) {
   renderCue();
 }
 
-/* 시각이 이웃과 어긋난 줄을 배열과 화면의 자리로 함께 옮깁니다. 시각을
- * 고쳤을 때, 새 줄을 써 넣었을 때, 라이브에 순서 밖의 줄이 도착했을 때.
+/* Moves a line whose time is out of step with its neighbours, both in the array
+ * and in its place on screen. On a time edit, on a newly written line, and when
+ * a line arrives out of order on a live stream.
  *
- * 자막 찾기(overlay.js 의 cueAt)는 목록이 시각순이라고 보고 걸어갑니다.
- * 한 줄만 어긋나 있어도 그 지점에서 걸음이 멈춰, 그 뒤의 모든 조회 --
- * 화면 위 자막과 따라가기 -- 가 함께 틀립니다. 배열은 제자리에서
- * 고칩니다(오버레이와 라이브 저장소가 같은 배열을 쥐고 있습니다).
- * 초점이 아닌 타일의 배열(`arr`)도 받습니다 -- 그때 화면에는 그 줄이
- * 없으므로 옮기는 것은 배열뿐입니다. */
+ * Cue lookup (cueAt in overlay.js) walks the list assuming it is in time order.
+ * One line out of place stops the walk right there, and every lookup after it
+ * -- the subtitles on screen and the following -- goes wrong with it. The array
+ * is fixed in place (the overlay and the live store hold the same array). An
+ * unfocused tile's array (`arr`) is accepted too -- that row is not on screen
+ * then, so only the array moves. */
 function resortCue(c, arr = state.cues) {
   if (!arr) return;
   const i = arr.indexOf(c);
@@ -269,7 +280,7 @@ function resortCue(c, arr = state.cues) {
   let j = arr.findIndex(x => cueStart(x) > cueStart(c));
   if (j < 0) j = arr.length;
   arr.splice(j, 0, c);
-  // 줄도 새 자리로. 배열만 옮기면 자막 내역의 순서가 시각과 어긋난 채 남습니다.
+  // The row moves to its new place too. Move only the array and the subtitle log's order stays out of step with the times.
   const row = arr === state.cues && c.id != null ? rowOf(c.id) : null;
   if (row) {
     const next = arr[j + 1];
@@ -277,17 +288,19 @@ function resortCue(c, arr = state.cues) {
   }
 }
 
-/* ---------- 줄 새로 쓰기 ----------
+/* ---------- writing a new line ----------
  *
- * 지우는 줄은 대개 잘못 인식된 것입니다 -- 효과음을 대사로 듣거나, 그 통에
- * 옆 대사를 통째로 놓친 자리들. 그 빈 시간대를 직접 채울 수 있어야 편집이
- * 완결됩니다. 시각은 지금 재생 위치로 미리 채우고, 번호는 서버가 짓습니다. */
+ * A line that gets deleted is usually a misrecognition -- a sound effect heard
+ * as speech, or a place where the line beside it was lost entirely in the
+ * process. Editing is only complete once those empty stretches of time can be
+ * filled in by hand. The time is pre-filled with the current playhead, and the
+ * server makes up the number. */
 function openNewCueEditor() {
   const owner = editOwner();
   if (!owner) { alert(t("panel.needTarget")); return; }
   const box = $("script");
   const already = box.querySelector(".line.adding textarea");
-  if (already) { already.focus(); return; }            // 한 번에 하나
+  if (already) { already.focus(); return; }            // one at a time
   const t0 = state.player && state.player.ready ? state.player.getCurrentTime() : 0;
 
   const row = document.createElement("div");
@@ -324,7 +337,7 @@ function openNewCueEditor() {
   ed.append(src, tr, bar);
   body.appendChild(ed);
 
-  // 시각 자리에 끼워 넣습니다. 바닥에 붙이면 긴 영상에서 찾아 올라와야 합니다.
+  // Inserted at its place in time. Appended at the bottom, a long video means scrolling back up to find it.
   const next = state.cues.find(c => cueStart(c) > t0);
   box.insertBefore(row, next && next.id != null ? rowOf(next.id) : null);
   row.scrollIntoView({ block: "center" });
@@ -354,9 +367,10 @@ function openNewCueEditor() {
   });
 }
 
-/* 서버가 번호를 지어 돌려준 새 줄을 화면의 기억에 앉힙니다. 받는 중인
- * 라이브는 SSE 로도 오지만(cuestore 가 id 로 걸러 중복을 막습니다) 끝난
- * 세션과 녹화본에는 그 통로가 없으므로 여기서 직접 넣습니다. */
+/* Seats the new line the server returned with a number of its own into what the
+ * screen holds. A live stream still being received also gets it over SSE
+ * (cuestore keeps duplicates out by id), but a finished session and a recording
+ * have no such channel, so it is put in directly here. */
 function adoptNewCue(got) {
   let c;
   if (state.live) {
@@ -380,48 +394,51 @@ function adoptNewCue(got) {
 function dropCue(id, tile = focusedTile()) {
   const live = tile && tile.live;
   if (live) {
-    live.store.drop(id);                 // 초점 타일이면 state.cues 가 그 저장소의 배열입니다
+    live.store.drop(id);                 // on the focused tile, state.cues is that store's array
   } else {
     const i = state.cues.findIndex(x => x.id === id);
     if (i >= 0) state.cues.splice(i, 1);
   }
-  if (tile !== focusedTile()) return;    // 다른 타일의 자막 내역은 화면에 없습니다
+  if (tile !== focusedTile()) return;    // another tile's subtitle log is not on screen
   const row = $("script").querySelector(`.line[data-id="${CSS.escape(String(id))}"]`);
   if (row) row.remove();
   state.idx = -1;
   renderCue();
 }
 
-/* 라이브에서 「따라가기」는 특정 줄이 아니라 **바닥**을 좇는 것입니다.
+/* On a live stream, "Follow" chases the **bottom**, not any particular row.
  *
- * 예전에는 새 줄에 scrollIntoView({block:"end"})를 걸었습니다. 그런데 줄은
- * 붙은 뒤에도 높이가 계속 바뀝니다 -- 0.2초쯤 뒤에 번역이 도착해 한 줄이
- * 늘고(refreshScriptRow가 `.tr`을 붙입니다), 정제본이 오면 여러 줄이 하나로
- * 합쳐집니다. 그 자리들에서는 다시 맞추지 않았으므로, 맨 아래 줄이 조금씩
- * 화면 밖으로 밀려 잘려 보였습니다.
+ * It used to call scrollIntoView({block:"end"}) on each new row. But a row keeps
+ * changing height after it is attached -- a translation arrives about 0.2s
+ * later and adds a line (refreshScriptRow attaches `.tr`), and when a refined
+ * line comes several rows merge into one. Nothing re-aligned at those points, so
+ * the bottom row was pushed a little at a time off the screen and looked cut.
  *
- * 컨테이너를 바닥에 붙이면 높이가 어떻게 바뀌든 상관이 없습니다. 부드러운
- * 스크롤은 쓰지 않습니다 -- 자막이 몇 백 밀리초마다 들어오므로 애니메이션이
- * 끝나기 전에 다음 것이 시작되어 영영 바닥에 닿지 못합니다. */
+ * Pinning the container to the bottom makes it irrelevant how the heights
+ * change. Smooth scrolling is not used -- subtitles come in every few hundred
+ * milliseconds, so the next animation starts before the previous one ends and
+ * it never reaches the bottom at all. */
 function pinScriptToBottom() {
-  // 받는 중일 때만 바닥을 좇습니다. 끝난 방송은 녹화본처럼 읽는 것이므로
-  // 지금 재생 중인 줄을 가운데에 두는 편이 맞습니다(markScript).
+  // The bottom is chased only while the stream is being received. A finished
+  // broadcast is read like a recording, so keeping the line playing right now in
+  // the middle is the right thing (markScript).
   if (!state.follow || !isLiveDoc() || !isLiveReceiving()) return;
   const box = $("script");
   box.scrollTop = box.scrollHeight;
 }
 
 function markScript(i) {
-  // 받는 중에는 표시하지 않습니다. 그때는 늘 마지막 줄이고, 스크립트는
-  // 이미 바닥에 붙어 있습니다.
+  // Nothing is marked while the stream is being received. It is always the last
+  // row then, and the script is already pinned to the bottom.
   if (isLiveDoc() && isLiveReceiving()) return;
   const box = $("script");
   box.querySelectorAll(".line.on").forEach(el => el.classList.remove("on"));
   if (i < 0) return;
-  // 줄은 위치(data-i)가 아니라 자막 id 로 찾습니다. 위치는 줄을 하나
-  // 지우는 순간 그 뒤가 전부 한 칸씩 어긋납니다 -- 편집으로 줄을 지운 뒤
-  // 따라가기가 계속 옆 줄을 짚던 버그가 그것입니다. id 가 없는 줄(옛 모양)
-  // 만 위치로 물러납니다.
+  // A row is found by cue id, not by position (data-i). The moment one row is
+  // deleted, every position after it is off by one -- that is the bug where
+  // following kept pointing at the row beside the right one after a line was
+  // deleted in the editor. Only rows with no id (the old shape) fall back to
+  // position.
   const c = state.cues[i] || {};
   const el = c.id != null ? rowOf(c.id) : box.querySelector(`.line[data-i="${i}"]`);
   if (!el) return;
@@ -429,15 +446,17 @@ function markScript(i) {
   if (state.follow) el.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
-/* 대본 창 모드.
+/* Script mode.
  *
- * `?script=<열쇠>` 로 열면 같은 앱이 대본만 그립니다. 임베드가 막힌 방송
- * (멤버십 등)을 유튜브에서 보면서 이 창으로 대본을 읽는 용도입니다.
+ * Opened as `?script=<key>`, the same app draws nothing but the script. It is
+ * for reading the script in this window while watching a broadcast whose
+ * embedding is blocked (members-only and the like) on YouTube.
  *
- * 별도 페이지를 새로 쓰지 않은 이유가 있습니다. SSE, 정제본 흡수, 번역
- * 도착 처리를 복사하면 고칠 곳이 두 군데가 되고, 그 값을 이미 여러 번
- * 치렀습니다. 여기서는 플레이어를 만들지 않고 나머지 껍데기를 감출
- * 뿐입니다 -- 자막을 받아 그리는 길은 같은 하나입니다. */
+ * There is a reason no separate page was written. Copying SSE, refined-line
+ * absorption and the handling of arriving translations would make two places to
+ * fix, and that price has already been paid several times over. All that
+ * happens here is not building a player and hiding the rest of the shell -- the
+ * path that receives and draws subtitles is the one same path. */
 function scriptWindowKey() {
   return new URLSearchParams(location.search).get("script") || "";
 }
@@ -449,8 +468,9 @@ function openScriptWindow() {
             : (state.doc && !isLiveDoc() ? state.doc.id : "");
   if (!key) { alert(t("panel.needTarget")); return; }
   const url = `/?script=${encodeURIComponent(key)}`;
-  // 이미 띄워 둔 창이 있으면 그것을 씁니다. 탭 소리로 시작하면 아래에서
-  // 미리 열어 두므로, 여기서 새로 열면 빈 창과 대본 창이 따로 남습니다.
+  // If a window is already up, use it. Starting from tab audio opens one ahead
+  // of time below, so opening a fresh one here would leave an empty window and
+  // a script window standing apart.
   if (state.scriptWin && !state.scriptWin.closed) {
     state.scriptWin.location = url;
     state.scriptWin.focus();
@@ -459,16 +479,17 @@ function openScriptWindow() {
   state.scriptWin = window.open(url, "mimiwatch-script", SCRIPT_WIN);
 }
 
-/* 아직 세션 번호를 모를 때 자리만 잡아 두는 창.
+/* A window that only holds the place while the session number is still unknown.
  *
- * 순서 때문에 이렇게 합니다. `window.open` 은 사용자 조작 직후에만 열리는데,
- * 탭 소리는 공유 창을 고르는 데 몇 초가 걸리고 그 사이에 유효기간이
- * 지납니다. 그 뒤에 열려고 하면 크롬이 조용히 막습니다. 그래서 조작이 아직
- * 살아 있는 지점에서 빈 창을 먼저 잡아 두고, 세션이 생기면 그 창을
- * 대본으로 돌립니다. */
+ * It is done this way because of ordering. `window.open` only opens right after
+ * a user gesture, and tab audio takes several seconds to pick a window to
+ * share, by which time the gesture has expired. Trying to open afterwards,
+ * Chrome blocks it silently. So an empty window is claimed at the point where
+ * the gesture is still alive, and once the session exists that window is turned
+ * into the script. */
 function openPendingScriptWindow() {
   const win = window.open("", "mimiwatch-script", SCRIPT_WIN);
-  if (!win) return null;          // 팝업 차단
+  if (!win) return null;          // the popup was blocked
   win.document.write(
     '<!doctype html><meta charset="utf-8"><title>' + t("panel.window.title") + '</title>'
     + '<style>html{color-scheme:dark light}'
@@ -481,10 +502,10 @@ function openPendingScriptWindow() {
   return win;
 }
 
-/* 스크립트에서 줄을 누르면 무슨 일이 일어나는가.
+/* What happens when a line in the script is clicked.
  *
- * 「무엇을 보일지」(setScriptView)와는 다른 축입니다. 저쪽은 원문·번역 중
- * 무엇을 그릴지이고, 이쪽은 누르면 어떤 일이 일어날지입니다. */
+ * A different axis from "what to show" (setScriptView). That one is which of
+ * source and translation to draw; this one is what happens on a click. */
 function setScriptMode(m) {
   state.scriptMode = m;
   const box = $("script");
@@ -496,21 +517,22 @@ function setScriptMode(m) {
   else markKeptRows();
   document.querySelectorAll("[data-smode]").forEach(b =>
     b.classList.toggle("on", b.dataset.smode === m));
-  // 모드를 옮기면 열려 있던 편집기는 닫습니다. 읽기로 돌아갔는데 편집기가
-  // 남아 있으면 그 줄만 규칙이 다른 상태가 됩니다.
+  // Moving out of a mode closes any editor left open. Back in read mode with an
+  // editor still standing, that one row plays by different rules than the rest.
   if (m !== "edit") closeAllCueEditors();
 }
 
 function closeAllCueEditors() {
   $("script").querySelectorAll(".line.editing .ce-bar button:last-child")
-    .forEach(b => b.click());          // 각 편집기의 「취소」
+    .forEach(b => b.click());          // each editor's "Cancel"
 }
 
-/* ---------- 다시 번역할 줄 고르기 ----------
+/* ---------- picking the lines to translate again ----------
  *
- * 파일 탐색기와 같은 규칙입니다. 누르면 그 줄만 뒤집히고, shift 로 누르면
- * 직전에 누른 줄부터 여기까지가 한꺼번에 들어옵니다. 긴 방송에서 한 대목만
- * 다시 돌리고 싶을 때 한 줄씩 스물세 번 누르게 할 수는 없습니다. */
+ * The same rules as a file browser. A click flips that one row, and a
+ * shift-click takes everything from the row clicked last up to here in one go.
+ * Wanting one passage of a long broadcast run again is no reason to make
+ * someone click twenty-three times, one row at a time. */
 function pickRow(id, extend) {
   const ids = state.cues.map(c => c.id);
   if (extend && state.pickAnchor != null) {
@@ -537,8 +559,9 @@ function pickAll() {
   syncPicks();
 }
 
-/* 사람이 고친 번역은 재번역이 건너뜁니다. 고르기 전에 그렇다고 보여 줍니다 --
- * 열두 줄을 골랐는데 둘이 조용히 빠지면 왜 안 바뀌었는지 알 수 없습니다. */
+/* Re-translation skips translations a person edited. That is shown before the
+ * picking -- pick twelve lines and have two silently drop out, and there is no
+ * telling why they did not change. */
 function markKeptRows() {
   state.cues.forEach(c => {
     const row = rowOf(c.id);
@@ -578,8 +601,9 @@ async function runRetranslate() {
   await watchRetranslate(res.id, res.kept || 0);
 }
 
-/* 진행률은 기존 작업 상자를 그대로 씁니다. 재번역은 줄당 0.15초라 스무 줄만
- * 골라도 몇 초씩 걸리고, 그동안 아무것도 없으면 멈춘 것처럼 보입니다. */
+/* Progress reuses the existing job box as it is. Re-translation runs at 0.15s a
+ * line, so even twenty lines take several seconds, and with nothing shown in the
+ * meantime it looks stuck. */
 async function watchRetranslate(jobId, kept) {
   const box = $("job");
   box.hidden = false;
@@ -611,8 +635,9 @@ async function watchRetranslate(jobId, kept) {
   }
 }
 
-/* 다시 번역한 줄을 화면에 되받습니다. 라이브는 SSE 로 이미 왔지만, 녹화본은
- * 흘려보낼 통로가 없으므로 여기서 한 번 더 읽습니다. */
+/* Takes the re-translated lines back onto the screen. Live already had them over
+ * SSE, but a recording has no channel to push them down, so they are read once
+ * more here. */
 async function reloadCues() {
   if (state.live) { markKeptRows(); return; }
   if (!state.doc || isLiveDoc()) return;
@@ -627,8 +652,8 @@ async function reloadCues() {
   renderCue();
 }
 
-/* 스크립트 줄에서 무엇을 보일지. 화면 위 자막 모드와는 다른 축입니다 --
- * 저쪽은 영상 위, 이쪽은 대본 자체입니다. */
+/* What to show in a script row. A different axis from the on-screen subtitle
+ * mode -- that one is over the video, this one is the script itself. */
 function setScriptView(v) {
   const box = $("script");
   box.classList.toggle("hide-src", v === "tr");

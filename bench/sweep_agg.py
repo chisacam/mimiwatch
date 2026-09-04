@@ -1,7 +1,8 @@
-"""문맥 줄 수를 조건마다 네 번씩 돌린 결과를 모읍니다.
+"""Gather the results of running each context-line condition four times.
 
-temperature 0.2이므로 한 번의 결과는 표본 하나입니다. `って。`가 5줄에서
-번역되지 않고 돌아온 것이 우연인지 성향인지는 반복해야 알 수 있습니다.
+temperature is 0.2, so one result is only one sample. Whether `って。` coming
+back untranslated at 5 lines was chance or a tendency can only be told by
+repeating.
 """
 import json, os, statistics
 
@@ -13,7 +14,8 @@ def load(n, tag):
     p = os.path.join(HERE, f"out_prompt_ctx{n}{tag}.json")
     return json.load(open(p, encoding="utf-8"))["rows"]
 
-# 한국어 번역에 히라가나·가타카나가 남으면 옮기지 않고 돌려준 것입니다.
+# Hiragana or katakana left in a Korean translation means it was handed back
+# rather than translated.
 def leaked(r):
     return (not r["error"] and r["src_lang"] == "ja"
             and any(0x3040 <= ord(c) <= 0x30ff for c in r["out"]))

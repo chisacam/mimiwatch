@@ -1,22 +1,23 @@
-/* 유튜브 페이지 위에 자막을 얹습니다.
+/* Lays subtitles over the YouTube page.
  *
- * 우리 페이지의 iframe 위가 아니라 유튜브 페이지 **자체**입니다. 그래서
- * 임베드가 막힌 방송 -- 멤버십 전용이 대부분 그렇습니다 -- 에서도 영상을
- * 그대로 보면서 자막을 읽을 수 있습니다.
+ * The YouTube page **itself**, not over our page's iframe. So a stream where
+ * embedding is blocked -- which most members-only ones are -- can be watched as
+ * it is with the subtitles read on top.
  *
- * 얻는 것이 하나 더 있습니다. 여기서는 진짜 <video> 를 잡을 수 있으므로
- * `currentTime` 을 직접 읽습니다. 우리 페이지에서는 임베드된 플레이어의
- * 시계를 못 읽어 라이브 자막 정렬이 수동이었습니다.
+ * There is one more thing gained. Here the real <video> can be grabbed, so
+ * `currentTime` is read directly. On our page the embedded player's clock
+ * cannot be read, which left live subtitle alignment a manual affair.
  *
- * 자막을 그리는 일은 overlay.js 가 합니다. mimiwatch 페이지와 같은 한
- * 벌입니다 -- 그 파일에 왜 그렇게 뽑았는지 적어 두었습니다.
+ * Drawing the subtitles is overlay.js's job. It is the same copy the mimiwatch
+ * page uses -- that file says why it was pulled out that way.
  */
 (function () {
   "use strict";
 
   const ID = "mimiwatch-overlay";
-  // 유튜브는 화면을 갈아 끼우며 돌아다닙니다(SPA). 영상이 바뀔 때마다
-  // 플레이어 요소도 새로 생기므로 붙잡아 두지 않고 그때그때 찾습니다.
+  // YouTube swaps the screen out as it navigates (an SPA). The player element
+  // is created afresh on every video change, so it is not held on to but looked
+  // up each time.
   const findPlayer = () =>
     document.querySelector("#movie_player") ||
     document.querySelector(".html5-video-player");
@@ -25,74 +26,77 @@
 
   const log = (...a) => console.log("[mimiwatch]", ...a);
 
-  /* 번역을 어느 이름으로 넣고 어느 이름으로 읽을지.
+  /* Which name a translation goes in under and comes out under.
    *
-   * **prefs 에 두면 안 됩니다.** prefs 는 저장했다가 다음에 되읽는데, 그
-   * 되읽기가 세션의 status 이벤트보다 늦게 도착하면 옛 엔진 이름이 지금
-   * 값을 덮어씁니다. 그러면 넣는 이름과 읽는 이름이 어긋나 번역이 늘
-   * 빈 문자열이 되고, 화면에는 **아무것도 나오지 않습니다** -- 「둘 다」에서
-   * 원문 줄도 번역이 있을 때만 나오기 때문입니다.
+   * **It must not sit in prefs.** prefs is stored and read back next time, and
+   * if that read-back arrives later than the session's status event, the old
+   * engine name overwrites the current value. The name it goes in under and the
+   * name it comes out under then disagree, the translation is always the empty
+   * string, and **nothing at all appears** on screen -- because in "Both" the
+   * source line too only shows when there is a translation.
    *
-   * 라이브는 한 세션에 번역이 한 벌뿐이므로 이름이 무엇이든 상관없습니다.
-   * 붙박이 값을 씁니다. 녹화본만 서버가 준 이름을 그대로 씁니다. */
+   * Live has one set of translations per session, so the name does not matter.
+   * It uses a fixed value. Only a VOD uses the name the server gave. */
   const LIVE_KEY = "_";
   let trKey = LIVE_KEY;
 
-  /* 이 자막이 어느 영상의 것인가. 빈 문자열이면 알아내지 못한 것입니다 --
-   * 그때는 내리지 않고 묻습니다. */
+  /* Which video these subtitles belong to. The empty string means it could not
+   * be worked out -- then it asks rather than taking them down. */
   let expectVideo = "";
-  let currentValue = "";        // 지금 얹고 있는 것. 서버 주소가 바뀌면 다시 붙는 데 씁니다.
-  const videoIdOf = MimiYtId.videoIdOf;      // 배경 워커와 같은 한 벌(ytid.js)
+  let currentValue = "";        // what is laid on now. Used to reattach when the server address changes.
+  const videoIdOf = MimiYtId.videoIdOf;      // the same copy the service worker uses (ytid.js)
 
-  let ov = null;           // overlay 모듈의 조종기
-  let node = null;         // 우리가 넣은 div
+  let ov = null;           // the overlay module's handle
+  let node = null;         // the div we put in
   let port = null;
-  // 자막 목록. 반영 규칙(같은 id 갈아 끼우기, replaces 빼기)은 mimiwatch
-  // 페이지와 공유하는 cuestore.js 의 것입니다. 배열은 제자리에서 고쳐지므로
-  // `cues`를 한 번 잡아 두고 그대로 씁니다.
+  // The subtitle list. The rules for folding events in (swap under the same id,
+  // take replaces out) belong to cuestore.js, shared with the mimiwatch page.
+  // The array is edited in place, so `cues` is grabbed once and used as it is.
   const store = MimiCues.create();
   const cues = store.cues;
   let live = false, receiving = false;
-  // 서버와의 줄이 끊겼는가. 배경 워커가 다시 붙어 보는 동안 참입니다.
-  // 팝업의 상태줄이 「지금 구간에 자막 없음」과 「서버 끊김」을 가릅니다.
+  // Has the line to the server broken. True while the service worker is trying
+  // to reattach. The popup's status line tells "no subtitle in the current
+  // segment" from "server connection lost".
   let stalled = false;
   let tickTimer = null;
   let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55,
                 pos: null, offset: 0, panel: false };
 
-  /* ---------- 화면에 자리 만들기 ---------- */
+  /* ---------- making room on screen ---------- */
 
   function mount() {
     const player = findPlayer();
     if (!player) return false;
     if (node && node.isConnected && node.parentElement === player) return true;
-    // 남은 것을 전부 걷습니다. 유튜브가 플레이어를 갈아 끼우는 사이 하나만
-    // 추적하면 옛 것을 놓치고, 그러면 자막이 두 겹으로 뜹니다.
+    // Sweep up everything left. Tracking only one while YouTube swaps the
+    // player out loses the old one, and then the subtitles show in two layers.
     document.querySelectorAll("#" + ID).forEach((e) => e.remove());
 
     node = document.createElement("div");
     node.id = ID;
     node.className = "mw-overlay";
-    // innerHTML 을 쓰지 않습니다. 유튜브는 Trusted Types 를 켜 두었고
-    // (`require-trusted-types-for 'script'`), 그 문서에서 innerHTML 에
-    // 문자열을 넣으면 거부됩니다. content script 가 면제되는지는 크롬 판에
-    // 따라 다르므로 아예 기대지 않습니다.
+    // It does not use innerHTML. YouTube has Trusted Types switched on
+    // (`require-trusted-types-for 'script'`), and putting a string into
+    // innerHTML on that document is refused. Whether a content script is exempt
+    // depends on the Chrome version, so it does not lean on it at all.
     for (const [a, b] of [["mw-prev", "cue-prev"], ["mw-main", "cue-main"],
                           ["mw-src", "cue-src"]]) {
       const d = document.createElement("div");
       d.className = a + " " + b;
       node.appendChild(d);
     }
-    // 배치는 overlay.css 가 하지만 여기서도 박아 둡니다. 그 파일이 어떤
-    // 이유로든 붙지 않으면 자막이 흐름 속의 평범한 블록이 되어 화면 밖으로
-    // 밀려나고, 그러면 「아무것도 안 보인다」로만 보입니다.
+    // Layout is overlay.css's job, but it is nailed down here as well. If that
+    // file fails to attach for any reason the subtitle becomes an ordinary block
+    // in the flow and is pushed off screen, and that only ever looks like
+    // "nothing shows".
     node.style.position = "absolute";
     node.style.zIndex = "30";
     node.style.pointerEvents = "none";
-    // 유튜브의 컨트롤 바보다 아래에 둡니다. 자막이 재생 단추를 덮으면
-    // 영상을 조작할 수 없습니다.
+    // Below YouTube's control bar. A subtitle covering the play button makes
+    // the video impossible to operate.
     player.appendChild(node);
-    // 우리가 붙는 상자가 자리를 잡고 있어야 absolute 가 그 안에서 셉니다.
+    // The box we attach to has to be positioned for absolute to count inside it.
     if (getComputedStyle(player).position === "static") {
       player.style.position = "relative";
     }
@@ -103,11 +107,12 @@
     return true;
   }
 
-  /* 이 탭에서 내립니다. 화면에서 지우는 것만으로는 모자랍니다.
+  /* Takes it down on this tab. Erasing it from the screen is not enough.
    *
-   * **포트를 끊어야 합니다.** 예전에는 끊지 않아서, 1.5초마다 도는 감시자가
-   * `port` 가 살아 있는 것을 보고 「오버레이가 사라졌네」 하며 다시
-   * 세웠습니다. 단추를 누르면 잠깐 사라졌다가 다음 자막에 되살아났습니다. */
+   * **The port has to be disconnected.** It used not to be, so the watcher that
+   * runs every 1.5 s saw `port` alive, decided the overlay had disappeared and
+   * put it back up. Press the button and it vanished for a moment, then came
+   * back with the next subtitle. */
   function unmount() {
     stopTick();
     if (port) { try { port.disconnect(); } catch (_) {} port = null; }
@@ -119,11 +124,13 @@
     store.reset();
   }
 
-  /* 채팅 자리의 대본. 화면 위 자막과는 별개로 켜고 끕니다 -- 오버레이는
-   * 지금 한 줄이고, 이쪽은 지나간 것을 되짚는 자리입니다. */
+  /* The subtitle log in the chat column. Switched on and off separately from
+   * the subtitles over the video -- the overlay is the one line right now, and
+   * this is the place to look back over what went past. */
   function syncPanel() {
-    // 붙어 있지 않으면 세우지 않습니다. 내린 뒤에도 이 함수가 도는데,
-    // `prefs.panel` 만 보면 자막 내역이 저 혼자 되살아납니다.
+    // It is not put up unless we are attached. This function runs after taking
+    // it down too, and looking only at `prefs.panel` has the subtitle log come
+    // back up by itself.
     if (prefs.panel && port) {
       if (!MimiPanel.mounted()) {
         MimiPanel.reset();
@@ -132,7 +139,7 @@
           const v = findVideo();
           if (v) { v.currentTime = t; v.play().catch(() => {}); }
         });
-        log("자막 내역을 채팅 자리에 세웠습니다");
+        log("put the subtitle log where the chat was");
       }
       MimiPanel.render(cues, { trKey });
     } else if (MimiPanel.mounted()) {
@@ -141,14 +148,15 @@
   }
 
   function apply() {
-    // 자막 내역은 오버레이와 별개입니다. 이 줄이 아래 `if (!ov) return` 뒤에
-    // 있어서, 오버레이가 아직(또는 이미) 없으면 체크를 꺼도 내역이 사라지지
-    // 않았습니다.
+    // The subtitle log is separate from the overlay. This line used to sit after
+    // the `if (!ov) return` below, so with the overlay not yet (or no longer)
+    // there, switching the checkbox off did not make the log go away.
     syncPanel();
     if (!ov) return;
     ov.setView({ mode: prefs.mode, showPrev: prefs.showPrev });
-    // 유튜브의 전체화면은 플레이어 요소가 그대로 커집니다. 그 높이를 기준으로
-    // 배율을 잡으면 창에서 고른 크기가 전체화면에서도 같은 비율로 보입니다.
+    // YouTube's full screen grows the player element itself. Scaling against
+    // that height makes a size chosen in the window look the same proportion in
+    // full screen.
     const p = findPlayer();
     const h = p ? p.clientHeight : 0;
     ov.setSize(prefs.size, h ? Math.max(0.6, h / 480) : 1);
@@ -156,7 +164,7 @@
     node.style.setProperty("--mw-dim", String(prefs.dim));
   }
 
-  /* ---------- 시계 ---------- */
+  /* ---------- the clock ---------- */
 
   function startTick() {
     stopTick();
@@ -174,10 +182,11 @@
     tickTimer = null;
   }
 
-  /* ---------- 서버에서 오는 것 ---------- */
+  /* ---------- what comes from the server ---------- */
 
-  /* 자막이 바뀔 때만 대본을 다시 그립니다. 렌더 루프(100ms)에 얹으면 초당
-   * 열 번씩 수백 줄을 훑게 되는데, 대본은 새 줄이 올 때만 바뀝니다. */
+  /* The subtitle log is redrawn only when the subtitles change. Put on the
+   * render loop (100ms) it would sweep hundreds of lines ten times a second,
+   * and the log only changes when a new line arrives. */
   let panelDirty = false;
   setInterval(() => {
     if (!panelDirty) return;
@@ -205,26 +214,28 @@
     dismissAsk();
     MimiPanel.reset();
     if (!mount()) {
-      log("플레이어를 찾지 못했습니다. 영상 페이지에서 다시 골라 주십시오.");
+      log("no player found. Pick it again on a video page.");
       return;
     }
-    log("붙었습니다:", value);
+    log("attached:", value);
     if (port) { try { port.disconnect(); } catch (_) {} }
     port = chrome.runtime.connect({ name: "cues" });
     port.onMessage.addListener((m) => {
       if (m.type === "event") { stalled = false; onEvent(m.data); }
       else if (m.type === "stalled") stalled = true;
       else if (m.type === "ended") {
-        // 끝난 세션은 서버가 백로그를 다 보내고 닫습니다. 더 올 것이 없으니
-        // 「받는 중」의 규칙(최근 줄 붙잡기)에서 시각 기준 조회로 넘어갑니다.
+        // A finished session has the server send the whole backlog and close.
+        // Nothing more is coming, so it moves from the "receiving" rule (hold
+        // the most recent line) to the time-based lookup.
         stalled = false; receiving = false;
       }
       else if (m.type === "doc") {
         live = false; receiving = false;
-        // 녹화본은 번역이 엔진별로 여러 벌일 수 있습니다. 마지막 것을 씁니다.
+        // A VOD may have several sets of translations, one per engine. It uses
+        // the last of them.
         trKey = (m.data.backends_done || []).slice(-1)[0] || LIVE_KEY;
         store.load(m.data.cues || []);
-        log(`녹화본 ${cues.length}줄, 번역 열쇠 ${trKey}`);
+        log(`VOD, ${cues.length} lines, translation key ${trKey}`);
         MimiPanel.reset();
         panelDirty = true;
       } else if (m.type === "error") {
@@ -233,23 +244,26 @@
     });
     port.onDisconnect.addListener(() => {
       port = null;
-      // 크롬은 확장 포트를 5분쯤마다 끊습니다(서비스 워커 수명 규칙). 받는 중이면 다시
-      // 붙습니다 -- 안 그러면 자막이 조용히 멈추고 「서버 연결 끊김」도 뜨지 않습니다.
+      // Chrome cuts extension ports about every 5 minutes (the service worker
+      // lifetime rule). If we are receiving it reattaches -- otherwise the
+      // subtitles stop quietly and "server connection lost" does not even show.
       if (currentValue === value && receiving !== false) {
         setTimeout(() => { if (!port && currentValue === value) attach(value, videoId); }, 1000);
       }
     });
     port.postMessage({ type: "attach", value });
     startTick();
-    // 포트가 선 뒤에 한 번 더 부릅니다. mount() 안의 apply() 는 이 줄보다
-    // 앞서 도는데, 그때는 아직 port 가 없어 자막 내역이 서지 않습니다.
+    // Called once more after the port is up. The apply() inside mount() runs
+    // ahead of this line, and at that point there is no port yet, so the
+    // subtitle log does not go up.
     syncPanel();
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     if (msg.type === "attach") { attach(msg.value, msg.videoId); reply({ ok: true }); }
     else if (msg.type === "reattach") {
-      // 서버 주소가 바뀌었습니다. 붙어 있던 것을 새 주소로 다시 붙입니다.
+      // The server address has changed. What was attached is reattached on the
+      // new address.
       if (port && currentValue) attach(currentValue, expectVideo);
       reply({ ok: true });
     }
@@ -261,8 +275,9 @@
       const r = node ? node.getBoundingClientRect() : null;
       reply({ ok: true, mounted: !!(node && node.isConnected),
               cues: cues.length, live, receiving, stalled, trKey,
-              // 안 보인다는 말은 여러 가지입니다 -- 안 붙었거나, 붙었는데
-              // 크기가 0이거나, 그릴 자막이 없거나. 구별할 수 있게 냅니다.
+              // "It does not show" means several things -- not attached, or
+              // attached at size 0, or nothing to draw. They are reported apart
+              // so they can be told from each other.
               box: r ? { w: Math.round(r.width), h: Math.round(r.height) } : null,
               text: node ? (node.textContent || "").slice(0, 40) : "",
               player: !!findPlayer(), video: !!findVideo(),
@@ -272,7 +287,7 @@
     return true;
   });
 
-  /* ---------- 기억 ---------- */
+  /* ---------- memory ---------- */
 
   const PKEY = "overlayPrefs";
   function savePrefs() { chrome.storage.local.set({ [PKEY]: prefs }); }
@@ -281,28 +296,30 @@
     if (ov) apply();
   });
 
-  /* 화면 언어. 서버가 들고 있는 값이지만 여기서 물어보지는 않습니다 -- 이
-   * 스크립트는 유튜브 페이지의 출처로 나가므로 서버에 직접 닿지 않고, 서버에
-   * 닿는 것은 배경 워커의 일입니다. 팝업이 서버에서 받아 적어 둔 값을 읽고,
-   * 그 값이 바뀌면 따라갑니다. 아직 아무도 물어본 적이 없으면(팝업을 한 번도
-   * 열지 않은 브라우저) 브라우저의 짐작으로 갑니다. */
+  /* The UI language. The server holds that value, but it is not asked for here
+   * -- this script goes out with the YouTube page's origin so it does not reach
+   * the server directly, and reaching the server is the service worker's job.
+   * It reads the value the popup received from the server and wrote down, and
+   * follows it when it changes. If nobody has asked yet (a browser where the
+   * popup was never opened) it goes with the browser's guess. */
   const LANG_KEY = "uiLang";
   chrome.storage.local.get(LANG_KEY)
     .then((got) => MW_I18N.setLang(got[LANG_KEY] || ""));
 
-  /* 스스로 물어봅니다.
+  /* It asks on its own.
    *
-   * 배경 워커가 `attach` 를 보내지만 그 순간 우리가 없을 수 있습니다 --
-   * 확장을 다시 로드한 직후(열려 있던 탭은 옛 content script 를 계속
-   * 씁니다), 페이지를 새로고침한 직후, 유튜브가 화면을 갈아 끼운 직후.
-   * 그때 배경은 조용히 실패하고 다시 시도하지 않았습니다. 사용자에게는
-   * 「골랐는데 안 나온다」로만 보이고, 실제로 페이지를 새로고침해야
-   * 나왔습니다.
+   * The service worker sends `attach`, but we may not be there at that moment
+   * -- right after reloading the extension (tabs already open keep using the old
+   * content script), right after a page reload, right after YouTube swapped the
+   * screen out. The background then failed quietly and never tried again. To the
+   * user that only looked like "I picked it and nothing shows", and the page
+   * really had to be reloaded before it did.
    *
-   * 저장은 이미 되어 있으므로 우리가 읽어 오면 됩니다. */
-  /* 유튜브는 주소만 갈아 끼웁니다(SPA). 다른 영상으로 옮기면 플레이어도
-   * 오른쪽 열도 새로 생기는데, 우리가 넣어 둔 것은 옛 영상의 자막을 그대로
-   * 들고 남아 있었습니다. 주소가 바뀌면 한 번 걷어 내고 다시 세웁니다. */
+   * The choice is already stored, so we only have to read it. */
+  /* YouTube swaps only the URL out (an SPA). Move to a different video and the
+   * player and the right-hand column are both created afresh, while what we put
+   * in stayed behind still holding the old video's subtitles. On a URL change it
+   * is swept away once and put back up. */
   let lastUrl = location.href;
   function onNavigate() {
     if (location.href === lastUrl) return;
@@ -310,30 +327,32 @@
     lastUrl = location.href;
     const now = videoIdOf(lastUrl);
     if (!port) {
-      // 얹은 것이 없습니다. 다만 이 탭에 볼 것이 정해져 있는데 아까는 영상
-      // 페이지가 아니어서 못 붙었을 수 있으니 한 번 물어봅니다.
+      // Nothing is laid on. Still, this tab may have something set to watch
+      // that could not attach earlier because it was not a video page, so it
+      // asks once.
       if (now) resume();
       return;
     }
-    if (now && now === wasVideo) return;     // 같은 영상 안에서의 이동(시각 등)
+    if (now && now === wasVideo) return;     // a move inside the same video (a seek and the like)
 
     if (expectVideo && now && now !== expectVideo) {
-      // 판별했습니다. 다른 영상이므로 내립니다. 이 자막은 저 영상의 것이
-      // 아니고, 남겨 두면 엉뚱한 말이 화면에 붙습니다.
-      log(`다른 영상입니다(${expectVideo} → ${now}). 내립니다.`);
+      // Told for certain. A different video, so it comes down. These subtitles
+      // are not that video's, and left up they stick the wrong words on screen.
+      log(`a different video (${expectVideo} → ${now}). Taking it down.`);
       unmount();
       chrome.runtime.sendMessage({ type: "dropWatch" });
       note(t("content.noteTakenDown"));
       return;
     }
     if (!expectVideo && now) {
-      // 어느 영상의 자막인지 알아내지 못했습니다(탭 소리로 시작했는데
-      // 주소를 못 읽은 경우 등). 마음대로 내리지 않고 묻습니다.
+      // Which video the subtitles belong to could not be worked out (started
+      // from the tab's sound with an unreadable URL, and the like). It asks
+      // rather than taking them down on its own.
       ask();
       return;
     }
-    // 같은 영상입니다. 화면이 갈아 끼워졌을 수 있으니 다시 세웁니다.
-    log("화면이 갈아 끼워졌습니다. 다시 세웁니다.");
+    // The same video. The screen may have been swapped out, so it is put back up.
+    log("the page was swapped out. Putting it back up.");
     MimiPanel.unmount();
     MimiPanel.reset();
     if (node) { node.remove(); node = null; }
@@ -341,16 +360,17 @@
     stopTick();
     if (mount()) { startTick(); apply(); }
   }
-  // 유튜브는 화면을 갈아 끼울 때마다 이 이벤트를 문서에 띄웁니다. 예전에는
-  // 0.7초마다 주소를 들여다봤는데, 모든 유튜브 탭에서 영원히 도는 시계였습니다.
-  // 이벤트가 오지 않는 판(또는 이름이 바뀐 뒤)을 위해 느린 시계 하나만 남깁니다.
+  // YouTube fires this event on the document every time it swaps the screen out.
+  // It used to look at the URL every 0.7 s, which was a clock running forever on
+  // every YouTube tab. One slow clock is left for versions where the event does
+  // not arrive (or for after it is renamed).
   document.addEventListener("yt-navigate-finish", onNavigate);
   setInterval(onNavigate, 3000);
 
-  /* ---------- 물어보기 ----------
+  /* ---------- asking ----------
    *
-   * confirm() 을 쓰지 않습니다. 페이지를 멈춰 세우는 데다 영상 위에서
-   * 그러면 재생까지 걸립니다. 플레이어 안에 작은 띠를 하나 놓습니다. */
+   * It does not use confirm(). It stops the page dead, and over a video it hangs
+   * playback with it. A small bar is placed inside the player instead. */
   const ASK_ID = "mimiwatch-ask";
 
   function dismissAsk() {
@@ -382,8 +402,8 @@
     const keep = document.createElement("button");
     keep.textContent = t("content.askKeep");
     keep.addEventListener("click", () => {
-      // 여기가 그 영상이라고 사용자가 답했습니다. 다시 묻지 않도록
-      // 지금 영상을 이 자막의 것으로 적어 둡니다.
+      // The user answered that this is that video. So it is not asked again,
+      // the current video is written down as this subtitle's.
       expectVideo = videoIdOf(location.href);
       dismissAsk();
       MimiPanel.reset();
@@ -405,34 +425,36 @@
   function resume() {
     chrome.runtime.sendMessage({ type: "whatToWatch" }, (r) => {
       if (chrome.runtime.lastError || !r || !r.ok || !r.data) return;
-      if (port) return;                // 이미 보고 있습니다
-      log("이 탭이 보던 것을 이어 붙입니다:", r.data);
+      if (port) return;                // already watching
+      log("reattaching what this tab was watching:", r.data);
       attach(r.data, r.videoId);
     });
   }
   resume();
 
-  /* 팝업이 이 탭에 볼 것을 정하면 저장(`tab:<번호>`)이 먼저 바뀝니다. 그
-   * 변화를 여기서 듣습니다 -- 예전에는 붙은 것이 없는 동안 1.5초마다 배경
-   * 워커에게 「볼 것 있나」를 물어서, 유튜브 탭이 열려 있는 한 워커가 잠들
-   * 틈이 없었습니다. 어느 탭의 열쇠인지는 모르지만 물어보는 값은 싸고,
-   * 우리 탭이 아니면 배경이 빈 답을 줍니다. */
+  /* When the popup sets what this tab watches, the storage (`tab:<number>`)
+   * changes first. That change is heard here -- it used to ask the service
+   * worker whether there was anything to watch every 1.5 s while nothing was
+   * attached, which left the worker no gap to sleep in as long as a YouTube tab
+   * was open. Which tab's key it is we do not know, but asking is cheap, and if
+   * it is not our tab the background gives an empty answer. */
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    // 팝업이 서버에서 새 언어를 받아 적었습니다. 세워 둔 자막 내역의 머리는
-    // panel.js 가 스스로 다시 적습니다.
+    // The popup received a new language from the server and wrote it down. The
+    // heading of a subtitle log already up is rewritten by panel.js itself.
     if (changes[LANG_KEY]) MW_I18N.setLang(changes[LANG_KEY].newValue || "");
     if (!port && Object.keys(changes).some((k) => k.startsWith("tab:"))) resume();
   });
 
-  /* 유튜브는 주소만 갈아 끼우고 페이지를 새로 읽지 않습니다. 영상이 바뀌면
-   * 플레이어 요소도 새로 생기므로, 우리가 넣어 둔 것이 사라졌는지 살핍니다.
-   * 문서만 보는 시계라 배경 워커를 깨우지 않습니다. */
+  /* YouTube swaps only the URL out and does not read the page anew. The player
+   * element is created afresh when the video changes, so this watches for what
+   * we put in having disappeared. A clock that only looks at the document, so it
+   * does not wake the service worker. */
   setInterval(() => {
     if (!port) return;
     if (node && node.isConnected) {
-      // 오버레이는 살아 있는데 대본만 사라졌을 수 있습니다. 유튜브가
-      // 오른쪽 열을 통째로 갈아 끼우는 경우입니다.
+      // The overlay may be alive with only the subtitle log gone. That is when
+      // YouTube swaps the whole right-hand column out.
       if (prefs.panel && !MimiPanel.mounted()) { MimiPanel.reset(); syncPanel(); }
       return;
     }

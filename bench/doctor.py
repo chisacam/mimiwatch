@@ -1,14 +1,15 @@
-"""설치된 기계가 어디까지 되는지 한 번에 찍어 봅니다.
+"""Print in one pass how far an installed machine gets.
 
-원격으로 설치 문제를 볼 때, 서로 다른 명령을 여럿 부탁하고 답을 조각조각
-받는 것보다 이 하나를 돌려 붙여 넣게 하는 편이 빠릅니다. 무엇이 되고
-무엇이 안 되는지, 안 되면 어떤 예외인지가 한 화면에 남습니다.
+When looking at an installation problem remotely, having the other side run
+this one thing and paste the output is faster than asking for several separate
+commands and receiving the answers piecemeal. What works, what does not, and
+which exception it is when it does not, all stay on one screen.
 
-    .venv/bin/python bench/doctor.py                 (윈도우: .venv\\Scripts\\python.exe)
-    .venv/bin/python bench/doctor.py <유튜브주소>     주소 해석까지 함께 봅니다
+    .venv/bin/python bench/doctor.py                 (Windows: .venv\\Scripts\\python.exe)
+    .venv/bin/python bench/doctor.py <youtube url>   also checks URL resolution
 
-무거운 것은 하지 않습니다. 전사 모델은 올렸다 바로 내리고, 번역 모델
-(5GB)은 건드리지 않습니다.
+It does nothing heavy. The transcription model is loaded and released right
+away, and the translation model (5GB) is not touched.
 """
 from __future__ import annotations
 
@@ -47,11 +48,12 @@ def main():
             ver = f"(판을 묻지 못했습니다: {e})"
     line(bool(path), "ffmpeg", ver or "없음")
 
-    # 시스템에 깔린 것이 아니라 **실제로 부르는 것**을 봅니다. 가상환경에
-    # 있으면 그쪽을 쓰고, 없으면 PATH로 물러납니다.
+    # Look at **what actually gets called**, not what is installed on the
+    # system. If it is in the virtualenv that one is used, otherwise we fall
+    # back to PATH.
     import stream, live
     cmd = stream.ytdlp_cmd()
-    # 어느 것을 부르는지: 도구 디렉터리의 독립 실행 파일 / 묶음 안 / 가상환경 / PATH.
+    # Which one gets called: tool directory (standalone binary) / bundle / virtualenv / PATH.
     if paths.tool("yt-dlp") and cmd[0] == paths.tool("yt-dlp"):
         where = "도구 디렉터리(독립 실행 파일)"
     elif cmd[0] == "yt-dlp":
@@ -60,11 +62,12 @@ def main():
         where = "묶음 안" if paths.frozen() else "가상환경"
     v = live.ytdlp_version()
     line(bool(v), f"yt-dlp ({where})", v or "부를 수 없습니다")
-    # 낡으면 유튜브에서 포맷을 하나도 받지 못합니다. 이슈 #1이 그랬습니다 --
-    # 234도 233도 bestaudio도 전부 "not available"이었는데, 포맷이 없는
-    # 것이 아니라 목록을 못 읽은 것이었습니다.
-    # 유튜브는 2025.11부터 JS 런타임(deno)이 있어야 온전합니다. 공개 라이브(HLS)는 없어도
-    # 되지만 녹화본과 쿠키(멤버십) 경로는 포맷이 사라집니다.
+    # A stale copy gets no formats at all from YouTube. Issue #1 was that --
+    # 234, 233 and bestaudio were all "not available", and it was not that
+    # the formats were missing but that the list could not be read.
+    # Since 2025.11 YouTube needs a JS runtime (deno) to be whole. A public
+    # live stream (HLS) works without it, but the formats vanish on the VOD
+    # and cookie (membership) paths.
     deno = stream.deno_path()
     line(bool(deno), "deno (유튜브 JS 런타임)",
          deno or "없음 -- 녹화본·멤버십 방송은 「모델·도구」에서 받으십시오")
@@ -89,8 +92,9 @@ def main():
 
     section("전사 모델 올리기")
     import config, stream, tcpp_asr
-    # 기본 전사 엔진의 모델을 봅니다. 예전에는 whisper 를 박아 두어, 기본이 가벼운
-    # 엔진인 설치에서는 "모델 파일 없음"으로 멈췄습니다.
+    # Look at the model of the default transcription engine. This used to have
+    # whisper hard-coded, so on an installation whose default is the light
+    # engine it stopped at "model file missing".
     spec = config.find_asr(config.active("asr")) or {"backend": "tcpp"}
     if spec.get("backend", "tcpp") != "tcpp":
         line(True, f"기본 전사기는 원격({spec.get('id')})입니다. 로컬 적재는 건너뜁니다")
@@ -100,8 +104,9 @@ def main():
     if not os.path.exists(path):
         print("       ↳ 화면의 「엔진 관리 › 모델·도구」에서 받거나 modelhub.py download default")
         return 1
-    # auto 와 cpu 를 따로 봅니다. GPU에서만 터지는 경우가 있고, 그때는
-    # backends.json 에 device: cpu 를 적는 것이 곧 해결책입니다.
+    # auto and cpu are checked separately. There are cases that blow up only
+    # on the GPU, and then writing device: cpu into backends.json is itself
+    # the fix.
     for device in ("auto", "cpu"):
         t0 = time.time()
         try:

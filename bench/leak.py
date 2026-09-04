@@ -1,9 +1,10 @@
-"""문맥이 대상 줄을 밀어내지 않았는지 봅니다.
+"""Check whether the context pushed the target line out.
 
-오염은 두 모양으로 나옵니다. 번역이 참고 줄의 내용으로 채워지거나
-(`ここまで。` -> "이번에 V스포 보컬 노래 방송으로요."), 아예 실패로
-떨어지거나. 둘 다 원문 대비 길이가 크게 튀므로 그 비율로 후보를 찾고
-사람이 확인합니다.
+The contamination shows up in two shapes. Either the translation is filled with
+the content of the reference lines (`ここまで。` -> "이번에 V스포 보컬 노래
+방송으로요."), or it falls over into an outright failure. Both make the length
+jump sharply against the source, so that ratio finds the candidates and a person
+confirms them.
 """
 import json, os, sys
 
@@ -13,8 +14,9 @@ load = lambda m: json.load(open(os.path.join(HERE, f"out_prompt_{m}.json"), enco
 for mode in ["generic", "preset", "generic-ctx", "preset-ctx"]:
     rows = load(mode)
     fails = [r for r in rows if r["error"]]
-    # 원문의 세 배를 넘는 출력. 자막 한 줄 번역이 이렇게 길어질 이유는
-    # 없습니다 -- 원문이 아주 짧은 경우를 빼려고 하한을 둡니다.
+    # Output more than three times the source. There is no reason for the
+    # translation of one subtitle line to grow this long -- a floor keeps out
+    # the cases where the source is very short.
     blown = [r for r in rows
              if not r["error"] and len(r["text"]) >= 4
              and len(r["out"]) > len(r["text"]) * 3]

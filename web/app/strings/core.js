@@ -1,5 +1,8 @@
 /* Strings for the core area. Filled by the i18n pass. */
 MW_I18N.add({
+  // The pop-out window when the session it was opened for is no longer there.
+  "script.gone": { en: "This subtitle log is gone. Open it again from the main window.",
+                   ko: "이 자막 내역은 더 이상 없습니다. 본 창에서 다시 여십시오." },
   // Collapsed forms of the two toggles. main.js writes them on a state change;
   // the expanded forms are header.videos / header.panel.
   "header.panel.collapsed": { en: "Subtitle log \u25c2", ko: "자막 내역 \u25c2" },

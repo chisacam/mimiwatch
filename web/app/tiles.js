@@ -1,18 +1,21 @@
-/* mimiwatch 화면 — 타일: 플레이어 자리(#player-wrap)를 나눠 쓰는 칸.
+/* The mimiwatch screen — tiles: the cells that share the player area (#player-wrap).
  *
- * web/app.js 를 관심사별로 나눈 파일입니다. 전부 일반 <script> 로 index.html 이
- * 적는 순서대로 읽히며 전역 범위를 함께 씁니다 -- 모듈 문법을 쓰지 않는 것은
- * 확장과 공유하는 overlay.js 와 같은 이유입니다. 서로 부르는 것은 전부
- * 실행 시점의 함수 호출이라 파일 순서는 main.js 가 마지막이기만 하면 됩니다.
+ * This is web/app.js split up by concern. All of them are plain <script> tags,
+ * read in the order index.html lists them, sharing one global scope -- module
+ * syntax is avoided for the same reason as in overlay.js, which is shared with
+ * the extension. Everything they call on each other is a function call at run
+ * time, so the file order only has to keep main.js last.
  *
- * 타일 하나 = 플레이어(어댑터) + 그 위의 자막 오버레이 + 제목 띠 + (초점이
- * 아닐 때) 누르면 초점을 옮기는 투명한 덮개. 예전에는 #player 와 #overlay 가
- * 하나씩 박혀 있었는데, 멀티뷰는 그것을 여러 벌 두어야 합니다. 타일이 하나일
- * 때는 띠도 덮개도 보이지 않아 예전 화면과 같습니다.
+ * One tile = a player (an adapter) + the subtitle overlay above it + a title
+ * strip + (when it is not focused) a transparent cover that moves the focus
+ * when clicked. There used to be one #player and one #overlay hard-wired in,
+ * but multiview needs several of each. With one tile neither the strip nor the
+ * cover is visible, so it is the same screen as before.
  *
- * 화면의 나머지는 「초점 타일」만 봅니다: `overlay` 와 `state.player` 는 초점
- * 타일의 것이고, `state.live`/`state.doc`/`state.cues` 도 그렇습니다. 초점이
- * 옮겨 가면 setFocus 가 그 넷을 갈아 끼우고 스크립트 패널을 다시 그립니다. */
+ * The rest of the screen only ever looks at the "focused tile": `overlay` and
+ * `state.player` are the focused tile's, and so are `state.live`, `state.doc`
+ * and `state.cues`. When the focus moves, setFocus swaps those four out and
+ * redraws the script panel. */
 
 let _tileSeq = 0;
 
@@ -24,9 +27,9 @@ function tileBySession(sid) {
   return state.tiles.find(t => t.live && t.live.id === sid) || null;
 }
 
-/* 부팅. 타일 0 을 만들고 자막 그리기 시계를 **한 번만** 겁니다 -- 예전에는
- * 유튜브 플레이어의 onReady 가 걸었는데, 타일마다 플레이어가 생기면 시계도
- * 그만큼 생깁니다. */
+/* Boot. Makes tile 0 and starts the subtitle drawing clock **once** -- the
+ * YouTube player's onReady used to start it, and with a player per tile that
+ * makes as many clocks as there are tiles. */
 function initTiles() {
   const t = makeTile();
   t.el.classList.add("focused");
@@ -42,13 +45,13 @@ function makeTile() {
     id: "t" + (++_tileSeq), el,
     playerEl: el.querySelector(".tile-player"),
     overlay: null, adapter: null,
-    src: null,          // srcOf() 의 결과. 무엇을 틀고 있는가
-    live: null,         // 이 타일이 보는 라이브 세션 (state.live 와 같은 모양)
-    doc: null,          // 이 타일이 보는 것의 문서 (state.doc 과 같은 모양)
+    src: null,          // the result of srcOf(). What is playing
+    live: null,         // the live session this tile is watching (same shape as state.live)
+    doc: null,          // the document of what this tile is watching (same shape as state.doc)
     title: "",
   };
   tile.overlay = MimiOverlay.attach({ overlay: el.querySelector(".overlay"), box: () => el });
-  // 끌어서 놓을 때마다 저장합니다. 자막 자리는 한 벌이고 초점 타일에 적용됩니다.
+  // Saved on every drop. There is one subtitle position, and it applies to the focused tile.
   tile.overlay.onPos = (p) => { state.cuePos = p; persist(); };
   if (state.cuePos) tile.overlay.setPos(state.cuePos);
   const cover = el.querySelector(".tile-cover"), bar = el.querySelector(".tile-bar");
@@ -58,16 +61,17 @@ function makeTile() {
     e.stopPropagation();
     removeTile(tile);
   });
-  // 끌어서 자리 바꾸기. 손잡이는 덮개(초점 아닌 타일)와 띠(모든 타일)입니다.
+  // Drag to swap places. The handles are the cover (unfocused tiles) and the strip (every tile).
   for (const h of [cover, bar]) {
     h.draggable = true;
     h.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/mimiwatch-tile", tile.id);
       e.dataTransfer.effectAllowed = "move";
-      // 덮개는 투명해서 그것을 끌면 드래그 그림도 투명합니다. 띠(제목)를 그림으로 씁니다.
-      try { e.dataTransfer.setDragImage(bar, 12, 12); } catch (_) { /* 지원 안 하면 기본 그림 */ }
-      // 받는 막은 **다음 틱에** 띄웁니다. dragstart 안에서 커서 밑 요소를 바꾸면 크롬이
-      // 드래그를 그 자리에서 취소합니다 -- 그래서 타일 끌기가 아무 일도 하지 않았습니다.
+      // The cover is transparent, so dragging it gives a transparent drag image. Use the strip (the title) as the image.
+      try { e.dataTransfer.setDragImage(bar, 12, 12); } catch (_) { /* unsupported: the default image */ }
+      // The catching film goes up **on the next tick**. Change the element under
+      // the cursor inside dragstart and Chrome cancels the drag then and there
+      // -- which is why dragging a tile did nothing at all.
       setTimeout(() => $("player-wrap").classList.add("dragging"), 0);
     });
     h.addEventListener("dragend", () => $("player-wrap").classList.remove("dragging"));
@@ -88,7 +92,7 @@ function makeTile() {
     if (tid) swapTiles(state.tiles.find(t => t.id === tid), tile);
     else if (row) dropRow(row);
   });
-  // 덮개 위의 움직임도 전체화면 조절기를 부릅니다(iframe 위는 우리에게 오지 않습니다).
+  // Movement over the cover calls the fullscreen controls too (movement over the iframe never reaches us).
   el.addEventListener("mousemove", showFsControls);
   $("player-wrap").insertBefore(el, $("fs-controls"));
   state.tiles.push(tile);
@@ -100,11 +104,13 @@ function dragHasOurs(e) {
   return types.includes("text/mimiwatch-tile") || types.includes("text/mimiwatch-row");
 }
 
-/* 두 타일의 자리를 바꿉니다. state.tiles 의 순서가 곧 자리이고, 화면에는 CSS `order` 로만
- * 옮깁니다. **DOM 노드를 옮기면 안 됩니다** -- iframe 은 DOM 에서 자리를 옮기는 순간 다시
- * 로드되어 플레이어가 처음 상태로 돌아가고(재생 단추, 처음부터), IFrame API 객체는 사라진
- * 플레이어를 가리켜 영영 로딩 중이 됩니다. 실제로 그랬습니다. 1+2/1+3 의 큰 자리는 초점이
- * 차지하므로 거기서는 작은 칸들의 순서가 바뀝니다. */
+/* Swaps two tiles' places. The order of state.tiles is the placement, and on
+ * screen they move by CSS `order` alone. **The DOM nodes must not be moved** --
+ * an iframe reloads the moment it is moved in the DOM, so the player goes back
+ * to its initial state (a play button, from the beginning), and the IFrame API
+ * object points at a player that is gone, leaving it loading forever. That is
+ * what actually happened. In 1+2/1+3 the focus takes the big area, so what
+ * changes there is the order of the small cells. */
 function swapTiles(a, b) {
   if (!a || !b || a === b) return;
   const i = state.tiles.indexOf(a), j = state.tiles.indexOf(b);
@@ -115,14 +121,16 @@ function swapTiles(a, b) {
   requestAnimationFrame(applyCueSize);
 }
 
-/* state.tiles 의 순서를 격자 자리로. 격자의 자동 배치는 DOM 순서가 아니라 `order` 를 따릅니다. */
+/* The order of state.tiles into grid placement. The grid's auto-placement follows `order`, not DOM order. */
 function syncTileOrder() {
   state.tiles.forEach((t, i) => { t.el.style.order = String(i); });
 }
 
-/* 단일 소스 경로가 지나는 문. 타일을 하나로 접고 그것을 돌려줍니다 -- 녹화본을
- * 열 때, 라이브를 새로 시작할 때, 목록에서 다른 방송을 열 때. 다른 타일이 보던
- * 세션은 화면에서만 떼고 서버는 그대로 둡니다(detachLive 와 같은 뜻). */
+/* The door the single-source path goes through. Collapses the tiles to one and
+ * hands it back -- opening a recording, starting a new live stream, opening a
+ * different broadcast from the list. Sessions the other tiles were watching are
+ * only detached from the screen; the server keeps them (the same sense as
+ * detachLive). */
 function soloTile() {
   collapseTiles();
   return state.tiles[0];
@@ -148,8 +156,8 @@ function collapseTiles() {
   applyLayout();
 }
 
-/* 세션에서 손을 뗍니다. 플레이어는 그대로 둡니다 -- 「중단」이 자막만 멈추고
- * 방송은 계속 틀어 두는 것과 같은 규칙입니다. */
+/* Lets go of the session. The player is left alone -- the same rule as "Stop",
+ * which stops only the subtitles and keeps the broadcast playing. */
 function detachTile(tile) {
   if (tile.live && tile.live.es) tile.live.es.close();
   tile.live = null;
@@ -158,12 +166,14 @@ function detachTile(tile) {
   updateTileBar(tile);
 }
 
-/* 초점을 옮깁니다. 소리와 자막과 오른쪽 자막 내역이 함께 따라옵니다. */
+/* Moves the focus. The sound, the subtitles and the subtitle log on the right all follow. */
 function setFocus(tile, opts = {}) {
   if (!tile) return;
-  // focusedTile() 의 「없으면 첫 타일」 대체를 여기서 쓰면 안 됩니다. 초점 타일을 닫은 직후에는
-  // state.focus 가 사라진 타일을 가리키는데, 대체값이 곧 남은 타일이라 「이미 초점」으로 보여
-  // 아무 일도 하지 않았습니다 -- 마지막 타일을 눌러도 초점이 오지 않던 버그입니다.
+  // focusedTile()'s "the first tile if there is none" fallback must not be used
+  // here. Right after the focused tile is closed, state.focus points at a tile
+  // that is gone, and the fallback is the surviving tile, so this looked like
+  // "already focused" and did nothing -- the bug where clicking the last tile
+  // never gave it the focus.
   const prev = state.tiles.find(t => t.id === state.focus) || null;
   if (prev === tile && tile.el.classList.contains("focused")) return;
   if (prev && prev !== tile) {
@@ -172,8 +182,9 @@ function setFocus(tile, opts = {}) {
     prev.el.classList.remove("focused");
   }
   tile.el.classList.add("focused");
-  // 소리를 켜고 재생도 시킵니다. 초점을 옮긴 것은 사용자 조작(클릭·키)이라 재생이
-  // 막히지 않고, 트위치는 소리를 켜는 순간 멈춰 서는 일이 있습니다.
+  // Unmute and start it playing too. Moving the focus is a user gesture (a click
+  // or a key), so playback is not blocked, and Twitch sometimes stalls the
+  // moment it is unmuted.
   if (tile.adapter) { tile.adapter.setMuted(false); tile.adapter.playVideo(); }
   state.focus = tile.id;
   overlay = tile.overlay;
@@ -187,7 +198,7 @@ function setFocus(tile, opts = {}) {
   persist();
 }
 
-/* 타일에 플레이어를 앉힙니다. 이미 있던 것은 치웁니다. */
+/* Seats a player in a tile. Whatever was already there is cleared away. */
 async function mountTile(tile, src, opts = {}) {
   if (state.scriptOnly) return;
   clearPlayerError(tile);
@@ -198,10 +209,10 @@ async function mountTile(tile, src, opts = {}) {
   if (tile === focusedTile()) state.player = tile.adapter;
   updateTileBar(tile);
   try {
-    // 버퍼링 감시의 마지막 단계: 이 타일의 플레이어를 통째로 다시 만듭니다(새로고침과 같음).
+    // The last stage of the buffering watch: rebuild this tile's player from scratch (the same as a reload).
     tile.adapter._remount = (wasMuted, autoplay) => {
       if (tile.adapter && tile.adapter.kind === "youtube") {
-        // 초점 타일은 소리를 켠 채(1차: 자동 재생, 2차: 재생 단추), 다른 타일은 음소거 자동 재생.
+        // The focused tile keeps its sound on (first pass: autoplay, second: a play button), the others autoplay muted.
         mountTile(tile, src, { muted: tile !== focusedTile() || wasMuted, autoplay: !!autoplay });
       }
     };
@@ -215,7 +226,7 @@ async function mountTile(tile, src, opts = {}) {
   }
 }
 
-/* 타일 띠: 사이트·제목·상태. 타일이 하나면 CSS 가 띠를 숨깁니다. */
+/* The tile strip: site, title, state. With one tile the CSS hides the strip. */
 const SITE_MARK = { youtube: "▶", twitch: "◉", hls: "≋", media: "▤", none: "" };
 
 function updateTileBar(tile) {
@@ -234,12 +245,12 @@ function updateTileBar(tile) {
   tile.el.classList.toggle("stopped", !!(live && live.state && !LIVE_RUNNING.includes(live.state)));
 }
 
-/* ---------- 배치 ----------
+/* ---------- layouts ----------
  *
- * 타일 수마다 기본 배치가 있고, 사용자가 고른 것은 prefs 에 남습니다. 1+2 와
- * 1+3 에서는 초점 타일이 큰 자리를 차지합니다 -- CSS 가 .focused 로 그렇게
- * 앉히므로 초점을 옮겨도 DOM 은 그대로입니다. */
-const LAYOUTS = { "2": [2, 2], "2h": [2, 2], "1p2": [3, 3], "1p3": [4, 4], "2x2": [3, 4] };   // 이름 → [최소, 최대] 타일 수
+ * Every tile count has a default layout, and what the user picked is kept in
+ * prefs. In 1+2 and 1+3 the focused tile takes the big area -- the CSS seats it
+ * there by .focused, so moving the focus leaves the DOM as it is. */
+const LAYOUTS = { "2": [2, 2], "2h": [2, 2], "1p2": [3, 3], "1p3": [4, 4], "2x2": [3, 4] };   // name → [min, max] tile count
 const DEFAULT_LAYOUT = { 1: "1", 2: "2", 3: "1p2", 4: "2x2" };
 
 function layoutFits(name, n) {
@@ -248,7 +259,7 @@ function layoutFits(name, n) {
 }
 
 function applyLayout(name) {
-  window.__tilesChangedAt = Date.now();     // 유튜브 어댑터의 버퍼링 감시가 「재배치 직후」를 짧게 봅니다
+  window.__tilesChangedAt = Date.now();     // the YouTube adapter's buffering watch reads "just after a relayout" briefly
   const n = state.tiles.length;
   if (name && layoutFits(name, n)) {
     state.mvLayout = name;
@@ -256,7 +267,7 @@ function applyLayout(name) {
   const use = n <= 1 ? "1" : (layoutFits(state.mvLayout, n) ? state.mvLayout : DEFAULT_LAYOUT[n] || "2x2");
   const wrap = $("player-wrap");
   syncTileOrder();
-  // className 을 통째로 갈지 않습니다 -- 전체화면의 fs-active 가 같은 요소에 붙습니다.
+  // className is not replaced wholesale -- fullscreen's fs-active hangs on the same element.
   const prevUse = ([...wrap.classList].find(c => c.startsWith("mv-")) || "").slice(3);
   [...wrap.classList].filter(c => c.startsWith("mv-")).forEach(c => wrap.classList.remove(c));
   wrap.classList.add("mv-" + use);
@@ -269,20 +280,23 @@ function applyLayout(name) {
   requestAnimationFrame(applyCueSize);
 }
 
-/* 배치가 바뀌어 초점 타일의 크기가 달라질 때, 소리 켠 유튜브 플레이어가 데이터를 들고도
- * 버퍼링에 갇히는 브라우저가 있습니다(임베드 안의 일이라 밖에서 막을 수 없음). 그런 정지를
- * 한 번 겪은 브라우저(prefs.ytRelayoutStall)에서는 3초 스피너를 기다리는 대신 초점 플레이어를
- * 바로 새로 만듭니다 -- 1~2초 검은 화면이 3초 스피너보다 낫습니다. 겪지 않은 브라우저는 그대로. */
+/* When a layout change resizes the focused tile, some browsers leave an unmuted
+ * YouTube player stuck buffering even though it holds the data (it happens
+ * inside the embed, so it cannot be stopped from outside). On a browser that
+ * has been through such a stall once (prefs.ytRelayoutStall), the focused
+ * player is rebuilt immediately instead of waiting out the 3s spinner -- one or
+ * two seconds of black beats a 3s spinner. Browsers that never saw it are left
+ * alone. */
 function preemptRelayoutStall() {
   if (!loadPrefs().ytRelayoutStall) return;
   const t = focusedTile();
   if (!t || !t.live || !t.adapter || t.adapter.kind !== "youtube" || !t.adapter.ready || !t.adapter._remount) return;
-  console.warn("[yt] 재배치 -- 초점 플레이어를 미리 새로 만듭니다 (이 브라우저에서 재배치 뒤 정지를 겪은 적이 있음)");
+  console.warn("[yt] reordering -- rebuilding the focused player up front (this browser has stalled after a reorder before)");
   requestAnimationFrame(() => t.adapter._remount(false, true));
 }
 
-/* 멀티뷰 조절기의 보임/숨김. 「＋ 타일」은 초점이 라이브일 때, 배치 단추는 타일이
- * 둘 이상일 때. */
+/* Showing and hiding the multiview controls. "Add tile" when the focus is live,
+ * the layout buttons when there are two or more tiles. */
 function syncMvControls() {
   const n = state.tiles.length;
   const group = $("mv-group");
@@ -303,8 +317,8 @@ function syncMvControls() {
   }
 }
 
-/* 타일을 닫습니다 = 그 세션을 멈추고 묶음에서 뺍니다. 마지막 타일은 닫지 않습니다
- * -- 그것은 「중단」의 일입니다. */
+/* Closing a tile = stopping that session and taking it out of the group. The
+ * last tile is never closed -- that is "Stop"'s job. */
 async function removeTile(tile) {
   if (state.tiles.length <= 1) return;
   const wasFocus = tile === focusedTile();
@@ -315,7 +329,7 @@ async function removeTile(tile) {
   tile.el.remove();
   state.tiles.splice(state.tiles.indexOf(tile), 1);
   if (wasFocus) {
-    // 사라진 타일을 가리키던 전역을 비우고 남은 첫 타일에 초점을 줍니다.
+    // Empties the globals that pointed at the tile that is gone and gives the focus to the first surviving tile.
     state.focus = null;
     state.live = null; state.doc = null; state.player = null; overlay = null;
     setFocus(state.tiles[0], { post: false });
@@ -324,9 +338,9 @@ async function removeTile(tile) {
   applyLayout();
 }
 
-/* ---------- 서버의 묶음 API ----------
+/* ---------- the server's group API ----------
  *
- * 모양은 여기 네 함수에만 있습니다. */
+ * The shape of it lives in these four functions and nowhere else. */
 async function mvPost(path, body) {
   return (await fetch(path, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -350,11 +364,13 @@ function mvAdd(gid, body) {
   return mvPost("/api/multiview/add", { group: gid, ...body });
 }
 
-/* ---------- 멀티뷰 만들기·복원 ----------
+/* ---------- creating and restoring a multiview ----------
  *
- * 「＋ 타일」은 지금 보는 방송 **옆에** 하나를 붙입니다. 첫 번째 붙이기가 묶음을
- * 만들고(보던 세션을 편입, 새 소스는 대기 세션으로), 그 뒤는 묶음에 더합니다.
- * 소리와 자막은 초점(지금 보던 것)에 그대로 남습니다. */
+ * "Add tile" attaches one **next to** the broadcast being watched. The first
+ * attach creates the group (taking the session already being watched into it,
+ * and the new source as a waiting session); after that they are added to the
+ * group. The sound and the subtitles stay with the focus (what was already
+ * being watched). */
 function liveStartArgs(lang) {
   return {
     lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
@@ -377,17 +393,18 @@ async function addTile(url, lang, probe) {
   } else {
     res = await mvAdd(state.mv.id, { url, ...args });
     if (res.error) { jobError(res.error); return; }
-    // 서버의 multiview 알림이 먼저 도착해 이미 들어 있을 수 있습니다.
+    // The server's multiview notification may have arrived first and put it in already.
     if (!state.mv.members.includes(res.id)) state.mv.members.push(res.id);
     members = [res];
   }
-  // 새 세션은 yt-dlp 가 답하기 전이라 site·video_id 가 비어 있습니다. probe 가 방금
-  // 알아낸 것으로 메워 플레이어를 바로 앉힙니다.
+  // A new session comes back before yt-dlp has answered, so site and video_id
+  // are empty. Fill them from what probe just worked out and seat the player
+  // right away.
   await mountMembers(members, { url, site: probe.site, video_id: probe.id,
                                 channel: probe.channel, title: probe.title || url });
 }
 
-/* 서버가 돌려준 멤버들 중 아직 타일이 없는 것을 타일로. `fill` 은 상태에 빈 칸이 있을 때 메울 값. */
+/* Turns the members the server returned that have no tile yet into tiles. `fill` is what to put in where the state has a gap. */
 async function mountMembers(members, fill = {}) {
   for (const m of members) {
     if (tileBySession(m.id)) continue;
@@ -400,9 +417,11 @@ async function mountMembers(members, fill = {}) {
   applyLayout();
 }
 
-/* 목록 줄을 플레이어 영역에 끌어다 놓았습니다. 라이브 세션이면 지금 보는 방송 옆에 타일로
- * 붙입니다 -- 받는 중이면 그대로 편입하고, 멈춘 것이면 서버가 같은 세션으로 이어받아 대기
- * 타일로 넣습니다. 아무것도 보고 있지 않으면 그냥 엽니다. */
+/* A list row was dragged onto the player area. If it is a live session it is
+ * attached as a tile next to the broadcast being watched -- one still being
+ * received is taken in as it is, and a stopped one is resumed by the server as
+ * the same session and put in as a waiting tile. If nothing is being watched it
+ * is simply opened. */
 async function dropRow(value) {
   const row = $("video-list").querySelector(`.video-row[data-value="${CSS.escape(value)}"]`);
   const sid = row && row.dataset.session;
@@ -429,7 +448,7 @@ async function dropRow(value) {
   await mountMembers(members, { title: row.dataset.title });
 }
 
-/* 서버가 들고 있는 묶음을 화면에 그대로. 새로고침이나 목록에서 멤버를 눌렀을 때. */
+/* The group the server holds, put on screen as it is. On a reload, or when a member is clicked in the list. */
 async function openMultiview(gid) {
   const g = await (await fetch(`/api/multiview/${encodeURIComponent(gid)}`)).json();
   if (!g || g.error) return false;
@@ -443,7 +462,7 @@ async function openMultiview(gid) {
     await openSessionInTile(t, m);
   }
   const focus = tileBySession(g.focus) || state.tiles[0];
-  // 먹이기 전에 초점을 정해야 각 타일이 제 소리 상태(음소거)로 앉습니다.
+  // The focus has to be settled before feeding them, so each tile is seated with its own sound state (muted).
   if (focus !== focusedTile()) {
     focusedTile().el.classList.remove("focused");
     focus.el.classList.add("focused");

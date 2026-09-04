@@ -1,18 +1,19 @@
-"""브라우저 확장이 형태를 갖추고 있는지 확인합니다.
+"""Check that the browser extension holds its shape.
 
-확장은 크롬에 직접 얹어 봐야 진짜로 도는지 알 수 있습니다. 그래도 얹기 전에
-걸러 낼 수 있는 것들이 있습니다 -- manifest 가 가리키는 파일이 실제로 있는지,
-공유하는 자막 모듈이 페이지 쪽과 어긋나지 않았는지.
+Whether the extension really runs is something only Chrome can tell you, by
+loading it. Even so, some things can be caught before that -- whether the files
+the manifest points at actually exist, whether the shared subtitle modules have
+drifted away from the page side.
 
-**자막 모듈은 사본입니다.** content script 는 확장 폴더 안의 파일만 읽을 수
-있어서(원격 코드 실행은 MV3 가 막습니다) `web/overlay.js` 를 `ext/` 로
-복사해 둡니다. 사본은 언젠가 반드시 어긋나므로 여기서 지킵니다 -- 구현이
-두 벌인 것과 기계적인 복사본은 다른 이야기이고, 후자는 시험으로 묶을 수
-있습니다.
+**The subtitle modules are copies.** A content script can only read files inside
+the extension folder (MV3 forbids running remote code), so `web/overlay.js` is
+kept copied into `ext/`. A copy is bound to drift sooner or later, so it is
+guarded here -- two implementations is one story, a mechanical copy is another,
+and the latter can be pinned down by a check.
 
     .venv/bin/python bench/ext_check.py
 
-어긋났으면 이렇게 맞춥니다:
+If they have drifted, line them back up like this:
 
     cp web/overlay.js ext/overlay.js
 """
@@ -29,7 +30,7 @@ WEB = os.path.join(HERE, "web")
 
 FAIL = []
 
-# web/ 이 원본, ext/ 가 사본인 파일들.
+# The files whose source is web/ and whose copy is ext/.
 SHARED = ("overlay.js", "cuestore.js", "capture.js", "ytid.js", "capture-worklet.js",
           "i18n.js", "strings-ext.js")
 
@@ -41,15 +42,15 @@ def check(cond, what):
 
 
 def balanced(src: str) -> bool:
-    """따옴표와 주석 밖에서 괄호가 맞는지. 문법 검사는 아니지만, 편집하다
-    한쪽을 지워 먹은 것은 여기서 걸립니다."""
+    """Whether the brackets balance outside quotes and comments. Not a syntax
+    check, but eating one half of a pair while editing is caught here."""
     depth = {"{": 0, "(": 0, "[": 0}
     pair = {"}": "{", ")": "(", "]": "["}
     i, n = 0, len(src)
     quote = None
-    # 마지막으로 본 공백 아닌 글자. `/`가 나누기인지 정규식의 시작인지를
-    # 여기서 가릅니다 -- `replace(/[&<>"]/g, …)`의 따옴표를 문자열 시작으로
-    # 읽으면 그 뒤가 전부 어긋납니다.
+    # The last non-space character seen. This is what tells a `/` that divides
+    # from a `/` that opens a regex -- reading the quote in
+    # `replace(/[&<>"]/g, …)` as the start of a string throws off everything after it.
     prev = ""
     while i < n:
         c = src[i]
@@ -61,7 +62,7 @@ def balanced(src: str) -> bool:
         elif c in "\"'`":
             quote = c
         elif c == "/" and i + 1 < n and src[i + 1] not in "/*" and prev in "(,=:[!&|?{};\n":
-            # 정규식. 닫는 `/`까지 건너뜁니다. `[...]` 안의 `/`는 닫는 것이 아닙니다.
+            # A regex. Skip to the closing `/`. A `/` inside `[...]` does not close it.
             i += 1
             in_class = False
             while i < n and src[i] != "\n":
@@ -125,25 +126,27 @@ def main():
 
     print("\n[3] 권한")
     hosts = m.get("host_permissions", [])
-    # 포트를 적지 않은 패턴은 어느 포트에나 닿습니다. 예전에는 8900에 못 박혀
-    # 있어서 서버를 다른 포트에 띄우면 팝업의 「서버」 칸을 바꿔도 CORS 에 막혔습니다.
+    # A pattern that names no port reaches every port. It used to be nailed to
+    # 8900, so running the server on another port hit CORS even after changing
+    # the popup's "server" field.
     check(any(h in ("http://localhost/*", "http://127.0.0.1/*") for h in hosts),
           f"로컬 서버에 어느 포트로든 닿을 수 있다 ({hosts})")
-    # 유튜브 호스트 권한은 tabs.sendMessage 때문에 필요합니다 -- activeTab 은
-    # 팝업을 누른 그 순간에만 줍니다. 그 둘 말고는 아무 데도 닿지 않아야
-    # 합니다.
+    # The YouTube host permission is needed for tabs.sendMessage -- activeTab
+    # only grants it at the moment the popup is clicked. Apart from those two,
+    # it must reach nowhere at all.
     ALLOWED = ("http://localhost/", "http://127.0.0.1/", "https://www.youtube.com/")
     stray = [h for h in hosts if not any(h.startswith(a) for a in ALLOWED)]
     check(not stray, f"허락한 곳 밖으로는 열지 않는다 ({stray or '없음'})")
     matches = [x for cs in m.get("content_scripts", []) for x in cs.get("matches", [])]
     check(matches and all("youtube.com" in x for x in matches),
           f"유튜브에서만 돈다 ({matches})")
-    # tabCapture 는 3단계에서 씁니다. 지금 없어도 되지만 있으면 적어 둡니다.
+    # tabCapture is used in stage 3. It need not be there yet, but note it if it is.
     print(f"  ----  권한: {', '.join(m.get('permissions', [])) or '(없음)'}")
 
     print("\n[4] 공유 모듈 사본이 페이지 쪽과 같은가")
-    # overlay.js 하나였던 것이 셋으로 늘었습니다 -- 라이브 자막 저장소(cuestore),
-    # 탭 소리 올리기(capture), 영상 id(ytid). 전부 web/ 이 원본이고 ext/ 는 사본.
+    # What was overlay.js alone has grown to three -- the live cue store
+    # (cuestore), tab audio upload (capture), video id (ytid). For all of them
+    # web/ is the source and ext/ the copy.
     for name in SHARED:
         a = open(os.path.join(WEB, name), "rb").read()
         bpath = os.path.join(EXT, name)
@@ -165,8 +168,8 @@ def main():
     for name in sorted(n for n in os.listdir(EXT) if n.endswith((".js", ".css"))):
         src = open(os.path.join(EXT, name), encoding="utf-8").read()
         check(balanced(src), f"ext/{name} 괄호와 따옴표가 맞다")
-    # 페이지 쪽도 봅니다. app.js 를 여러 파일로 나눈 뒤라 한 파일의 괄호가
-    # 어긋나면 그 파일 뒤의 것이 통째로 죽습니다.
+    # Look at the page side too. Now that app.js is split across several files,
+    # one file with unbalanced brackets kills everything loaded after it.
     for folder in (WEB, os.path.join(WEB, "app")):
         for name in sorted(n for n in os.listdir(folder) if n.endswith(".js")):
             src = open(os.path.join(folder, name), encoding="utf-8").read()
@@ -187,8 +190,9 @@ def main():
         check(".mw-panel" in css, "대본 패널 모양이 있다")
 
     print("\n[7-1] 탭 소리를 잡는 쪽")
-    # 서비스 워커에는 getUserMedia 도 AudioContext 도 없습니다. offscreen
-    # 문서가 그 일을 맡는데, 그러려면 권한과 파일이 함께 있어야 합니다.
+    # A service worker has neither getUserMedia nor AudioContext. The offscreen
+    # document takes that job, and for that the permission and the files have
+    # to be there together.
     if "tabCapture" in m.get("permissions", []):
         check("offscreen" in m.get("permissions", []),
               "tabCapture 를 쓰면 offscreen 권한도 있어야 한다")
@@ -197,15 +201,15 @@ def main():
         off = open(os.path.join(EXT, "offscreen.js"), encoding="utf-8").read()
         check("chromeMediaSource" in off,
               "탭 캡처 제약(chromeMediaSource)을 쓴다")
-        # 되돌려 주기는 해야 합니다. tabCapture 로 잡으면 그 탭의 소리가
-        # 사용자에게 들리지 않게 되니까요.
+        # It does have to be played back. Capturing with tabCapture makes that
+        # tab's sound inaudible to the user.
         check("srcObject = media" in off and ".play()" in off,
               "잡은 소리를 되돌려 준다 (안 그러면 탭이 음소거됩니다)")
-        # 다만 **우리 그래프를 거치면 안 됩니다.** 그 컨텍스트는 16kHz 라,
-        # 거기로 내보내면 48kHz 스테레오가 전화 음질로 깎여 나갑니다.
+        # But **it must not go through our graph.** That context is 16kHz, so
+        # routing it there shaves 48kHz stereo down to telephone quality.
         check("source.connect(ctx.destination)" not in off,
               "듣는 소리를 16kHz 컨텍스트로 보내지 않는다")
-        # 그래프 자체는 페이지와 공유하는 capture.js 에 있습니다.
+        # The graph itself lives in capture.js, shared with the page.
         capjs = open(os.path.join(EXT, "capture.js"), encoding="utf-8").read()
         check("sampleRate: 16000" in capjs, "받아 적는 쪽만 16kHz 다 (capture.js)")
         check("channelCount: 1" in capjs,
@@ -223,17 +227,17 @@ def main():
               f"워클릿이 web_accessible_resources 에 있다 ({war})")
 
     print("\n[6-1] 남의 페이지 글꼴에 휘둘리지 않는가")
-    # 유튜브는 `html` 을 10px 로 둡니다(보통 16px). rem 을 쓰면 우리 UI 가
-    # 62.5% 크기로 나옵니다 -- 12.8px 로 의도한 자막이 8px 이었습니다.
+    # YouTube sets `html` to 10px (normally 16px). Using rem renders our UI at
+    # 62.5% size -- a subtitle meant to be 12.8px came out at 8px.
     css = open(os.path.join(EXT, "overlay.css"), encoding="utf-8").read()
     rems = re.findall(r"[\d.]+rem", css)
     check(not rems, f"확장 CSS 에 rem 이 없다 ({rems or '없음'})")
 
     print("\n[7] 유튜브 문서에서 쓸 수 없는 것을 쓰지 않는가")
-    # 유튜브는 Trusted Types 를 켜 두었습니다(`require-trusted-types-for
-    # 'script'`). 그 문서에서 innerHTML 에 문자열을 넣으면 거부됩니다 --
-    # 실제로 유튜브 페이지에서 확인했습니다. content script 가 면제되는지는
-    # 크롬 판에 따라 다르므로 아예 기대지 않습니다.
+    # YouTube has Trusted Types turned on (`require-trusted-types-for
+    # 'script'`). Assigning a string to innerHTML in that document is refused --
+    # confirmed on the YouTube page itself. Whether a content script is exempt
+    # varies by Chrome version, so we do not lean on it at all.
     for name in ("content.js", "panel.js"):
         src = open(os.path.join(EXT, name), encoding="utf-8").read()
         used = re.findall(r"^\s*[^/*\n]*\.innerHTML\s*=", src, re.M)
@@ -241,8 +245,8 @@ def main():
 
     print("\n[8] 서비스 워커가 쓸 수 없는 것을 쓰지 않는가")
     bg = open(os.path.join(EXT, "background.js"), encoding="utf-8").read()
-    # MV3 서비스 워커에는 EventSource 도 DOM 도 없습니다. 처음에 EventSource
-    # 로 짰다가 아무것도 오지 않았습니다.
+    # An MV3 service worker has neither EventSource nor a DOM. The first cut
+    # was written with EventSource and nothing ever arrived.
     for banned in ("new EventSource", "document.", "window."):
         check(banned not in bg, f"background.js 가 {banned} 를 쓰지 않는다")
     check("getReader()" in bg, "SSE 를 fetch 스트림으로 직접 푼다")

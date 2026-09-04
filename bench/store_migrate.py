@@ -1,24 +1,27 @@
-"""저장소를 SQLite로 통일한 것이 데이터를 그대로 옮겼는지 확인합니다.
+"""Check that unifying storage on SQLite moved the data across untouched.
 
-녹화본은 `data/<영상id>.json` 파일 하나에 메타와 자막을 함께 담고 있었고,
-라이브는 SQLite에 있었습니다. 저장 모양이 갈려 있으니 읽고 쓰는 길이 두
-벌이었고, 내보내기·편집·재번역이 그 갈래를 하나씩 더 짊어져야 했습니다.
+A VOD used to keep its metadata and its subtitles together in a single
+`data/<video id>.json` file, while live sat in SQLite. With two storage shapes
+there were two read/write paths, and export, editing and re-translation each
+had to carry one more fork.
 
-이 시험은 **옮기는 코드가 한 글자도 잃지 않는지**를 봅니다. 옛 판이 남기던
-모양의 파일을 여기서 지어 임시 저장소로 옮겨 보고, 그 결과를 지은 것과
-맞댑니다.
+This test looks at **whether the migrating code loses a single character**. It
+builds files here in the shape the old version left behind, migrates them into
+a temporary store, and compares the result against what it built.
 
-실제 저장소와 맞대지 않는 이유가 있습니다. 옮긴 뒤에도 사람은 자막을 고치고
-지우고 다시 전사합니다 -- 그때마다 실제 저장소는 원본과 달라지는 것이
-당연하고, 그것을 실패로 적으면 정상적인 작업이 시험을 깨뜨립니다. 실제로
-한 번 그렇게 울렸습니다.
+There is a reason it does not compare against the real store. After the
+migration people go on editing, deleting and re-transcribing subtitles -- the
+real store diverging from the originals is the normal outcome, and recording
+that as a failure means ordinary work breaks the test. It rang that way once.
 
-표본을 여기서 짓는 이유도 같습니다. `data/legacy/` 에 기대면 그 폴더를
-치우는 순간(치워도 되는 폴더입니다) 시험이 아무것도 보지 않게 됩니다.
+The sample is built here for the same reason. Leaning on `data/legacy/` means
+that the moment that folder is cleared away (it is a folder you may clear) the
+test looks at nothing at all.
 
     .venv/bin/python bench/store_migrate.py
 
-저장소에 쓰지 않습니다 -- 읽기만 하고, 쓰기 왕복은 임시 사본에서 합니다.
+Writes nothing to the store -- it only reads, and the write round trip happens
+on a temporary copy.
 """
 from __future__ import annotations
 
@@ -44,8 +47,8 @@ def check(cond, what):
 
 
 def norm(cue: dict) -> dict:
-    """빈 칸은 있으나 없으나 같습니다. 옛 파일은 speaker 를 아예 안 적었고,
-    표는 빈 문자열로 둡니다."""
+    """An empty field is the same whether it is there or not. The old files did
+    not write speaker at all, and the table leaves it as an empty string."""
     return {k: v for k, v in cue.items() if v not in ("", {}, None)}
 
 
@@ -66,8 +69,9 @@ def main():
     check("cues_owner_start" in idx, "owner+start 인덱스가 있다")
 
     print("\n[2] 옮기는 코드가 원본을 그대로 옮기는가")
-    # 옛 판이 남기던 모양 그대로 짓습니다. 마지막 것은 자막마다 translation
-    # 하나만 달던 더 옛 판입니다 -- 그 접기까지 함께 봅니다.
+    # Built exactly in the shape the old version left behind. The last one is
+    # an even older version that hung a single translation on each subtitle --
+    # this checks that folding too.
     FIXTURES = {
         "vid-new": {
             "id": "vid-new", "title": "새 판 · 한글과 日本語",
@@ -111,7 +115,7 @@ def main():
         moved = store.import_legacy_docs()
         check(moved == len(FIXTURES), f"{len(FIXTURES)}개를 옮겼다 ({moved})")
         for vid, doc in FIXTURES.items():
-            old = json.loads(json.dumps(doc))      # 원본을 건드리지 않습니다
+            old = json.loads(json.dumps(doc))      # leave the original alone
             old_cues = old.pop("cues")
             for c in old_cues:
                 if "translations" not in c:
@@ -134,7 +138,7 @@ def main():
                   + ("" if same_n else f" (줄 수 {len(old_cues)}->{len(new_cues)})")
                   + ("" if same_c or not same_n else " (내용 다름)")
                   + ("" if same_m else " (메타 다름)"))
-        # 옛 판의 translation 접기
+        # Folding the old version's translation
         got = store.cues("vid-old")
         check(got[0]["translations"] == {"local-m2m100": "하나"},
               f"옛 translation 을 백엔드 지도로 접는다 ({got[0]['translations']})")
@@ -164,8 +168,9 @@ def main():
     print("\n[4] 자막 한 줄만 고치기 (사본에서)")
     tmp = tempfile.mkdtemp(prefix="mw-store-")
     try:
-        # WAL 도 같이 옮깁니다. 본 파일만 베끼면 아직 체크포인트되지 않은
-        # 것이 통째로 빠져, 방금 넣은 녹화본이 없는 DB를 보게 됩니다.
+        # The WAL travels along too. Copying only the main file drops
+        # everything not yet checkpointed, and you end up looking at a DB
+        # without the VOD you just put in.
         for suffix in ("", "-wal", "-shm"):
             src = store.DB + suffix
             if os.path.exists(src):

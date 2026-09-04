@@ -1,7 +1,8 @@
-"""서버를 시험 포트에 띄워 라우팅·출처 검사·정적 파일 경계를 봅니다.
+"""Bring the server up on a test port and watch routing, the origin checks and the static-file boundary.
 
-모델은 올리지 않습니다 -- 두드리는 끝점이 전부 설정·목록·거절 경로입니다.
-저장소와 설정은 MIMIWATCH_DATA_DIR / MIMIWATCH_CONFIG 로 임시 디렉터리에 둡니다.
+No model is loaded -- every endpoint knocked on is a config, listing or refusal
+path. The store and the config are put in a temporary directory through
+MIMIWATCH_DATA_DIR / MIMIWATCH_CONFIG.
 """
 import importlib.util
 import json
@@ -21,18 +22,19 @@ SERVER_HOME = None
 
 
 def _stub_dir(tmp) -> str:
-    """전사 런타임이 없는 기계(CI)를 위한 가짜 모듈 디렉터리.
+    """A directory of stub modules for a machine without the transcription runtimes (CI).
 
-    conftest 의 가짜 모듈은 **이 프로세스**에만 끼워지는데, 서버는 별도 프로세스로
-    뜨므로 그쪽에서는 진짜 `import sherpa_onnx` 가 돌아 죽었습니다. 같은 가짜를
-    파일로 써서 PYTHONPATH 로 넘깁니다. 진짜가 깔려 있으면 비워 두어 진짜를 씁니다.
+    conftest's stubs are installed in **this process** only, and the server comes
+    up as a separate process, so over there the real `import sherpa_onnx` ran and
+    died. The same stubs are written out as files and handed over on PYTHONPATH.
+    When the real ones are installed this is left empty and the real ones are used.
     """
     d = tmp / "stubs"
     d.mkdir(exist_ok=True)
 
     def real(name: str) -> bool:
-        # conftest 가 끼운 가짜 모듈에는 __spec__ 이 없어 find_spec 이 ValueError 를
-        # 냅니다. 그것도 "진짜가 없다"입니다.
+        # A stub module installed by conftest has no __spec__, so find_spec raises
+        # ValueError. That counts as "the real one is missing" too.
         try:
             return importlib.util.find_spec(name) is not None
         except ValueError:
@@ -65,17 +67,18 @@ def server(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("srv")
     port = _free_port()
     stubs = _stub_dir(tmp)
-    # 서버 프로세스의 설정 파일. conftest 가 이 프로세스의 config 를 다른 임시 파일로
-    # 돌려 두므로, 서버가 저장한 것을 보려면 그 파일을 직접 읽어야 합니다.
+    # The server process's config file. conftest redirects this process's config to a
+    # different temporary file, so to see what the server saved that file has to be read
+    # directly.
     global SERVER_CONFIG, SERVER_HOME
     SERVER_CONFIG = tmp / "backends.json"
     SERVER_HOME = tmp / "home"
     env = {**os.environ, "MIMIWATCH_DATA_DIR": str(tmp / "data"),
            "MIMIWATCH_CONFIG": str(tmp / "backends.json"),
            "MIMIWATCH_HOME": str(tmp / "home"),
-           # 시험이 깃허브에 나가면 안 됩니다. 자동 판 확인을 끕니다.
+           # A test must never reach GitHub. Turn the automatic update check off.
            "MIMIWATCH_NO_UPDATE_CHECK": "1",
-           # SSE 회전을 2초로. 회전 뒤 소켓이 정말 닫히는지 몇 초 안에 봅니다.
+           # SSE rotation down to 2 s, so whether the socket really closes after a rotation shows within seconds.
            "MIMIWATCH_SSE_ROTATE_S": "2",
            "PYTHONPATH": stubs + (os.pathsep + os.environ["PYTHONPATH"]
                                   if os.environ.get("PYTHONPATH") else "")}
@@ -100,7 +103,7 @@ def server(tmp_path_factory):
         proc.communicate(timeout=10)
     except Exception:
         proc.kill()
-    # 시험이 진짜 저장소를 건드리지 않았는지.
+    # Check that the test never touched the real store.
     assert os.path.exists(tmp / "data" / "mimiwatch.db")
 
 
@@ -115,13 +118,13 @@ def req(base, path, body=None, headers=None, raw=None):
 
 
 def test_host_header_must_be_local(server):
-    """DNS 리바인딩: 다른 이름으로 들어온 요청은 읽기도 거절합니다."""
+    """DNS rebinding: a request that arrives under another name is refused even for reads."""
     base, port = server
     assert req(base, "/api/videos")[0] == 200                       # 127.0.0.1:port
     assert req(base, "/api/videos", headers={"Host": f"localhost:{port}"})[0] == 200
     assert req(base, "/api/videos", headers={"Host": "evil.example"})[0] == 421
     assert req(base, "/api/videos", headers={"Host": f"evil.example:{port}"})[0] == 421
-    assert req(base, "/api/videos", headers={"Host": "127.0.0.1:1"})[0] == 421    # 다른 포트
+    assert req(base, "/api/videos", headers={"Host": "127.0.0.1:1"})[0] == 421    # A different port
     s, _ = req(base, "/api/live/stop", body={"id": "x"}, headers={"Host": "evil.example"})
     assert s == 421
 
@@ -133,8 +136,8 @@ def test_api_keys_are_masked_and_kept(server):
     s, b = req(base, "/api/backends", body=entry)
     assert s == 200
     got = [x for x in json.loads(b)["backends"] if x["id"] == "remote-x"][0]
-    assert got["api_key"] and "sk-secret" not in json.dumps(json.loads(b))    # 가려서 옵니다
-    # 가린 값을 그대로 돌려보내면 저장된 키가 남고, 빈 값은 지웁니다.
+    assert got["api_key"] and "sk-secret" not in json.dumps(json.loads(b))    # It comes back masked
+    # Sending the masked value straight back keeps the stored key; an empty value clears it.
     req(base, "/api/backends", body={**entry, "label": "X2", "api_key": got["api_key"]})
 
     def saved():
@@ -147,7 +150,7 @@ def test_api_keys_are_masked_and_kept(server):
 
 
 def test_active_engine_is_set_on_the_server(server):
-    """「관리」 선택기가 서버의 기본 엔진을 바꿉니다 -- 확장이 그 값으로 세션을 시작합니다."""
+    """The "Manage" picker changes the server's default engine -- the extension starts a session with that value."""
     base, _ = server
     s, b = req(base, "/api/active", body={"kind": "asr", "id": "tcpp-best"})
     assert s == 200 and json.loads(b)["asr_active"] == "tcpp-best"
@@ -160,7 +163,7 @@ def test_active_engine_is_set_on_the_server(server):
 
 
 def test_pushed_cookies_are_stored_privately_and_used(server):
-    """확장이 넘긴 쿠키: 0600 으로 저장, 내용은 응답에 없음, yt-dlp 인자에 붙음, 지우면 빠짐."""
+    """Cookies handed over by the extension: stored 0600, never in a response, added to the yt-dlp arguments, gone once deleted."""
     base, _ = server
     s, b = req(base, "/api/cookies")
     assert s == 200 and json.loads(b)["present"] is False
@@ -175,7 +178,7 @@ def test_pushed_cookies_are_stored_privately_and_used(server):
     if os.name != "nt":
         assert oct(os.stat(path).st_mode & 0o777) == "0o600"
     assert "secret-value" in open(path, encoding="utf-8").read()
-    # 서버 프로세스의 yt-dlp 인자에 붙는지는 stream 을 같은 HOME 으로 직접 확인합니다.
+    # Whether it lands in the server process's yt-dlp arguments is checked directly by pointing stream at the same HOME.
     import stream
     stream.reset_tool_cache()
     os.environ["MIMIWATCH_HOME"] = str(SERVER_HOME)
@@ -195,7 +198,7 @@ def test_static_and_index(server):
     assert req(base, "/")[0] == 200
     s, b = req(base, "/static/app/state.js")
     assert s == 200 and b"const state" in b
-    s, b = req(base, "/static/vendor/hls.min.js")          # m3u8 재생용 hls.js 가 묶여 있다
+    s, b = req(base, "/static/vendor/hls.min.js")          # hls.js for m3u8 playback is bundled
     assert s == 200 and len(b) > 100_000 and b"Hls" in b
     assert req(base, "/static/../server.py")[0] == 404
     assert req(base, "/static/no-such.js")[0] == 404
@@ -246,26 +249,27 @@ def test_event_bus_stream_says_hello(server):
 
 
 def test_event_bus_rotate_really_closes_the_socket(server):
-    """회전(rotate) 뒤 서버가 소켓을 **닫아야** 합니다.
+    """After a rotate the server **must** close the socket.
 
-    SSE 응답의 `Connection: keep-alive` 가 close_connection 을 False 로 돌려 놓아,
-    핸들러가 그냥 돌아가면 서버는 같은 소켓에서 다음 요청을, 브라우저는 본문이 더
-    오길 서로 기다렸습니다. EventSource 는 onerror 없이 조용히 죽어 4.5분마다 자막이
-    멎었습니다. 여기서는 회전 프레임 뒤 곧 EOF 가 와야 합니다."""
+    The `Connection: keep-alive` on the SSE response set close_connection back to
+    False, so when the handler simply returned the server waited for the next
+    request on the same socket while the browser waited for more body -- each on
+    the other. EventSource died quietly with no onerror and the subtitles stopped
+    every 4.5 minutes. Here EOF has to follow the rotate frame right away."""
     _, port = server
     with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
         s.sendall(b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                   b"Accept: text/event-stream\r\nConnection: keep-alive\r\n\r\n")
-        s.settimeout(8)              # 회전 2초 + 여유. 안 닫히면 여기서 timeout 으로 실패
+        s.settimeout(8)              # The 2 s rotation plus slack. If it never closes this fails on the timeout
         got, t0 = b"", time.time()
         while True:
             chunk = s.recv(4096)
             if not chunk:
-                break                # EOF -- 서버가 닫았습니다
+                break                # EOF -- the server closed it
             got += chunk
     assert b'data: {"type": "hello"}' in got
     assert b'data: {"type": "rotate"}' in got
-    # 회전이 정시에 옵니다(예전에는 15초 keepalive 틱까지 밀렸습니다).
+    # The rotation arrives on time (it used to be pushed out to the 15 s keepalive tick).
     assert time.time() - t0 < 6
 
 
@@ -280,9 +284,10 @@ def test_multiview_routes(server):
     assert "error" in json.loads(req(base, "/api/multiview/add", {"group": "nope", "url": "https://x/a"})[1])
     assert "error" in json.loads(req(base, "/api/multiview/remove", {"group": "nope", "id": "x"})[1])
     assert "error" in json.loads(req(base, "/api/multiview/stop", {"group": "nope"})[1])
-    # 탭 소스 둘로 묶음을 만듭니다 -- yt-dlp 도 ffmpeg 도 부르지 않습니다. 시험 서버에는
-    # 전사 엔진이 없어 초점을 받은 세션이 곧 오류로 끝나고 초점이 다음으로 넘어가다 묶음이
-    # 저절로 없어지므로, 만들어진 모양만 봅니다.
+    # Build a bundle out of two tab sources -- neither yt-dlp nor ffmpeg is called. The
+    # test server has no transcription engine, so the focused session soon ends in an
+    # error, the focus moves on and the bundle disappears by itself; only the shape it
+    # was created with is examined.
     s, b = req(base, "/api/multiview", {"sources": [{"source": "tab", "title": "a"},
                                                     {"source": "tab", "title": "b"}],
                                         "viewer_lang": "ko", "asr": "no-such-engine"})
@@ -307,7 +312,7 @@ def test_engine_config_roundtrip(server):
 
 
 def test_upload_and_probe_local(server):
-    """로컬 파일: 업로드는 uploads/ 아래에만, probe 는 yt-dlp 없이 바로 답합니다."""
+    """Local files: an upload lands under uploads/ and nowhere else, and probe answers at once without yt-dlp."""
     base, port = server
     import urllib.parse
     q = urllib.parse.quote("나의 클립!.mp3")
@@ -317,7 +322,7 @@ def test_upload_and_probe_local(server):
     assert os.path.basename(os.path.dirname(path)) == "uploads"
     with open(path, "rb") as f:
         assert f.read() == b"abc123"
-    # 같은 이름을 또 올리면 덮지 않고 딴 이름을 짓습니다.
+    # Uploading the same name again does not overwrite; it invents another name.
     code, body2 = req(base, f"/api/upload?name={q}", raw=b"xy")
     assert code == 200 and json.loads(body2)["path"] != path
 
@@ -326,16 +331,16 @@ def test_upload_and_probe_local(server):
     assert code == 200 and d["id"].startswith("file-") and d["site"] == "file"
     assert d["is_live"] is False and d["media_path"] == path
 
-    # 없는 경로는 무엇이 없는지 바로 말합니다 -- yt-dlp 를 기다리지 않습니다.
+    # A path that does not exist says so right away -- there is no waiting on yt-dlp.
     code, body = req(base, "/api/probe", body={"url": "/no/such/파일.mp4"})
     assert code == 400 and "No such file" in json.loads(body)["error"]
 
-    # 전사 전에는 내줄 미디어가 없습니다.
+    # Before transcription there is no media to serve.
     assert req(base, "/api/media/file-doesnotexist")[0] == 404
 
 
 def test_update_status_endpoint(server):
-    """상태 조회는 네트워크에 나가지 않고 지금 판을 답합니다."""
+    """A status query never goes to the network; it answers with the version in hand."""
     base, port = server
     code, body = req(base, "/api/update")
     d = json.loads(body)
@@ -344,21 +349,21 @@ def test_update_status_endpoint(server):
 
 
 def test_parse_range():
-    """브라우저가 미디어에 보내는 Range 꼴만 받습니다."""
+    """Only the Range forms a browser sends for media are accepted."""
     import server as srv
     assert srv.parse_range(None, 100) == (None, None)
     assert srv.parse_range("bytes=0-", 100) == (0, 99)
     assert srv.parse_range("bytes=10-19", 100) == (10, 19)
-    assert srv.parse_range("bytes=90-1000", 100) == (90, 99)   # 끝은 파일 크기로 자릅니다
-    assert srv.parse_range("bytes=-10", 100) == (90, 99)       # 마지막 n바이트
-    assert srv.parse_range("bytes=100-", 100) == (None, -1)    # 시작이 파일 밖
+    assert srv.parse_range("bytes=90-1000", 100) == (90, 99)   # The end is clamped to the file size
+    assert srv.parse_range("bytes=-10", 100) == (90, 99)       # The last n bytes
+    assert srv.parse_range("bytes=100-", 100) == (None, -1)    # The start is past the end of the file
     assert srv.parse_range("bytes=5-2", 100) == (None, -1)
     assert srv.parse_range("bytes=-0", 100) == (None, -1)
     assert srv.parse_range("units=0-1", 100) == (None, -1)
 
 
 def test_cue_add_validates(server):
-    """새 줄 쓰기: 없는 영상은 404, 시각 없는 요청은 400."""
+    """Writing a new line: 404 for a video that does not exist, 400 for a request with no timestamp."""
     base, port = server
     code, _ = req(base, "/api/cue/add", body={"id": "nope", "start": 1.0, "text": "x"})
     assert code == 404

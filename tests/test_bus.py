@@ -1,4 +1,4 @@
-"""전역 변화 알림: 누가 언제 무엇을 내보내는가."""
+"""The global change feed: who publishes what, and when."""
 import json
 import queue
 
@@ -24,13 +24,13 @@ def test_publish_reaches_every_subscriber_and_drops_when_full():
         assert _drain(a) == [{"type": "x"}] and _drain(b) == [{"type": "x"}]
         for _ in range(bus.QUEUE_MAX + 5):
             bus.publish({"type": "flood"})
-        assert a.qsize() == bus.QUEUE_MAX          # 넘친 것은 버립니다. 막히지 않습니다.
+        assert a.qsize() == bus.QUEUE_MAX          # What overflows is dropped. Nothing blocks.
         _drain(a)
     finally:
         bus.unsubscribe(a)
         bus.unsubscribe(b)
     bus.publish({"type": "after"})
-    assert _drain(a) == []                          # 끊은 뒤에는 오지 않습니다
+    assert _drain(a) == []                          # After unsubscribing, nothing arrives
     assert bus.subscribers() == 0
 
 

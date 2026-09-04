@@ -1,9 +1,11 @@
-/* mimiwatch 화면 — 공유 상태와 작은 도우미. 다른 파일이 전부 여기 것을 씁니다 -- 그래서 맨 먼저 읽힙니다.
+/* The mimiwatch screen — shared state and small helpers. Every other file uses
+ * what is here -- which is why it is read first.
  *
- * web/app.js 를 관심사별로 나눈 파일입니다. 전부 일반 <script> 로 index.html 이
- * 적는 순서대로 읽히며 전역 범위를 함께 씁니다 -- 모듈 문법을 쓰지 않는 것은
- * 확장과 공유하는 overlay.js 와 같은 이유입니다. 서로 부르는 것은 전부
- * 실행 시점의 함수 호출이라 파일 순서는 main.js 가 마지막이기만 하면 됩니다. */
+ * This is web/app.js split up by concern. All of them are plain <script> tags,
+ * read in the order index.html lists them, sharing one global scope -- module
+ * syntax is avoided for the same reason as in overlay.js, which is shared with
+ * the extension. Everything they call on each other is a function call at run
+ * time, so the file order only has to keep main.js last. */
 
 /* mimiwatch player logic.
  *
@@ -19,23 +21,25 @@ const state = {
   doc: null, cues: [], idx: -1, player: null, ready: false,
   mode: "both", offset: 0, showPrev: true, follow: true, panelHidden: false,
   libraryHidden: false, scriptOnly: false, capture: null, scriptWin: null,
-  // 스크립트에서 줄을 누르면 무슨 일이 일어나는가. 기본은 예전 그대로
-  // 「그 지점으로 이동」입니다. 켤 때마다 정합니다 -- 남겨 두면 다음에
-  // 읽으러 왔다가 잘못 눌러 편집기가 열립니다.
+  // What happens when a line in the script is clicked. The default is what it
+  // has always been -- "seek there". It is set on every open -- left behind, the
+  // next visitor comes to read, misclicks, and gets the editor.
   scriptMode: "read",
-  // 번역 모드에서 고른 자막 번호. Set 입니다 -- 순서는 스크립트가 들고
-  // 있으므로 여기서는 들었는지만 알면 됩니다.
+  // The cue numbers picked in translation mode. A Set -- the order is held by
+  // the script, so all that is needed here is whether a line was picked.
   picked: new Set(), pickAnchor: null,
   genres: [],
-  // 전체화면에 들어가기 직전의 플레이어 높이. 자막 크기 배율의 기준입니다.
+  // The player height just before entering fullscreen. The baseline for the
+  // subtitle size scale.
   fsBaseHeight: 0, cuePx: 0,
-  cuePos: null,        // { x, y } 비율. restore()가 채웁니다 -- DEFAULT_CUE_POS 참고
+  cuePos: null,        // { x, y } as ratios. restore() fills it -- see DEFAULT_CUE_POS
   backend: "local-gemma", asr: "tcpp-best", refine: true,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
-  models: null,        // /api/models 의 답. 모델·도구의 목록과 상태(engines.js)
+  models: null,        // the answer from /api/models. Model and tool list and state (engines.js)
   live: null,          // { id, es, store } while a broadcast is running (store: MimiCues)
-  // 멀티뷰(tiles.js). tiles 는 화면의 칸들, focus 는 소리·자막·자막 내역이 따르는 칸,
-  // mv 는 서버의 묶음 { id, focus, members }, mvLayout 은 고른 배치 이름.
+  // Multiview (tiles.js). tiles are the panes on screen, focus is the pane the
+  // audio, subtitles and subtitle log follow, mv is the server's group
+  // { id, focus, members }, mvLayout is the chosen layout name.
   tiles: [], focus: null, mv: null, mvLayout: "",
 };
 
@@ -44,7 +48,7 @@ const state = {
 const trOf = (c) => c && c.translations ? c.translations[state.backend] : null;
 
 /* Two different questions get asked about live, and conflating them is what
- * made "중단" leave the screen inconsistent with itself:
+ * made "Stop" leave the screen inconsistent with itself:
  *   state.live  -- a transcription session is running right now
  *   isLiveDoc() -- what the player is showing is a broadcast
  * Stopping subtitles answers only the first. The broadcast keeps playing, so
@@ -52,14 +56,17 @@ const trOf = (c) => c && c.translations ? c.translations[state.backend] : null;
  * keyed by id, the picker entry -- has to keep saying yes afterwards. */
 const isLiveDoc = () => !!(state.doc && state.doc.live);
 
-/* **받는 중**인 라이브인가. 끝난 방송과는 다르게 다뤄야 합니다.
+/* Is this a live stream that is **still being received**? A finished broadcast
+ * has to be handled differently.
  *
- * 유튜브는 방송이 끝나면 그것을 녹화본으로 남깁니다. 그때부터 이 세션의
- * 자막은 라이브 자막이 아니라 그 녹화본의 자막입니다 -- 시각으로 찾아야
- * 하고, 시각은 맞습니다(미디어 기준으로 적어 두었으니까요).
+ * YouTube leaves a broadcast behind as a recording once it ends. From that
+ * moment on this session's subtitles are not live subtitles but the subtitles
+ * of that recording -- they have to be found by time, and the times are right
+ * (they were written down media-relative).
  *
- * 상태를 아직 못 받았으면 받는 중으로 봅니다. 시작 직후 한순간 그런데,
- * 그때 시각으로 찾으면 아직 도착하지 않은 자막을 찾는 셈이 됩니다. */
+ * If the state has not arrived yet, treat it as still receiving. That is true
+ * for an instant right after the start, and looking up by time then means
+ * looking for subtitles that have not arrived. */
 const isLiveReceiving = () => !!state.live
   && (!state.live.state || LIVE_RUNNING.includes(state.live.state));
 
@@ -87,17 +94,18 @@ function savePrefs(p) {
   try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* non-fatal */ }
 }
 
-/* ---------- 화면 위 자막 ----------
+/* ---------- subtitles on screen ----------
  *
- * 그리는 일은 web/overlay.js 가 합니다. 확장이 유튜브 페이지에 얹는 자막과
- * 같은 한 벌입니다 -- 모양·자리·끌기를 두 군데서 고치게 두지 않으려고
- * 뽑아 두었습니다. 여기서는 그 모듈에 값을 넣고 시계를 대 줍니다. */
-/* 초점 타일의 오버레이입니다(tiles.js 의 initTiles/setFocus 가 넣습니다). 타일마다
- * 오버레이가 하나씩 있지만 그리는 것은 초점 타일의 것뿐입니다. */
+ * The drawing is done by web/overlay.js. It is the same one set as the
+ * subtitles the extension lays over the YouTube page -- it was pulled out so
+ * that look, position and dragging are not fixed in two places. Here we only
+ * feed that module its values and hand it a clock. */
+/* The focused tile's overlay (tiles.js's initTiles/setFocus puts it here).
+ * Every tile has an overlay of its own, but only the focused tile's is drawn. */
 let overlay = null;
 
-/* 지금 무엇을 그려야 하는지 모듈에 알려 줍니다. 자막 목록·백엔드·라이브
- * 여부가 바뀔 때마다 부릅니다. */
+/* Tells the module what should be drawn right now. Called whenever the cue
+ * list, the backend, or whether this is live changes. */
 function syncOverlayData() {
   if (!overlay) return;
   overlay.setData({
@@ -125,10 +133,12 @@ function renderCue() {
 
 const cueStart = (c) => (c.start != null ? c.start : c.t) || 0;
 
-/* 자막 내역의 시각. 확장이 유튜브 페이지에 세우는 자막 내역(ext/panel.js)과 같은
- * 모양입니다 -- 한 시간을 넘으면 `1:02:03`, 아니면 `02:03`. 예전에는 여기가
- * 분:초만 적어서 두 시간짜리 방송의 `95:12`가 유튜브 진행 막대의 `1:35:12`와
- * 맞대어지지 않았습니다. 두 화면이 같은 발화를 같은 글자로 가리켜야 합니다. */
+/* Timestamps in the subtitle log. The same shape as the subtitle log the
+ * extension raises on the YouTube page (ext/panel.js) -- `1:02:03` past an
+ * hour, `02:03` otherwise. This used to write only minutes:seconds, so a
+ * two-hour broadcast's `95:12` could not be lined up against the YouTube
+ * progress bar's `1:35:12`. Both screens must point at the same utterance with
+ * the same characters. */
 const fmt = (s) => {
   const t = Math.max(0, Math.floor(s || 0));
   const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
@@ -136,18 +146,20 @@ const fmt = (s) => {
   return h ? `${h}:${two(m)}:${two(x)}` : `${two(m)}:${two(x)}`;
 };
 
-/* 설정을 서버에서 받아 맞추기 전에는 저장하지 않습니다. 부팅 순서가
- * restore() → loadBackends()라서, 그 사이에 한 번이라도 저장하면 state에
- * 박아 둔 초기값이 사용자가 고른 값을 덮어씁니다. 그 뒤 loadBackends는
- * 방금 덮어쓴 값을 읽으므로 서버 기본값도 영영 이기지 못합니다. */
+/* Nothing is saved before the settings have been fetched from the server and
+ * lined up. The boot order is restore() → loadBackends(), so a single save in
+ * between lets the initial values hard-coded in state overwrite what the user
+ * chose. loadBackends then reads what was just overwritten, so the server's
+ * defaults never win either. */
 let booted = false;
 
 function persist() {
   if (!booted) return;
-  // applyModeForDoc()가 읽는 것과 같은 기준으로 적어야 합니다. 예전에는 여기서
-  // `doc.translated`를 봤는데 라이브는 그 값이 첫 번역이 올 때까지 false라,
-  // 라이브에서 고른 자막 모드가 `modeSame` 칸에 저장되고 다음에는
-  // `modeTranslated` 칸에서 읽혀 기억되지 않았습니다.
+  // This has to be written against the same test applyModeForDoc() reads. It
+  // used to look at `doc.translated` here, but for live that value is false
+  // until the first translation arrives, so a subtitle mode chosen during a
+  // live stream was saved in the `modeSame` slot and read back from the
+  // `modeTranslated` slot next time, which is to say not remembered.
   const translated = docHasTranslation();
   const prev = loadPrefs();
   savePrefs({
@@ -170,9 +182,10 @@ function restore() {
   if (p.viewerLang) $("viewer-lang").value = p.viewerLang;
   if (p.size) $("size").value = p.size;
   if (p.dim != null) $("dim").value = p.dim;
-  // 예전에는 세로 자리만 「위치」 슬라이더의 퍼센트(p.pos)로 적었습니다.
-  // 그 값을 가운데-그 높이로 옮겨 줍니다. 슬라이더 시절에 정해 둔 자리가
-  // 갱신 한 번으로 아래 가운데로 튀지 않게요.
+  // This used to write only the vertical position, as the "Position" slider's
+  // percentage (p.pos). That value is carried over to centre-at-that-height,
+  // so a position settled on back in the slider days does not jump to
+  // bottom-centre on one update.
   const D = MimiOverlay.DEFAULT_POS;
   state.cuePos = p.cuePos ? { ...D, ...p.cuePos }
                : p.pos != null ? { x: D.x, y: p.pos / 100 }
@@ -187,7 +200,7 @@ function restore() {
   applyCuePos();
   $("offset-val").textContent = state.offset.toFixed(1) + "s";
   syncControlInputs();
-  setScriptMode("read");     // 늘 읽기로 시작합니다. 저장하지 않습니다.
+  setScriptMode("read");     // Always start in read mode. Never saved.
   setScriptView(p.scriptView || "both");
   if (p.scriptSize) {
     $("script-size").value = p.scriptSize;
@@ -201,8 +214,9 @@ const esc = (t) => String(t).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 /* ---------- live ---------- */
-/* 서버가 라이브 세션과 그 자막을 SQLite에 남기므로, 세션은 탭보다 오래 삽니다.
- * 상태 이름이 화면에 그대로 나오던 자리에 사람이 읽을 말을 붙입니다. */
+/* The server keeps live sessions and their subtitles in SQLite, so a session
+ * outlives the tab. Where the state name used to reach the screen verbatim, put
+ * words a person can read. */
 const LIVE_RUNNING = ["starting", "loading", "running"];
 
 // The state words the screen shows. The keys are protocol -- the server sends

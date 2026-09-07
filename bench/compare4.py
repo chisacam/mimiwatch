@@ -20,7 +20,7 @@ print("| source | " + " | ".join(MODES) + " |")
 print("|---|" + "---|" * len(MODES))
 esc = lambda s: (s or "").replace("|", "\\|").replace("\n", " ")
 for tup in rows:
-    if only and tup[0]["genre" if only != "general" else "genre"] and only not in (tup[1]["genre"],):
+    if only and tup[0]["genre"] and only not in (tup[1]["genre"],):
         continue
     outs = [esc(r["out"] or r["error"]) for r in tup]
     if len(set(outs)) == 1:

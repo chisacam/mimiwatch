@@ -1,7 +1,9 @@
-# 맥(Apple Silicon)과 윈도우(x64) 묶음을 만듭니다. 태그를 밀면 릴리스에 붙입니다.
+# Builds the macOS (Apple Silicon) and Windows (x64) bundles. Pushing a tag attaches
+# them to the release.
 #
-# 모델은 넣지 않습니다 -- 묶음은 300~400MB, 모델은 첫 실행 때 화면에서 받습니다.
-# 맥에서는 llama-cpp-python 을 소스에서 빌드하므로(Metal) 몇 분이 걸립니다.
+# Models are not included -- a bundle is 300~400MB and the models are fetched from the
+# screen on first run. On macOS llama-cpp-python is built from source (Metal), which
+# takes a few minutes.
 name: build
 
 on:
@@ -9,34 +11,39 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
-# 릴리스를 만들려면 GITHUB_TOKEN 에 쓰기 권한이 있어야 합니다. 저장소 기본값이
-# 읽기 전용이면 마지막 단계가 403 으로 죽습니다 -- 첫 태그 빌드가 그랬습니다.
+# Creating a release needs write permission on GITHUB_TOKEN. If the repository default
+# is read-only the last step dies with a 403 -- which is what the first tag build did.
 permissions:
   contents: write
 
 jobs:
-  # 브라우저 확장. 빌드할 것은 없고 ext/ 를 그대로 zip 으로 묶어 릴리스에 붙입니다 --
-  # 저장소를 통째로 받지 않은 사람도 「압축 해제된 확장 프로그램을 로드」로 얹을 수
-  # 있게요. 리눅스 러너 1분이면 됩니다.
+  # The browser extension. There is nothing to build: ext/ is zipped as it is and
+  # attached to the release, so somebody who did not clone the whole repository can
+  # still add it with "Load unpacked". One minute on a Linux runner.
   ext:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: 확장 폴더 압축
+      - name: Zip the extension folder
         run: |
           VERSION=$(git describe --tags --always)
           python3 bench/ext_check.py
           cp LICENSE ext/LICENSE
           zip -qr "mimiwatch-ext-$VERSION.zip" ext -x 'ext/.DS_Store'
           ls -l mimiwatch-ext-*.zip
+      # The upload is a convenience for runs that are not a tag (workflow_dispatch);
+      # the release below attaches the same files by itself. It must never be able to
+      # stop a release: on v0.5.0 the account's artifact storage was full, every job
+      # died here, and the release step -- which comes after -- never ran at all.
       - uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
           name: mimiwatch-ext
           path: mimiwatch-ext-*.zip
           if-no-files-found: error
-      - name: 릴리스에 붙이기
+      - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
@@ -47,39 +54,50 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15          # Apple Silicon 러너. Metal 로 빌드됩니다. (macos-14 는 2026-11-02 폐기)
+          - os: macos-15          # Apple Silicon runner, built with Metal. (macos-14 retired 2026-11-02)
             name: macos-arm64
           - os: windows-latest
             name: windows-x64
             backend: vulkan
-          # NVIDIA 전용 CUDA 판(-Backend cuda)은 릴리스에서 뺐습니다. cu124 휠의 커널이
-          # RTX 50(Blackwell, sm_120)을 담지 않아 최신 카드에서는 뜻이 없고, 726MB 를 더
-          # 배포할 만한 이득이 아닙니다. 필요하면 build.ps1 -Backend cuda 로 직접 만듭니다.
+          # The NVIDIA-only CUDA build (-Backend cuda) is out of the release. The cu124
+          # wheels carry no RTX 50 (Blackwell, sm_120) kernels, so it means nothing on a
+          # recent card, and it is not worth shipping another 726MB. Whoever wants it
+          # builds it with build.ps1 -Backend cuda.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0          # git describe 로 판 이름을 얻습니다
+          fetch-depth: 0          # the version name comes from git describe
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: 묶음 만들기 (macOS)
+      - name: Build the bundle (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install cmake >/dev/null 2>&1 || true
           PYTHON=python packaging/build.sh
-      - name: 묶음 만들기 (Windows)
+      - name: Build the bundle (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\packaging\build.ps1 -Backend ${{ matrix.backend }}
+      # ls fails when the glob matches nothing, so an empty dist still fails the job --
+      # the guard the non-fatal upload below can no longer provide.
+      - name: Check a bundle was produced
+        shell: bash
+        run: ls -l dist/*.zip dist/*.tar.gz
+      # The upload is a convenience for runs that are not a tag (workflow_dispatch);
+      # the release below attaches the same files by itself. It must never be able to
+      # stop a release: on v0.5.0 the account's artifact storage was full, every job
+      # died here, and the release step -- which comes after -- never ran at all.
       - uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
           name: mimiwatch-${{ matrix.name }}
           path: |
             dist/*.zip
             dist/*.tar.gz
           if-no-files-found: error
-      - name: 릴리스에 붙이기
+      - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:

@@ -1,10 +1,11 @@
-# 모델 없이 도는 검사만 돕니다. 전사 런타임(transcribe.cpp)은 리눅스 휠이 없어
-# 시험이 가짜 모듈로 대신합니다(tests/conftest.py). 모델을 올리는 시험은 없습니다.
+# Only the checks that run without a model. The transcription runtime
+# (transcribe.cpp) has no Linux wheel, so the tests stand in a fake module for it
+# (tests/conftest.py). No test loads a model.
 name: check
 
-# main 에 미는 것과 main 을 향한 PR 에서만 돕니다. 태그를 밀 때는 돌리지 않습니다 --
-# 태그는 이미 검사가 끝난 main 의 커밋에 붙이는 것이고, 무료 사용 시간을 두 번 쓸
-# 이유가 없습니다.
+# Runs on a push to main and on a PR against main. Not on a tag push -- a tag goes on
+# a commit of main that has already been checked, and there is no reason to spend the
+# free minutes twice.
 on:
   push:
     branches: [main]
@@ -20,9 +21,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install numpy pytest ruff
-      - name: ruff (문법·미사용 이름)
+      - name: ruff (syntax, unused names)
         run: ruff check .
       - name: pytest
         run: python -m pytest
-      - name: 확장 사본·형태 검사
+      - name: Extension copies and shape
         run: python bench/ext_check.py

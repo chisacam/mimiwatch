@@ -80,11 +80,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\packaging\build.ps1 -Backend ${{ matrix.backend }}
-      # ls fails when the glob matches nothing, so an empty dist still fails the job --
-      # the guard the non-fatal upload below can no longer provide.
+      # The guard the non-fatal upload below can no longer provide. It has to pass on
+      # *either* extension: build.sh writes a .zip on macOS and a .tar.gz only on Linux,
+      # which is not in this matrix, so requiring both fails every release job -- which
+      # is exactly what the first attempt at this step did.
       - name: Check a bundle was produced
         shell: bash
-        run: ls -l dist/*.zip dist/*.tar.gz
+        run: |
+          shopt -s nullglob
+          found=(dist/*.zip dist/*.tar.gz)
+          if [ ${#found[@]} -eq 0 ]; then echo "no bundle in dist/"; ls -l dist/ || true; exit 1; fi
+          ls -l "${found[@]}"
       # The upload is a convenience for runs that are not a tag (workflow_dispatch);
       # the release below attaches the same files by itself. It must never be able to
       # stop a release: on v0.5.0 the account's artifact storage was full, every job

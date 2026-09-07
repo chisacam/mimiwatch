@@ -106,12 +106,17 @@ number that has been published for more than a few minutes — bump the patch in
 - **The tag is the deploy.** Tagging to "see if it builds" publishes a release the
   in-app updater will offer. Push a branch and run the workflow manually instead.
 - **A green run is not a complete release.** Verify assets from `gh release view`.
-- **macOS bundles are unsigned.** Gatekeeper blocks every launch and the user has to
-  approve it in System Settings each time. Unresolved as of `v0.4.0` — say so in the
-  release notes rather than letting the owner rediscover it.
-- **The updater round trip has never been verified end to end**, and the Windows apply
-  path (swap script) has not been exercised at all. A release that changes `update.py`
-  cannot be called verified on this evidence.
+- **macOS bundles are unsigned, and that is settled.** Notarization needs a paid
+  Developer ID and there is no plan to commercialise this, so it will not be bought
+  (`docs/PACKAGING.md` records the reasoning). Do not raise it as an open item at each
+  release — but do keep it in the notes, because the reader still has to allow the app
+  in System Settings on every launch.
+- **The updater's apply path has still never run.** Half of it is verified as of
+  `v0.5.0`: with the repository public, an unauthenticated `releases/latest` answers 200
+  and an asset download answers 206, and `pick_asset` picks the right file per platform.
+  What no one has watched is the swap itself — the script that moves the old bundle to
+  `.old` and puts the new one in place — and on Windows it has not been exercised at all.
+  A release that changes `update.py` cannot be called verified on this evidence.
 - **Runner images retire.** `macos-14` was replaced by `macos-15`; a build that fails at
   the runner line is an image, not your code.
 
@@ -123,7 +128,7 @@ bundle, say which platform's asset is which.
 
 ## What this skill does not do
 
-- Code signing or notarization. It needs a paid Apple identity; it is the owner's call.
+- Code signing or notarization. Decided against (see the trap above); nothing to do.
 - Verify the update round trip. State that it is unverified and hand it back.
 - Build the CUDA variant. `packaging/build.ps1 -Backend cuda` exists for whoever wants
   it locally; it is deliberately out of the release.

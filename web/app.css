@@ -503,40 +503,18 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 .job.error .job-bar i{background:var(--warn)}
 .job #job-cancel{padding:.1rem .4rem; font-size:.7rem}
 
-/* ---------- backend dialog ---------- */
+/* ---------- dialogs (add, export, setup) ---------- */
 dialog{
   background:var(--panel); color:var(--text); border:1px solid var(--line);
   border-radius:12px; padding:0; max-width:440px; width:92vw;
 }
 dialog::backdrop{background:rgba(4,6,10,.7)}
-#backend-form{display:flex; flex-direction:column; gap:.7rem; padding:1.4rem}
-#backend-form h3{margin:0; font-size:1rem}
-#backend-form .hint{margin:0; font-size:.78rem; color:var(--dim); line-height:1.6}
-#backend-form code{font-family:var(--mono); font-size:.9em; color:var(--accent)}
-#backend-form label{display:flex; flex-direction:column; gap:.25rem; font-size:.76rem; color:var(--dim)}
-#backend-form input{
-  background:#0d1017; color:var(--text); border:1px solid var(--line);
-  border-radius:6px; padding:.45rem .6rem; font-size:.85rem; font-family:inherit;
-}
-#backend-form .row{display:flex; justify-content:flex-end; gap:.5rem; margin-top:.4rem}
-#backend-form button{
-  background:#0d1017; color:var(--dim); border:1px solid var(--line);
-  border-radius:6px; padding:.45rem 1rem; font-size:.82rem; cursor:pointer; font-family:inherit;
-}
-#backend-form button.primary{background:var(--accent); border-color:var(--accent); color:#04211b; font-weight:700}
-#edit-backend{padding:.3rem .5rem}
 
 .job-head{display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom:.5rem}
 .job-head .job-label{margin:0}
 #job-cancel{padding:.2rem .55rem; font-size:.72rem}
 #job-source{color:var(--accent)}
 #job-source.local{color:var(--warn)}
-#backend-form .grow{flex:1}
-#backend-form button.danger{border-color:#5a2b2b; color:#e07a7a}
-#backend-form button.danger:hover{background:#2a1616}
-
-#backend-form small{color:var(--dim); font-size:.7rem; line-height:1.5; margin-top:.15rem}
-#backend-form input[type=number]{width:6rem}
 
 .primary-seg{background:var(--accent); border-color:var(--accent); color:#04211b; font-weight:700}
 .primary-seg:hover{filter:brightness(1.08); color:#04211b}

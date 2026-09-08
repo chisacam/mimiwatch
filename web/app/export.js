@@ -31,11 +31,64 @@ function openExport() {
     ? t("export.what.live", { title: tgt.title, n })
     : t("export.what", { title: tgt.title, n });
   syncExportHint();
+  // Burn-in needs the video file itself. A local file is the only source
+  // that has one -- a streamed VOD is transcribed from audio, and the video
+  // was never downloaded.
+  $("export-burn").hidden = !(state.doc && state.doc.source === "file"
+    && state.doc.media_path && !state.live);
   $("export-dialog").showModal();
+}
+
+/* The burn is a background job: an encode of the whole video takes a stretch
+ * of real time, so the dialog closes and the job box follows the progress. */
+async function submitBurn() {
+  const tgt = exportTarget();
+  if (!tgt || tgt.value.startsWith("live:")) return;
+  const view = document.querySelector('#export-form select[name="view"]').value;
+  $("export-dialog").close();
+  const res = await (await fetch("/api/burn", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value: tgt.value, view }),
+  })).json();
+  if (res.error) { jobError(res.error); return; }
+  await burnJob(res.id);
+}
+
+async function burnJob(id) {
+  const box = $("job");
+  box.hidden = false; box.classList.remove("error");
+  $("job-cancel").disabled = false;
+  document.querySelector(".job-label").textContent = t("jobs.burning");
+  $("job-label") && ($("job-label").textContent = t("jobs.burning"));
+  $("job-source").textContent = "";
+  trackJob(id);
+  $("job-fill").style.width = "5%";
+  $("job-count").textContent = "…";
+  while (true) {
+    await new Promise(r => setTimeout(r, 700));
+    const st = await (await fetch(`/api/job/${id}`)).json();
+    const pct = st.total ? Math.round(st.done / st.total * 100) : 0;
+    $("job-fill").style.width = Math.max(5, pct) + "%";
+    $("job-count").textContent = st.total ? `${st.done}%` : "…";
+    if (st.state === "error" || st.state === "interrupted") { jobError(st.error); return; }
+    if (st.state === "cancelled") {
+      $("job-count").textContent = t("jobs.cancelled");
+      setTimeout(() => { box.hidden = true; }, 3000);
+      return;
+    }
+    if (st.state === "done") {
+      // The file is beside the source; its name is the answer.
+      $("job-count").textContent = st.out ? st.out.split(/[\\/]/).pop() : t("jobs.done.count", { n: 1, secs: st.elapsed || 0 });
+      setTimeout(() => { box.hidden = true; }, 6000);
+      return;
+    }
+  }
 }
 
 /* Each format has its own catch. Better to read about it before choosing
  * than to find out afterwards. */
+
+
 function syncExportHint() {
   const f = document.querySelector('#export-form select[name="fmt"]').value;
   const live = !!state.live;

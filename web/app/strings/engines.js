@@ -498,6 +498,10 @@ MW_I18N.add({
     en: "Translating again…",
     ko: "다시 번역하는 중…",
   },
+  "jobs.burning": {
+    en: "Burning the subtitles into the video…",
+    ko: "자막을 영상에 번인하는 중…"
+  },
   "jobs.uploading": {
     en: "Uploading the file · {name}",
     ko: "파일 올리는 중 · {name}",

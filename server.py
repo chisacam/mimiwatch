@@ -859,6 +859,19 @@ class Handler(BaseHTTPRequestHandler):
             })
         self._json({"q": q, "results": results})
 
+    def post_burn(self, body):
+        value = (body.get("value") or "").strip()
+        if not value:
+            return self._json({"error": "No video"}, 400)
+        if value.startswith("live:"):
+            return self._json(
+                {"error": "Burn-in works on a finished VOD, not on a live session"},
+                400)
+        res = jobs.start_burn(value, body.get("view") or "both")
+        if res.get("error"):
+            return self._json({"error": res["error"]}, 400)
+        self._json(res)
+
     def post_glossaries(self, body):
         out = store.save_glossary(body.get("channel_key") or "",
                                   body.get("name") or "",
@@ -1057,6 +1070,7 @@ POST_ROUTES = {
     "/api/update/download": Handler.post_update_download,
     "/api/update/apply": Handler.post_update_apply,
     "/api/glossaries": Handler.post_glossaries,
+    "/api/burn": Handler.post_burn,
 }
 
 

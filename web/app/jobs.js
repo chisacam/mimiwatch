@@ -87,6 +87,8 @@ function renderForeignJob(st) {
     $("job-cancel").disabled = false;
     const label = st.kind === "transcribe"
       ? phaseLabel(st.phase) + (st.title ? ` · ${st.title.slice(0, 28)}` : "")
+      : st.kind === "burn"
+      ? t("jobs.burning")
       : t("jobs.translating");
     box.querySelector(".job-label").textContent = t("jobs.otherWindow", { label });
     const pct = st.total ? Math.round(st.done / st.total * 100) : null;

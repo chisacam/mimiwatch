@@ -271,6 +271,10 @@ MW_I18N.add({
     en: "Download",
     ko: "내려받기"
   },
+  "export.burn": {
+    en: "Burn into video",
+    ko: "영상에 번인"
+  },
   "export.fmt": {
     en: "Format",
     ko: "형식"

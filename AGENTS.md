@@ -144,6 +144,7 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 | `jobs.py` | Background VOD transcription and (re)translation; the single translate loop |
 | `store.py` | SQLite (`data/mimiwatch.db`): jobs/sessions as JSON blobs, cues as a real table; one locked connection |
 | `export.py` | SRT/VTT/TXT/JSON export; synthesizes end times for live cues |
+| `burn.py` | Burns subtitles into a local video file (ffmpeg); the file goes beside the source |
 | `config.py` | The only reader/writer of `backends.json`; atomic, lock-guarded |
 | `models.py` | Process-wide model cache (`shared`/`touch`), `MIMIWATCH_MODEL_IDLE_S` eviction |
 | `modelhub.py` | Model/tool catalog and download queue (`.part` + Range resume); also a CLI |

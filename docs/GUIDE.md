@@ -369,6 +369,27 @@ It works by URL too.
 /api/export?id=<video id>&fmt=txt&view=tr
 ```
 
+### Burn-in
+
+**Burn into video** in the export dialog writes the subtitles back onto the
+picture. The server hands the lines to ffmpeg as an SRT, and ffmpeg encodes a
+new file beside the source, which is never touched. A re-burn numbers its file
+(`x - mimiwatch (2).mp4`). The audio is copied through as it is; only the
+video is re-encoded.
+
+**Only local files.** The premise is a video file on this machine, and the
+only kind that has one is a local file. A YouTube or Twitch VOD is transcribed
+from an audio rendition, and the video itself is never downloaded, so there is
+no file here to burn into.
+
+**The ffmpeg needs the `subtitles` filter.** That filter only exists in a build
+with libass, and a stock Homebrew `ffmpeg` does not have it. Before it starts,
+it asks — an ffmpeg that cannot burn is said so plainly, not with a bare exit
+code.
+
+It encodes the whole video, so it takes a stretch of real time. The dialog
+closes and the job box follows the progress; stopping leaves no file behind.
+
 ## Swapping engines
 
 Open it with the ⚙ button.

@@ -26,7 +26,9 @@ import time
 import uuid
 
 import bus
+import burn
 import config
+import export
 import translate as mw_translate
 import transcribe_vod as vod
 import asr as mw_asr
@@ -427,6 +429,41 @@ def start_retranslate(value: str, backend_id: str, cue_ids=None,
 
     _spawn(job_id, run)
     return {"id": job_id, "total": len(todo), "kept": len(kept)}
+
+
+def start_burn(value: str, view: str = "both") -> dict:
+    """Burn the subtitles into the video file itself.
+
+    A VOD, and a local file at that -- a YouTube or Twitch VOD is transcribed
+    from an audio rendition, and the video itself is never downloaded, so
+    there is no file here to burn into.
+    """
+    owner = store.owner_of(value)
+    meta = store.doc(owner) or store.session(owner)
+    if not meta:
+        return {"error": "no such video"}
+    media = meta.get("media_path") or ""
+    if not media or not os.path.isfile(media):
+        return {"error": ("burning needs a local file; a streamed VOD has no "
+                          "video file on this machine")}
+    if not store.cues(owner):
+        return {"error": "no subtitles to burn"}
+    job_id = _new_job(kind="burn", value=value, owner=owner,
+                      title=meta.get("title") or "", total=100)
+
+    def run():
+        try:
+            meta2, rows = export.collect(value)
+            res = burn.run(media, meta2.get("duration") or 0, rows, view,
+                           on_progress=lambda f: _note(job_id, done=int(f * 100)),
+                           should_stop=lambda: _cancelled(job_id))
+            _note(job_id, state="done", done=100, out=res["out"],
+                  elapsed=round(time.time() - _jobs[job_id]["started"], 1))
+        except (Exception, SystemExit) as exc:
+            _note(job_id, state="error", error=str(exc)[:300])
+
+    _spawn(job_id, run)
+    return {"id": job_id}
 
 
 # ---- Transcription ---------------------------------------------------------

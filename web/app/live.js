@@ -198,6 +198,7 @@ async function startLive(url, lang, probe) {
   bindLive(t, {
     id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
     url, lang, probe, asr: state.asr, backend: state.backend, source: res.source || "hls",
+    channelKey: liveChannelKey(probe),
   }, {
     id: probe.id, title: probe.title, source_lang: lang || "",
     viewer_lang: $("viewer-lang").value, translated: false,
@@ -244,6 +245,7 @@ async function openSessionInTile(tile, st) {
     probe: { id: st.video_id, title: st.title },
     source: st.source || "hls",
     asr: st.asr_backend || "", backend: st.backend || "",
+    channelKey: liveChannelKey(st),
     lastStatus: running ? null : { ...st, type: "status" },
   }, {
     id: st.video_id || "", title: st.title || st.url,
@@ -342,6 +344,9 @@ async function attachLive(tile) {
     if (live.rotating) { live.rotating = false; return; }
     if (tile === focusedTile()) $("lang-status").innerHTML = t("live.status.disconnected");
   };
+  // The channel's offset, when one was set down for it before. A VOD has no
+  // such thing, so this is a no-op everywhere but a live stream.
+  if (tile === focusedTile()) applyChannelOffset();
 }
 
 function addLiveToPicker(probe, sessionId) {
@@ -545,6 +550,15 @@ function renderLiveStatus(tile) {
 function detachLive() {
   const live = state.live;
   if (!live) return;
+  // The channel's offset sits under its own key now. Put the slider back on
+  // the global player setting, so what the live adjustment made is not
+  // carried into a VOD (a VOD aligns itself and needs no offset).
+  const p = loadPrefs();
+  if (p.offset != null) {
+    $("offset").value = p.offset;
+    state.offset = p.offset;
+    $("offset-val").textContent = state.offset.toFixed(1) + "s";
+  }
   const t = tileBySession(live.id);
   if (t) detachTile(t);
   else if (live.es) live.es.close();

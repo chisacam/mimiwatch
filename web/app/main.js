@@ -80,6 +80,7 @@ function bind() {
   $("offset").addEventListener("input", e => {
     state.offset = +e.target.value;
     $("offset-val").textContent = state.offset.toFixed(1) + "s";
+    rememberChannelOffset();
     persist();
   });
   $("viewer-lang").addEventListener("change", () => { updateLangStatus(); persist(); });

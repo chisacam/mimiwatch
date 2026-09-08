@@ -909,7 +909,9 @@ mimiwatch page keeps them — building those too would make two sets.
 ## Known limits
 
 **Aligning live subtitles with the video is manual.** Match them with the offset
-slider. VODs match automatically.
+slider. The value is remembered per channel, so only the first broadcast of a
+channel takes the effort -- the next one comes up already matched. VODs match
+automatically.
 
 **In multiview, streams that are not focused are not transcribed.** They hold
 only the last 30 seconds of sound and start from there when the focus arrives.

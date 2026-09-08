@@ -94,6 +94,38 @@ function savePrefs(p) {
   try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* non-fatal */ }
 }
 
+/* The live offset, remembered per channel. A VOD aligns itself against the
+ * player's clock, so the offset means nothing there; a live stream's drift is
+ * a property of the channel's ingest, and re-dialling the same seconds on
+ * every broadcast is the cost this removes. The key is `site:channel`, the
+ * shape the server uses for the same data (store.channel_key), and it lives
+ * in this browser like the rest of the player prefs. */
+const OFFSETS = (key) => "mimiwatch.liveOffset." + key;
+
+function liveChannelKey(x) {
+  const channel = (x && x.channel) || "";
+  return channel ? `${x.site}:${channel}` : null;
+}
+
+function applyChannelOffset() {
+  const t = focusedTile();
+  const key = (t && t.live) ? t.live.channelKey : null;
+  if (!key) return;
+  let v;
+  try { v = localStorage.getItem(OFFSETS(key)); } catch { return; }   // private window
+  if (v === null) return;
+  $("offset").value = v;
+  state.offset = +v;
+  $("offset-val").textContent = state.offset.toFixed(1) + "s";
+}
+
+function rememberChannelOffset() {
+  const t = focusedTile();
+  const key = (t && t.live && state.live === t.live) ? t.live.channelKey : null;
+  if (!key) return;
+  try { localStorage.setItem(OFFSETS(key), String(state.offset)); } catch { /* non-fatal */ }
+}
+
 /* ---------- subtitles on screen ----------
  *
  * The drawing is done by web/overlay.js. It is the same one set as the

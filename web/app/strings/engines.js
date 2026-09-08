@@ -1,5 +1,98 @@
 /* Strings for the engines area. Filled by the i18n pass. */
 MW_I18N.add({
+  /* engines.js -- channel glossaries (docs/GLOSSARY.md) */
+  "settings.glossary.title": {
+    en: "Glossary",
+    ko: "채널 시어집",
+  },
+  "settings.glossary.add": {
+    en: "Add channel",
+    ko: "채널 추가",
+  },
+  "settings.glossary.hint": {
+    en: "Words kept per channel, written into the translation prompt — streamer names, brands, recurring catchphrases. It applies from the next line onward, to this channel's videos and live streams, on engines that use a prompt. The default engine (M2M-100) uses no prompt, so the glossary goes without it.",
+    ko: "채널마다 유지하는 단어를 번역 프롬프트에 씁니다 — 스트리머 이름, 브랜드, 반복되는 밈. 프롬프트를 쓰는 엔진에서 이 채널의 영상과 라이브에, 다음 줄부터 적용됩니다. 기본 엔진(M2M-100)은 프롬프트를 쓰지 않아 시어집을 타지 못합니다.",
+  },
+  "settings.glossary.empty": {
+    en: "No glossaries yet. Add a channel to keep its names as-is.",
+    ko: "아직 시어집이 없습니다. 채널을 추가해 이름을 그대로 유지해 보십시오.",
+  },
+  "settings.glossary.row.terms": {
+    en: "{n} terms",
+    ko: "시어 {n}개",
+  },
+  "settings.glossary.form.add": {
+    en: "Channel glossary",
+    ko: "채널 시어집",
+  },
+  "settings.glossary.form.edit": {
+    en: "Channel glossary — {name}",
+    ko: "채널 시어집 — {name}",
+  },
+  "settings.glossary.form.back": {
+    en: "Back",
+    ko: "뒤로",
+  },
+  "settings.glossary.form.name": {
+    en: "Channel name",
+    ko: "채널 이름",
+  },
+  "settings.glossary.form.namePlaceholder": {
+    en: "The name the list shows",
+    ko: "목록에 보이는 이름",
+  },
+  "settings.glossary.form.key": {
+    en: "Channel key",
+    ko: "채널 키",
+  },
+  "settings.glossary.form.keyPlaceholder": {
+    en: "e.g. youtube:UC…, twitch:… — blank keys by name",
+    ko: "예: youtube:UC…, twitch:… — 비워두면 이름으로",
+  },
+  "settings.glossary.form.keyHint": {
+    en: "Videos and streams of this channel match the key. A name a person typed keys as manual:name.",
+    ko: "이 채널의 영상과 방송이 키로 맞습니다. 사람이 입력한 이름은 manual:이름 으로 키가 됩니다.",
+  },
+  "settings.glossary.form.terms": {
+    en: "Terms — one per line",
+    ko: "시어 — 한 줄에 하나씩",
+  },
+  "settings.glossary.form.termsPlaceholder": {
+    en: "source → target\none term per line",
+    ko: "원어 → 번역\n한 줄에 하나씩",
+  },
+  "settings.glossary.form.termsHint": {
+    en: "Each line is source → target, written into the prompt as-is. The list keeps everything; the prompt carries up to 100 terms.",
+    ko: "한 줄이 원어 → 번역이며 프롬프트에 그대로 씁니다. 목록은 전부 보관하고, 프롬프트에는 100개까지 씁니다.",
+  },
+  "settings.glossary.form.warn": {
+    en: "The glossary reaches the translator by prompt. An engine that uses no prompt (the default M2M-100) ignores it, and a term is a hint — the model may still miss a line.",
+    ko: "시어집은 프롬프트로 전달됩니다. 프롬프트를 쓰지 않는 엔진(기본 M2M-100)은 무시하고, 시어는 힌트라 모델이 일부 줄을 놓칠 수 있습니다.",
+  },
+  "settings.glossary.form.save": {
+    en: "Save",
+    ko: "저장",
+  },
+  "settings.glossary.form.delete": {
+    en: "Delete",
+    ko: "삭제",
+  },
+  "add.channel": {
+    en: "Channel name",
+    ko: "채널 이름",
+  },
+  "add.channel.placeholder": {
+    en: "Only when we could not get it from the address",
+    ko: "주소에서 알 수 없을 때만",
+  },
+  "add.channel.hint": {
+    en: "It chooses the channel glossary. The address carries the channel on YouTube and Twitch; elsewhere, type it.",
+    ko: "채널 시어집을 가립니다. 유튜브·트위치 주소는 채널을 담고, 그 밖에는 직접 입력합니다.",
+  },
+  "jobs.glossary": {
+    en: "glossary {name} ({n} terms)",
+    ko: "시어집 {name} (시어 {n}개)",
+  },
   /* capture.js -- tab audio */
   "capture.error.getAudio": {
     en: "Could not take the tab's sound: {error}",

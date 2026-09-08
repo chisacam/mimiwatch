@@ -182,8 +182,11 @@ async function submitAdd(e) {
       url, lang: f.lang.value || null, asr: state.asr,
       speakers: f.speakers.checked, refine: state.refine, genre: currentGenre(),
       viewer_lang: $("viewer-lang").value, backend: state.backend,
+      site: probe.site || "", channel: probe.channel || "",
+      channel_name: f.channel_name.value.trim(),
     }),
   })).json();
+  f.channel_name.value = "";
   if (res.error) { jobError(res.error); return; }
   await watchTranscribe(res.id);
 }
@@ -196,6 +199,7 @@ function setAddSource(v) {
   $("url-field").hidden = tab || file;
   $("tab-title-field").hidden = !tab;
   $("file-field").hidden = !file;
+  $("channel-field").hidden = tab || file;
   $("source-hint").textContent = tab ? t("jobs.source.hint.tab")
     : file ? t("jobs.source.hint.file")
     : t("jobs.source.hint.url");
@@ -261,6 +265,13 @@ async function watchTranscribe(jobId) {
       $("job-source").textContent = st.degraded
         ? t("jobs.source.degraded.short", { n: st.by_local })
         : t("jobs.source.remote", { n: st.by_remote });
+    }
+    // The applied glossary, when the channel has one. "None" is not written --
+    // most channels do not have a glossary, and saying so on every job would
+    // blur the cases where one is on.
+    if (st.phase === "translate" && st.glossary) {
+      $("job-source").textContent += " · " +
+        t("jobs.glossary", { name: st.glossary, n: st.glossary_terms || 0 });
     }
     if (st.state === "error" || st.state === "interrupted") { jobError(st.error); return; }
     if (st.state === "cancelled") {

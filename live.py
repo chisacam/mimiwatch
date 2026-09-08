@@ -468,6 +468,13 @@ class LiveSession:
         self.gap_s = 0.0
         # yt-dlp fills this in for hls; the browser supplies it for tab.
         self.title = title
+        # The channel's glossary. The channel is known the moment the probe
+        # answers, so _sync_glossary() fixes the key then, and repeats it
+        # before every engine (re)build -- a glossary saved mid-session
+        # reaches a running session on its next build.
+        self.channel_key = ""
+        self.glossary_name = ""
+        self._glossary_terms = []
         # Did a person choose this name? yt-dlp's title is a guess we can improve
         # on, never a correction, so once someone renames a session nothing may
         # write over it -- see set_title and _resolve_hls.
@@ -611,6 +618,8 @@ class LiveSession:
                 "ring_s": round(self._ring.seconds(), 1),
                 "focused": self._focus.is_set(), "group": self.group,
                 "site": self.site, "channel": self.channel,
+                "channel_key": self.channel_key,
+                "glossary": self.glossary_name,
                 "elapsed": round(time.time() - self.started, 1),
                 "lines": self.lines, "translated": self.translated}
 
@@ -1256,6 +1265,7 @@ class LiveSession:
             self.video_id = d.get("id", "") or ""
             info = site_of(d, self.url)
             self.site, self.channel = info["site"], info["channel"]
+            self._sync_glossary()
             # yt-dlp's generic extractor does not know whether a raw m3u8 is live
             # (is_live is None). The user entered it as live, so unknown counts as
             # live. Only an explicit no (False) blocks it.
@@ -1343,6 +1353,16 @@ class LiveSession:
         self._persist()
         self.emit({"type": "status", **self.status()})
 
+    def _sync_glossary(self):
+        """A glossary for this channel, when one exists. The key does not move
+        after the probe; the lookup is one indexed row, and the callers
+        repeat it so a glossary saved while the session runs is picked up at
+        the next engine build."""
+        self.channel_key = store.channel_key(self.site, self.channel)
+        g = store.glossary(self.channel_key)
+        self.glossary_name = (g or {}).get("name") or ""
+        self._glossary_terms = (g or {}).get("terms") or []
+
     def _ensure_engines(self):
         """Build the transcriber and the translator once, on first getting focus. The
         process shares the weights (models.py) so what a session holds is only the
@@ -1352,8 +1372,9 @@ class LiveSession:
         fresh = self._asr is None
         cfg = config.load()
         if self._tr is None:
+            self._sync_glossary()
             spec = config.find("tr", self.backend_id, cfg)
-            self._tr = mw_translate.build(spec, self.genre)
+            self._tr = mw_translate.build(spec, self.genre, self._glossary_terms)
         if self._asr is None:
             asr_spec = config.find("asr", self.asr_backend_id, cfg)
             # Speaker tags are a recorded-video feature. CAM++ needs enough
@@ -1932,8 +1953,9 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     if spec is None:
         return {"error": f"no such backend '{backend_id}'"}
     # The genre is a property of the video being watched, so it stays across a
-    # backend change.
-    s._tr = mw_translate.build(spec, s.genre)
+    # backend change -- and so is the channel's glossary.
+    s._sync_glossary()
+    s._tr = mw_translate.build(spec, s.genre, s._glossary_terms)
     s.backend_id = backend_id
     return {"backend": backend_id}
 

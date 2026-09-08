@@ -193,18 +193,56 @@ def genre_prompt(genre: str | None) -> str:
                              GENRE_PROMPTS[DEFAULT_GENRE])["prompt"]
 
 
+# A glossary is a list of {"from", "to"} pairs kept per channel (store.py).
+# Rendered into the prompt it reaches only a backend that uses prompts --
+# M2M-100 has nowhere to put a prompt, and that is fine: the glossary is a
+# hint for a language model. A string-replacement pass over its output was
+# considered and deferred (docs/GLOSSARY.md).
+GLOSSARY_RENDER_CAP = 100
+
+
+def glossary_block(terms: list | None) -> str:
+    """The glossary as the block appended to the rendered prompt.
+
+    Empty or missing terms render as the empty string, so a video with no
+    glossary produces byte-identical prompts to before the glossary existed.
+    The store keeps the full list; only the rendered part is capped.
+    """
+    pairs = []
+    for t in terms or []:
+        if isinstance(t, dict):
+            a, b = t.get("from", ""), t.get("to", "")
+        elif isinstance(t, (list, tuple)) and len(t) == 2:
+            a, b = t
+        else:
+            continue
+        a, b = str(a).strip(), str(b).strip()
+        if not a or not b:
+            continue
+        pairs.append(f"{a} \u2192 {b}")
+        if len(pairs) >= GLOSSARY_RENDER_CAP:
+            break
+    if not pairs:
+        return ""
+    return ("\nUse this glossary as-is when translating: "
+            + ", ".join(pairs) + ".")
+
+
 def render_prompt(prompt: str, src: str, tgt: str, text: str,
-                  context: list[str] | None = None) -> str:
+                  context: list[str] | None = None,
+                  glossary: str = "") -> str:
     """A custom prompt without `{context}` still works as it is.
 
     str.format ignores leftover keywords, so a prompt of the old shape sitting
-    in backends.json renders fine, just without the context.
+    in backends.json renders fine, just without the context. The glossary, when
+    present, is appended as it is -- a backend that uses no prompt never calls
+    here, so it never sees the block.
     """
     block = ""
     if context:
         block = CONTEXT_BLOCK.format(
             src=src, lines="\n".join(f"- {c}" for c in context))
-    return prompt.format(src=src, tgt=tgt, text=text, context=block)
+    return prompt.format(src=src, tgt=tgt, text=text, context=block) + glossary
 
 
 class TranslationFailed(RuntimeError):
@@ -339,12 +377,16 @@ class OpenAICompatible(Translator):
 
     def __init__(self, base_url: str, model: str, api_key: str = "",
                  prompt: str | None = None, timeout: float = 30.0,
-                 no_reasoning: bool = True):
+                 no_reasoning: bool = True, glossary: str = ""):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.prompt = prompt or self.DEFAULT_PROMPT
         self.timeout = timeout
+        # The rendered glossary block (glossary_block). Empty when the video's
+        # channel has no glossary -- then the prompt is byte-identical to the
+        # pre-glossary one.
+        self.glossary = glossary
         # Reasoning models spend their budget deliberating over a one-line
         # subtitle: Gemma 4 E4B burned 484 completion tokens and 9s on a
         # twelve-character line, against 8 tokens and 0.25s with thinking
@@ -361,7 +403,7 @@ class OpenAICompatible(Translator):
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": render_prompt(
-                self.prompt, src, tgt, stripped, context)}],
+                self.prompt, src, tgt, stripped, context, self.glossary)}],
             "temperature": 0.2,
         }
         if self.no_reasoning:
@@ -436,7 +478,7 @@ class LocalGemma(Translator):
     def __init__(self, model_path: str | None = None, n_ctx: int = 2048,
                  threads: int = 4, prompt: str | None = None,
                  max_tokens: int = 256, genre: str | None = None,
-                 device: str = "auto"):
+                 device: str = "auto", glossary: str = ""):
         import stream
 
         self.model_path = model_path or os.path.join(
@@ -456,6 +498,10 @@ class LocalGemma(Translator):
         # A prompt written into the backend itself takes precedence. The
         # genre applies only to a backend that left that place empty.
         self.prompt = prompt or genre_prompt(genre)
+        # The rendered glossary block. The genre is a property of the video,
+        # and so is the glossary -- both ride on this object while the model
+        # stays shared.
+        self.glossary = glossary
         self.max_tokens = max_tokens
         self._n_ctx = n_ctx
         self._threads = threads
@@ -484,7 +530,8 @@ class LocalGemma(Translator):
             return text
         llm = self._ensure()
         models.touch(self._key)
-        msg = render_prompt(self.prompt, src, tgt, stripped, context)
+        msg = render_prompt(self.prompt, src, tgt, stripped, context,
+                            self.glossary)
         with self._lock:
             out = llm.create_chat_completion(
                 messages=[{"role": "user", "content": msg}],
@@ -587,15 +634,20 @@ class WithFallback(Translator):
             return self.backup.translate(text, src, tgt, context)
 
 
-def build(spec: dict | None, genre: str | None = None) -> Translator:
+def build(spec: dict | None, genre: str | None = None,
+          glossary: list | None = None) -> Translator:
     """spec = {"backend": "local"} or
        {"backend": "openai", "base_url": ..., "model": ..., "api_key": ...}
 
     `genre` is a property of the video being watched, not of the backend. The
     same Gemma translates both a tech talk and a game stream, with only the
-    prompt swapped.
+    prompt swapped. `glossary` is the same kind of property -- a list of
+    {"from", "to"} pairs for the video's channel, rendered by glossary_block
+    and appended to the prompt. A backend that uses no prompt (M2M-100) takes
+    it nowhere, by design.
     """
     spec = spec or {}
+    block = glossary_block(glossary)
     min_chars = int(spec.get("min_chars", DEFAULT_MIN_CHARS) or 0)
     if spec.get("backend") == "gemma":
         device = (spec.get("device") or "auto").strip().lower()
@@ -606,7 +658,7 @@ def build(spec: dict | None, genre: str | None = None) -> Translator:
                            threads=int(spec.get("threads")
                                        or stream.default_threads(device)),
                            prompt=spec.get("prompt"), genre=genre,
-                           device=device)
+                           device=device, glossary=block)
         gemma.min_chars = min_chars
         # M2M-100 sits behind it so that a missing model file or a failed
         # load does not leave the subtitles as the source text. Which of the
@@ -616,7 +668,8 @@ def build(spec: dict | None, genre: str | None = None) -> Translator:
         remote = OpenAICompatible(spec["base_url"], spec["model"],
                                   spec.get("api_key", ""),
                                   spec.get("prompt") or genre_prompt(genre),
-                                  no_reasoning=spec.get("no_reasoning", True))
+                                  no_reasoning=spec.get("no_reasoning", True),
+                                  glossary=block)
         remote.min_chars = min_chars
         return WithFallback(remote, Lazy(LocalM2M))
     local = LocalM2M()

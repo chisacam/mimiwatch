@@ -56,7 +56,7 @@ def test_system_exit_in_worker_becomes_job_error(monkeypatch):
     _seed_video()
     import translate
 
-    def boom(spec, genre=None):
+    def boom(spec, genre=None, glossary=None):
         raise SystemExit("yt-dlp failed")
     monkeypatch.setattr(translate, "build", boom)
     r = jobs.start_retranslate(VID, "local-m2m100", None, None)
@@ -76,7 +76,7 @@ def test_cancel_stops_translation(monkeypatch):
     def slow(text, s, g, c):
         time.sleep(0.01)
         return "T:" + text
-    monkeypatch.setattr(translate, "build", lambda spec, genre=None: FakeTranslator(slow))
+    monkeypatch.setattr(translate, "build", lambda spec, genre=None, glossary=None: FakeTranslator(slow))
     r = jobs.start_retranslate(VID, "local-m2m100", None, None)
     jobs.cancel(r["id"])
     st = wait_job(r["id"])
@@ -98,7 +98,7 @@ def test_cancel_all_and_wait_idle_stop_running_jobs(monkeypatch):
     def slow(text, s, g, c):
         time.sleep(0.01)
         return "T:" + text
-    monkeypatch.setattr(translate, "build", lambda spec, genre=None: FakeTranslator(slow))
+    monkeypatch.setattr(translate, "build", lambda spec, genre=None, glossary=None: FakeTranslator(slow))
     r = jobs.start_retranslate(VID, "local-m2m100", None, None)
     assert r["id"] in jobs.running()
     assert jobs.cancel_all() == [r["id"]]

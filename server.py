@@ -843,6 +843,19 @@ class Handler(BaseHTTPRequestHandler):
     def post_video_delete(self, body):
         self._json(jobs.delete_video(body.get("id", ""), bool(body.get("keep_audio"))))
 
+    def get_glossaries(self):
+        self._json(store.all_glossaries())
+
+    def post_glossaries(self, body):
+        out = store.save_glossary(body.get("channel_key") or "",
+                                  body.get("name") or "",
+                                  body.get("terms") or [])
+        # The same channel as an edit -- the browser finds the open screens on it.
+        bus.publish({"type": "glossary", "id": body.get("channel_key") or "",
+                     "reason": "saved" if out is not None else "deleted"})
+        self._json(out if out is not None
+                   else {"channel_key": body.get("channel_key") or ""})
+
     def post_transcribe(self, body):
         url = (body.get("url") or "").strip()
         if not url:
@@ -854,7 +867,10 @@ class Handler(BaseHTTPRequestHandler):
             body.get("asr") or "",
             bool(body.get("speakers")),
             body.get("genre"),
-            bool(body.get("refine", True))))
+            bool(body.get("refine", True)),
+            body.get("site") or "",
+            body.get("channel") or "",
+            body.get("channel_name") or ""))
 
     def _keep_masked_key(self, kind: str, entry: dict) -> dict:
         """If the screen sent the masked key (KEY_MASK) straight back, the
@@ -972,6 +988,7 @@ GET_ROUTES = {
     "/api/setup": Handler.get_setup,
     "/api/cookies": Handler.get_cookies,
     "/api/update": Handler.get_update,
+    "/api/glossaries": Handler.get_glossaries,
 }
 # Paths with a tail. The longer prefix has to come first so that `/api/video/`
 # does not swallow `/api/videos` -- an exact path is looked up in the dict above
@@ -1025,6 +1042,7 @@ POST_ROUTES = {
     "/api/update/check": Handler.post_update_check,
     "/api/update/download": Handler.post_update_download,
     "/api/update/apply": Handler.post_update_apply,
+    "/api/glossaries": Handler.post_glossaries,
 }
 
 

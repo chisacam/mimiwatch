@@ -86,6 +86,12 @@ CREATE TABLE IF NOT EXISTS docs (
   updated  REAL NOT NULL,
   doc      TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS glossaries (
+  channel_key TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  terms       TEXT NOT NULL DEFAULT '[]',
+  updated     REAL NOT NULL
+);
 """
 
 # Column names changed. A file made by an older version has `session` and `t`,
@@ -523,6 +529,63 @@ def delete_doc(video_id: str):
         db.execute("DELETE FROM cues WHERE owner = ?", (video_id,))
         db.execute("DELETE FROM docs WHERE id = ?", (video_id,))
         db.commit()
+
+
+# ---- Glossaries --------------------------------------------------------------
+
+def channel_key(site: str, channel: str, manual_name: str = "") -> str:
+    """The key a glossary is looked up by. The rule lives in one place, so the
+    web, the jobs and the live sessions all derive the same key.
+
+    An extracted channel keys as `{site}:{channel}` (youtube:UC…, twitch:login);
+    a name a person typed when the extraction was empty keys as `manual:{name}`.
+    Neither present means no key, and the job matches no glossary -- which the
+    UI shows, instead of letting the miss stay silent.
+    """
+    if (channel or "").strip():
+        return f"{site or 'other'}:{channel.strip()}"
+    if (manual_name or "").strip():
+        return "manual:" + manual_name.strip()
+    return ""
+
+
+def glossary(channel_key: str) -> dict | None:
+    rows = _rows("SELECT channel_key, name, terms, updated FROM glossaries "
+                 "WHERE channel_key = ?", (channel_key or "",))
+    if not rows:
+        return None
+    r = rows[0]
+    return {"channel_key": r["channel_key"], "name": r["name"],
+            "terms": json.loads(r["terms"]), "updated": r["updated"]}
+
+
+def all_glossaries() -> list[dict]:
+    out = []
+    for r in _rows("SELECT channel_key, name, terms, updated FROM glossaries "
+                   "ORDER BY name"):
+        out.append({"channel_key": r["channel_key"], "name": r["name"],
+                    "terms": json.loads(r["terms"]),
+                    "updated": r["updated"]})
+    return out
+
+
+def save_glossary(channel_key: str, name: str, terms: list) -> dict | None:
+    """Create or replace a glossary. An empty term list deletes the row --
+    the editor saves "nothing" as a removal instead of a second button."""
+    channel_key = (channel_key or "").strip()
+    if not channel_key:
+        return None
+    if not terms:
+        _write("DELETE FROM glossaries WHERE channel_key = ?", (channel_key,))
+        return None
+    _write(
+        "INSERT INTO glossaries (channel_key, name, terms, updated) "
+        "VALUES (?, ?, ?, ?) ON CONFLICT(channel_key) DO UPDATE SET "
+        "name = excluded.name, terms = excluded.terms, "
+        "updated = excluded.updated",
+        (channel_key, (name or "").strip(),
+         json.dumps(terms, ensure_ascii=False), time.time()))
+    return glossary(channel_key)
 
 
 LEGACY = os.path.join(DATA, "legacy")

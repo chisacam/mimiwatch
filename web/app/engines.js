@@ -169,6 +169,7 @@ function openSettings() {
   showEngineList();
   loadModels();        // read afresh on every open -- a file may have been put there by hand
   loadCookies();
+  loadGlossaries();    // ditto -- a channel list edited in another tab must show
   if (!$("settings-dialog").open) $("settings-dialog").showModal();
 }
 
@@ -287,6 +288,7 @@ function closeWindows(stopped) {
 function showEngineList() {
   $("engine-form").hidden = true;
   $("model-form").hidden = true;
+  $("glossary-form").hidden = true;
   $("settings-body").hidden = false;
   renderEngineList("asr");
   renderEngineList("tr");
@@ -815,4 +817,120 @@ MW_I18N.onChange(() => {
     renderEngineList("tr");
   }
   if (state.models) { renderModelList(); refreshSetupNotice(); }
+  renderGlossaryList();
 });
+
+/* ---------- channel glossaries ----------
+ * A glossary is a list of source → target terms kept per channel, written
+ * into the translation prompt (docs/GLOSSARY.md). One line of the textarea
+ * is one term; the server stores what the lines say. */
+let glossaries = [];
+
+async function loadGlossaries() {
+  glossaries = (await fetch("/api/glossaries")).json().catch(() => []) || [];
+  renderGlossaryList();
+}
+
+function renderGlossaryList() {
+  const box = $("glossary-list");
+  if (!box) return;
+  box.textContent = "";
+  if (!glossaries.length) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = t("settings.glossary.empty");
+    box.appendChild(p);
+    return;
+  }
+  glossaries.forEach(g => {
+    const row = document.createElement("div");
+    row.className = "engine-row";
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = g.name || g.channel_key;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = `${g.channel_key} · ` +
+      t("settings.glossary.row.terms", { n: g.terms.length });
+    name.appendChild(meta);
+    const edit = document.createElement("button");
+    edit.textContent = t("engines.row.edit");
+    edit.addEventListener("click", () => showGlossaryForm(g));
+    row.append(name, edit);
+    box.appendChild(row);
+  });
+}
+
+/* One line is one term: source → target. The arrow may be typed as ->,
+ * because a hardware keyboard does not always hand a → over. */
+function parseTerms(text) {
+  const out = [];
+  text.split(/\r?\n/).forEach(line => {
+    const m = line.split(/\s*(?:→|->)\s*/);
+    if (m.length === 2 && m[0].trim() && m[1].trim())
+      out.push({ from: m[0].trim(), to: m[1].trim() });
+  });
+  return out;
+}
+
+function showGlossaryForm(g) {
+  const f = $("glossary-form");
+  f.dataset.channelKey = g ? g.channel_key : "";
+  $("glossary-form-title").textContent = g
+    ? t("settings.glossary.form.edit", { name: g.name || g.channel_key })
+    : t("settings.glossary.form.add");
+  f.name.value = g ? g.name : "";
+  f.key.value = g ? g.channel_key : "";
+  f.terms.value = g ? g.terms.map(x => `${x.from} → ${x.to}`).join("\n") : "";
+  $("glossary-form-delete").hidden = !g;
+  $("glossary-form-error").hidden = true;
+  $("settings-body").hidden = true;
+  $("engine-form").hidden = true;
+  $("model-form").hidden = true;
+  f.hidden = false;
+}
+
+function backToEngineList() {
+  $("glossary-form").hidden = true;
+  showEngineList();
+}
+
+async function saveGlossaryForm(e) {
+  e.preventDefault();
+  const f = e.target;
+  const name = (f.name.value || "").trim();
+  // A name typed where the key is unknown keys as manual:name -- the rule the
+  // server applies (store.channel_key), mirrored here so the form answers
+  // without a round trip.
+  const key = (f.key.value || "").trim() || (name ? "manual:" + name : "");
+  if (!key) { jobErrorGlossary(t("settings.glossary.form.name")); return; }
+  const res = await (await fetch("/api/glossaries", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channel_key: key, name,
+                           terms: parseTerms(f.terms.value) }),
+  })).json();
+  if (res.error) { jobErrorGlossary(res.error); return; }
+  await loadGlossaries();
+  backToEngineList();
+}
+
+function jobErrorGlossary(msg) {
+  const p = $("glossary-form-error");
+  p.textContent = msg;
+  p.hidden = false;
+}
+
+async function deleteGlossary(key) {
+  if (!key) return;
+  await fetch("/api/glossaries", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channel_key: key, terms: [] }) });
+  await loadGlossaries();
+  backToEngineList();
+}
+
+$("glossary-add").addEventListener("click", () => showGlossaryForm(null));
+$("glossary-form-back").addEventListener("click", backToEngineList);
+$("glossary-form-delete").addEventListener("click",
+  () => deleteGlossary($("glossary-form").dataset.channelKey));
+$("glossary-form").addEventListener("submit", saveGlossaryForm);

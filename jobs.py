@@ -300,7 +300,12 @@ def _translate_rows(job_id: str, owner: str, spec: dict, meta: dict,
     hand-edited lines taken out -- that judgement is the caller's, and it
     records it as `kept`.
     """
-    tr = mw_translate.build(spec, genre)
+    # The channel's glossary, when the video's channel has one. An engine that
+    # uses no prompt (M2M-100) takes it nowhere; a prompt engine writes it into
+    # the next line and on.
+    g = store.glossary(meta.get("channel_key") or "")
+    terms = (g or {}).get("terms") or []
+    tr = mw_translate.build(spec, genre, terms)
     bid = spec.get("id") or config.PROTECTED["tr"]
     tgt = meta.get("viewer_lang") or "ko"
     by_id = {c["id"]: i for i, c in enumerate(cues)}
@@ -309,7 +314,9 @@ def _translate_rows(job_id: str, owner: str, spec: dict, meta: dict,
     def progress(n):
         _note(job_id, done=n, skipped=skipped,
               degraded=bool(getattr(tr, "tripped", False)),
-              failures=getattr(tr, "failures", 0))
+              failures=getattr(tr, "failures", 0),
+              glossary=(g["name"] if g else ""),
+              glossary_terms=len(terms))
 
     for n, c in enumerate(todo):
         if _cancelled(job_id):
@@ -427,7 +434,8 @@ def start_retranslate(value: str, backend_id: str, cue_ids=None,
 def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                      backend_id: str = "", asr_id: str = "",
                      speakers: bool = False, genre: str | None = None,
-                     refine: bool = True) -> dict:
+                     refine: bool = True, site: str = "", channel: str = "",
+                     channel_name: str = "") -> dict:
     """Take a URL from the UI all the way to a playable cue file.
 
     Everything the CLI does, driven from the browser, with the phase reported
@@ -443,14 +451,16 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                       genre=genre or mw_translate.DEFAULT_GENRE)
     _spawn(job_id, _run_transcribe,
            (job_id, url, lang, viewer_lang, backend_id, asr_id, speakers, genre,
-            refine))
+            refine, site, channel, channel_name))
     return {"id": job_id}
 
 
 def _run_transcribe(job_id: str, url: str, lang: str | None,
                     viewer_lang: str, backend_id: str,
                     asr_id: str = "", speakers: bool = False,
-                    genre: str | None = None, refine: bool = True):
+                    genre: str | None = None, refine: bool = True,
+                    site: str = "", channel: str = "",
+                    channel_name: str = ""):
     def note(**kw):
         _note(job_id, **kw)
 
@@ -551,10 +561,17 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
         if kept:
             print(f"[job] kept {kept} existing translations", flush=True)
 
+        # The channel the glossary is looked up by. The web sent the probe's
+        # own answer up (site, channel), so the doc and the lookup agree even
+        # when the probe shape changes under the web.
         doc = {**meta, "source_lang": source_lang, "lang_counts": counts,
                "viewer_lang": viewer_lang, "translated": bool(kept),
                "genre": genre or mw_translate.DEFAULT_GENRE,
-               "audio_seconds": round(audio_s, 1), "cues": merged}
+               "audio_seconds": round(audio_s, 1), "cues": merged,
+               "channel_key": store.channel_key(
+                   site or meta.get("site") or "",
+                   channel or meta.get("channel") or "", channel_name),
+               "channel_name": (channel_name or "").strip()}
         save_video(meta["id"], doc)
         note(kept=kept)
 

@@ -52,6 +52,7 @@ DOCS = [d for d in DOCS if not d.endswith(".ko.md")]
 QUOTED = [
     ("header.manage", "Manage"),
     ("manage.engines", "⚙ Engines"),
+    ("settings.glossary.title", "Glossary"),
     ("settings.models.title", "Models & Tools"),
     ("settings.update.title", "Update"),
     ("settings.update.check", "Check for updates"),

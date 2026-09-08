@@ -296,6 +296,10 @@
       <input name="tab_title" data-i18n-attr="placeholder:add.name.placeholder">
       <small data-i18n="add.name.hint"></small>
     </label>
+    <label id="channel-field" hidden><span data-i18n="add.channel"></span>
+      <input name="channel_name" data-i18n-attr="placeholder:add.channel.placeholder">
+      <small data-i18n="add.channel.hint"></small>
+    </label>
     <label><span data-i18n="add.genre"></span>
       <select name="genre"></select>
       <small id="genre-hint" data-i18n="add.genre.hint"></small>
@@ -466,6 +470,15 @@
       <p class="hint" id="update-hint">—</p>
     </section>
 
+    <section class="engine-group" id="glossary-group">
+      <div class="group-head">
+        <h4 data-i18n="settings.glossary.title"></h4>
+        <button id="glossary-add" class="seg ghost" data-i18n="settings.glossary.add"></button>
+      </div>
+      <p class="hint" data-i18n="settings.glossary.hint"></p>
+      <div id="glossary-list" class="engine-list"></div>
+    </section>
+
     <section class="engine-group" id="shutdown-group">
       <div class="group-head">
         <h4 data-i18n="settings.server.title"></h4>
@@ -534,6 +547,30 @@
     <div class="row">
       <span class="grow"></span>
       <button type="submit" class="primary" data-i18n="engine.submit"></button>
+    </div>
+  </form>
+
+  <!-- One channel's glossary: a name, the key it is looked up by, and the
+       terms, one line each. docs/GLOSSARY.md. -->
+  <form id="glossary-form" hidden>
+    <div class="dlg-head">
+      <h3 id="glossary-form-title" data-i18n="settings.glossary.form.add"></h3>
+      <button type="button" id="glossary-form-back" class="seg" data-i18n="settings.glossary.form.back"></button>
+    </div>
+    <label><span data-i18n="settings.glossary.form.name"></span> <input name="name" required data-i18n-attr="placeholder:settings.glossary.form.namePlaceholder"></label>
+    <label><span data-i18n="settings.glossary.form.key"></span> <input name="key" data-i18n-attr="placeholder:settings.glossary.form.keyPlaceholder">
+      <small data-i18n="settings.glossary.form.keyHint"></small>
+    </label>
+    <label><span data-i18n="settings.glossary.form.terms"></span>
+      <textarea name="terms" rows="8" data-i18n-attr="placeholder:settings.glossary.form.termsPlaceholder"></textarea>
+      <small data-i18n="settings.glossary.form.termsHint"></small>
+    </label>
+    <p class="hint" data-i18n="settings.glossary.form.warn"></p>
+    <p class="hint" id="glossary-form-error" hidden></p>
+    <div class="row">
+      <span class="grow"></span>
+      <button type="button" id="glossary-form-delete" class="seg danger" data-i18n="settings.glossary.form.delete"></button>
+      <button type="submit" class="primary" data-i18n="settings.glossary.form.save"></button>
     </div>
   </form>
 </dialog>

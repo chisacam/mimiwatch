@@ -159,7 +159,7 @@ def fake_translate(monkeypatch):
     """Fake out `translate.build`. Returns the translators it made."""
     made: list[FakeTranslator] = []
 
-    def build(spec, genre=None):
+    def build(spec, genre=None, glossary=None):
         t = FakeTranslator()
         t.spec, t.genre = spec, genre
         made.append(t)

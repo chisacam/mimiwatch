@@ -86,8 +86,9 @@ measurement.
 .venv/bin/ruff check .                # CI runs this too
 ```
 
-`check_all.py` runs, in order: compile every root `*.py`; `bench/edit_check.py`,
-`export_check.py`, `ext_check.py`, `live_errors.py`; then `pytest -q tests/`.
+`check_all.py` runs, in order: compile every root `*.py`; every `bench/*_check.py`
+(found by name, so a new check is picked up without editing the list; `live_errors.py`
+predates the `_check` naming and is added explicitly); then `pytest -q tests/`.
 Nothing in it loads a model or touches the network. CI
 (`.github/workflows/check.yml`) runs `ruff check .`, `pytest`, `bench/ext_check.py`
 on pushes and PRs to `main`; there the transcribe.cpp runtime is absent and

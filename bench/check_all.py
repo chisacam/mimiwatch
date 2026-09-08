@@ -17,8 +17,11 @@ import sys
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Only checks that leave the store alone and load no model.
-CHECKS = ["edit_check", "export_check", "ext_check", "live_errors"]
+# Only checks that leave the store alone and load no model. The `*_check.py`
+# ones are found by name, so a new check is picked up without editing this
+# list. `live_errors` predates the `_check` naming.
+CHECKS = sorted(n[:-len(".py")] for n in os.listdir(os.path.join(HERE, "bench"))
+                if n.endswith("_check.py")) + ["live_errors"]
 
 
 def main() -> int:

@@ -231,6 +231,18 @@ the cut is a few seconds then, so it picks up right away inside the DVR window.
 **It does not resume automatically.** Resuming reception after the server
 comes back up requires explicit user action (clicking the button).
 
+### Searching the library
+
+The video list has a search box. It searches **the subtitle text, not the
+titles** — both the source lines and their translations — across the whole
+library. You type words and the list becomes the matching lines, each with the
+video name and its moment; pressing a line opens the video and moves there.
+
+It searches by word: every word you type must stand in a line (a line that
+holds all of them matches), and the marked stretch shows the place it stood.
+That is how you find the line half remembered — "the one where they said
+mimi".
+
 ### Re-transcribing
 
 Hovering a VOD row in the list shows **⟳**. Pressing it opens the "Add video"

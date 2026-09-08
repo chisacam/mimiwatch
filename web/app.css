@@ -344,6 +344,12 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   padding:.75rem 1rem; border-bottom:1px solid var(--line);
 }
 .panel-head h2{margin:0; font-size:.72rem; letter-spacing:.22em; color:var(--dim); font-weight:700}
+.panel-search{
+  flex:none; padding:.5rem 1rem .3rem;
+}
+.panel-search input{
+  width:100%; box-sizing:border-box;
+}
 .script{
   flex:1; overflow-y:auto; padding:.5rem 0 3rem; scrollbar-width:thin;
   --script-size:13px;

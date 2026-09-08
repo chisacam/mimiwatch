@@ -235,6 +235,84 @@ function markVideoRow(value) {
   setNowTitle(row ? row.dataset.title : null);
 }
 
+/* Whole-library search. The box sits above the list, and while it holds text
+ * the list is the matches instead of the titles. A match is one line of
+ * subtitle (the source or its translation) with its moment, and pressing it
+ * opens the owner and moves there. */
+let searchActive = false;
+let searchTimer = null;
+
+function onLibrarySearchInput() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runLibrarySearch, 300);
+}
+
+async function runLibrarySearch() {
+  const box = $("library-search");
+  const list = $("video-list");
+  const q = (box.value || "").trim();
+  if (!q) {
+    searchActive = false;
+    refreshVideoList();
+    return;
+  }
+  const res = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
+  if (($("library-search").value || "").trim() !== q) return;    // it moved on
+  searchActive = true;
+  list.textContent = "";
+  (res.results || []).forEach(r => list.appendChild(searchRow(r)));
+  if (!list.children.length) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = t("library.search.empty");
+    list.appendChild(e);
+  }
+}
+
+function searchRow(r) {
+  const row = document.createElement("div");
+  row.className = "video-row search";
+  row.dataset.value = r.value;
+  const th = document.createElement("img");
+  th.className = "vth blank";
+  th.alt = "";
+  row.appendChild(th);
+  const body = document.createElement("div");
+  const tt = document.createElement("div");
+  tt.className = "vt";
+  tt.textContent = r.title || r.value;
+  body.appendChild(tt);
+  const m = document.createElement("div");
+  m.className = "vm";
+  // The server marks the matched word with «». When the match is in the
+  // translation, the source snippet has no mark and the translation side is
+  // the one to show.
+  const s = (r.snip && r.snip.indexOf("«") >= 0) ? r.snip
+          : (r.snip_tr && r.snip_tr.indexOf("«") >= 0) ? r.snip_tr
+          : (r.text || "");
+  m.textContent = (r.start ? fmt(r.start) + "  ·  " : "") + s;
+  body.appendChild(m);
+  row.appendChild(body);
+  row.addEventListener("click", () => openSearchResult(r));
+  return row;
+}
+
+async function openSearchResult(r) {
+  const sid = r.value.startsWith("live:") ? r.value.slice(5) : null;
+  if (sid) {
+    const t = tileBySession(sid);
+    if (t) setFocus(t);
+    else await resumeLive(sid);
+  } else {
+    if (state.live) {
+      // Same rule as openFromList: a VOD does not cut the reception.
+      (state.live.source === "tab" ? stopLive() : detachLive());
+    }
+    await loadVideo(r.value);
+  }
+  if (r.start != null && state.player) state.player.seekTo(r.start);
+}
+
 /* The bar up top is the place that answers "what am I watching right now". */
 function setNowTitle(title) {
   const el = $("now-title");
@@ -244,6 +322,9 @@ function setNowTitle(title) {
 }
 
 async function refreshVideoList(selectId, pre) {
+  // While the search box holds text, the list is the matches, not the titles.
+  // A library change in that state is skipped: clearing the box redraws.
+  if (searchActive) return;
   // At start-up it is handed what has already been fetched. init used to send
   // two requests and this function then sent the same two again.
   const [list, sessions] = pre || await Promise.all([

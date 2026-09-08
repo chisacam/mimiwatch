@@ -399,6 +399,14 @@ MW_I18N.add({
     en: "Videos",
     ko: "영상"
   },
+  "library.search.ph": {
+    en: "Search the subtitles…",
+    ko: "자막 검색…"
+  },
+  "library.search.empty": {
+    en: "Nothing matches.",
+    ko: "맞는 줄이 없습니다."
+  },
   "manage.asr": {
     en: "Transcription",
     ko: "전사"

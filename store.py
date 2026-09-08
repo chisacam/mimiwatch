@@ -92,6 +92,12 @@ CREATE TABLE IF NOT EXISTS glossaries (
   terms       TEXT NOT NULL DEFAULT '[]',
   updated     REAL NOT NULL
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS cues_fts USING fts5(
+  owner UNINDEXED,
+  cue_id UNINDEXED,
+  text,
+  tr_text
+);
 """
 
 # Column names changed. A file made by an older version has `session` and `t`,
@@ -144,7 +150,8 @@ def _migrate_columns(db: sqlite3.Connection):
 
 def init():
     with _lock:
-        _connect()
+        db = _connect()
+        _fts_resync(db)
 
 
 def _write(sql: str, args: tuple = ()):
@@ -224,6 +231,7 @@ def delete_session(session_id: str) -> bool:
     with _lock:
         db = _connect()
         db.execute("DELETE FROM cues WHERE owner = ?", (session_id,))
+        _fts_sync(db, session_id)
         cur = db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         db.commit()
         return cur.rowcount > 0
@@ -260,6 +268,7 @@ def save_cue(session_id: str, cue: dict):
             float(cue.get("t") or 0), float(cue.get("end") or 0),
             cue.get("text") or "",
             cue.get("lang") or "", cue.get("speaker") or ""))
+    _fts_sync(_connect(), session_id)
 
 
 def drop_cues(session_id: str, cue_ids: list[int]):
@@ -268,6 +277,7 @@ def drop_cues(session_id: str, cue_ids: list[int]):
     marks = ",".join("?" * len(cue_ids))
     _write(f"DELETE FROM cues WHERE owner = ? AND cue_id IN ({marks})",
            (session_id, *[int(i) for i in cue_ids]))
+    _fts_sync(_connect(), session_id)
 
 
 def save_translation(session_id: str, cue_id: int, backend: str, text: str):
@@ -292,6 +302,7 @@ def save_translation(session_id: str, cue_id: int, backend: str, text: str):
                    "WHERE owner = ? AND cue_id = ?",
                    (json.dumps(tr, ensure_ascii=False), ",".join(sorted(flags)),
                     session_id, int(cue_id)))
+        _fts_sync(db, session_id)
         db.commit()
 
 
@@ -346,6 +357,7 @@ def replace_cues(owner: str, rows: list[dict]):
               json.dumps(c.get("translations") or {}, ensure_ascii=False),
               c.get("edited") or "")
              for i, c in enumerate(rows)])
+        _fts_sync(db, owner)
         db.commit()
 
 
@@ -373,6 +385,10 @@ def update_cue(owner: str, cue_id: int, **fields) -> bool:
                          "WHERE owner = ? AND cue_id = ?",
                          (*args, owner, int(cue_id)))
         db.commit()
+        # Only fields the search reads are worth a resync. A timing fix
+        # (start/end) moves a line, it does not change what it says.
+        if cur.rowcount > 0 and ("text" in cols or tr is not None):
+            _fts_sync(db, owner)
         return cur.rowcount > 0
 
 
@@ -443,6 +459,9 @@ def edit_cue(owner: str, cue_id: int, *, text=None, tr=None, backend="",
         args.append(",".join(sorted(flags)))
         db.execute(f"UPDATE cues SET {', '.join(cols)} "
                    "WHERE owner = ? AND cue_id = ?", (*args, owner, int(cue_id)))
+        # cols here is the list of `col = ?` clauses, so the fields are written out.
+        if "text = ?" in cols or "tr = ?" in cols:
+            _fts_sync(db, owner)
         db.commit()
         got = db.execute("SELECT * FROM cues WHERE owner = ? AND cue_id = ?",
                          (owner, int(cue_id))).fetchone()
@@ -480,6 +499,7 @@ def insert_cue(owner: str, start: float, text: str, *, lang: str = "",
                    "speaker, tr, edited) VALUES (?,?,?,?,?,?,?,?,?,?)",
                    (owner, cue_id, "final", float(start), float(end or 0), text,
                     lang, "", json.dumps(trs, ensure_ascii=False), "tr" if tr else ""))
+        _fts_sync(db, owner)
         db.commit()
         got = db.execute("SELECT * FROM cues WHERE owner = ? AND cue_id = ?",
                          (owner, cue_id)).fetchone()
@@ -494,6 +514,7 @@ def delete_cue(owner: str, cue_id: int) -> bool:
         db = _connect()
         cur = db.execute("DELETE FROM cues WHERE owner = ? AND cue_id = ?",
                          (owner, int(cue_id)))
+        _fts_sync(db, owner)
         db.commit()
         return cur.rowcount > 0
 
@@ -527,6 +548,7 @@ def delete_doc(video_id: str):
     with _lock:
         db = _connect()
         db.execute("DELETE FROM cues WHERE owner = ?", (video_id,))
+        _fts_sync(db, video_id)
         db.execute("DELETE FROM docs WHERE id = ?", (video_id,))
         db.commit()
 
@@ -586,6 +608,95 @@ def save_glossary(channel_key: str, name: str, terms: list) -> dict | None:
         (channel_key, (name or "").strip(),
          json.dumps(terms, ensure_ascii=False), time.time()))
     return glossary(channel_key)
+
+
+# ---- Full-text search ----------------------------------------------------------
+#
+# `cues_fts` is an ordinary FTS5 table, not an external-content one. An
+# external-content table trusts that the table it mirrors stays in step, and
+# keeping that promise row by row is more code than it is worth. Every cue
+# write path resyncs its owner's whole set instead: an owner's cues are at
+# most a few thousand rows, a rebuild is cheap, and a drifted table would
+# cost a wrong search answer. The `tr` column holds a JSON object keyed by
+# backend, so the translation side is flattened to one string with Python's
+# json, the same way the rest of this file treats the column.
+
+def _fts_sync(db: sqlite3.Connection, owner: str) -> None:
+    """Put one owner's cues back into the FTS table. The caller holds the lock.
+
+    It does not commit: the write that triggered it commits, and a start-up
+    resync commits for all of them at once."""
+    db.execute("DELETE FROM cues_fts WHERE owner = ?", (owner,))
+    rows = db.execute(
+        "SELECT cue_id, text, tr FROM cues WHERE owner = ?",
+        (owner,)).fetchall()
+    db.executemany(
+        "INSERT INTO cues_fts (owner, cue_id, text, tr_text) VALUES (?,?,?,?)",
+        [(owner, r["cue_id"], r["text"] or "",
+          " ".join(str(v) for v in (json.loads(r["tr"] or "{}").values() or []) if v))
+         for r in rows])
+
+
+def _fts_resync(db: sqlite3.Connection) -> None:
+    """Wipe the whole FTS table and rebuild it from the cues. The caller holds
+    the lock.
+
+    It runs once at every start: the table a write cut short, or a version
+    that did not know the table at all, left half stale cannot outlive one
+    restart. The cost is the size of the subtitle table, which is small."""
+    db.execute("DELETE FROM cues_fts")
+    owners = [r["owner"] for r in db.execute("SELECT DISTINCT owner FROM cues")]
+    for owner in owners:
+        _fts_sync(db, owner)
+    db.commit()
+
+
+def search(q: str, limit: int = 50) -> list[dict]:
+    """Full-text search over the subtitle source text and its translations.
+
+    The query is free text, not FTS5 syntax: each whitespace-separated word
+    is quoted and the words stand in AND. A word that contains a quote is
+    doubled inside, the way a quoted FTS5 term says a literal quote, so
+    nothing the user types can break the statement."""
+    words = ['"' + w.replace('"', '""') + '"' for w in (q or "").split()]
+    if not words:
+        return []
+    # The time and the text come back from the cues table: the FTS table holds
+    # the words, the cues table holds the shape of the line.
+    rows = _rows(
+        "SELECT c.owner, c.cue_id, c.start, c.text, "
+        "snippet(cues_fts, 2, '«', '»', '…', 8) AS snip, "
+        "snippet(cues_fts, 3, '«', '»', '…', 8) AS snip_tr "
+        "FROM cues_fts JOIN cues c ON c.owner = cues_fts.owner "
+        " AND c.cue_id = cues_fts.cue_id "
+        "WHERE cues_fts MATCH ? ORDER BY rank LIMIT ?",
+        (" ".join(words), limit))
+    return [dict(r) for r in rows]
+
+
+def owner_kind(owner: str) -> str:
+    """Whether the owner of a subtitle set is a live session or a video.
+
+    The on-screen list writes the two kinds apart (`live:<session>` and a
+    video id); the table keeps the bare owner, so this is what tells them
+    back apart."""
+    if _rows("SELECT 1 FROM sessions WHERE id = ?", (owner,)):
+        return "live"
+    return "video"
+
+
+def owner_title(owner: str) -> str:
+    """The title the screen has for a subtitle set's owner. A live session
+    falls back to its address, a video to its id."""
+    r = _rows("SELECT doc FROM sessions WHERE id = ?", (owner,))
+    if r:
+        d = json.loads(r[0]["doc"] or "{}")
+        return d.get("title") or d.get("url") or owner
+    r = _rows("SELECT doc FROM docs WHERE id = ?", (owner,))
+    if r:
+        d = json.loads(r[0]["doc"] or "{}")
+        return d.get("title") or owner
+    return owner
 
 
 LEGACY = os.path.join(DATA, "legacy")

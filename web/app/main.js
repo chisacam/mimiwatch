@@ -167,6 +167,8 @@ function bind() {
     $("add-dialog").showModal();
   };
   $("add-video").addEventListener("click", () => openAddDialog(""));
+  if ($("library-search"))
+    $("library-search").addEventListener("input", onLibrarySearchInput);
   $("mv-add").addEventListener("click", () => openAddDialog("tile"));
   document.querySelector('#add-form input[name="refine"]')
     .addEventListener("change", e => { state.refine = e.target.checked; persist(); });

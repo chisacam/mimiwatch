@@ -71,3 +71,61 @@ def test_insert_cue_translation_is_hand_edited():
     # The source alone carries no mark -- a machine translation has to be able to land on it.
     got2 = store.insert_cue("v", 3.0, "c")
     assert got2["translations"] == {} and got2["edited"] == ""
+
+
+def test_search_finds_source_and_translation():
+    store.replace_cues("v1", [{"start": 0, "text": "hello mimi",
+                               "translations": {"g": "미미 안녕"}}])
+    store.replace_cues("v2", [{"start": 5, "text": "goodbye"}])
+    assert [r["owner"] for r in store.search("mimi")] == ["v1"]
+    assert [r["owner"] for r in store.search("미미")] == ["v1"]
+    assert store.search("zzz") == []
+    assert store.search("") == []
+
+
+def test_search_keeps_step_with_cue_writes():
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": "quantum fox"})
+    assert [r["owner"] for r in store.search("quantum")] == ["s"]
+    assert store.search("fox")
+    store.edit_cue("s", 1, text="quantum cat")
+    assert store.search("quantum")
+    assert store.search("fox") == []
+    store.delete_cue("s", 1)
+    assert store.search("quantum") == []
+
+
+def test_search_quotes_cannot_break_the_match():
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": 'say "hi" loudly'})
+    assert [r["owner"] for r in store.search('"hi"')] == ["s"]
+    # An FTS operator coming in from the user is a plain word, not syntax.
+    assert store.search("AND") == []
+    assert store.search("NEAR") == []
+
+
+def test_search_snippet_marks_the_word():
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": "the quick brown fox"})
+    r = store.search("fox")[0]
+    assert "«" in r["snip"]
+
+
+def test_owner_kind_and_title():
+    store.save_session({"id": "s1", "state": "stopped", "title": "Stream A",
+                        "url": "https://x"})
+    assert store.owner_kind("s1") == "live"
+    assert store.owner_title("s1") == "Stream A"
+    store.save_doc("v9", {"title": "Video B"})
+    assert store.owner_kind("v9") == "video"
+    assert store.owner_title("v9") == "Video B"
+    assert store.owner_title("nobody") == "nobody"
+
+
+def test_fts_resync_repairs_a_drifted_table():
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": "needle"})
+    assert store.search("needle")
+    with store._lock:
+        db = store._connect()
+        db.execute("DELETE FROM cues_fts")
+        db.commit()
+    assert store.search("needle") == []      # drifted
+    store.init()                             # the start-up resync repairs it
+    assert store.search("needle")

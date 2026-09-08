@@ -846,6 +846,19 @@ class Handler(BaseHTTPRequestHandler):
     def get_glossaries(self):
         self._json(store.all_glossaries())
 
+    def get_search(self):
+        q = (self._query().get("q") or "").strip()
+        results = []
+        for r in store.search(q) if q else []:
+            kind = store.owner_kind(r["owner"])
+            results.append({
+                "value": ("live:" + r["owner"]) if kind == "live" else r["owner"],
+                "title": store.owner_title(r["owner"]),
+                "start": r["start"], "text": r["text"],
+                "snip": r["snip"], "snip_tr": r["snip_tr"],
+            })
+        self._json({"q": q, "results": results})
+
     def post_glossaries(self, body):
         out = store.save_glossary(body.get("channel_key") or "",
                                   body.get("name") or "",
@@ -989,6 +1002,7 @@ GET_ROUTES = {
     "/api/cookies": Handler.get_cookies,
     "/api/update": Handler.get_update,
     "/api/glossaries": Handler.get_glossaries,
+    "/api/search": Handler.get_search,
 }
 # Paths with a tail. The longer prefix has to come first so that `/api/video/`
 # does not swallow `/api/videos` -- an exact path is looked up in the dict above

@@ -610,4 +610,16 @@ MW_I18N.add({
     en: "The new version {tag} is taken. Restart and it is applied.",
     ko: "새 판 {tag}을 받아 두었습니다. 다시 시작하면 적용됩니다.",
   },
+  "update.token": {
+    en: "Repository token",
+    ko: "저장소 토큰",
+  },
+  "update.token.ph": {
+    en: "GitHub token (for a private repository)",
+    ko: "GitHub 토큰 (비공개 저장소용)",
+  },
+  "update.token.hint": {
+    en: "Kept in this browser and sent to api.github.com only. The MIMIWATCH_GITHUB_TOKEN environment variable works the same and also covers the automatic once-a-day check.",
+    ko: "이 브라우저에만 두고 api.github.com으로만 보내습니다. MIMIWATCH_GITHUB_TOKEN 환경 변수도 동일하며, 하루 한 번의 자동 검사까지 함께 커버합니다.",
+  },
 });

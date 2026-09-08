@@ -534,6 +534,12 @@ raises a notification strip at the top of the screen (also checked by hand in
   Models, settings and subtitles live outside the program, so they stay as they
   are.
 - **Running from the repository** it only tells you — get it with `git pull`.
+- **A private repository** answers 404 to the check and the readout says so
+  ("release not found (404) -- a private repository needs a token"). Put a
+  GitHub token in the field under "Update", or set the environment variable
+  `MIMIWATCH_GITHUB_TOKEN` (it also covers the automatic check). The token is
+  sent to api.github.com and nowhere else; the field's value is kept in this
+  browser only.
 
 To switch it off, put `"update_check": false` into `backends.json` or start it
 with the environment variable `MIMIWATCH_NO_UPDATE_CHECK=1`. Even with the check

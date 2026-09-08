@@ -474,6 +474,11 @@ Small**(241MB)도 함께 받아 둡니다. `backends.json`의 `asr_backends`에 
   판으로 다시 뜹니다. 옛 판은 같은 자리의 `.old`로 남아, 교체가 어긋나면
   그것으로 되돌립니다. 모델·설정·자막은 프로그램 밖에 있으므로 그대로입니다.
 - **저장소에서 돌면** 알리기만 합니다 — `git pull`로 받으십시오.
+- **비공개 저장소**는 검사에 404로 답합니다. 읽기가 그것을 그대로 말합니다
+  (「release not found (404) — a private repository needs a token」). 「판올림」
+  아래 단에 GitHub 토큰을 넣거나 환경변수 `MIMIWATCH_GITHUB_TOKEN`을 두십시오
+  (자동 검사도 함께 커버합니다). 토큰은 api.github.com에만 보내지고, 단에 쓴
+  값은 이 브라우저에만 둡니다.
 
 끄려면 `backends.json`에 `"update_check": false`를 넣거나 환경변수
 `MIMIWATCH_NO_UPDATE_CHECK=1`로 띄웁니다. 확인을 꺼도 「판올림」의

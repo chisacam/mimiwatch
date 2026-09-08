@@ -36,6 +36,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import bus
@@ -123,9 +124,23 @@ def pick_asset(assets: list[dict], platform: str | None = None,
         pat = re.compile(rf"^mimiwatch-.*-linux-{re.escape(mach)}\.tar\.gz$")
     for a in assets:
         if pat.match(a.get("name") or ""):
+            # `id` rides along so a token can fetch the asset through the API
+            # endpoint -- the browser address of a private release asset does
+            # not open unauthenticated (see `_download`).
             return {"name": a["name"], "url": a.get("browser_download_url") or "",
-                    "size": int(a.get("size") or 0)}
+                    "id": int(a.get("id") or 0), "size": int(a.get("size") or 0)}
     return None
+
+
+def _token_env() -> str:
+    """The token the shell provides. The field in the Update section covers a
+    check pressed by hand; the environment variable also covers the automatic
+    once-a-day check, which has no field to read."""
+    for name in ("MIMIWATCH_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        v = (os.environ.get(name) or "").strip()
+        if v:
+            return v
+    return ""
 
 
 # ---- Check ---------------------------------------------------------------------
@@ -140,11 +155,29 @@ def _cache_path() -> str:
     return os.path.join(_dir(), "check.json")
 
 
-def _get_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
+def _get_json(url: str, tok: str = "") -> dict:
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
+    if tok:
+        # A private repository answers 404 without this, and the 404 reads as
+        # "not found" -- the fix is a token, not a retry. The token goes to
+        # api.github.com only, the same host the request already names.
+        headers["Authorization"] = "Bearer " + tok
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.load(r)
+
+
+def _describe(exc: Exception) -> str:
+    """The error line the screen sees, with the two failures a private
+    repository makes named for what they are."""
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 404:
+            return ("check failed: release not found (404) -- a private "
+                    "repository needs a token in the Update section or in "
+                    "MIMIWATCH_GITHUB_TOKEN")
+        if exc.code == 403:
+            return "check failed: no access (403) -- check the token or the rate limit"
+    return f"check failed: {str(exc)[:200]}"
 
 
 def status() -> dict:
@@ -157,9 +190,12 @@ def status() -> dict:
     return st
 
 
-def check(force: bool = False) -> dict:
+def check(force: bool = False, token: str = "") -> dict:
     """Asks releases/latest and fixes up the state. The interval between checks is a
-    day -- the last result is left in a file so that a restart does not ask again."""
+    day -- the last result is left in a file so that a restart does not ask again.
+
+    `token` is a GitHub token for a private repository; a token from the
+    environment (`_token_env`) is used when none is pressed in."""
     with _lock:
         checked = _state["checked"]
         busy = _state["state"] in ("downloading", "applying")
@@ -179,13 +215,18 @@ def check(force: bool = False) -> dict:
         return status()
     if busy:
         return status()          # We do not swap the listing while downloading
+    tok = (token or "").strip() or _token_env()
     try:
-        rel = _get_json(API_LATEST)
+        rel = _get_json(API_LATEST, tok)
         tag = (rel.get("tag_name") or "").strip()
+        asset = pick_asset(rel.get("assets") or [])
+        if asset is not None:
+            # The release's own id, so a token can fetch the asset through the API.
+            asset["release_id"] = int(rel.get("id") or 0)
         latest = {"tag": tag,
                   "url": rel.get("html_url") or f"https://github.com/{REPO}/releases",
                   "notes": (rel.get("body") or "")[:2000],
-                  "asset": pick_asset(rel.get("assets") or [])}
+                  "asset": asset}
         with _lock:
             was = _state["available"]
             _state.update(checked=time.time(), latest=latest,
@@ -202,7 +243,7 @@ def check(force: bool = False) -> dict:
             _publish()           # Stands the banner up on any open screen
     except Exception as exc:
         with _lock:
-            _state.update(checked=time.time(), error=f"check failed: {str(exc)[:200]}")
+            _state.update(checked=time.time(), error=_describe(exc))
     return status()
 
 
@@ -216,7 +257,7 @@ def _publish():
 
 # ---- Download ------------------------------------------------------------------
 
-def download() -> dict:
+def download(token: str = "") -> dict:
     with _lock:
         if _state["state"] in ("downloading", "applying"):
             pass
@@ -225,21 +266,31 @@ def download() -> dict:
         else:
             _state.update(state="downloading", error=None, progress={"done": 0, "total": 0})
             asset = _state["latest"]["asset"]
+            tok = (token or "").strip() or _token_env()
             global _worker
-            _worker = threading.Thread(target=_download, args=(dict(asset),), daemon=True)
+            _worker = threading.Thread(target=_download, args=(dict(asset), tok), daemon=True)
             _worker.start()
     return status()
 
 
-def _download(asset: dict):
+def _download(asset: dict, tok: str = ""):
     dest = os.path.join(_dir(), os.path.basename(asset["name"]))
     part = dest + ".part"
+    url = asset["url"]
     try:
         have = os.path.getsize(part) if os.path.exists(part) else 0
         headers = {"User-Agent": USER_AGENT}
+        if tok:
+            # The browser address of a private release asset does not open
+            # unauthenticated. The API endpoint answers 302 to a signed copy,
+            # and it honours Range, so resume works the same way.
+            url = (f"https://api.github.com/repos/{REPO}"
+                   f"/releases/{asset.get('release_id') or 0}"
+                   f"/assets/{asset.get('id') or 0}?accept=application/octet-stream")
+            headers["Authorization"] = "Bearer " + tok
         if have:
             headers["Range"] = f"bytes={have}-"
-        req = urllib.request.Request(asset["url"], headers=headers)
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=60) as resp:
             if have and resp.status != 206:
                 have = 0

@@ -63,7 +63,7 @@ def test_check_caches_across_restart(monkeypatch):
 
     calls = []
 
-    def fake(url):
+    def fake(url, tok=""):
         calls.append(url)
         return {"tag_name": "v9.9.9", "html_url": "h", "body": "메모",
                 "assets": list(ASSETS)}
@@ -89,12 +89,92 @@ def test_check_caches_across_restart(monkeypatch):
 
 
 def test_check_failure_is_reported_not_raised(monkeypatch):
-    def boom(url):
+    def boom(url, tok=""):
         raise OSError("no network")
 
     monkeypatch.setattr(update, "_get_json", boom)
     st = update.check(force=True)
     assert st["available"] is False and "check failed" in st["error"]
+
+
+def test_check_sends_pressed_token(monkeypatch):
+    """A token pressed in goes out on the request, and the release's id rides
+    on the picked asset so a token can fetch it through the API endpoint."""
+    seen = {}
+
+    def fake(url, tok=""):
+        seen["tok"] = tok
+        return {"tag_name": "v9.9.9", "html_url": "h", "body": "", "id": 7,
+                "assets": list(ASSETS)}
+
+    for name in ("MIMIWATCH_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(update, "_get_json", fake)
+    st = update.check(force=True, token="sekrit")
+    assert seen["tok"] == "sekrit"
+    asset = st["latest"]["asset"]
+    if asset is not None:
+        assert asset["release_id"] == 7
+
+
+def test_check_falls_back_to_environment_token(monkeypatch):
+    seen = {}
+
+    def fake(url, tok=""):
+        seen["tok"] = tok
+        return {"tag_name": "v9.9.9", "html_url": "h", "body": "", "assets": list(ASSETS)}
+
+    monkeypatch.setenv("MIMIWATCH_GITHUB_TOKEN", "fromenv")
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(update, "_get_json", fake)
+    update.check(force=True)
+    assert seen["tok"] == "fromenv"
+    update._state.update(checked=0.0)
+    update.check(force=True, token="pressed")     # The pressed one wins.
+    assert seen["tok"] == "pressed"
+
+
+def test_check_404_reads_as_private_repository(monkeypatch):
+    import urllib.error
+
+    def boom(url, tok=""):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(update, "_get_json", boom)
+    st = update.check(force=True)
+    assert "404" in st["error"] and "token" in st["error"]
+
+
+def test_get_json_builds_authorization_header(monkeypatch):
+    import io
+
+    cap = {}
+
+    def fake_urlopen(req, timeout=None):
+        cap["auth"] = req.get_header("Authorization")
+        return io.BytesIO(b"{}")
+
+    monkeypatch.setattr(update.urllib.request, "urlopen", fake_urlopen)
+    update._get_json("https://api.github.com/x", tok="abc")
+    assert cap["auth"] == "Bearer abc"
+    update._get_json("https://api.github.com/x")
+    assert cap["auth"] is None
+
+
+def test_download_passes_token_through(monkeypatch):
+    got = []
+
+    def fake_download(asset, tok=""):
+        got.append(tok)
+
+    monkeypatch.setattr(update, "_download", fake_download)
+    update._state.update(available=True, state="idle",
+                         latest={"tag": "v0.4.0", "asset": {"name": "a.zip", "url": "u",
+                                                           "id": 1, "release_id": 2, "size": 1}})
+    update.download(token="tok123")
+    update._worker.join(2)
+    assert got == ["tok123"]
 
 
 def test_apply_refuses_repo_run():
@@ -108,7 +188,7 @@ def test_download_without_available_refuses():
 
 
 def test_status_never_touches_network(monkeypatch):
-    def boom(url):
+    def boom(url, tok=""):
         raise AssertionError("status() went out to the network")
 
     monkeypatch.setattr(update, "_get_json", boom)

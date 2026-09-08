@@ -960,10 +960,10 @@ class Handler(BaseHTTPRequestHandler):
         self._json(mw_update.status())
 
     def post_update_check(self, body):
-        self._json(mw_update.check(force=True))
+        self._json(mw_update.check(force=True, token=(body or {}).get("token") or ""))
 
     def post_update_download(self, body):
-        self._json(mw_update.download())
+        self._json(mw_update.download(token=(body or {}).get("token") or ""))
 
     def post_update_apply(self, body):
         res = mw_update.apply()

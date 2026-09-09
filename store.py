@@ -253,31 +253,46 @@ def save_cue(session_id: str, cue: dict):
     sentence, so the earlier translation is a translation of a sentence that is
     already wrong. The new translation arrives separately, soon.
     """
-    _write("INSERT INTO cues (owner, cue_id, kind, start, end, text, lang, speaker) "
-           "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-           "ON CONFLICT(owner, cue_id) DO UPDATE SET "
-           "  kind=excluded.kind, start=excluded.start, end=excluded.end, "
-           "  text=excluded.text, "
-           "  lang=excluded.lang, speaker=excluded.speaker, tr='{}'",
-           # `.get(k, "")` yields the default only when the key is missing.
-           # With the key present and the value None, None binds as it is,
-           # the column's DEFAULT '' does not apply either, and it hits NOT
-           # NULL. That does not cost one subtitle line, it ends the session,
-           # so the values are filtered once more here.
-           (session_id, int(cue["id"]), cue.get("kind") or "",
-            float(cue.get("t") or 0), float(cue.get("end") or 0),
-            cue.get("text") or "",
-            cue.get("lang") or "", cue.get("speaker") or ""))
-    _fts_sync(_connect(), session_id)
+    # The insert and the FTS resync sit in one lock: the connection is a
+    # shared object (check_same_thread=False), and a resync running outside
+    # the lock is a use the translation loop's locked write can land inside
+    # -- the same two-handed use of one connection sqlite answers with a
+    # "bad parameter" InterfaceError, which ended live sessions in the test
+    # suite's flake.
+    with _lock:
+        db = _connect()
+        db.execute("INSERT INTO cues (owner, cue_id, kind, start, end, text, lang, speaker) "
+                   "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                   "ON CONFLICT(owner, cue_id) DO UPDATE SET "
+                   "  kind=excluded.kind, start=excluded.start, end=excluded.end, "
+                   "  text=excluded.text, "
+                   "  lang=excluded.lang, speaker=excluded.speaker, tr='{}'",
+                   # `.get(k, "")` yields the default only when the key is missing.
+                   # With the key present and the value None, None binds as it is,
+                   # the column's DEFAULT '' does not apply either, and it hits NOT
+                   # NULL. That does not cost one subtitle line, it ends the session,
+                   # so the values are filtered once more here.
+                   (session_id, int(cue["id"]), cue.get("kind") or "",
+                    float(cue.get("t") or 0), float(cue.get("end") or 0),
+                    cue.get("text") or "",
+                    cue.get("lang") or "", cue.get("speaker") or ""))
+        _fts_sync(db, session_id)
+        db.commit()
 
 
 def drop_cues(session_id: str, cue_ids: list[int]):
     if not cue_ids:
         return
     marks = ",".join("?" * len(cue_ids))
-    _write(f"DELETE FROM cues WHERE owner = ? AND cue_id IN ({marks})",
-           (session_id, *[int(i) for i in cue_ids]))
-    _fts_sync(_connect(), session_id)
+    # One lock around the delete and the resync, for the same reason as
+    # save_cue: the shared connection is not to be used from two places at
+    # once, locked or not.
+    with _lock:
+        db = _connect()
+        db.execute(f"DELETE FROM cues WHERE owner = ? AND cue_id IN ({marks})",
+                   (session_id, *[int(i) for i in cue_ids]))
+        _fts_sync(db, session_id)
+        db.commit()
 
 
 def save_translation(session_id: str, cue_id: int, backend: str, text: str):

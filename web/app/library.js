@@ -310,7 +310,17 @@ async function openSearchResult(r) {
     }
     await loadVideo(r.value);
   }
-  if (r.start != null && state.player) state.player.seekTo(r.start);
+  if (r.start != null && state.player) {
+    const p = state.player;
+    // A currentTime the browser sets before it has the metadata is ignored
+    // (the HTML spec says so), and loadVideo just issued load() with no
+    // await in between -- so on a file whose metadata is still arriving, the
+    // seek is queued as a one-shot on the first ready state. The YouTube
+    // adapter queues on its own, the stub does nothing.
+    if (p.video && p.video.readyState < 1)
+      p.video.addEventListener("loadedmetadata", () => p.seekTo(r.start), { once: true });
+    else p.seekTo(r.start);
+  }
 }
 
 /* The bar up top is the place that answers "what am I watching right now". */

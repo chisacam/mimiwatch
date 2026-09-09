@@ -38,6 +38,12 @@ translation, engine management).
 when that decision wobbles a whole sentence comes out in a different language.
 If you know the language of the stream, specifying it is far more stable.
 
+**The target language is remembered on the machine.** "My language" in Manage
+decides which language the subtitles come out in. The last choice is stored on
+the server (in the settings file), so the web page and the browser extension
+share one value: the default you set in one place follows you to the other, and
+it survives a fresh browser profile.
+
 ### Genre
 
 **It fits the translation prompt to the character of the speech.** A speaker at

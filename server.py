@@ -188,6 +188,11 @@ class Handler(BaseHTTPRequestHandler):
         cfg["genres"] = [{"id": k, "label_en": v["label_en"], "label_ko": v["label_ko"],
                           "hint_en": v["hint_en"], "hint_ko": v["hint_ko"]}
                          for k, v in translate.GENRE_PROMPTS.items()]
+        # The remembered translation target. It is added explicitly rather than
+        # left to ride the file because a config written before this setting
+        # exists has no key, and the select still has to seat on a value -- the
+        # getter falls back to the default, so the answer is always total.
+        cfg["viewer_lang"] = config.viewer_lang()
         self._json(cfg)
 
     def get_sessions(self):
@@ -962,6 +967,16 @@ class Handler(BaseHTTPRequestHandler):
         # whichever browser profile opened the page first.
         self._json(config.set_ui_lang(str(body.get("lang") or "")))
 
+    def post_viewerlang(self, body):
+        # Which language the subtitles are translated into. Like ui_lang it
+        # lives in backends.json, so the web page and the extension remember
+        # one value instead of each holding its own copy -- the last choice
+        # follows the user from one surface to the other.
+        got = config.set_viewer_lang(str(body.get("lang") or ""))
+        if "error" in got:
+            return self._json(got, 400)
+        self._json(got)
+
     def post_setup(self, body):
         # Settle the two default engines and start fetching what that
         # combination needs. One default cannot fit machines of every spec, so
@@ -1043,6 +1058,7 @@ POST_ROUTES = {
     "/api/live/resume": Handler.post_live_resume,
     "/api/active": Handler.post_active,
     "/api/uilang": Handler.post_uilang,
+    "/api/viewerlang": Handler.post_viewerlang,
     "/api/live/delete": Handler.post_live_delete,
     "/api/multiview": Handler.post_multiview,
     "/api/multiview/focus": Handler.post_multiview_focus,

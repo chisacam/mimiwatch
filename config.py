@@ -51,6 +51,17 @@ PROTECTED = {"tr": "local-m2m100", "asr": "tcpp-best"}
 UI_LANGS = ("en", "ko")
 DEFAULT_UI_LANG = "en"
 
+# Languages the subtitles can be translated into. This is the list the two
+# selects (the web's manage menu and the extension's popup) offer, so a stored
+# code that is not here is a stale value from an older build. It is deliberately
+# separate from UI_LANGS: the UI language is the language the screen draws
+# itself in (en/ko), while the viewer language is the language the lines come
+# out in. It is remembered on the server (backends.json) rather than in a
+# browser, so the last choice follows the user from the web page to the
+# extension and survives a fresh browser profile.
+VIEWER_LANGS = ("ko", "en", "ja", "zh")
+DEFAULT_VIEWER_LANG = "ko"
+
 _lock = threading.RLock()
 
 
@@ -224,6 +235,29 @@ def set_ui_lang(code: str) -> dict:
         cfg["ui_lang"] = code
         save(cfg)
         return {"ui_lang": code}
+
+
+def viewer_lang(cfg: dict | None = None) -> str:
+    """Which language the subtitles are translated into.
+
+    Unlike ui_lang an unset or stale value is not an error here -- there is no
+    better guess to fall back to, so it answers the default. That keeps the
+    setting total: it always comes back with a usable language, which is what
+    lets the screen seat the select on boot without a special case.
+    """
+    code = str((cfg or load()).get("viewer_lang") or "")
+    return code if code in VIEWER_LANGS else DEFAULT_VIEWER_LANG
+
+
+def set_viewer_lang(code: str) -> dict:
+    with _lock:
+        code = str(code or "")
+        if code not in VIEWER_LANGS:
+            return {"error": f"'{code}' is not a target language ({', '.join(VIEWER_LANGS)})"}
+        cfg = load()
+        cfg["viewer_lang"] = code
+        save(cfg)
+        return {"viewer_lang": code}
 
 
 def example_default(kind: str) -> str:

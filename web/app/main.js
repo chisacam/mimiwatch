@@ -44,6 +44,19 @@ function bindUiLang() {
   });
 }
 
+/* The translation target is remembered on the server (backends.json), so the
+ * web page and the extension share one value instead of each holding its own.
+ * The browser keeps a local copy too (persist) for a fast paint and an offline
+ * fallback, but the server's answer wins on boot -- see init(). A failed write
+ * is not worth an error line: the local copy already holds the choice, and the
+ * next open asks again. */
+function saveViewerLang() {
+  fetch("/api/viewerlang", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lang: $("viewer-lang").value }),
+  }).catch(() => {});
+}
+
 function syncUiLangPickers() {
   UI_LANG_PICKERS.forEach(id => { const s = $(id); if (s) s.value = MW_I18N.current(); });
 }
@@ -83,7 +96,7 @@ function bind() {
     rememberChannelOffset();
     persist();
   });
-  $("viewer-lang").addEventListener("change", () => { updateLangStatus(); persist(); });
+  $("viewer-lang").addEventListener("change", () => { updateLangStatus(); persist(); saveViewerLang(); });
   $("open-script-window").addEventListener("click", openScriptWindow);
   $("rename-live").addEventListener("click", renameLive);
   $("open-export").addEventListener("click", openExport);
@@ -279,6 +292,11 @@ function setLibrary(hidden) {
   // have, and overwriting it with "" would drag the page back to English.
   if (cfg && cfg.ui_lang) MW_I18N.setLang(cfg.ui_lang);
   syncUiLangPickers();   // both selects show what we actually settled on
+  // The remembered translation target settles after the UI language, because
+  // the select is drawn in the settled language. The server's answer wins over
+  // the browser's local copy, so the last choice made on either surface -- the
+  // web page or the extension -- is the default everywhere next time.
+  if (cfg && cfg.viewer_lang) $("viewer-lang").value = cfg.viewer_lang;
   if (models && !state.scriptOnly) {
     applyModels(models);
     // First run: the first-time setup has not happened and nothing needed is

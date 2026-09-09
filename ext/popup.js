@@ -40,6 +40,11 @@ let start = { lang: "", genre: "general", refine: false, profile: "broadcast",
               // as "My language" on the mimiwatch page.
               viewerLang: "ko" };
 const SKEY = "startPrefs";
+/* The translation target remembered on the server (backends.json). The popup
+ * reads it in fillChoices so the last choice made on either surface -- the web
+ * page or the extension -- is the default here too. The local start.viewerLang
+ * is the fallback for when the server was not reached. */
+let serverViewer = "";
 
 /* The language for the screen is held by the server (`ui_lang` in the config).
  * The popup does not know it the moment it comes up, so the table starts in
@@ -139,8 +144,13 @@ async function loadFromServer() {
   $("refine").checked = !!start.refine;
   $("profile").value = start.profile || "broadcast";
   if (!$("profile").value) $("profile").selectedIndex = 0;
-  $("viewer").value = start.viewerLang || "ko";
+  // The remembered target comes from the server, so the last choice made on
+  // either surface is the default. The local copy is the fallback for when the
+  // server was not reached.
+  const viewerVal = serverViewer || start.viewerLang || "ko";
+  $("viewer").value = viewerVal;
   if (!$("viewer").value) $("viewer").selectedIndex = 0;
+  if ($("viewer").value) start.viewerLang = $("viewer").value;
   syncProfileHint();
   await refreshState();
   await syncHideButton();
@@ -201,6 +211,7 @@ async function fillChoices() {
   // goes with the browser's guess -- the error string that shows then has to be
   // in a language a person reads as well.
   useLang(r && r.ok ? r.data.ui_lang : "");
+  serverViewer = (r && r.ok && r.data.viewer_lang) ? r.data.viewer_lang : "";
   if (!r || !r.ok) return;
   const g = $("genre");
   g.length = 0;                             // so a re-read after an address change does not pile up
@@ -492,7 +503,12 @@ $("refine").addEventListener("change", (e) => { start.refine = e.target.checked;
 $("profile").addEventListener("change", (e) => {
   start.profile = e.target.value; saveStart(); syncProfileHint();
 });
-$("viewer").addEventListener("change", (e) => { start.viewerLang = e.target.value; saveStart(); });
+$("viewer").addEventListener("change", (e) => {
+  start.viewerLang = e.target.value; saveStart();
+  // Remember it on the server too, so the web page picks it up. A failed write
+  // only means the next open asks again.
+  send({ type: "setViewer", lang: e.target.value });
+});
 
 $("start-url").addEventListener("click", () => startWith("startUrl"));
 $("start-url-cookies").addEventListener("click", () => startWith("startUrl", { cookies: true }));

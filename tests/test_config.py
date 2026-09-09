@@ -88,3 +88,23 @@ def test_find_and_active():
     assert config.find_backend("local-m2m100")["backend"] == "local"
     assert config.find_asr("no-such") is None
     assert config.active("asr") == _example()["asr_active"]
+
+
+def test_viewer_lang_getter_and_setter():
+    # Unset: the getter answers the default, so a config written before this
+    # setting existed still seats the select (unlike ui_lang, where the front
+    # end falls back to the browser's guess).
+    assert config.viewer_lang() == config.DEFAULT_VIEWER_LANG
+    # Stale: a code the current list does not know falls back to the default
+    # rather than being handed back to a select that cannot hold it.
+    cfg = config.load()
+    cfg["viewer_lang"] = "fr"
+    config.save(cfg)
+    assert config.viewer_lang() == config.DEFAULT_VIEWER_LANG
+    # Set: a valid code round-trips to the file and back.
+    assert config.set_viewer_lang("ja") == {"viewer_lang": "ja"}
+    assert config.viewer_lang() == "ja"
+    assert config.load()["viewer_lang"] == "ja"
+    # The list is fixed; a code outside it is refused, not written.
+    assert "error" in config.set_viewer_lang("fr")
+    assert config.viewer_lang() == "ja"

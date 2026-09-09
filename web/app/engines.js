@@ -762,6 +762,7 @@ async function submitSetup(e) {
   const f = e.target;
   $("viewer-lang").value = f.viewer_lang.value;
   persist();
+  saveViewerLang();
   const res = await (await fetch("/api/setup", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ asr: f.elements["setup-asr"].value,

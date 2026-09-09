@@ -14,6 +14,8 @@ import time
 import urllib.error
 import urllib.request
 
+import config
+
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -160,6 +162,23 @@ def test_active_engine_is_set_on_the_server(server):
     assert req(base, "/api/active", body={"kind": "zz", "id": "x"})[0] == 400
     s, b = req(base, "/api/backends")
     assert json.loads(b)["asr_active"] == "tcpp-best"
+
+
+def test_viewer_lang_roundtrip(server):
+    """The translation target is remembered on the server and rides /api/backends back out."""
+    base, _ = server
+    # Unset at boot: the answer carries the default, so the select seats on it.
+    s, b = req(base, "/api/backends")
+    assert s == 200 and json.loads(b)["viewer_lang"] == config.DEFAULT_VIEWER_LANG
+    s, b = req(base, "/api/viewerlang", body={"lang": "ja"})
+    assert s == 200 and json.loads(b)["viewer_lang"] == "ja"
+    # It is back in the answer, and in the file the server writes.
+    assert json.loads(req(base, "/api/backends")[1])["viewer_lang"] == "ja"
+    assert json.loads(SERVER_CONFIG.read_text(encoding="utf-8"))["viewer_lang"] == "ja"
+    # A code outside the list is refused with a 400, not written.
+    s, b = req(base, "/api/viewerlang", body={"lang": "fr"})
+    assert s == 400 and "error" in json.loads(b)
+    assert json.loads(SERVER_CONFIG.read_text(encoding="utf-8"))["viewer_lang"] == "ja"
 
 
 def test_pushed_cookies_are_stored_privately_and_used(server):

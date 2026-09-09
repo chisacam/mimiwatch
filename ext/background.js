@@ -100,6 +100,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await Promise.all(tabs.map((t) =>
           chrome.tabs.sendMessage(t.id, { type: "reattach" }).catch(() => {})));
         reply({ ok: true });
+      } else if (msg.type === "setViewer") {
+        // The translation target is remembered on the server (backends.json),
+        // shared with the web page. The worker is what reaches the server, so
+        // the popup asks here. The local copy is already updated by the caller,
+        // so a failed write only means the next open asks again.
+        await post("/api/viewerlang", { lang: msg.lang }).catch(() => {});
+        reply({ ok: true });
       } else if (msg.type === "watch") {
         reply({ ok: true, ...(await setWatch(msg.tabId, msg.value || "")) });
       } else if (msg.type === "dropWatch") {

@@ -109,19 +109,22 @@ class ASRBackend:
 
     def transcribe(self, samples: np.ndarray, lang: str | None,
                    on_progress=None, speakers: bool = False,
+                   speaker_solo: bool = False,
+                   speaker_threshold: float | None = None,
                    should_stop=None, refine: bool = True) -> list[dict]:
         """Raises `stream.Cancelled` when `should_stop` returns true.
 
         Transcription is the longest stage of a VOD job. Checking only between
         stages means it cannot be stopped once started until it ends.
 
-        What `speakers` and `refine` can do differs per transcriber. The caller
-        (`jobs`) used to look at the engine name to decide whether to pass them,
-        and that test was `name == "default"`, so speaker tags never once reached
-        the local transcriber (`tcpp`) chosen in the config -- meaning the
-        screen's "Attach speaker tags" did nothing at all on the default engine.
-        So they stand on the surface instead, and a transcriber that cannot do
-        them quietly ignores them.
+        What `speakers`, `speaker_solo`, `speaker_threshold` and `refine` can do
+        differs per transcriber. The caller (`jobs`) used to look at the engine
+        name to decide whether to pass them, and that test was
+        `name == "default"`, so speaker tags never once reached the local
+        transcriber (`tcpp`) chosen in the config -- meaning the screen's
+        "Attach speaker tags" did nothing at all on the default engine. So they
+        stand on the surface instead, and a transcriber that cannot do them
+        quietly ignores them.
         """
         raise NotImplementedError
 
@@ -137,11 +140,13 @@ class DefaultLocal(ASRBackend):
     name = DEFAULT_NAME
 
     def transcribe(self, samples, lang, on_progress=None, speakers=False,
+                   speaker_solo=False, speaker_threshold=None,
                    should_stop=None, refine=True):
         import transcribe_vod as vod
         return vod.transcribe(samples, lang, on_progress=on_progress,
-                              speakers=speakers, should_stop=should_stop,
-                              refine=refine)
+                              speakers=speakers, speaker_solo=speaker_solo,
+                              speaker_threshold=speaker_threshold,
+                              should_stop=should_stop, refine=refine)
 
 
 LocalHayamimi = DefaultLocal       # The old name. Tests and scripts may call it.
@@ -160,13 +165,15 @@ class TranscribeCpp(ASRBackend):
         self.spec = spec
 
     def transcribe(self, samples, lang, on_progress=None, speakers=False,
+                   speaker_solo=False, speaker_threshold=None,
                    should_stop=None, refine=True):
         import transcribe_vod as vod
         from tcpp_asr import build_live_asr
         engine = build_live_asr(self.spec, lang, threads=4)
         return vod.transcribe(samples, lang, on_progress=on_progress,
-                              speakers=speakers, asr=engine,
-                              should_stop=should_stop, refine=refine)
+                              speakers=speakers, speaker_solo=speaker_solo,
+                              speaker_threshold=speaker_threshold,
+                              asr=engine, should_stop=should_stop, refine=refine)
 
 
 class OpenAICompatibleASR(ASRBackend):
@@ -219,8 +226,10 @@ class OpenAICompatibleASR(ASRBackend):
                                   self.timeout)
 
     def transcribe(self, samples, lang, on_progress=None, speakers=False,
+                   speaker_solo=False, speaker_threshold=None,
                    should_stop=None, refine=True):
-        """`speakers` and `refine` are taken and ignored.
+        """`speakers`, `speaker_solo`, `speaker_threshold` and `refine` are taken
+        and ignored.
 
         This path sends a whole window to the remote and gets the segment
         timestamps back with it, so it is already doing what refinement sets out

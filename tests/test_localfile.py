@@ -87,6 +87,7 @@ class FakeEngine(mw_asr.ASRBackend):
         self._cues = cues
 
     def transcribe(self, samples, lang, on_progress=None, speakers=False,
+                   speaker_solo=False, speaker_threshold=None,
                    should_stop=None, refine=True):
         return [dict(c) for c in self._cues]
 

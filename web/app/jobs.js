@@ -147,7 +147,9 @@ async function submitAdd(e) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: up.path, lang: f.lang.value || null, asr: state.asr,
-        speakers: f.speakers.checked, refine: state.refine, genre: currentGenre(),
+        speakers: f.speakers.checked, speaker_solo: f.speaker_solo.checked,
+        speaker_threshold: f.speaker_threshold.value || "",
+        refine: state.refine, genre: currentGenre(),
         viewer_lang: $("viewer-lang").value, backend: state.backend,
       }),
     })).json();
@@ -182,7 +184,9 @@ async function submitAdd(e) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url, lang: f.lang.value || null, asr: state.asr,
-      speakers: f.speakers.checked, refine: state.refine, genre: currentGenre(),
+      speakers: f.speakers.checked, speaker_solo: f.speaker_solo.checked,
+      speaker_threshold: f.speaker_threshold.value || "",
+      refine: state.refine, genre: currentGenre(),
       viewer_lang: $("viewer-lang").value, backend: state.backend,
       site: probe.site || "", channel: probe.channel || "",
       channel_name: f.channel_name.value.trim(),
@@ -208,7 +212,20 @@ function setAddSource(v) {
   // A VOD only ever comes from a URL or a file. Tab audio is always live.
   document.querySelector('#add-form input[name="speakers"]')
     .closest("label").hidden = tab;
+  syncSpeakerOptions();
 }
+
+/* The solo/threshold row only means anything when the speaker box is ticked.
+ * It is reset to its own state (unticked, 0.45) on every open of the dialog, so
+ * nothing carries over from a previous job. */
+function syncSpeakerOptions() {
+  const f = $("add-form");
+  const show = f.speakers.checked && f.source.value !== "tab";
+  $("speaker-options").hidden = !show;
+  $("speaker-options-hint").hidden = !show;
+}
+document.querySelector('#add-form input[name="speakers"]')
+  .addEventListener("change", syncSpeakerOptions);
 
 /* POSTs the file body as it is. fetch cannot report upload progress, hence XHR
  * -- the page must not look dead while a wav of several GB goes up. The

@@ -470,7 +470,9 @@ def start_burn(value: str, view: str = "both") -> dict:
 
 def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                      backend_id: str = "", asr_id: str = "",
-                     speakers: bool = False, genre: str | None = None,
+                     speakers: bool = False, speaker_solo: bool = False,
+                     speaker_threshold: float | None = None,
+                     genre: str | None = None,
                      refine: bool = True, site: str = "", channel: str = "",
                      channel_name: str = "") -> dict:
     """Take a URL from the UI all the way to a playable cue file.
@@ -487,7 +489,8 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
                       video=None, asr=asr_id,
                       genre=genre or mw_translate.DEFAULT_GENRE)
     _spawn(job_id, _run_transcribe,
-           (job_id, url, lang, viewer_lang, backend_id, asr_id, speakers, genre,
+           (job_id, url, lang, viewer_lang, backend_id, asr_id, speakers,
+            speaker_solo, speaker_threshold, genre,
             refine, site, channel, channel_name))
     return {"id": job_id}
 
@@ -495,6 +498,7 @@ def start_transcribe(url: str, lang: str | None, viewer_lang: str,
 def _run_transcribe(job_id: str, url: str, lang: str | None,
                     viewer_lang: str, backend_id: str,
                     asr_id: str = "", speakers: bool = False,
+                    speaker_solo: bool = False, speaker_threshold: float | None = None,
                     genre: str | None = None, refine: bool = True,
                     site: str = "", channel: str = "",
                     channel_name: str = ""):
@@ -534,7 +538,10 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             # never once reached the local transcriber picked in the settings
             # (`tcpp`, which is the default). Now the surface takes both, and a
             # transcriber that cannot do it ignores it (asr.ASRBackend).
-            cues = engine.transcribe(samples, lang, speakers=speakers, refine=refine,
+            cues = engine.transcribe(samples, lang, speakers=speakers,
+                                     speaker_solo=speaker_solo,
+                                     speaker_threshold=speaker_threshold,
+                                     refine=refine,
                                      on_progress=lambda p: note(done=int(p * audio_s)),
                                      should_stop=cancelled)
         except mw_stream.Cancelled:
@@ -552,6 +559,8 @@ def _run_transcribe(job_id: str, url: str, lang: str | None,
             engine = mw_asr.DefaultLocal()
             try:
                 cues = engine.transcribe(samples, lang, speakers=speakers,
+                                         speaker_solo=speaker_solo,
+                                         speaker_threshold=speaker_threshold,
                                          refine=refine,
                                          on_progress=lambda p: note(done=int(p * audio_s)),
                                          should_stop=cancelled)

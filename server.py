@@ -891,12 +891,18 @@ class Handler(BaseHTTPRequestHandler):
         url = (body.get("url") or "").strip()
         if not url:
             return self._json({"error": "Enter a URL"}, 400)
+        try:
+            threshold = speaker_threshold_from_body(body)
+        except ValueError as exc:
+            return self._json({"error": str(exc)}, 400)
         self._json(jobs.start_transcribe(
             url, body.get("lang") or None,
             body.get("viewer_lang") or "ko",
             body.get("backend") or "",
             body.get("asr") or "",
             bool(body.get("speakers")),
+            bool(body.get("speaker_solo")),
+            threshold,
             body.get("genre"),
             bool(body.get("refine", True)),
             body.get("site") or "",
@@ -1088,6 +1094,26 @@ POST_ROUTES = {
     "/api/glossaries": Handler.post_glossaries,
     "/api/burn": Handler.post_burn,
 }
+
+
+def speaker_threshold_from_body(body: dict) -> float | None:
+    """The similarity threshold off the add form, or None for the default (0.45).
+
+    `ValueError` when it is there but not a number, or outside 0.25~0.9. Not a
+    silent clamp: the number the user typed is a judgement, and rewriting it
+    would hide the mistake. Below 0.25 the embeddings stop being comparable in
+    the first place, and above 0.9 almost nothing is taken as the same voice.
+    """
+    v = body.get("speaker_threshold")
+    if v is None or v == "":
+        return None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        raise ValueError("Similarity threshold is a number from 0.25 to 0.9")
+    if not 0.25 <= v <= 0.9:
+        raise ValueError("Similarity threshold is a number from 0.25 to 0.9")
+    return v
 
 
 def parse_range(header: str | None, size: int) -> tuple[int | None, int | None]:

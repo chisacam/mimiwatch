@@ -92,6 +92,13 @@ CREATE TABLE IF NOT EXISTS glossaries (
   terms       TEXT NOT NULL DEFAULT '[]',
   updated     REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS watchers (
+  url     TEXT PRIMARY KEY,
+  name    TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  live    INTEGER NOT NULL DEFAULT 0,
+  updated REAL NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS cues_fts USING fts5(
   owner UNINDEXED,
   cue_id UNINDEXED,
@@ -241,6 +248,86 @@ def running_session_ids() -> list[str]:
     return [r["id"] for r in _rows("SELECT id, doc FROM sessions")
             if json.loads(r["doc"]).get("state") in
             ("starting", "loading", "running")]
+
+
+# ---- Watchers --------------------------------------------------------------
+#
+# A watched address: a channel or stream URL the user left behind so the server
+# polls it, and starts receiving the moment it goes live. The row is the user's
+# will (enabled), and `live` is the last thing the probe found, kept so that
+# the screen can say "receiving now" between polls.
+
+def watchers() -> list[dict]:
+    out = []
+    for r in _rows("SELECT url, name, enabled, live, updated FROM watchers "
+                   "ORDER BY updated DESC"):
+        out.append({"url": r["url"], "name": r["name"],
+                    "enabled": bool(r["enabled"]), "live": bool(r["live"]),
+                    "updated_at": r["updated"]})
+    return out
+
+
+def add_watcher(url: str, name: str = "") -> dict | None:
+    """Watch a new address, or put one back on the list.
+
+    The address is the key. Adding it again keeps the will as it was (the
+    user may have turned it off) and only refreshes the name and the stamp.
+    """
+    now = time.time()
+    with _lock:
+        db = _connect()
+        db.execute("INSERT INTO watchers (url, name, enabled, live, updated) "
+                   "VALUES (?, ?, 1, 0, ?) "
+                   "ON CONFLICT(url) DO UPDATE SET "
+                   "  name=CASE WHEN excluded.name != '' "
+                   "            THEN excluded.name ELSE watchers.name END, "
+                   "  updated=excluded.updated",
+                   (url, name, now))
+        db.commit()
+    return next((w for w in watchers() if w["url"] == url), None)
+
+
+def set_watcher(url: str, enabled: bool | None = None,
+                name: str = "") -> dict | None:
+    """Turn the will on or off, or rename. The other columns stay."""
+    with _lock:
+        db = _connect()
+        sets, args = [], []
+        if enabled is not None:
+            sets.append("enabled=?")
+            args.append(int(enabled))
+        if name != "":
+            sets.append("name=?")
+            args.append(name)
+        sets.append("updated=?")
+        args += [time.time(), url]
+        cur = db.execute(f"UPDATE watchers SET {', '.join(sets)} WHERE url=?",
+                         args)
+        db.commit()
+    if cur.rowcount == 0:
+        return None
+    return next((w for w in watchers() if w["url"] == url), None)
+
+
+def drop_watcher(url: str) -> bool:
+    with _lock:
+        db = _connect()
+        cur = db.execute("DELETE FROM watchers WHERE url=?", (url,))
+        db.commit()
+        return cur.rowcount > 0
+
+
+def set_watcher_live(url: str, live: bool):
+    """The probe's finding. A call with the same value it already has is
+    a no-op, so a screen that polls every thirty seconds does not rewrite
+    the row.
+    """
+    with _lock:
+        db = _connect()
+        db.execute("UPDATE watchers SET live=?, updated=? WHERE url=? "
+                   "AND live != ?",
+                   (int(live), time.time(), url, int(live)))
+        db.commit()
 
 
 # ---- Live subtitles --------------------------------------------------------

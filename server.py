@@ -864,6 +864,39 @@ class Handler(BaseHTTPRequestHandler):
             })
         self._json({"q": q, "results": results})
 
+    # ---- Watchers -----------------------------------------------------------
+    # The list the server polls for a start of stream. The rule for when
+    # something starts is in live.py's watchers section; here the JSON is
+    # unpacked, and the change is pushed out over the bus so every window's
+    # list comes down together.
+
+    def get_watchers(self):
+        self._json({"watchers": store.watchers()})
+
+    def post_watcher(self, body):
+        url = (body.get("url") or "").strip()
+        if not url:
+            return self._json({"error": "Enter an address"}, 400)
+        w = store.add_watcher(url, (body.get("name") or "").strip())
+        bus.publish({"type": "watchers"})
+        self._json({"watcher": w, "watchers": store.watchers()})
+
+    def post_watcher_toggle(self, body):
+        url = (body.get("url") or "").strip()
+        w = store.set_watcher(url, enabled=bool(body.get("enabled")),
+                              name=(body.get("name") or "").strip())
+        if w is None:
+            return self._json({"error": "No such address"}, 404)
+        bus.publish({"type": "watchers"})
+        self._json({"watcher": w, "watchers": store.watchers()})
+
+    def post_watcher_delete(self, body):
+        url = (body.get("url") or "").strip()
+        if not store.drop_watcher(url):
+            return self._json({"error": "No such address"}, 404)
+        bus.publish({"type": "watchers"})
+        self._json({"watchers": store.watchers()})
+
     def post_burn(self, body):
         value = (body.get("value") or "").strip()
         if not value:
@@ -1037,6 +1070,7 @@ GET_ROUTES = {
     "/api/update": Handler.get_update,
     "/api/glossaries": Handler.get_glossaries,
     "/api/search": Handler.get_search,
+    "/api/watchers": Handler.get_watchers,
 }
 # Paths with a tail. The longer prefix has to come first so that `/api/video/`
 # does not swallow `/api/videos` -- an exact path is looked up in the dict above
@@ -1093,6 +1127,9 @@ POST_ROUTES = {
     "/api/update/apply": Handler.post_update_apply,
     "/api/glossaries": Handler.post_glossaries,
     "/api/burn": Handler.post_burn,
+    "/api/watchers": Handler.post_watcher,
+    "/api/watchers/toggle": Handler.post_watcher_toggle,
+    "/api/watchers/delete": Handler.post_watcher_delete,
 }
 
 
@@ -1193,6 +1230,7 @@ def _wind_down(timeout: float = 8.0):
     cancelled = jobs.cancel_all()
     if cancelled:
         print(f"mimiwatch: cancelling {len(cancelled)} jobs", flush=True)
+    live.stop_watcher_poller()
     stopped = live.shutdown(timeout)
     jobs.wait_idle(max(0.0, deadline - time.time()))
     # For live sessions the wait goes only as far as the DB state becoming
@@ -1254,6 +1292,10 @@ def main(argv: list[str] | None = None):
     if stale_jobs or stale_live:
         print(f"mimiwatch: marked {stale_jobs} jobs and {stale_live} live "
               "sessions from before the restart as interrupted", flush=True)
+    # The watchers' list is watched by a daemon thread, one probe per address
+    # every thirty seconds. It goes up with the server, and it is the session
+    # side that is shut down with it.
+    live.start_watcher_poller()
 
     global _srv
     try:

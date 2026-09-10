@@ -331,6 +331,109 @@ function setNowTitle(title) {
   el.title = title || "";
 }
 
+/* The watched list -- the addresses the server polls, and starts receiving by
+ * itself the moment one of them goes live. The rule for when it starts is the
+ * server's (live.py, the watchers section); the list here only shows it, and
+ * sets or unsets the will. It is hidden while empty, so the screen stays as it
+ * was for someone who leaves nothing to be watched. */
+
+async function refreshWatchList() {
+  const res = await (await fetch("/api/watchers")).json();
+  const section = $("watch-section");
+  const list = $("watch-list");
+  if (!section || !list) return;
+  const ws = res.watchers || [];
+  section.hidden = !ws.length;
+  list.textContent = "";
+  ws.forEach(w => list.appendChild(watchRow(w)));
+}
+
+function watchRow(w) {
+  const row = document.createElement("div");
+  row.className = "video-row watch" + (w.live ? " live" : "") + (w.enabled ? "" : " stopped");
+  row.dataset.url = w.url;
+
+  const body = document.createElement("div");
+  const tt = document.createElement("div");
+  tt.className = "vt";
+  tt.textContent = w.name || w.url;
+  body.appendChild(tt);
+  const m = document.createElement("div");
+  m.className = "vm";
+  m.textContent = w.live ? t("library.watch.live") : t("library.watch.waiting");
+  body.appendChild(m);
+  row.appendChild(body);
+
+  const box = document.createElement("span");
+  box.className = "vact";
+  // The will. The row's click starts the stream when it is live; the button
+  // sets the will and stops the click from taking it with it.
+  const tg = document.createElement("button");
+  tg.className = "wtg" + (w.enabled ? " on" : "");
+  tg.title = w.enabled ? t("library.watch.disable.tip") : t("library.watch.enable.tip");
+  tg.textContent = "◉";
+  tg.addEventListener("click", (e) => { e.stopPropagation(); toggleWatcher(w.url, !w.enabled); });
+  box.appendChild(tg);
+  const del = document.createElement("button");
+  del.className = "vdel";
+  del.title = t("library.watch.delete.tip");
+  del.textContent = "🗑";
+  del.addEventListener("click", (e) => { e.stopPropagation(); deleteWatcher(w); });
+  box.appendChild(del);
+  row.appendChild(box);
+
+  row.addEventListener("click", () => {
+    // A live one with the will set is started here; the server's auto-start
+    // does the same when the screen is free, this is the hand on the wheel.
+    if (w.live && w.enabled) startFromWatcher(w);
+  });
+  return row;
+}
+
+async function toggleWatcher(url, enabled) {
+  const res = await (await fetch("/api/watchers/toggle", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, enabled }),
+  })).json();
+  if (res.error) { alert(res.error); return; }
+  refreshWatchList();
+}
+
+async function deleteWatcher(w) {
+  if (!confirm(t("library.watch.delete.confirm",
+                 { title: (w.name || w.url).slice(0, 50) }))) return;
+  const res = await (await fetch("/api/watchers/delete", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: w.url }),
+  })).json();
+  if (res.error) { alert(res.error); return; }
+  refreshWatchList();
+}
+
+function startFromWatcher(w) {
+  // The start takes a probe to name the stream. The probe's fields the address
+  // does not give are empty, and the server fills in what it can when the
+  // session resolves it.
+  startLive(w.url, "", { id: "", title: w.name || w.url,
+                         site: "", channel: "", url: w.url });
+}
+
+function addWatcherClick() {
+  const url = prompt(t("library.watch.add.prompt"));
+  if (url == null) return;
+  const u = url.trim();
+  if (!u) return;
+  const name = (prompt(t("library.watch.add.name"), "") || "").trim();
+  (async () => {
+    const res = await (await fetch("/api/watchers", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: u, name }),
+    })).json();
+    if (res.error) { alert(res.error); return; }
+    refreshWatchList();
+  })();
+}
+
 async function refreshVideoList(selectId, pre) {
   // While the search box holds text, the list is the matches, not the titles.
   // A library change in that state is skipped: clearing the box redraws.

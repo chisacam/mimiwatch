@@ -388,3 +388,31 @@ def test_cue_add_validates(server):
     assert code == 404
     code, _ = req(base, "/api/cue/add", body={"id": "nope", "text": "x"})
     assert code == 400
+
+
+def test_watcher_routes(server):
+    """The watched list: add, set the will, delete. No address gets a 400, an unknown one a 404."""
+    base, port = server
+    s, b = req(base, "/api/watchers")
+    assert s == 200 and json.loads(b)["watchers"] == []
+
+    s, _ = req(base, "/api/watchers", body={})
+    assert s == 400                             # no address
+
+    s, b = req(base, "/api/watchers",
+               body={"url": "https://twitch.tv/watchtest", "name": "w"})
+    assert s == 200
+    ws = json.loads(b)["watchers"]
+    assert len(ws) == 1 and ws[0]["enabled"] and not ws[0]["live"]
+
+    s, b = req(base, "/api/watchers/toggle",
+               body={"url": "https://twitch.tv/watchtest", "enabled": False})
+    assert s == 200 and not json.loads(b)["watcher"]["enabled"]
+    s, _ = req(base, "/api/watchers/toggle",
+               body={"url": "https://nope", "enabled": True})
+    assert s == 404
+
+    s, b = req(base, "/api/watchers/delete", body={"url": "https://twitch.tv/watchtest"})
+    assert s == 200 and json.loads(b)["watchers"] == []
+    s, _ = req(base, "/api/watchers/delete", body={"url": "https://nope"})
+    assert s == 404

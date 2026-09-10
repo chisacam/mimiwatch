@@ -556,6 +556,38 @@ MW_I18N.add({
     en: "Delete the transcription of “{title}”?\nThe audio taken for it goes with it.",
     ko: "'{title}' 전사를 삭제할까요?\n내려받은 오디오도 함께 지웁니다.",
   },
+  "library.watch.waiting": {
+    en: "waiting for a start",
+    ko: "시작을 기다리는 중",
+  },
+  "library.watch.live": {
+    en: "receiving now",
+    ko: "지금 받는 중",
+  },
+  "library.watch.disable.tip": {
+    en: "Stop watching — leave it be even when it goes live",
+    ko: "감시 멈춤 — 시작해도 안 받습니다",
+  },
+  "library.watch.enable.tip": {
+    en: "Watch it again",
+    ko: "다시 감시",
+  },
+  "library.watch.delete.tip": {
+    en: "Remove from the watched list",
+    ko: "감시 목록에서 뺌",
+  },
+  "library.watch.delete.confirm": {
+    en: "Remove “{title}” from the watched list?\nStopping it means it is not started on its own.",
+    ko: "'{title}'을(를) 감시 목록에서 뺄까요?\n뺀 뒤로는 알아서 시작하지 않습니다.",
+  },
+  "library.watch.add.prompt": {
+    en: "Address to watch (channel or stream)",
+    ko: "감시할 주소 (채널 또는 스트림)",
+  },
+  "library.watch.add.name": {
+    en: "Name (optional)",
+    ko: "이름 (선택)",
+  },
 
   /* update.js -- the notification strip and the Update section */
   "update.apply.confirm": {

@@ -2116,3 +2116,115 @@ def stop(session_id: str) -> dict:
         return {"error": "no such session"}
     s.stop()
     return {"state": "stopping"}
+
+
+# ---- Watchers ---------------------------------------------------------------
+#
+# The server watches the addresses the user left it, and starts receiving by
+# itself the moment one of them goes live. The browser cannot do this -- the
+# tab that is watching may be closed, and an extension's worker does not
+# survive the machine. The one thing that outlives the tab is the process
+# that is holding the transcription models, and that is this server.
+#
+# The auto-start rule is deliberately narrow: a session is started only when
+# **nothing is running** (a state in `RUNNING_STATES` counts) and only when
+# there is no session for the same address in the registry. A watcher that
+# goes live while the screen is on a broadcast waits for the next pass, and a
+# broadcast that ended and started again is started again -- that is the
+# point of watching.
+
+WATCH_POLL_S = 30          # the pass through the list. A probe is one yt-dlp call each
+# A probe is a peek, not a fetch. The 90 s fetch timeout would stretch one pass
+# over several poll cycles and hold the loop past a shutdown that already asked
+# it to stop, so a probe gives up well before either.
+WATCH_PROBE_TIMEOUT_S = 20
+
+_watcher_stop = threading.Event()
+_watcher_thread: threading.Thread | None = None
+
+
+def probe_live(url: str) -> bool | None:
+    """Whether the address is live right now, from the metadata yt-dlp sees.
+
+    `None` is *unknown* -- the probe timed out, or the metadata does not say
+    -- and the caller keeps the finding it had before. A channel page comes
+    back as a playlist of recordings, and the one live entry among them is
+    the stream; a stream URL answers in its own `is_live`.
+    """
+    try:
+        meta = subprocess.run(stream.ytdlp_args("-j", url),
+                              capture_output=True, text=True,
+                              timeout=WATCH_PROBE_TIMEOUT_S,
+                              **stream.child_io(stderr=False))
+    except TimeoutExpired:
+        return None
+    if meta.returncode != 0:
+        return None
+    try:
+        d = json.loads(meta.stdout)
+    except json.JSONDecodeError:
+        return None
+    if d.get("_type") == "playlist":
+        for e in d.get("entries") or []:
+            if e is not None and e.get("is_live"):
+                return True
+        return None              # a shelf of recordings; it may go live later
+    v = d.get("is_live")
+    return bool(v) if v is not None else None
+
+
+def _watcher_tick() -> None:
+    """One pass. At most one session is started per pass, and only when the
+    screen is free of running sessions.
+    """
+    for w in store.watchers():
+        if not w["enabled"]:
+            continue
+        live_now = probe_live(w["url"])
+        if live_now is None:
+            continue                    # unknown keeps the finding it had
+        if live_now != w["live"]:
+            store.set_watcher_live(w["url"], live_now)
+            bus.publish({"type": "watchers"})
+        if not live_now:
+            continue
+        with _lock:
+            urls = [s.url for s in _sessions.values()]
+            busy = any(s.state in RUNNING_STATES for s in _sessions.values())
+        if w["url"] in urls or busy:
+            continue                    # the screen is on something else
+        s = start(w["url"], None, config.viewer_lang(), config.active("tr"),
+                  asr_backend_id=config.active("asr"),
+                  title=w["name"])
+        print(f"mimiwatch: watcher {w['name'] or w['url']} is live -- started {s['id']}",
+              flush=True)
+        break                           # one per pass; the rest next time
+
+
+def start_watcher_poller() -> None:
+    """The daemon thread that takes the passes. The process's death is its
+    death, so it is not joined on the ordinary path.
+    """
+    global _watcher_thread
+    if _watcher_thread is not None and _watcher_thread.is_alive():
+        return
+    _watcher_stop.clear()
+    t = threading.Thread(target=_watcher_loop, name="watchers", daemon=True)
+    _watcher_thread = t
+    t.start()
+
+
+def stop_watcher_poller() -> None:
+    _watcher_stop.set()
+    t = _watcher_thread
+    if t is not None and t.is_alive() and t is not threading.current_thread():
+        t.join(timeout=5)
+
+
+def _watcher_loop() -> None:
+    while not _watcher_stop.is_set():
+        try:
+            _watcher_tick()
+        except Exception:
+            traceback.print_exc()       # one bad pass does not kill the watching
+        _watcher_stop.wait(WATCH_POLL_S)

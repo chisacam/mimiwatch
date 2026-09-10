@@ -64,6 +64,9 @@ function connectBus() {
     else if (m.type === "update") onUpdateEvent(m);
     // A multiview bundle appeared, or its focus or members changed (moved by another window or by the server).
     else if (m.type === "multiview") onMultiviewChanged(m);
+    // The watched list changed, or the probe changed a watcher's live finding.
+    // The list is short; it is re-read whole.
+    else if (m.type === "watchers") refreshWatchList();
   };
   bus.onopen = () => {
     if (busWasDown) scheduleListRefresh(0);   // fill in what changed while it was down

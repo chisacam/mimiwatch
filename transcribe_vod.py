@@ -331,6 +331,39 @@ def _speaker_for(cues: list[dict], idx: list[int], start: float, end: float) -> 
     return best
 
 
+def _soft_resplit(cues: list[dict], text: str, lang: str) -> list[dict]:
+    """Lay one group's re-decoded text back on its own VAD boundaries.
+
+    The transcriber cannot give segment timestamps, so there is no timing the
+    re-decode can own. What it does have is the text, and the text is the side
+    that improves with the surrounding context (section 48). Laying it over
+    the boundaries the fast pass already cut keeps the player's timestamp
+    lookup working as it was. The measured loss of section 49 was the timing
+    of one line stretched across the group, not the characters, and the
+    characters here are the re-decode's, so the soft side takes the gain
+    without that loss.
+
+    The cut points divide the text in proportion to how long each final was --
+    a line that said more takes a longer piece. A piece that comes out empty
+    is not a subtitle line, so that final is kept as it was.
+    """
+    weights = [max(1, len(c["text"].strip())) for c in cues]
+    total = sum(weights)
+    cuts = [0]
+    acc = 0
+    for w in weights:
+        acc += w
+        cuts.append(int(round(acc * len(text) / total)))
+    out = []
+    for c, lo, hi in zip(cues, cuts, cuts[1:]):
+        piece = text[lo:hi].strip()
+        n = dict(c)
+        n["text"] = piece if piece else c["text"]
+        n["lang"] = lang or c["lang"]
+        out.append(n)
+    return out
+
+
 def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
                 on_progress=None, should_stop=None) -> list[dict]:
     """Decodes an utterance group whole again and re-splits it by segment timestamps.
@@ -349,12 +382,30 @@ def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
     and dividing it back up gives 32.4 on the same sample, the highest of the
     settings measured.
 
-    A transcriber that cannot give timestamps, and a group caught by the
-    rollback, keep their finals as they are. Where it does not get better, it
-    must at least not get worse.
+    A transcriber that cannot give timestamps (the light defaults) cannot be
+    re-split that way, and one line per group is the side that lost in section
+    49. It runs the same decode and lands the text on the group's own VAD
+    boundaries instead (`_soft_resplit`): the times are the ones the fast pass
+    already had, and only the text is swapped.
+
+    A group caught by the rollback, whatever the transcriber is, keeps its
+    finals as they are. Where it does not get better, it must at least not get
+    worse.
     """
-    if not getattr(asr, "supports_segments", False):
-        return cues
+    soft = not getattr(asr, "supports_segments", False)
+    groups = refine_groups(spans)
+    pre = int(stream.PREROLL_S * SAMPLE_RATE)
+    out: list[dict] = []
+    for n, g in enumerate(groups):
+        if should_stop and should_stop():
+            raise stream.Cancelled()
+        keep = [cues[i] for i in g]
+        first, last = spans[g[0]][0], spans[g[-1]][1]
+        base = max(0, first - pre)
+        lo, hi = first / SAMPLE_RATE, last / SAMPLE_RATE
+        buf = samples[base:last]
+        joined = " ".join(c["text"] for c in keep if c["text"].strip())
+    soft = not getattr(asr, "supports_segments", False)
     groups = refine_groups(spans)
     pre = int(stream.PREROLL_S * SAMPLE_RATE)
     out: list[dict] = []
@@ -369,32 +420,39 @@ def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
         joined = " ".join(c["text"] for c in keep if c["text"].strip())
         if len(buf) >= SAMPLE_RATE // 2:
             got = asr.transcribe(buf, SAMPLE_RATE, speech_s=len(buf) / SAMPLE_RATE,
-                                 live=False, segments=True)
+                                 live=False, segments=not soft)
             text = got["text"].strip()
-            segs = got.get("segments") or []
-            # The rollback uses the same threshold as live. If the re-decode is
-            # noticeably shorter than the finals concatenated, it swallowed
-            # words, and swapping perfectly good subtitles for a decode that
-            # swallowed words is the worst outcome.
-            if segs and len(text) >= stream.REFINE_MIN_KEEP * len(joined):
-                lang = got.get("lang") or keep[0]["lang"]
-                keep = []
-                for sg in segs:
-                    start = min(max(base / SAMPLE_RATE + sg["start"], lo), hi)
-                    end = min(max(base / SAMPLE_RATE + sg["end"], lo), hi)
-                    # A line that came out only within the 1 s preroll is the
-                    # tail of the previous group, and a piece whose timing is
-                    # mangled cannot be a subtitle. Both are thrown away.
-                    if end - start < 0.05:
-                        continue
-                    cue = {"start": round(start, 3), "end": round(end, 3),
-                           "lang": lang, "text": sg["text"]}
-                    who = _speaker_for(cues, g, start, end)
-                    if who:
-                        cue["speaker"] = who
-                    keep.append(cue)
-                if not keep:                       # All filtered out: put the finals back
-                    keep = [cues[i] for i in g]
+            if soft:
+                # The re-decode has no timestamps to cut by, so the text goes
+                # back over the boundaries that made the finals.
+                if len(text) >= stream.REFINE_MIN_KEEP * len(joined):
+                    keep = _soft_resplit(keep, text,
+                                         got.get("lang") or keep[0]["lang"])
+            else:
+                segs = got.get("segments") or []
+                # The rollback uses the same threshold as live. If the re-decode is
+                # noticeably shorter than the finals concatenated, it swallowed
+                # words, and swapping perfectly good subtitles for a decode that
+                # swallowed words is the worst outcome.
+                if segs and len(text) >= stream.REFINE_MIN_KEEP * len(joined):
+                    lang = got.get("lang") or keep[0]["lang"]
+                    keep = []
+                    for sg in segs:
+                        start = min(max(base / SAMPLE_RATE + sg["start"], lo), hi)
+                        end = min(max(base / SAMPLE_RATE + sg["end"], lo), hi)
+                        # A line that came out only within the 1 s preroll is the
+                        # tail of the previous group, and a piece whose timing is
+                        # mangled cannot be a subtitle. Both are thrown away.
+                        if end - start < 0.05:
+                            continue
+                        cue = {"start": round(start, 3), "end": round(end, 3),
+                               "lang": lang, "text": sg["text"]}
+                        who = _speaker_for(cues, g, start, end)
+                        if who:
+                            cue["speaker"] = who
+                        keep.append(cue)
+                    if not keep:                   # All filtered out: put the finals back
+                        keep = [cues[i] for i in g]
         out.extend(keep)
         if on_progress:
             on_progress((n + 1) / len(groups))
@@ -436,14 +494,14 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
     total = len(samples)
     # Refinement is one set of moves only as far as the re-split. On a model
     # that cannot give segment timestamps (SenseVoice Small, moonshine -- the
-    # light defaults) all it could do is lump a group into one line, and that is
-    # the side that lost in section 49, so it is not done. It is settled here
-    # ahead of time because how many shares to split the progress into hangs
-    # on it.
+    # light defaults) the group is decoded again and the text lands on the VAD
+    # boundaries instead (`_soft_resplit`). It is settled here ahead of time
+    # because how many shares to split the progress into hangs on it.
     if refine and not getattr(asr, "supports_segments", False):
         print(f"[vod] {getattr(asr, 'label', 'this transcriber')} cannot give segment "
-              "timestamps, so the refinement pass is skipped", file=sys.stderr, flush=True)
-        refine = False
+              "timestamps, so the refinement pass lands the text on the VAD "
+              "boundaries -- the times are kept, the text is swapped",
+              file=sys.stderr, flush=True)
     fast_share = (1.0 - REFINE_SHARE) if refine else 1.0
 
     def drain():

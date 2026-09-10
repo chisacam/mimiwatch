@@ -543,6 +543,13 @@ Quality goes like this.
 This is where the reason for not changing the default lies. For the details see
 [measurement sections 33–34][m].
 
+**The refinement pass runs on light engines too.** A model that cannot give
+segment timestamps (SenseVoice Small, Moonshine) re-decodes each utterance
+group and lays that text on the group's own VAD boundaries: the times come
+through as they were from the fast pass, and only the text is swapped. Until
+now the pass was skipped for these models, which is why a VOD transcribed
+with the light side stayed at the fast pass's level.
+
 ## Shutdown
 
 Shut it down with **"⏻ Shut down"** at the right end of the top bar ("Server ·

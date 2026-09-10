@@ -107,22 +107,31 @@ def test_an_engine_that_promises_timestamps_but_sends_none_keeps_the_fast_lines(
     assert out == cues
 
 
-def test_an_engine_that_cannot_do_timestamps_is_never_asked():
-    """A model that cannot produce segment times is never put through refinement.
+def test_a_model_without_timestamps_lands_the_text_on_the_vad_boundaries():
+    """A model that cannot produce segment times re-decodes the group anyway.
 
-    The light default (SenseVoice Small) and moonshine are such models -- asking
-    raises `UnsupportedRequest`, and taking that once per group pays the decode
-    cost for subtitles that do not change. Refinement without the re-split is
-    the side that lost in section 49, so it is not an alternative either.
+    Until this the pass was skipped for these models (the light defaults), and
+    the skip lived only in a server log line. Lumping a group into one line is
+    the side that lost in section 49, but so is a refinement that never
+    happens: the soft side keeps the VAD times and swaps the text.
     """
     samples = np.zeros(10 * SR, dtype=np.float32)
-    cues = [{"start": 1.0, "end": 3.0, "lang": "ja", "text": "그대로"}]
-    asr = FakeASR([{"start": 0.0, "end": 2.0, "text": "정제된 긴 문장"}],
-                  supports_segments=False)
+    cues = [{"start": 1.0, "end": 3.0, "lang": "ja", "text": "가나다", "speaker": "S1"},
+            {"start": 4.0, "end": 5.0, "lang": "ko", "text": "라마", "speaker": "S2"}]
+    # Same length as the finals joined, so the rollback cannot catch it.
+    asr = FakeASR(text="가가가라라", supports_segments=False)
 
-    out = vod.refine_cues(samples, cues, [span(1, 3)], asr)
-    assert out == cues
-    assert asr.calls == []                 # The decode is never called at all
+    out = vod.refine_cues(samples, cues, [span(1, 3), span(4, 5)], asr)
+
+    assert asr.calls == pytest.approx([5.0])   # One group, one decode (with the lead-in)
+    # The VAD boundaries stay as they were; only the text is swapped.
+    assert [c["start"] for c in out] == [1.0, 4.0]
+    assert [c["end"] for c in out] == [3.0, 5.0]
+    assert [c["speaker"] for c in out] == ["S1", "S2"]   # The labels ride along
+    assert [c["lang"] for c in out] == ["ja", "ja"]     # The re-decode's lang, group-wide
+    # The piece each line takes divides the text by how long its final was.
+    assert out[0]["text"] + out[1]["text"] == "가가가라라"
+    assert len(out[0]["text"]) > len(out[1]["text"])
 
 
 class FakeVAD:
@@ -195,10 +204,13 @@ def test_refining_reserves_the_tail_of_the_progress_bar(monkeypatch):
     assert seen[1] == pytest.approx(0.5 * (1.0 - vod.REFINE_SHARE))
 
 
-def test_skipping_the_refine_gives_the_whole_bar_to_the_fast_pass(monkeypatch):
-    """Reserving progress for a pass that will not run leaves the bar stuck at 65%."""
-    asr = FakeASR([{"start": 1.0, "end": 2.0, "text": "정제된 문장"}],
-                  supports_segments=False)
+def test_the_soft_refine_also_takes_the_reserved_share_of_the_progress_bar(monkeypatch):
+    """Whether the reserved tail is spent hangs on whether the pass runs at all.
+
+    A model without timestamps is not an engine that skips the pass, it is one
+    that takes a different cut of it, so the bar has to pay the same share.
+    """
+    asr = FakeASR(text="정제된 문장", supports_segments=False)
     seen = _progress(monkeypatch, asr)
-    assert seen[1] == pytest.approx(0.5)
-    assert asr.calls == pytest.approx([2.0])          # One final pass, no refinement
+    assert seen[1] == pytest.approx(0.5 * (1.0 - vod.REFINE_SHARE))
+    assert asr.calls == pytest.approx([2.0, 3.0])    # One final pass + one group decode

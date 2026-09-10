@@ -2134,6 +2134,10 @@ def stop(session_id: str) -> dict:
 # point of watching.
 
 WATCH_POLL_S = 30          # the pass through the list. A probe is one yt-dlp call each
+# A probe is a peek, not a fetch. The 90 s fetch timeout would stretch one pass
+# over several poll cycles and hold the loop past a shutdown that already asked
+# it to stop, so a probe gives up well before either.
+WATCH_PROBE_TIMEOUT_S = 20
 
 _watcher_stop = threading.Event()
 _watcher_thread: threading.Thread | None = None
@@ -2150,7 +2154,7 @@ def probe_live(url: str) -> bool | None:
     try:
         meta = subprocess.run(stream.ytdlp_args("-j", url),
                               capture_output=True, text=True,
-                              timeout=stream.YTDLP_TIMEOUT_S,
+                              timeout=WATCH_PROBE_TIMEOUT_S,
                               **stream.child_io(stderr=False))
     except TimeoutExpired:
         return None

@@ -176,6 +176,10 @@ function bind() {
     if (mode === "tile") f.source.value = "url";
     f.source.closest("label").hidden = mode === "tile";
     $("tile-hint").hidden = mode !== "tile";
+    // The solo/threshold row is brought back to its own state (unticked, 0.45)
+    // on every open, so nothing carries over from a previous job.
+    f.speaker_solo.checked = false;
+    f.speaker_threshold.value = "0.45";
     setAddSource(f.source.value);
     $("add-dialog").showModal();
   };

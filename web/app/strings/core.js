@@ -411,6 +411,18 @@ MW_I18N.add({
     en: "Nothing matches.",
     ko: "맞는 줄이 없습니다."
   },
+  "library.watch": {
+    en: "Watching",
+    ko: "감시"
+  },
+  "library.watch.add": {
+    en: "＋ Watch",
+    ko: "＋ 감시"
+  },
+  "library.watch.add.title": {
+    en: "Watch an address — it is started on its own the moment it goes live",
+    ko: "주소를 감시합니다 — 시작하면 알아서 받기 시작합니다"
+  },
   "manage.asr": {
     en: "Transcription",
     ko: "전사"

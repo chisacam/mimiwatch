@@ -144,6 +144,28 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .video-row.live.stopped .vt::before{content:"○ "; color:var(--dim)}
 .video-list .empty{padding:1.2rem .9rem; font-size:.76rem; color:var(--dim); line-height:1.6}
 
+/* The watched list. It sits above the video list and is hidden while it is
+ * empty, so the screen stays as it was for someone who leaves nothing to be
+ * watched. The rows have no thumbnail -- the space a picture would take is
+ * the address's, and a watched channel rarely has one to fetch. */
+.watch-section{
+  border-bottom:1px solid var(--line); display:flex; flex-direction:column;
+  min-height:0; max-height:40%;
+}
+.watch-head{display:flex; justify-content:space-between; align-items:center; padding:.3rem .8rem .1rem}
+.watch-head .watch-title{font-size:.7rem; color:var(--dim); letter-spacing:.04em}
+.watch-head .seg{padding:.08rem .45rem; font-size:.72rem}
+.watch-list{flex:1; overflow-y:auto; padding:.2rem 0 .3rem}
+.video-row.watch{grid-template-columns:1fr auto; padding:.4rem .8rem}
+.video-row.watch .vt{-webkit-line-clamp:1}
+/* The will. It is a state, so it shows even without a hover, dim when off. */
+.video-row .wtg{
+  opacity:.45; border:1px solid transparent; background:none; color:var(--dim);
+  cursor:pointer; border-radius:6px; padding:.15rem .35rem; font-size:.8rem;
+}
+.video-row:hover .wtg{opacity:1}
+.video-row .wtg.on{color:var(--accent)}
+
 /* The hidden attribute always hides. An element's own display:flex beat the
  * browser default's display:none, so the dialog's "Name" field showed in URL
  * mode and the layout buttons showed with a single tile. */

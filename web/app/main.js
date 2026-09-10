@@ -182,6 +182,8 @@ function bind() {
   $("add-video").addEventListener("click", () => openAddDialog(""));
   if ($("library-search"))
     $("library-search").addEventListener("input", onLibrarySearchInput);
+  if ($("watch-add"))
+    $("watch-add").addEventListener("click", addWatcherClick);
   $("export-burn").addEventListener("click", submitBurn);
   $("mv-add").addEventListener("click", () => openAddDialog("tile"));
   document.querySelector('#add-form input[name="refine"]')
@@ -338,6 +340,7 @@ function setLibrary(hidden) {
   // From here on it is the screen with the list. It takes the changes the
   // server pushes (a new session, a state, a job) and updates without a reload.
   connectBus();
+  refreshWatchList();
   if (!list.length && !sessions.some(s => s.cues || LIVE_RUNNING.includes(s.state))) {
     await refreshVideoList(undefined, [list, sessions]);   // the empty-list notice
     setLibrary(false);              // the list is left open for a first-time visitor

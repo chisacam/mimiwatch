@@ -18,6 +18,9 @@ kinds of content.
                           "deleted"?: true}
                         a multiview group appeared, its focus or members changed, or it
                         went away (live.py, the multiview section)
+    {"type": "watchers"}
+                        the watched list changed, or the probe changed a watcher's live
+                        finding (live.py, the watchers section; the list is re-read)
 
 The receiving side refreshes only that part (`web/app/bus.js`). Session
 notifications arrive for every subtitle line, so the screen fixes just that row

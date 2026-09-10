@@ -396,6 +396,33 @@ code.
 It encodes the whole video, so it takes a stretch of real time. The dialog
 closes and the job box follows the progress; stopping leaves no file behind.
 
+## Watching (it starts on its own the moment it goes live)
+
+Leave the address with the server and it checks it for you. Open **Watching**
+in the video list and put in a channel or stream address (and a name) with
+**＋ Watch**. The moment that address is live, the server starts receiving it.
+
+The browser cannot do this: closing the tab closes the stream, and an extension
+does not live long. The one thing that outlives the tab is the process that
+holds the models -- and that is the server. So the checking is done on the
+server side.
+
+When it starts is deliberately narrow. Only when nothing else is being
+received, and only when there is no other session for the same address. A
+watcher that goes live while you are on a broadcast waits; the next pass
+starts it when the screen is free. A broadcast that ends and a new one that
+starts again is received again -- that is the point of watching.
+
+The live/no-live finding is a probe: one call of yt-dlp's metadata every 30
+seconds. On a channel page it looks for the one live among the recordings; on a
+stream address it reads the live flag outright. A finding it cannot read keeps
+the one it had before.
+
+Each address has a **watch** (the small circle): turn it off to put the address
+on hold, delete it from the list at any time. Clicking a row that is live
+starts it by hand -- the same thing the server does on its own, done while you
+are looking.
+
 ## Swapping engines
 
 Open it with the ⚙ button.

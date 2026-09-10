@@ -402,7 +402,8 @@ def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
 
 
 def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress=None,
-               speakers: bool = False, asr=None, should_stop=None,
+               speakers: bool = False, speaker_solo: bool = False,
+               speaker_threshold: float | None = None, asr=None, should_stop=None,
                refine: bool = True) -> list[dict]:
     """VAD-segment the whole file and decode each segment.
 
@@ -424,11 +425,13 @@ def transcribe(samples: "np.ndarray | WavSamples", lang: str | None, on_progress
     vad = build_vad(min_silence=0.35, max_speech=12.0)
     # CAM++ needs enough voice in a segment to place a speaker. The 12s
     # splits here give it that; the live path splits at 3-4s to keep up with
-    # a talker and cannot, which is why tagging lives on this side.
-    labeler = None
-    if speakers:
-        from speaker_id import SpeakerLabeler
-        labeler = SpeakerLabeler()
+    # a talker and cannot, which is why tagging lives on this side. The
+    # factory is the surface that survives a missing model: a disappeared
+    # onnx file used to stop the whole VOD, now it is a transcript without
+    # labels and a line in the log.
+    from speaker_id import make_labeler
+    labeler = make_labeler(speakers, solo=speaker_solo,
+                           threshold=speaker_threshold)
     cues: list[dict] = []
     # The sample spans paired with the subtitle lines. Refinement uses them to
     # group utterances.
@@ -514,6 +517,12 @@ def main():
                     help="Translation engine ID (left empty, the config default)")
     ap.add_argument("--speakers", action="store_true",
                     help="Attaches speaker labels (S1, S2, ...)")
+    ap.add_argument("--speaker-solo", action="store_true",
+                    help="Single-speaker mode with --speakers: everything is S1 "
+                         "instead of the voice splitting into several")
+    ap.add_argument("--speaker-threshold", type=float, default=None,
+                    help="Similarity threshold for --speakers (0.25~0.9, default 0.45; "
+                         "lower splits people more, higher lumps them)")
     ap.add_argument("--no-refine", action="store_true",
                     help="Skips the refinement pass (transcription 30~50%% shorter, "
                          "quality goes down)")
@@ -525,6 +534,8 @@ def main():
     res = jobs.start_transcribe(args.url, args.lang, args.viewer_lang,
                                 backend_id=args.backend, asr_id=args.asr,
                                 speakers=args.speakers, genre=args.genre,
+                                speaker_solo=args.speaker_solo,
+                                speaker_threshold=args.speaker_threshold,
                                 refine=not args.no_refine)
     job_id = res["id"]
     last = ""

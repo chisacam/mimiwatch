@@ -10,10 +10,17 @@ splits at 3-4 s to keep up with someone who does not stop talking, so that much
 is not there. In a measurement six people came out over 70 seconds, and there
 were not that many. A label that invents speakers who are not there is worse
 than no label.
+
+The labeler is only an add-on on the job. Until now it was a hard one: a
+disappeared model (a 187MB file that a cleanup script or a moved model folder
+deletes) raised out of the constructor and stopped the whole VOD. `make_labeler`
+is the surface the job uses, and a missing model is a line in the log and a
+transcript without labels, not a failed job.
 """
 from __future__ import annotations
 
 import os
+import sys
 
 import numpy as np
 import sherpa_onnx
@@ -28,7 +35,8 @@ def _model_path() -> str:
 
 
 class SpeakerLabeler:
-    def __init__(self, threads: int = 2, threshold: float = SIM_THRESHOLD):
+    def __init__(self, threads: int = 2, threshold: float = SIM_THRESHOLD,
+                 solo: bool = False):
         model = _model_path()
         if not os.path.exists(model):
             raise FileNotFoundError(
@@ -38,6 +46,7 @@ class SpeakerLabeler:
             sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=model,
                                                         num_threads=threads))
         self._threshold = threshold
+        self._solo = solo
         self._centroids: list[np.ndarray] = []   # Mean embedding per speaker
         self._counts: list[int] = []
 
@@ -48,6 +57,19 @@ class SpeakerLabeler:
         stream.input_finished()
         emb = np.asarray(self._extractor.compute(stream), dtype=np.float32)
         emb /= np.linalg.norm(emb) + 1e-9
+
+        if self._solo:
+            # One voice, nothing to classify. The centroid still follows the
+            # voice as it drifts, so a label that was started solo can be
+            # handed over to the split path without a cold start.
+            if self._centroids:
+                n = self._counts[0]
+                self._centroids[0] = (self._centroids[0] * n + emb) / (n + 1)
+                self._counts[0] = n + 1
+            else:
+                self._centroids.append(emb)
+                self._counts.append(1)
+            return "S1"
 
         best, best_sim = -1, -1.0
         for i, c in enumerate(self._centroids):
@@ -65,3 +87,22 @@ class SpeakerLabeler:
         self._centroids.append(emb)
         self._counts.append(1)
         return f"S{len(self._centroids)}"
+
+
+def make_labeler(speakers: bool, solo: bool = False,
+                 threshold: float | None = None) -> SpeakerLabeler | None:
+    """Build the labeler -- or None, where the VOD goes on without labels.
+
+    `speakers` off is a None for a different reason (the box was not ticked),
+    and the missing-model None is the one the log line explains. The caller
+    cannot tell them apart and does not need to: both mean "no speaker chip".
+    """
+    if not speakers:
+        return None
+    try:
+        return SpeakerLabeler(threshold=threshold if threshold is not None
+                              else SIM_THRESHOLD, solo=solo)
+    except FileNotFoundError as exc:
+        print(f"[speaker] {exc} -- continuing without speaker labels",
+              file=sys.stderr, flush=True)
+        return None

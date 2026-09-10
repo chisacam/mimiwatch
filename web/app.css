@@ -540,6 +540,7 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 #add-form small,#export-form small{color:var(--dim); font-size:.7rem; line-height:1.5}
 #add-form .row,#export-form .row{display:flex; gap:.5rem; margin-top:.4rem}
 #add-form .grow,#export-form .grow{flex:1}
+#add-form .speaker-options{display:flex; flex-wrap:wrap; gap:.5rem 1.4rem; padding-left:.3rem}
 #add-form button,#export-form button{
   background:#0d1017; color:var(--dim); border:1px solid var(--line);
   border-radius:6px; padding:.45rem 1rem; font-size:.82rem; cursor:pointer; font-family:inherit;

@@ -963,7 +963,12 @@ but does not remove it.
 
 **Speaker tags are VOD-only.** Live segments are short, so speaker embeddings do
 not settle. A 70-second stream once produced six people, and there were not that
-many.
+many. For a stream with one voice, tick the single-voice box with the tags: a
+split is a mistake and there is no second speaker to catch it, so everything is
+one person. The similarity threshold goes in the same place -- lower splits
+people more, higher lumps them. And if the embedding model is gone from the
+disk, the tags simply do not come out; the transcript itself is not lost for
+it.
 
 **English is 1.7× slower than a dedicated model.** The quality is the same. It
 is enough for live but may be noticeable on a long VOD.

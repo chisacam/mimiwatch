@@ -320,6 +320,11 @@
     <small class="hint" data-i18n="add.refine.hint"></small>
     <label class="inline"><input type="checkbox" name="speakers"> <span data-i18n="add.speakers"></span>
            <small class="tag" data-i18n="add.tag.vodOnly"></small></label>
+    <div id="speaker-options" class="speaker-options" hidden>
+      <label class="inline"><input type="checkbox" name="speaker_solo"> <span data-i18n="add.speaker.solo"></span></label>
+      <label class="inline"><input type="number" name="speaker_threshold" value="0.45" min="0.25" max="0.9" step="0.05"> <span data-i18n="add.speaker.threshold"></span></label>
+    </div>
+    <small class="hint" id="speaker-options-hint" data-i18n="add.speaker.solo.hint"></small>
     <label><span data-i18n="add.asr"></span>
       <select name="asr"></select>
       <small data-i18n="add.asr.hint"></small>

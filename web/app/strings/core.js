@@ -111,6 +111,18 @@ MW_I18N.add({
     en: "Attach speaker tags",
     ko: "화자 태그 붙이기"
   },
+  "add.speaker.solo": {
+    en: "Single voice",
+    ko: "1인 방송"
+  },
+  "add.speaker.solo.hint": {
+    en: "A stream with one voice. Keeps the tag from splitting it into several. Lower the threshold to split people more, raise it to lump them.",
+    ko: "하나의 목소리가 있는 방송. 태그가 여러 개로 나뉘는 것을 막아 줍니다. 문턱을 낮게 하면 사람으로 더 많이 나누고, 높게 하면 하나로 모읍니다."
+  },
+  "add.speaker.threshold": {
+    en: "Similarity threshold",
+    ko: "유사도 문턱"
+  },
   "add.start": {
     en: "Start",
     ko: "시작"

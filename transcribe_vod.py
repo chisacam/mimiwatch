@@ -405,19 +405,6 @@ def refine_cues(samples, cues: list[dict], spans: list[tuple[int, int]], asr,
         lo, hi = first / SAMPLE_RATE, last / SAMPLE_RATE
         buf = samples[base:last]
         joined = " ".join(c["text"] for c in keep if c["text"].strip())
-    soft = not getattr(asr, "supports_segments", False)
-    groups = refine_groups(spans)
-    pre = int(stream.PREROLL_S * SAMPLE_RATE)
-    out: list[dict] = []
-    for n, g in enumerate(groups):
-        if should_stop and should_stop():
-            raise stream.Cancelled()
-        keep = [cues[i] for i in g]
-        first, last = spans[g[0]][0], spans[g[-1]][1]
-        base = max(0, first - pre)
-        lo, hi = first / SAMPLE_RATE, last / SAMPLE_RATE
-        buf = samples[base:last]
-        joined = " ".join(c["text"] for c in keep if c["text"].strip())
         if len(buf) >= SAMPLE_RATE // 2:
             got = asr.transcribe(buf, SAMPLE_RATE, speech_s=len(buf) / SAMPLE_RATE,
                                  live=False, segments=not soft)

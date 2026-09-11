@@ -63,7 +63,10 @@ function stop() {
   if (!cap) return;
   const c = cap;
   cap = null;
-  MimiCapture.stop(c);
+  // stopAndFlush, not stop: the last up-to-2 s the upload timer had not caught
+  // would otherwise go nowhere. Not awaited -- the caller is a message handler
+  // that has to reply now.
+  MimiCapture.stopAndFlush(c);
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {

@@ -29,7 +29,13 @@ function stopCapture() {
   state.captureSession = null;
   if (!c) return;
   state.capture = null;
-  MimiCapture.stop(c);
+  // Not awaited, and the state above is cleared first: every caller of this is
+  // synchronous (a session ending, a new capture replacing this one), and the
+  // screen has to show the capture gone at once. The flush carries the last
+  // buffered seconds to the session they belong to while that happens -- if
+  // the page is being unloaded it may not finish, which is still strictly
+  // better than the unconditional loss stop() alone caused.
+  MimiCapture.stopAndFlush(c);
 }
 
 /* Have the user pick a tab. Called **before the session is created**.

@@ -88,7 +88,7 @@ function tabStageNotice(tail, tile = focusedTile()) {
  * only go back. */
 function syncRenameButton() {
   const live = state.live;
-  $("rename-live").hidden = !(live && live.source === "tab");
+  $("rename-live").hidden = !(live && isPushedSource(live.source));
 }
 
 function renameLive() {
@@ -211,6 +211,88 @@ async function pipeCapture(media, sessionId) {
 /* This is where "＋ Add" lands when the sound source is set to "Sound from
  * another tab in this browser". The target is a tab and not a URL, so there is
  * no probe and no yt-dlp. */
+/* Open the machine's own microphone. Called **before the session is created**,
+ * for the same two reasons as requestTabAudio: the permission prompt wants the
+ * click that is still alive, and a cancel here has nothing to undo.
+ *
+ * The three cleanup constraints are switched off on purpose. They are tuned for
+ * one person close to a headset, and this path exists for the opposite case --
+ * several people around one microphone at a distance, which is where
+ * noiseSuppression can take the quiet far voice for noise and autoGainControl
+ * rides the level up and down inside a sentence, a movement the VAD reads as an
+ * utterance boundary. The deciding argument is not that raw transcribes better,
+ * which is **unmeasured**: it is that the recording is the archive. Cleanup can
+ * be applied to a raw file later and cannot be taken back out of a processed
+ * one.
+ *
+ * There is no device picker here. Chrome hands over the system default input,
+ * and choosing another one is done in the browser's own site settings. */
+async function requestMicAudio() {
+  let media;
+  try {
+    media = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+        sampleRate: 16000,
+      },
+    });
+  } catch (err) {
+    // Denied, dismissed, or no input device at all. All three arrive as an
+    // exception and none of them is worth a stack trace on screen.
+    jobError(MW_I18N.t("capture.mic.denied", { error: err && err.message ? err.message : String(err) }));
+    return null;
+  }
+  return media;
+}
+
+/* A session fed by the microphone: a meeting, a seminar, a room.
+ *
+ * The live subtitles it produces are a preview, not the product. Speaker labels
+ * are a VOD-side feature (speaker_id.py), so the record worth keeping comes
+ * from transcribing the WAV this session writes -- which is why the notice
+ * below names the recording rather than the subtitles. */
+async function startMicCapture(title, lang) {
+  const pending = openPendingScriptWindow();
+  state.scriptWin = pending;
+
+  const media = await requestMicAudio();
+  if (!media) { if (pending) pending.close(); state.scriptWin = null; return; }
+  stopLive();
+  const name = title || MW_I18N.t("capture.micAudio");
+  const res = await (await fetch("/api/live/mic", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: name, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
+      asr: state.asr, refine: state.refine, genre: currentGenre(),
+      profile: document.querySelector('#add-form select[name="profile"]').value,
+    }),
+  })).json();
+  if (res.error) {
+    media.getTracks().forEach(t => t.stop());
+    if (pending) pending.close();
+    state.scriptWin = null;
+    jobError(res.error);
+    return;
+  }
+
+  const probe = { id: "", title: name, is_live: true };
+  const t = soloTile();
+  bindLive(t, {
+    id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
+    url: "", lang, probe, asr: state.asr, backend: state.backend, source: "mic",
+  }, {
+    id: probe.id, title: probe.title, source_lang: lang || "",
+    viewer_lang: $("viewer-lang").value, translated: false,
+    backends_done: [state.backend], live: true,
+  });
+  t.src = { site: "none" };          // there is no video to attach
+  await pipeCapture(media, res.id);
+  showLiveNotice(MW_I18N.t("capture.notice.micRecording"));
+}
+
 async function startTabCapture(title, lang) {
   // Grab the script window first. This flow has no video to attach, so there
   // is no reason to leave the user on the main screen, and once the sharing

@@ -251,6 +251,16 @@ const esc = (t) => String(t).replace(/[&<>"]/g,
  * words a person can read. */
 const LIVE_RUNNING = ["starting", "loading", "running"];
 
+/* Is this session's sound pushed up by the browser rather than fetched by the
+ * server? True for "tab" (getDisplayMedia) and "mic" (getUserMedia).
+ *
+ * It exists because the screen used to ask `source === "tab"` in eight places,
+ * and adding a second pushed source turned every one of them silently false
+ * for the new source -- no error, just a session with a media offset control
+ * that means nothing, a rename button that will not appear, and a stream left
+ * running when the window moves on. Ask this instead. */
+const isPushedSource = (s) => s === "tab" || s === "mic";
+
 // The state words the screen shows. The keys are protocol -- the server sends
 // exactly these -- and only the values are language, so the map answers with
 // whatever the string table says at the moment it is read. A plain object of

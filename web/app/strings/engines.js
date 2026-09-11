@@ -110,6 +110,18 @@ MW_I18N.add({
     en: "The popup was blocked, so the subtitle log window did not open — open it with “⧉ Pop out” on the right.",
     ko: "팝업이 막혀 자막 내역 창을 띄우지 못했습니다 — 오른쪽 「⧉ 따로 띄우기」로 여십시오.",
   },
+  "capture.mic.denied": {
+    en: "The microphone could not be opened: {error}",
+    ko: "마이크를 열지 못했습니다: {error}",
+  },
+  "capture.micAudio": {
+    en: "Microphone",
+    ko: "마이크",
+  },
+  "capture.notice.micRecording": {
+    en: "Recording. The subtitles below are a running preview — the record to keep comes from transcribing the saved audio afterwards, which is also where speaker labels come from.",
+    ko: "녹음 중입니다. 아래 자막은 진행 중인 미리보기이고, 남길 기록은 저장된 소리를 끝난 뒤에 전사해서 만듭니다. 화자 구분도 그때 붙습니다.",
+  },
   "capture.notice.sessionEnded": {
     en: "The subtitle session ended: {error}",
     ko: "자막 세션이 끝났습니다: {error}",
@@ -477,6 +489,10 @@ MW_I18N.add({
   "jobs.source.hint.file": {
     en: "Transcribes a video or audio file on this machine. A copy of the file you pick is left in the server's storage (data/uploads).",
     ko: "이 기계의 영상·음성 파일을 받아 적습니다. 고른 파일은 서버 저장소(data/uploads)에 사본이 남습니다.",
+  },
+  "jobs.source.hint.mic": {
+    en: "Records this machine's microphone. Live subtitles are a preview; the audio is saved, and transcribing that file afterwards is what gives you speaker labels and a record worth keeping.",
+    ko: "이 컴퓨터의 마이크를 녹음합니다. 실시간 자막은 미리보기이고, 소리는 파일로 저장됩니다. 그 파일을 끝난 뒤에 전사하면 화자 구분이 붙은 기록을 얻습니다.",
   },
   "jobs.source.hint.tab": {
     en: "Chromium-based browsers only. Pick the tab in the sharing window and switch on “Also share tab audio”. It is the route for what the server cannot take, such as a members-only stream.",

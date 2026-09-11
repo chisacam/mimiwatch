@@ -5,6 +5,7 @@ import pytest
 import subprocess
 import threading
 import time
+import wave
 
 import live
 import store
@@ -653,3 +654,82 @@ def test_resume_carries_the_rename(monkeypatch):
     s = live.get("title-1")
     assert (s.title, s.title_by_user) == ("the name I typed", True)
     live._sessions.clear()
+
+
+# ---- The session's own audio: carrying the tail and writing the WAV --------------
+# hayamimi, which this ingest path was ported from, kept no audio, and a meeting
+# transcribed with it on 2026-09-11 could never be transcribed again at better
+# quality because the sound was gone. These tests pin the two things that turned
+# out to be load-bearing for a record: every uploaded sample reaches the
+# transcriber, and every uploaded sample reaches the file.
+
+def _pcm(n_samples: int) -> bytes:
+    """Distinguishable int16 PCM -- a ramp, so a dropped stretch shows up as a
+    gap in the values rather than as more silence among silence."""
+    return (np.arange(n_samples, dtype=np.int32) % 1000).astype(np.int16).tobytes()
+
+
+def test_feed_carries_the_misaligned_tail_instead_of_dropping_it():
+    """An upload is a multiple of the worklet's 128 samples, not of the VAD's 1600.
+
+    The loop used to be `range(0, len(raw) - need + 1, need)`, so the remainder
+    was dropped and never made up: two uploads of 2.5 and 1.1 chunks yielded
+    two chunks instead of three, silently. Three is the whole of what arrived.
+    """
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="tab", title="t")
+    s._tr = None
+    first = s.feed(_pcm(live.CHUNK * 2 + 500))     # 2 chunks + a 500-sample tail
+    assert first["ok"] and abs(first["queued_s"] - 0.2) < 1e-9
+    second = s.feed(_pcm(live.CHUNK - 500))        # the tail completes the third
+    assert abs(second["queued_s"] - 0.3) < 1e-9    # 3 chunks, not 2
+    assert abs(s._recv_s - 0.3) < 1e-9
+
+
+def test_mic_session_is_pushed_and_records_every_sample():
+    """A mic session takes uploaded audio like a tab one, and writes it down.
+
+    The recordings directory is a tmpdir already: conftest's `isolated` fixture
+    redirects it for every test, because a session records as soon as it is fed
+    and not only when the test is about recording.
+    """
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m")
+    s._tr = None
+    assert s.pushed and s.source == "mic"
+    blocks = [_pcm(live.CHUNK * 2 + 500), _pcm(live.CHUNK - 500), _pcm(777)]
+    for b in blocks:
+        assert s.feed(b)["ok"]
+    assert s.status()["recording"] and not s.status()["recording_error"]
+    s.stop()
+    written = b"".join(blocks)
+    with wave.open(s._wav_path, "rb") as w:
+        assert w.getnchannels() == 1 and w.getsampwidth() == 2
+        assert w.getframerate() == live.SAMPLE_RATE
+        assert w.readframes(w.getnframes()) == written
+    live._sessions.clear()
+
+
+def test_recording_failure_leaves_the_transcription_running(monkeypatch):
+    """A full disk costs the recording, never the subtitles already on screen.
+
+    The error has to be visible, though: a recording that stopped with nobody
+    told is the failure this feature exists to prevent, moved one level down.
+    """
+    monkeypatch.setattr(live.wave, "open", lambda *a, **k: (_ for _ in ()).throw(OSError("no space left")))
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m")
+    s._tr = None
+    r = s.feed(_pcm(live.CHUNK * 2))
+    assert r["ok"] and abs(r["queued_s"] - 0.2) < 1e-9      # audio still queued
+    assert "no space left" in s.status()["recording_error"]
+    assert s.status()["recording_s"] == 0
+    live._sessions.clear()
+
+
+def test_stop_flushes_the_carried_tail_so_the_last_words_are_transcribed():
+    """The fragment shorter than one chunk is zero-padded, not discarded -- the
+    end of a meeting is where the closing agreement is."""
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="tab", title="t")
+    s._tr = None
+    s.feed(_pcm(500))                      # nothing reaches the ring yet
+    assert abs(s._recv_s) < 1e-9
+    s.stop()
+    assert abs(s._recv_s - live.FRAME_S) < 1e-9   # one padded chunk did

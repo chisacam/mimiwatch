@@ -979,6 +979,62 @@ page.
 List management, engine settings and subtitle editing are not in the popup. The
 mimiwatch page keeps them — building those too would make two sets.
 
+## Meetings and seminars (the machine's own microphone)
+
+Pick **"This machine's microphone"** as the source in **⊕ Add**, give the room a
+name, and start. The browser asks for microphone permission, and from then on
+two things happen at once: subtitles scroll as a live preview, and **the audio
+is written to `data/recordings/<date>-<session id>.wav`**.
+
+**The recording is the point, not the preview.** Speaker labels are a VOD-side
+feature, so a live session cannot say who spoke — and in a meeting that is most
+of what a record is for. The way round it is to let the session write its WAV,
+and when the meeting is over add that file as a new job with **☑ Speakers**
+ticked. That pass gets the whole file at once, so it also gets cue ranges
+instead of start-only times, the refinement pass over complete utterances, and
+whatever transcriber is configured rather than whatever keeps up in real time.
+
+So the order for a meeting is:
+
+1. Record with the microphone source. Watch the preview only to confirm sound is
+   arriving.
+2. When it ends, add `data/recordings/<the file>.wav` as a job with speakers on.
+3. Read that job's transcript. The live session's lines were the preview.
+
+### Why the audio is kept
+
+Live transcription is a one-shot reading of something that exists only while it
+arrives. A meeting recorded on 2026-09-11 with hayamimi — the tool this ingest
+path was ported from, which keeps no audio — was transcribed once, at whatever
+quality the CPU-only Korean model reached that afternoon. Both passes garbled
+the same stretches, which is how it was established that the fault was the room
+audio and not the model: the first-pass final and the refined line broke in the
+same places. By then there was nothing left to try a better model on. A
+transcript can be made again from audio; audio cannot be made again from a
+transcript.
+
+If writing the file fails — a full disk, a directory that cannot be created —
+the session says so in its status and **keeps transcribing**. Losing the
+recording must not also lose the subtitles already on screen.
+
+### What the microphone path does not do
+
+- **No device picker.** The system default input is used. Choose another one in
+  the browser's own site settings.
+- **The browser's cleanup is switched off** — echo cancellation, noise
+  suppression and automatic gain. They are tuned for one person close to a
+  headset, and this path is for several people around one microphone at a
+  distance, where noise suppression can take the quiet far voice for noise and
+  automatic gain moves the level inside a sentence. Whether raw transcribes
+  better on that material is **not measured**; what decides it is that the
+  recording is the archive, and cleanup can be applied to a raw file later but
+  never taken back out of a processed one.
+- **The extension does not start or resume a microphone session.** It captures
+  tab audio; the microphone is a page feature.
+- A killed process (rather than a stopped session) leaves the WAV's length
+  field short, because that field is written on close. Every sample is on disk
+  and `ffmpeg -i short.wav fixed.wav` rewrites the header.
+
 ## Known limits
 
 **Aligning live subtitles with the video is manual.** Match them with the offset
@@ -1044,6 +1100,7 @@ lsof -ti:8900 | xargs kill
 |---|---|
 | `backends.json` | Engine settings (not committed to git). `MIMIWATCH_CONFIG` can point at another file |
 | `data/mimiwatch.db` | Jobs, sessions and **all the subtitles** (VOD and live). `MIMIWATCH_DATA_DIR` can move the location |
+| `data/recordings/` | The WAV a microphone or tab session wrote. Never deleted automatically — it is the one artifact that cannot be made again |
 | `data/legacy/` | `<video id>.json` left behind by old versions. Nobody reads them |
 | `~/.local/share/mimiwatch/models` | Models (`%LOCALAPPDATA%\mimiwatch\models` on Windows) |
 | `ext/` | The browser extension (loaded unpacked) |

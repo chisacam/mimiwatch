@@ -216,7 +216,7 @@ function openFromList(value) {
     // Tab audio is the one exception. That stream is tied to this window and
     // breaks the moment something else is opened anyway, so we tell the server
     // it is over as well.
-    if (state.live.source === "tab") stopLive();
+    if (isPushedSource(state.live.source)) stopLive();
     else detachLive();
   } else {
     // The temporary row of a finished stream is cleared away once something else is opened.
@@ -306,7 +306,7 @@ async function openSearchResult(r) {
   } else {
     if (state.live) {
       // Same rule as openFromList: a VOD does not cut the reception.
-      (state.live.source === "tab" ? stopLive() : detachLive());
+      (isPushedSource(state.live.source) ? stopLive() : detachLive());
     }
     await loadVideo(r.value);
   }

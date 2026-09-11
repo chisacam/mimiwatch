@@ -1,8 +1,8 @@
 """Shared test setup.
 
-No model is ever loaded. The store (`data/`) and the config (`backends.json`)
-are redirected to a temporary directory for each test so that the real ones are
-never touched -- test sessions used to survive in the real DB and show up in
+No model is ever loaded. The store (`data/`), the config (`backends.json`) and
+the recordings directory are redirected to a temporary directory for each test
+so that the real ones are never touched -- test sessions used to survive in the real DB and show up in
 the "Past streams" list on screen.
 
 On a machine without the transcription runtimes (transcribe_cpp, sherpa_onnx),
@@ -110,6 +110,7 @@ import config  # noqa: E402
 import jobs  # noqa: E402
 import live  # noqa: E402
 import models  # noqa: E402
+import paths  # noqa: E402
 import store  # noqa: E402
 import translate  # noqa: E402
 
@@ -122,9 +123,18 @@ def native_stub_path(tmp_path_factory):
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
-    """Redirect the store and the config to a temporary directory."""
+    """Redirect the store, the config and the recordings to a temporary directory.
+
+    `recordings_dir` belongs here rather than in the handful of tests that are
+    about recording, because being absent is exactly how it goes wrong: a live
+    session opens its WAV on the first feed(), so any test that feeds audio
+    writes a file whether or not recording is what it is testing. Four tests
+    wrote into the real `data/recordings` before this line existed and every
+    one of them passed -- a green run says nothing about where the bytes went.
+    """
     data = tmp_path / "data"
     data.mkdir()
+    monkeypatch.setattr(paths, "recordings_dir", lambda: str(data / "recordings"))
     monkeypatch.setattr(store, "DATA", str(data))
     monkeypatch.setattr(store, "DB", str(data / "mimiwatch.db"))
     monkeypatch.setattr(store, "_db", None)

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import queue
 import re
 from collections import deque
@@ -31,11 +32,13 @@ import traceback
 import time
 import urllib.request
 import uuid
+import wave
 
 import numpy as np
 
 import bus
 import config
+import paths
 import store
 import stream
 import translate as mw_translate
@@ -423,7 +426,20 @@ class LiveSession:
         # uploads what it hears in its own tab. It is the route for what the server
         # cannot receive, such as a members-only broadcast -- no cookies needed
         # either, and the tab is one the user picked in the share dialog themselves.
-        self.source = "tab" if source == "tab" else "hls"
+        # Three values, but only two behaviours. "tab" and "mic" are both
+        # pushed in by the browser through feed(); "hls" is pulled by ffmpeg.
+        # Every branch below asks `self.pushed`, never `source == "tab"` --
+        # adding a third value to those equality checks would have turned each
+        # one silently false for a mic session, which is the entire ingest path.
+        self.source = source if source in ("tab", "mic") else "hls"
+        # Set on the first feed(); see _record().
+        self._wav: wave.Wave_write | None = None
+        self._wav_path = ""
+        self._wav_error = ""
+        self._wav_s = 0.0
+        # What feed() could not cut into whole VAD chunks last time. Carried,
+        # not dropped -- see feed().
+        self._feed_tail = b""
         self.lang = lang
         self.viewer_lang = viewer_lang
         self.backend_id = backend_id
@@ -515,7 +531,7 @@ class LiveSession:
         # were dropped is written down. Better than silently falling behind and
         # producing a subtitle 20 minutes later. An address session's pipe gives back
         # pressure, so its ring never overflows.
-        self._ring = Ring(INGEST_MAX_S if self.source == "tab" else RING_S)
+        self._ring = Ring(INGEST_MAX_S if self.pushed else RING_S)
         self._recv_base = 0.0
         self._recv_s = 0.0
         self.dropped_s = 0.0        # sound dropped on ring overflow (s). feed() returns it
@@ -613,6 +629,9 @@ class LiveSession:
                 # Separate from where transcription reached (media_base+audio_s):
                 # where the reading side received to. On a session with no focus the
                 # former stands still while the latter keeps going. Resume uses the latter.
+                "recording": self._wav_path,
+                "recording_s": round(self._wav_s, 1),
+                "recording_error": self._wav_error,
                 "recv_s": round(self._recv_s, 1),
                 "recv_t": round(self._recv_base + self._recv_s, 2),
                 "ring_s": round(self._ring.seconds(), 1),
@@ -846,13 +865,91 @@ class LiveSession:
               f"(ring {self._ring.seconds():.1f}s, received {self._recv_s:.0f}s, "
               f"transcribed {self.audio_s:.0f}s)",
               flush=True)
-        if self.source == "tab":
-            # The browser cannot slow tab audio down, so while focused a long
+        if self.pushed:
+            # The browser cannot slow its own audio down, so while focused a long
             # stretch is held. Without focus there is no reason to hold that much --
             # 30 seconds is enough for when it comes back.
             self._ring.set_max(INGEST_MAX_S if on else RING_S)
         self._persist()
         self.emit({"type": "status", **self.status()})
+
+    @property
+    def pushed(self) -> bool:
+        """The browser uploads this session's sound through feed().
+
+        True for both "tab" (getDisplayMedia) and "mic" (getUserMedia); False
+        for "hls", which ffmpeg pulls. Nothing downstream cares which of the
+        two pushed kinds it is, so nothing downstream should be testing the
+        source string for it.
+        """
+        return self.source in ("tab", "mic")
+
+    # ---- the session's own audio ------------------------------------------
+
+    def _record(self, raw: bytes) -> None:
+        """Append uploaded PCM to this session's WAV file, opening it on the
+        first block.
+
+        Why a pushed session writes its own audio down: hayamimi, the tool this
+        pipeline was ported from, kept none. A 2026-09-11 meeting recorded with
+        it was transcribed once, at whatever quality the CPU-only Korean model
+        reached that afternoon, and both passes garbled the same stretches --
+        the fault was the room audio, not the model. By then the sound existed
+        nowhere. A better model could never be tried on it, because live
+        transcription is a one-shot reading of something that only exists while
+        it arrives. So the file, not the transcript, is what a meeting should
+        leave behind: transcripts can be made again from audio, and audio
+        cannot be made again from anything.
+
+        A failure here never takes the session with it. A full disk costs the
+        recording; it must not also cost the subtitles already on screen. So a
+        write error closes the recorder, is recorded once in `_wav_error` for
+        the status to carry, and the same bytes go on to the transcriber.
+        """
+        if self._wav_error or not raw:
+            return
+        try:
+            if self._wav is None:
+                os.makedirs(paths.recordings_dir(), exist_ok=True)
+                name = f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id}.wav"
+                self._wav_path = os.path.join(paths.recordings_dir(), name)
+                w = wave.open(self._wav_path, "wb")
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(SAMPLE_RATE)
+                self._wav = w
+                print(f"[live] session {self.id} recording to {self._wav_path}",
+                      flush=True)
+            self._wav.writeframes(raw)
+            self._wav_s += len(raw) / 2 / SAMPLE_RATE
+        except Exception as exc:
+            # Reported, never swallowed: a recording that stopped without
+            # anyone being told is the failure this whole feature exists to
+            # prevent, only moved one level down.
+            self._wav_error = str(exc) or exc.__class__.__name__
+            print(f"[live] session {self.id} recording failed, transcription "
+                  f"continues: {self._wav_error}", file=sys.stderr, flush=True)
+            self._close_recording()
+
+    def _close_recording(self) -> None:
+        """Finish the WAV. Safe to call more than once, and on a session that
+        never recorded anything.
+
+        A WAV carries its length in the header, which `wave` writes on close.
+        A process that is killed rather than stopped therefore leaves the
+        length field short; the samples are all on disk and ffmpeg recovers
+        them by scanning (`ffmpeg -i short.wav out.wav`), which is why the path
+        is published in the status even while the session is running.
+        """
+        w, self._wav = self._wav, None
+        if w is None:
+            return
+        try:
+            w.close()
+            print(f"[live] session {self.id} recorded {self._wav_s:.0f}s "
+                  f"to {self._wav_path}", flush=True)
+        except Exception as exc:
+            self._wav_error = self._wav_error or str(exc)
 
     def stop(self):
         self.stopped_by = self.stopped_by or "user"
@@ -862,11 +959,28 @@ class LiveSession:
         ff = self._ff
         if ff:
             ff.terminate()
-        # A tab session has no reading thread, so nobody puts ("end",) in. The
-        # transcribing side is waiting on the ring, so it is woken here directly.
-        if self.source == "tab":
+        # A pushed session has no reading thread, so nobody puts ("end",) in.
+        # The transcribing side is waiting on the ring, so it is woken here
+        # directly.
+        if self.pushed:
+            # Whatever feed() was carrying is shorter than one VAD chunk, so it
+            # is zero-padded up to one. The padding is at most 0.1 s of silence
+            # at the very end of the session; dropping the fragment instead
+            # would throw away the last word of a closing remark, which is
+            # exactly the part of a meeting a record is wanted for.
+            tail, self._feed_tail = self._feed_tail, b""
+            if tail:
+                pad = np.zeros(CHUNK, dtype=np.float32)
+                have = np.frombuffer(tail, dtype=np.int16).astype(np.float32) / 32768.0
+                pad[:len(have)] = have
+                self._recv_s += FRAME_S
+                self._ring.push(("audio", self._recv_s, pad))
             self._ended = True
             self._ring.push(("end",))
+        # Closed after the ring is woken: a WAV gets its length field written
+        # only on close, and doing that first would put a file operation
+        # between the user's stop and the screen reacting to it.
+        self._close_recording()
 
     # ---- tab audio intake -------------------------------------------------
     def feed(self, raw: bytes) -> dict:
@@ -880,13 +994,28 @@ class LiveSession:
         waiting -- the browser is waiting on this request) and how many seconds were
         dropped is returned.
         """
-        if self.source != "tab":
-            return {"error": "This session does not take tab audio"}
+        if not self.pushed:
+            return {"error": "This session does not take uploaded audio"}
         if self._stop.is_set() or self.state in ("stopped", "error"):
             return {"error": "The session has ended", "state": self.state}
+        # The recording takes the bytes exactly as they arrived, ahead of any
+        # chunking, so the file is a faithful copy of what the browser sent
+        # rather than of what the VAD happened to accept.
+        self._record(raw)
+        # The remainder is carried, not dropped. The uploader accumulates
+        # 128-sample worklet frames and posts whatever its 2 s timer caught, so
+        # an upload is a multiple of 128 samples but not of CHUNK (1600):
+        # 32000 divides evenly, 31872 leaves 1472. This loop used to be
+        # `range(0, len(raw) - need + 1, need)`, which let that remainder fall
+        # on the floor -- up to 0.1 s lost at every misaligned upload, and lost
+        # silently, which is how a word goes missing from a meeting record with
+        # nothing anywhere saying so. The tail now leads the next block.
+        buf = self._feed_tail + raw
         need = CHUNK * 2
-        for off in range(0, len(raw) - need + 1, need):
-            block = np.frombuffer(raw, dtype=np.int16, count=CHUNK,
+        cut = len(buf) - (len(buf) % need)
+        self._feed_tail = buf[cut:]
+        for off in range(0, cut, need):
+            block = np.frombuffer(buf, dtype=np.int16, count=CHUNK,
                                   offset=off).astype(np.float32) / 32768.0
             self._recv_s += FRAME_S
             self._ring.push(("audio", self._recv_s, block))
@@ -1008,9 +1137,9 @@ class LiveSession:
             stdout=subprocess.PIPE, **stream.child_io())
 
     def _start_reader(self, src, start_index):
-        """Stand ffmpeg up and start the thread that reads it. A tab session has
-        nothing to do here because `feed()` plays the reading role."""
-        if self.source == "tab":
+        """Stand ffmpeg up and start the thread that reads it. A pushed session
+        has nothing to do here because `feed()` plays the reading role."""
+        if self.pushed:
             return
         self._spawn_ffmpeg(src, start_index)
         self._rx = threading.Thread(target=self._read_loop, name=f"rx-{self.id}",
@@ -1113,7 +1242,7 @@ class LiveSession:
         On losing focus it finalises only the utterance being held and withdraws; the
         session stays alive and keeps receiving sound.
         """
-        idle_flush = self.source == "tab"   # only a tab flushes on 2s of silence -- as before
+        idle_flush = self.pushed   # only a pushed session flushes on 2s of silence -- as before
         idle = False
         waited = 0.0
         while not self._stop.is_set() and self._focus.is_set():
@@ -1338,7 +1467,7 @@ class LiveSession:
                 "note",
                 f"⋯ about {int(self.gap_s)} s went unreceived while the "
                 f"server was down ⋯", self.lang or "", "")
-        if self.source == "tab" and self.resume_from:
+        if self.pushed and self.resume_from:
             # Tab audio cannot be rewound. The sound from while the share was
             # cut is nowhere, so not even how many seconds it was is known.
             self.publish_line(
@@ -1474,7 +1603,7 @@ def _new_session(url: str, lang: str | None, viewer_lang: str, backend_id: str,
         # It is born a standby session. set_focus() sends the status out and it is
         # not even registered yet, so only the flag is lowered.
         s._focus.clear()
-        if s.source == "tab":
+        if s.pushed:
             s._ring.set_max(RING_S)
     with _lock:
         _sessions[s.id] = s
@@ -2053,7 +2182,7 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
             g.focus = s.id               # in a bundle with no focus, this is the focus
         else:
             s._focus.clear()             # if there is one, it comes back as a standby session
-            if s.source == "tab":
+            if s.pushed:
                 s._ring.set_max(RING_S)
         if s.id not in g.members:
             g.members.append(s.id)

@@ -682,6 +682,28 @@ class Handler(BaseHTTPRequestHandler):
             source="tab",
             title=(body.get("title") or "").strip() or "Tab audio"))
 
+    def post_live_mic(self, body):
+        # A session fed by the machine's own microphone. Same intake as
+        # /api/live/capture -- the browser holds the device and uploads PCM to
+        # /api/ingest -- and it differs only in where the sound came from,
+        # which the source records so the UI and the recording can say so.
+        #
+        # This is the meeting and seminar path. What makes it usable for that
+        # is not the live subtitles but the WAV the session writes: speaker
+        # labels live on the VOD side (speaker_id.py), so the finished record
+        # comes from transcribing the recording afterwards, not from the lines
+        # that scrolled past during the meeting.
+        self._json(live.start(
+            "", body.get("lang") or None,
+            body.get("viewer_lang") or "ko",
+            body.get("backend") or config.active("tr"),
+            profile=body.get("profile") or "broadcast",
+            asr_backend_id=body.get("asr") or config.active("asr"),
+            refine=bool(body.get("refine", True)),
+            genre=body.get("genre"),
+            source="mic",
+            title=(body.get("title") or "").strip() or "Microphone"))
+
     # ---- Multiview -----------------------------------------------------------
     # Several streams on one screen. The rules for groups and focus are in
     # live.py's multiview section; here the JSON is only unpacked and passed
@@ -1091,6 +1113,7 @@ POST_ROUTES = {
     "/api/transcribe": Handler.post_transcribe,
     "/api/live/start": Handler.post_live_start,
     "/api/live/capture": Handler.post_live_capture,
+    "/api/live/mic": Handler.post_live_mic,
     "/api/live/title": Handler.post_live_title,
     "/api/live/backend": Handler.post_live_backend,
     "/api/live/asr": Handler.post_live_asr,

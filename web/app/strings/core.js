@@ -99,6 +99,10 @@ MW_I18N.add({
     en: "The server fetches the audio directly with yt-dlp.",
     ko: "서버가 yt-dlp로 오디오를 직접 받습니다."
   },
+  "add.source.mic": {
+    en: "This machine's microphone",
+    ko: "이 컴퓨터의 마이크",
+  },
   "add.source.tab": {
     en: "Sound from another tab in this browser",
     ko: "이 브라우저의 다른 탭 소리"

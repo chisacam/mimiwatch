@@ -85,6 +85,10 @@ MW_I18N.add({
     en: "The server stopped, so reception was cut off — ",
     ko: "서버가 멈춰 수신이 끊겼습니다 — ",
   },
+  "live.resume.mic": {
+    en: "Subtitle reception has stopped. Allow the microphone again and they keep piling up — ",
+    ko: "자막 수신이 멈춰 있습니다. 마이크를 다시 허용하면 이어서 쌓입니다 — ",
+  },
   "live.resume.stopped": {
     en: "Reception was stopped for this stream. If it is still on you can resume — ",
     ko: "수신을 멈춘 방송입니다. 아직 진행 중이면 이어서 받을 수 있습니다 — ",
@@ -148,6 +152,14 @@ MW_I18N.add({
   "live.status.stopped": {
     en: "Subtitles stopped · the stream keeps playing",
     ko: "자막 중단됨 · 방송은 계속 재생됩니다",
+  },
+  "live.mic.reshare": {
+    en: "You have to allow the microphone again to continue.",
+    ko: "마이크를 다시 허용해야 이어집니다.",
+  },
+  "live.mic.reshareLong": {
+    en: "You have to allow the microphone again to continue. Press “Resume” in the list again.",
+    ko: "마이크를 다시 허용해야 이어집니다. 목록에서 「이어받기」를 다시 누르십시오.",
   },
   "live.tab.logOnly": {
     en: "Reception has stopped; you are looking at the subtitle log that piled up.",

@@ -95,7 +95,6 @@ MW_I18N.add({
     en: "Auto-detect could not determine the source language. Translation unavailable.",
     ko: "자동 감지가 원문 언어를 찾지 못했습니다. 번역을 할 수 없습니다.",
   },
-  "panel.glossary.tip": { en: "{from} → {to}", ko: "{from} → {to}" },
   "panel.window.title": { en: "Subtitle log", ko: "자막 내역" },
   "panel.window.waiting": {
     en: "Pick the tab to share and the subtitles pile up here.",

@@ -512,13 +512,6 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
   margin-left:.4rem; font-size:.68rem; font-weight:600;
   color:var(--err); opacity:.9; white-space:nowrap;
 }
-/* A glossary term inside the translation. The underline is --warn, not
-   --accent: .tr is already --accent, and a line the colour of the text it
-   underlines cannot be seen at .8rem. */
-.glossary-term{
-  text-decoration:underline; text-decoration-style:dotted;
-  text-decoration-color:var(--warn); text-underline-offset:2px; cursor:help;
-}
 .line.on{background:#16221f; border-left-color:var(--accent)}
 .line .t{font-family:var(--mono); font-size:.68rem; color:var(--dim); padding-top:.15rem}
 .line .tx{font-size:.86rem; line-height:1.5}

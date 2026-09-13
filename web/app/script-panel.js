@@ -75,8 +75,7 @@ function refreshScriptRow(row, c) {
   if (trText) {
     const tr = document.createElement("div");
     tr.className = "tr";
-    // Highlight glossary terms in the translation
-    tr.appendChild(highlightGlossaryTerms(trText));
+    tr.textContent = trText;
     // If the source was edited, the translation attached to it is the
     // translation of the **sentence before the edit**. It is not deleted, only
     // marked as such -- a wrong translation still beats none, and whether to
@@ -534,73 +533,6 @@ function openPendingScriptWindow() {
     + '</style><div>' + t("panel.window.waiting") + '</div>');
   win.document.close();
   return win;
-}
-
-/* The channel glossary, as the server last reported it.
- *
- * It rides in the status blob (live.py status()), and state.live is not that
- * blob -- it is the handful of keys bindLive picks out of it. Reading
- * state.live.glossary_terms gave undefined on every line, so nothing was ever
- * marked. A recording carries no glossary at all: the terms are written into
- * the prompt while it is translated and the doc never keeps them. */
-function getGlossaryTerms() {
-  const st = state.live && state.live.lastStatus;
-  return (st && st.glossary_terms) || [];
-}
-
-function highlightGlossaryTerms(text) {
-  const terms = getGlossaryTerms();
-  if (!terms.length) return document.createTextNode(text);
-
-  const fragment = document.createDocumentFragment();
-  let remaining = text;
-  let lastIndex = 0;
-
-  // Longest first, so a term that contains another one wins. An empty `from`
-  // is dropped rather than sorted: it matches at index 0 of everything, the
-  // slice below takes nothing off, and the loop never ends.
-  const sortedTerms = terms.filter(x => x && x.from)
-                           .sort((a, b) => b.from.length - a.from.length);
-  if (!sortedTerms.length) return document.createTextNode(text);
-
-  while (remaining.length > 0) {
-    let matched = false;
-    for (const term of sortedTerms) {
-      const from = term.from;
-      const to = term.to;
-      const idx = remaining.indexOf(from);
-      if (idx === 0) {
-        // Match at the start
-        const span = document.createElement("span");
-        span.className = "glossary-term";
-        span.textContent = from;
-        span.title = t("panel.glossary.tip", { from, to });
-        fragment.appendChild(span);
-        remaining = remaining.slice(from.length);
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) {
-      // No match at current position, find the next match
-      let nextIdx = remaining.length;
-      for (const term of sortedTerms) {
-        const idx = remaining.indexOf(term.from, 1);
-        if (idx !== -1 && idx < nextIdx) {
-          nextIdx = idx;
-        }
-      }
-      if (nextIdx === remaining.length) {
-        // No more matches
-        fragment.appendChild(document.createTextNode(remaining));
-        remaining = "";
-      } else {
-        fragment.appendChild(document.createTextNode(remaining.slice(0, nextIdx)));
-        remaining = remaining.slice(nextIdx);
-      }
-    }
-  }
-  return fragment;
 }
 
 /* What happens when a line in the script is clicked.

@@ -193,6 +193,16 @@ User can delete individual cues but not reset a live session's subtitles while k
 
 ---
 
+### UX-08: Script panel not highlighting current line for live receiving — ✅ FIXED
+**Severity**: HIGH (Windows-specific sync issue)  
+**Location**: `web/app/script-panel.js:441` (`markScript`)
+
+For live receiving, `markScript` returned early and never highlighted the current line. The script panel only scrolled to bottom via `pinScriptToBottom`, but didn't show which line was actually on screen (the overlay shows the most recent cue).
+
+**Fix applied**: `markScript` now highlights the last cue for live receiving, while `pinScriptToBottom` continues to handle scrolling. For VOD, behavior unchanged.
+
+---
+
 ## Architectural Notes
 
 | Aspect | Current | Note |
@@ -221,7 +231,8 @@ User can delete individual cues but not reset a live session's subtitles while k
 | **P2** | UX-06 | Clear all subtitles (live) | Medium | `web/app/live.js`, `server.py`, `store.py` | 🔄 PENDING |
 | **P2** | BUG-04 | Ring marker cap | Small | `live.py` | ✅ DONE |
 | **P3** | PERF-01 | Pre-warm default models | Medium | `server.py`, `app.py`, `models.py` | 🔄 PENDING |
-| **P3** | PERF-02 | Incremental FTS resync | Medium | `store.py` | 🔄 PENDING |
+| **P3** | PERF-02 | Incremental FTS resync | Medium | `store.py` | ✅ DONE |
+| **P2** | UX-08 | Script panel live follow highlight | Small | `web/app/script-panel.js` | ✅ DONE |
 | **P3** | UX-07 | User-renamed title indicator | Small | `web/app/library.js`, `bus.js`, `app.css` | ✅ DONE |
 
 ---
@@ -243,7 +254,6 @@ cd /Users/chiyak/hobby/mimiwatch
 - Clear all subtitles for live session (UX-06)
 - Glossary term highlighting (UX-04)
 - Pre-warm default models (PERF-01)
-- Incremental FTS resync (PERF-02)
 
 ---
 

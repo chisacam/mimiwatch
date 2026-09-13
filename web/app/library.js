@@ -326,9 +326,11 @@ async function openSearchResult(r) {
 /* The bar up top is the place that answers "what am I watching right now". */
 function setNowTitle(title, userRenamed = false) {
   const el = $("now-title");
-  el.textContent = (title || t("library.nowTitle.empty")) + (userRenamed ? " ✎" : "");
+  el.textContent = title || t("library.nowTitle.empty");
   el.classList.toggle("empty", !title);
-  el.classList.toggle("user-renamed", userRenamed);
+  // The mark is a sibling, not part of the title: the title clips with an
+  // ellipsis and would eat it on exactly the names it is there for.
+  $("now-renamed").hidden = !userRenamed;
   el.title = title || "";
 }
 

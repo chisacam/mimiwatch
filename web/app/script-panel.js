@@ -90,17 +90,18 @@ function refreshScriptRow(row, c) {
     }
     body.appendChild(tr);
   }
-  row.classList.toggle("pending", c.kind === "final" && !trText);
-
-  // Auto-detect language failure indicator: cue has no source language and no translation
-  // (and is not a note). This happens when auto-detect was used but the language
-  // wasn't determined, or the source language is unknown.
-  if (c.kind !== "note" && !c.lang && !trText) {
+  // Auto-detect never settled on a source language, so there is nothing to
+  // translate from. That is a different state from "the translation has not
+  // arrived yet" -- marking it pending as well drew the waiting ellipsis on a
+  // line that is never going to get one.
+  const missingLang = c.kind !== "note" && !c.lang && !trText;
+  row.classList.toggle("pending", c.kind === "final" && !trText && !missingLang);
+  if (missingLang) {
     const warn = document.createElement("b");
     warn.className = "tr-missing-lang";
     warn.title = t("panel.row.missingLang.title");
     warn.textContent = t("panel.row.missingLang");
-    body.appendChild(warn);
+    tx.appendChild(warn);
   }
   // The edit button. It is laid over the row and the CSS shows it on hover
   // only. It is attached anew on every redraw -- it closes over c, so leaving
@@ -535,21 +536,16 @@ function openPendingScriptWindow() {
   return win;
 }
 
-/* What happens when a line in the script is clicked.
+/* The channel glossary, as the server last reported it.
  *
- * A different axis from "what to show" (setScriptView). That one is which of
- * source and translation to draw; this one is what happens on a click. */
-
+ * It rides in the status blob (live.py status()), and state.live is not that
+ * blob -- it is the handful of keys bindLive picks out of it. Reading
+ * state.live.glossary_terms gave undefined on every line, so nothing was ever
+ * marked. A recording carries no glossary at all: the terms are written into
+ * the prompt while it is translated and the doc never keeps them. */
 function getGlossaryTerms() {
-  // For live sessions, terms are in state.live.glossary_terms
-  if (state.live && state.live.glossary_terms) {
-    return state.live.glossary_terms;
-  }
-  // For recordings, check if doc has glossary info
-  if (state.doc && state.doc.glossary_terms) {
-    return state.doc.glossary_terms;
-  }
-  return [];
+  const st = state.live && state.live.lastStatus;
+  return (st && st.glossary_terms) || [];
 }
 
 function highlightGlossaryTerms(text) {
@@ -560,8 +556,12 @@ function highlightGlossaryTerms(text) {
   let remaining = text;
   let lastIndex = 0;
 
-  // Sort terms by length (longest first) to avoid partial matches
-  const sortedTerms = [...terms].sort((a, b) => b.from.length - a.from.length);
+  // Longest first, so a term that contains another one wins. An empty `from`
+  // is dropped rather than sorted: it matches at index 0 of everything, the
+  // slice below takes nothing off, and the loop never ends.
+  const sortedTerms = terms.filter(x => x && x.from)
+                           .sort((a, b) => b.from.length - a.from.length);
+  if (!sortedTerms.length) return document.createTextNode(text);
 
   while (remaining.length > 0) {
     let matched = false;
@@ -574,7 +574,7 @@ function highlightGlossaryTerms(text) {
         const span = document.createElement("span");
         span.className = "glossary-term";
         span.textContent = from;
-        span.title = `${from} → ${to}`;
+        span.title = t("panel.glossary.tip", { from, to });
         fragment.appendChild(span);
         remaining = remaining.slice(from.length);
         matched = true;

@@ -5,7 +5,7 @@
   --text:#e8eaf0; --dim:#8d94a6;
   --accent:#5ee0c0;      /* caption green, legible on any frame */
   --warn:#f0b447;
-  --err:#ff6b6b;
+  --err:#e07a7a;      /* the red the .danger rules already use */
   --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 *{box-sizing:border-box}
@@ -77,8 +77,10 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 #now-title.empty{color:var(--dim); font-weight:400}
-#now-title.user-renamed{color:var(--accent)}
-#now-title.user-renamed::after{content:" ✎"; font-weight:400; font-size:.8em; color:var(--accent)}
+/* Outside the title on purpose. #now-title clips with an ellipsis, so a mark
+   inside it is the first thing to go on a name long enough to be clipped --
+   which is the case where "this name is one I gave" has to stay readable. */
+.now-renamed{flex:none; font-size:.8rem; color:var(--accent); cursor:default}
 /* Inherits the title's slot exactly. A different size makes the bar lurch while
    the name is being edited, and in a narrow window even rewraps it. */
 .title-edit{
@@ -220,7 +222,7 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 /* Key hint for multiview focus (1-4) */
 .tile-key-hint{
   flex:none; font-size:.7rem; color:var(--accent); opacity:.7;
-  font-family:var(--mono); margin-right:.2rem;
+  font-family:var(--mono);
 }
 
 /* Layouts. In 1+2 / 1+3 the focused tile takes the big area and the rest flow
@@ -505,15 +507,17 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
   margin-left:.4rem; font-size:.68rem; font-weight:600;
   color:var(--warn); opacity:.85; white-space:nowrap;
 }
-/* Auto-detect failed to determine source language — no translation possible. */
+/* Auto-detect did not settle on a source language -- nothing to translate from. */
 .tr-missing-lang{
   margin-left:.4rem; font-size:.68rem; font-weight:600;
   color:var(--err); opacity:.9; white-space:nowrap;
 }
-/* Glossary term highlight in translation — underline with tooltip */
+/* A glossary term inside the translation. The underline is --warn, not
+   --accent: .tr is already --accent, and a line the colour of the text it
+   underlines cannot be seen at .8rem. */
 .glossary-term{
   text-decoration:underline; text-decoration-style:dotted;
-  text-decoration-color:var(--accent); cursor:help;
+  text-decoration-color:var(--warn); text-underline-offset:2px; cursor:help;
 }
 .line.on{background:#16221f; border-left-color:var(--accent)}
 .line .t{font-family:var(--mono); font-size:.68rem; color:var(--dim); padding-top:.15rem}
@@ -624,18 +628,26 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 }
 .live-badge button:hover{background:#3a1a17; color:#fff}
 
-/* Live menu dropdown */
-#live-menu{
-  position:absolute; top:100%; right:0; margin-top:.2rem;
-  background:var(--panel); border:1px solid var(--line); border-radius:6px;
-  box-shadow:0 .5rem 1rem rgba(0,0,0,.4); min-width:140px; z-index:10;
-}
+/* The live menu. It carries .menu, so it is `fixed` for the reason written
+   out above that rule -- absolute, the header's overflow:hidden clips it --
+   and live.js already hands it viewport coordinates. Only the size differs:
+   two short rows do not need the settings menu's 16rem. */
+#live-menu{width:auto; min-width:10rem; padding:.3rem; gap:.1rem}
+/* border-radius as well as border: without it the 100px pill from
+   `.live-badge button` wins and full-width rows come out as lozenges. */
 #live-menu button{
-  display:block; width:100%; text-align:left; padding:.5rem .8rem;
-  background:transparent; border:none; color:var(--text);
-  font-size:.8rem; cursor:pointer;
+  display:block; width:100%; text-align:left; padding:.45rem .6rem;
+  background:transparent; border:none; border-radius:6px; color:var(--text);
+  font-size:.8rem; cursor:pointer; font-family:inherit;
 }
-#live-menu button:hover{background:var(--line)}
+#live-menu button:hover{background:var(--line); color:var(--text)}
+/* Stopping is the destructive one, so it keeps the badge's red. The ⋮ that
+   only opens the menu does not -- `:not(.on)` so .seg.on still owns the
+   open state, which an id selector would otherwise take from it. */
+#live-menu #live-stop{color:#e8a09b}
+#live-menu #live-stop:hover{background:#3a1a17; color:#fff}
+#live-menu-btn:not(.on){border-color:var(--line); color:var(--dim); border-radius:6px}
+#live-menu-btn:not(.on):hover{background:transparent; color:var(--text)}
 .line.pending .tx{opacity:.65}
 .line.pending .t::after{content:"…"; color:var(--accent)}
 

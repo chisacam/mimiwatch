@@ -16,6 +16,11 @@
 
   <div class="now">
     <b id="now-title" data-i18n="header.now.empty"></b>
+    <!-- The mark for a name the viewer gave. A sibling of the title rather than
+         part of it: the title clips with an ellipsis, and a name long enough to
+         clip is the one whose provenance is worth showing. -->
+    <span id="now-renamed" class="now-renamed" hidden
+          data-i18n-attr="title:header.renamed.title">✎</span>
     <!-- Tab audio carries no title to take. Chrome puts an opaque identifier in
          the track label rather than the tab title (measured). So the name has
          to be fixable afterwards. -->
@@ -23,7 +28,8 @@
             data-i18n-attr="title:header.rename.title"></button>
     <div id="live-badge" class="live-badge" hidden>
       <span>● LIVE</span>
-      <button id="live-menu-btn" class="seg" aria-haspopup="true" aria-expanded="false">⋮</button>
+      <button id="live-menu-btn" class="seg" aria-haspopup="true" aria-expanded="false"
+              data-i18n-attr="title:live.menu.title">⋮</button>
       <div id="live-menu" class="menu" hidden>
         <button id="live-clear-cues" class="seg" data-i18n="live.clearCues"></button>
         <button id="live-stop" class="seg" data-i18n="header.live.stop"></button>
@@ -146,10 +152,10 @@
             <div class="cue-src"></div>
           </div>
           <div class="tile-bar">
+            <span class="tile-key-hint" hidden></span>
             <span class="tile-site"></span>
             <span class="tile-title"></span>
             <span class="tile-state"></span>
-            <span class="tile-key-hint"></span>
             <span class="tile-sound" data-i18n-attr="title:tile.sound.title">🔊</span>
             <button class="tile-close seg" data-i18n-attr="title:tile.close.title">✕</button>
           </div>

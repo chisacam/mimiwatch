@@ -249,6 +249,7 @@ async function openSessionInTile(tile, st) {
     lastStatus: running ? null : { ...st, type: "status" },
   }, {
     id: st.video_id || "", title: st.title || st.url,
+    title_by_user: !!st.title_by_user,
     source_lang: st.source_lang || "", viewer_lang: st.viewer_lang,
     translated: false, backends_done: [st.backend], live: true,
   });
@@ -301,7 +302,8 @@ function showTileInPanels(tile) {
   $("live-badge").hidden = !isLiveReceiving();
   // Tab audio has no video to line up against, so the offset means nothing either.
   $("offset-wrap").style.display = !live ? "" : (live.source === "tab" ? "none" : "flex");
-  setNowTitle(tile.doc ? tile.doc.title : null);
+  setNowTitle(tile.doc ? tile.doc.title : null,
+              !!(tile.doc && tile.doc.title_by_user));
   hideLiveNotice();
   if (live) renderLiveStatus(tile);
   else updateLangStatus();
@@ -468,6 +470,7 @@ function onLiveStatus(m, tile = focusedTile()) {
   live.lastStatus = m;
   if (m.asr_backend) live.asr = m.asr_backend;
   if (m.backend) live.backend = m.backend;
+  if (tile.doc) tile.doc.title_by_user = !!m.title_by_user;
   // Follows a change of name. Editing it with "✎ Name" makes the server send
   // the state again, so what was edited in the main window reaches the script
   // window by the same path.
@@ -475,7 +478,7 @@ function onLiveStatus(m, tile = focusedTile()) {
       && !document.querySelector(".title-edit")) {
     tile.doc.title = m.title;
     tile.title = m.title;
-    if (tile === focusedTile()) setNowTitle(m.title);
+    if (tile === focusedTile()) setNowTitle(m.title, !!m.title_by_user);
   }
   if (m.state === "error" || m.state === "stopped") {
     // stopLive() used to be called here. It empties state.live, and two things
@@ -588,7 +591,7 @@ async function clearLiveCues() {
   const live = state.live;
   if (!live) return;
   toggleLiveMenu(false);
-  if (!confirm(MW_I18N.t("live.clearCues.confirm"))) return;
+  if (!confirm(t("live.clearCues.confirm"))) return;
   const res = await fetch("/api/cue/clear", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session: live.id }),

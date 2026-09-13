@@ -339,6 +339,10 @@ MW_I18N.add({
     en: "Stop",
     ko: "중단"
   },
+  "live.menu.title": {
+    en: "Live session actions",
+    ko: "라이브 세션 작업"
+  },
   "live.clearCues": {
     en: "Clear subtitles",
     ko: "자막 지우기"
@@ -374,6 +378,10 @@ MW_I18N.add({
   "header.rename": {
     en: "✎ Name",
     ko: "✎ 이름"
+  },
+  "header.renamed.title": {
+    en: "This name was given here, not taken from the stream",
+    ko: "방송에서 가져온 이름이 아니라 여기서 붙인 이름입니다"
   },
   "header.rename.title": {
     en: "Renames this session",

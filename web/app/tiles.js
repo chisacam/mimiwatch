@@ -247,11 +247,10 @@ function updateTileBar(tile) {
   // Key hint for multiview focus (1-4)
   const idx = state.tiles.indexOf(tile);
   const keyEl = tile.el.querySelector(".tile-key-hint");
-  if (keyEl && state.tiles.length > 1 && idx >= 0 && idx < 4) {
-    keyEl.textContent = ["①", "②", "③", "④"][idx];
-    keyEl.style.display = "inline-block";
-  } else if (keyEl) {
-    keyEl.style.display = "none";
+  if (keyEl) {
+    const shown = state.tiles.length > 1 && idx >= 0 && idx < 4;
+    if (shown) keyEl.textContent = ["①", "②", "③", "④"][idx];
+    keyEl.hidden = !shown;
   }
 }
 

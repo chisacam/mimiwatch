@@ -368,9 +368,6 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .check{display:flex; align-items:center; gap:.35rem; cursor:pointer}
 .check input{accent-color:var(--accent)}
 #offset-wrap{display:none}
-#offset-wrap.live-edge-warning{border:2px solid var(--warn); border-radius:6px; padding:2px; box-sizing:border-box}
-#offset-wrap.live-edge-warning input::-webkit-slider-thumb{background:var(--warn)}
-#offset-wrap.live-edge-warning input::-moz-range-thumb{background:var(--warn); border:none}
 
 .panel{border-left:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; min-height:0}
 .panel-head{

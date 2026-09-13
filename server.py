@@ -794,28 +794,11 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True, "deleted": int(cue_id)})
 
     def post_cue_clear(self, body):
-        # Clear all cues for a live session. The session keeps running.
         sid = (body.get("session") or "").strip()
         if not sid:
             return self._json({"error": "session is required"}, 400)
-        # Verify it's a live session that exists
-        s = live.get(sid)
-        if not s or s.source != "hls" and s.source != "tab":
-            return self._json({"error": "no such live session"}, 404)
-        # Clear all cues
-        store.replace_cues(sid, [])
-        # Notify the live session to clear its in-memory cues
-        s._recent.clear()
-        s._text_of.clear()
-        s._translated_ids.clear()
-        s._seq = 0
-        s.lines = 0
-        s.translated = 0
-        s._persist()
-        s.emit({"type": "status", **s.status()})
-        # Notify other windows
-        bus.publish({"type": "session", "id": sid, "cleared": True})
-        self._json({"ok": True, "cleared": True})
+        res = live.clear_cues(sid)
+        self._json(res, 404 if res.get("error") else 200)
 
     def post_live_title(self, body):
         self._json(live.set_title(body.get("id", ""), body.get("title", "")))

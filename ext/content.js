@@ -199,6 +199,7 @@
     if (e.type === "cue") store.upsert(e);
     else if (e.type === "translation") store.translate(e.id, trKey, e.text);
     else if (e.type === "drop") store.drop(e.id);
+    else if (e.type === "clear") store.reset();
     else if (e.type === "status") {
       live = true;
       receiving = ["starting", "loading", "running"].includes(e.state);

@@ -418,6 +418,18 @@ function dropCue(id, tile = focusedTile()) {
   renderCue();
 }
 
+/* The whole list thrown away while the session goes on. The same shape as
+ * dropCue, one line at a time turned into all of them at once. */
+function clearCues(tile = focusedTile()) {
+  const live = tile && tile.live;
+  if (live) live.store.reset();
+  else state.cues.length = 0;
+  if (tile !== focusedTile()) return;    // another tile's subtitle log is not on screen
+  buildScript();
+  state.idx = -1;
+  renderCue();
+}
+
 /* On a live stream, "Follow" chases the **bottom**, not any particular row.
  *
  * It used to call scrollIntoView({block:"end"}) on each new row. But a row keeps

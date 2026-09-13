@@ -332,6 +332,9 @@ async function attachLive(tile) {
     // window are watching the same session, so an edit in one has to reach the
     // other.
     else if (m.type === "drop") dropCue(m.id, tile);
+    // The subtitles were thrown away on the server. Every screen keeps its own
+    // copy of the list, so each has to be told.
+    else if (m.type === "clear") clearCues(tile);
   };
   es.onerror = () => {
     // For a finished session the server sends the whole backlog and then closes

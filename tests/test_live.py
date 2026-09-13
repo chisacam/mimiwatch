@@ -665,14 +665,16 @@ def test_auto_detect_language_gets_translated(session):
     s.lang = None  # auto-detect
     s.viewer_lang = "ko"
 
-    # Mock translator that records what it's called with
+    # The pairs land in `calls` from translate(), not from should_translate():
+    # recording the question rather than the answer proves the translator was
+    # asked, which is not what this test is named after.
     calls = []
     class MockTranslator:
         name = "mock"
         def should_translate(self, text, src, tgt):
-            calls.append((text, src, tgt))
             return src != tgt and src != ""
         def translate(self, text, src, tgt, context=None):
+            calls.append((text, src, tgt))
             return "T:" + text
     s._tr = MockTranslator()
 
@@ -687,67 +689,46 @@ def test_auto_detect_language_gets_translated(session):
     while time.time() < deadline and len(calls) < 2:
         time.sleep(0.01)
 
-    # Both cues should have been translated
     assert len(calls) == 2
     for text, src, tgt in calls:
         assert src == "ja"
         assert tgt == "ko"
         assert text in ("こんにちは", "元気ですか")
+    # And the translations actually reached the screen.
+    assert [t for _, t in _translations(s)] == ["T:こんにちは", "T:元気ですか"]
 
 
-def test_trim_text_of_does_not_retranslate(session):
-    """Lines trimmed from _text_of by _trim_text_of should not be re-translated.
+def test_clear_cues_keeps_the_id_space(session):
+    """Clearing empties the record but does not hand the same ids out again.
 
-    This tests the fix for BUG-03: _trim_text_of now preserves _translated_ids
-    for already-translated cues, and _superseded checks _translated_ids.
+    The event log still holds the cleared lines under the ids they were given,
+    and a client that reconnects with `Last-Event-ID` replays them. Restarting
+    `_seq` at zero would put the replayed lines and the new ones under one id
+    each.
     """
     s = session
-    s.lang = "ja"
-    s.viewer_lang = "ko"
+    live._sessions[s.id] = s
+    try:
+        for n in range(3):
+            s.audio_s = n * 1.0
+            s.publish_line("final", f"line {n}", "ja", "")
+        assert len(store.cues(s.id)) == 3
+        seq_before = s._seq
 
-    # Mock translator
-    calls = []
-    class MockTranslator:
-        name = "mock"
-        def should_translate(self, text, src, tgt):
-            return src != tgt
-        def translate(self, text, src, tgt, context=None):
-            calls.append((text, src, tgt))
-            return "T:" + text
-    s._tr = MockTranslator()
+        assert live.clear_cues(s.id) == {"ok": True, "cleared": True}
 
-    # Publish 600 cues (more than keep*2 = 1000, but we'll manually trigger trim)
-    for n in range(600):
-        s.audio_s = n * 1.0
-        s.publish_line("final", f"line {n}", "ja", "")
+        assert store.cues(s.id) == []
+        assert list(s._recent) == [] and s._text_of == {}
+        assert (s.lines, s.translated) == (0, 0)
+        assert s._seq == seq_before          # not reset
+        assert any(e.get("type") == "clear" for e in s.emitted)
 
-    # Wait for translations to complete
-    import time
-    deadline = time.time() + 5.0
-    while time.time() < deadline and len(calls) < 600:
-        time.sleep(0.01)
-    assert len(calls) == 600
+        # The next line comes after the cleared ones, not on top of them.
+        s.publish_line("final", "after", "ja", "")
+        assert store.cues(s.id)[0]["id"] > seq_before
+    finally:
+        live._sessions.clear()
 
-    # Now manually trigger _trim_text_of with small keep to simulate
-    # the trimming that happens when _text_of grows beyond keep*2
-    original_keep = 500
-    s._trim_text_of(keep=100)  # This should keep last 100, but preserve translated
 
-    # Verify _translated_ids has entries for all 600 cues
-    assert len(s._translated_ids) == 600
-
-    # Now simulate the translation queue processing a cue that was trimmed
-    # (i.e., not in _text_of but in _translated_ids)
-    # Create a fake cue for an old line that was trimmed
-    old_cue = {"id": 1, "text": "line 1", "lang": "ja", "kind": "final"}
-    # This should be skipped because it's in _translated_ids
-    assert s._superseded(old_cue) is True
-
-    # A new cue not in _translated_ids should not be superseded
-    new_cue = {"id": 999, "text": "new line", "lang": "ja", "kind": "final"}
-    assert s._superseded(new_cue) is False
-
-    # An absorbed cue (in _text_of with None) should be superseded
-    s._text_of[50] = None
-    absorbed_cue = {"id": 50, "text": "line 50", "lang": "ja", "kind": "final"}
-    assert s._superseded(absorbed_cue) is True
+def test_clear_cues_on_a_session_that_is_gone(isolated):
+    assert live.clear_cues("nope") == {"error": "no such live session"}

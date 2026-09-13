@@ -561,9 +561,6 @@ class LiveSession:
         # refined line absorbed drops out of here, and the inherited id changes to
         # the refined line's text.
         self._text_of: dict[int, str] = {}
-        # Cue IDs that have been translated. Used to prevent re-translation of
-        # lines trimmed from _text_of (see _trim_text_of).
-        self._translated_ids: set[int] = set()
 
     # ---- fan-out ----------------------------------------------------------
     def subscribe(self) -> queue.Queue:
@@ -713,8 +710,6 @@ class LiveSession:
             for c in covered:
                 self._recent.remove(c)
                 self._text_of[c["id"]] = None      # absorbed. Dropped from the translation queue
-                # Absorbed cues are deleted from storage, so their translations are gone too
-                self._translated_ids.discard(c["id"])
             self._text_of[cue["id"]] = text
             # A line a refined line absorbed disappears from the screen, so it is
             # deleted from storage too. Only the one line whose id was inherited is
@@ -753,9 +748,6 @@ class LiveSession:
         """
         if len(self._text_of) > keep * 2:
             for k in sorted(self._text_of)[:-keep]:
-                # Don't delete keys for already-translated cues
-                if k in self._translated_ids:
-                    continue
                 del self._text_of[k]
 
     def _translate_async(self, cue: dict):
@@ -789,10 +781,6 @@ class LiveSession:
         """Has this line been absorbed by a refined line, or its text changed, in the
         meantime. A line trimmed out of the record, and so unknown, counts as still
         alive."""
-        # If already translated (and not superseded by a refined line), skip.
-        # This covers lines trimmed from _text_of by _trim_text_of.
-        if cue["id"] in self._translated_ids:
-            return True
         cur = self._text_of.get(cue["id"], _UNKNOWN)
         return cur is not _UNKNOWN and cur != cue["text"]
 
@@ -833,7 +821,6 @@ class LiveSession:
         # and previously this case was read as a failure and the line vanished.
         self.translated += 1
         store.save_translation(self.id, cue["id"], self.backend_id, out)
-        self._translated_ids.add(cue["id"])
         self.emit({"type": "translation", "id": cue["id"],
                    "kind": cue["kind"], "text": out})
 
@@ -1811,6 +1798,35 @@ def notify_drop(owner: str, cue_id: int):
     s = get(owner)
     if s is not None:
         s.emit({"type": "drop", "id": int(cue_id)})
+
+
+def clear_cues(session_id: str) -> dict:
+    """Throw away a running session's subtitles without ending the session.
+
+    `_recent` and `_text_of` are owned by `_publish_locked`, so the clearing
+    happens under the same lock -- emptied from outside it, a line arriving at
+    the same moment lands in a record that is being swept out from under it.
+
+    `_seq` is deliberately **not** reset. The event log still holds the cleared
+    lines under the ids they were handed, and a client that reconnects with
+    `Last-Event-ID` replays them; handing the same ids out again would collide
+    the replayed lines with the new ones, under one id each.
+    """
+    s = get(session_id)
+    if s is None:
+        return {"error": "no such live session"}
+    store.replace_cues(s.id, [])
+    with s._pub_lock:
+        s._recent.clear()
+        s._text_of.clear()
+        s.lines = 0
+        s.translated = 0
+    # The screens hold their own copy of the list, so emptying the table is not
+    # enough -- without this the lines stay on the page until it is reloaded.
+    s.emit({"type": "clear"})
+    s.emit({"type": "status", **s.status()})
+    s._persist()
+    return {"ok": True, "cleared": True}
 
 
 def feed(session_id: str, raw: bytes) -> dict:

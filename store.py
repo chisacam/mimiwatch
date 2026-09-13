@@ -105,10 +105,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS cues_fts USING fts5(
   text,
   tr_text
 );
-CREATE TABLE IF NOT EXISTS fts_meta (
-  key   TEXT PRIMARY KEY,
-  value REAL NOT NULL
-);
 """
 
 # Column names changed. A file made by an older version has `session` and `t`,
@@ -744,50 +740,16 @@ def _fts_sync(db: sqlite3.Connection, owner: str) -> None:
 
 
 def _fts_resync(db: sqlite3.Connection) -> None:
-    """Incremental FTS resync. Only rebuilds owners modified since last resync.
+    """Wipe the whole FTS table and rebuild it from the cues. The caller holds
+    the lock.
 
-    On first run (no last_resync), does a full rebuild. After that, only owners
-    with updated timestamp > last_resync are resynced.
-    Also detects FTS corruption (missing entries) and does full rebuild if found."""
-    # Get last resync timestamp
-    row = db.execute("SELECT value FROM fts_meta WHERE key = 'last_resync'").fetchone()
-    last_resync = row["value"] if row else 0.0
-
-    # Check for FTS corruption: any owner with cues but no FTS entries
-    corrupted = False
-    if last_resync > 0.0:
-        for r in db.execute("SELECT DISTINCT owner FROM cues"):
-            owner = r["owner"]
-            cues_count = db.execute("SELECT COUNT(*) FROM cues WHERE owner = ?", (owner,)).fetchone()[0]
-            fts_count = db.execute("SELECT COUNT(*) FROM cues_fts WHERE owner = ?", (owner,)).fetchone()[0]
-            if cues_count > fts_count:
-                corrupted = True
-                break
-
-    if last_resync == 0.0 or corrupted:
-        # First run or corruption detected: full rebuild
-        db.execute("DELETE FROM cues_fts")
-        owners = [r["owner"] for r in db.execute("SELECT DISTINCT owner FROM cues")]
-    else:
-        # Incremental: find owners modified since last resync
-        # Check docs and sessions tables for updated timestamps
-        owners = set()
-        # Docs (VODs)
-        for r in db.execute("SELECT id FROM docs WHERE updated > ?", (last_resync,)):
-            owners.add(r["id"])
-        # Sessions (live)
-        for r in db.execute("SELECT id FROM sessions WHERE updated > ?", (last_resync,)):
-            owners.add(r["id"])
-        owners = list(owners)
-        if not owners:
-            # Nothing modified since last resync
-            return
-
+    It runs once at every start: the table a write cut short, or a version
+    that did not know the table at all, left half stale cannot outlive one
+    restart. The cost is the size of the subtitle table, which is small."""
+    db.execute("DELETE FROM cues_fts")
+    owners = [r["owner"] for r in db.execute("SELECT DISTINCT owner FROM cues")]
     for owner in owners:
         _fts_sync(db, owner)
-    # Update last resync timestamp
-    db.execute("INSERT OR REPLACE INTO fts_meta (key, value) VALUES ('last_resync', ?)",
-               (time.time(),))
     db.commit()
 
 

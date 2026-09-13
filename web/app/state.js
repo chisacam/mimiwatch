@@ -262,3 +262,58 @@ const LIVE_STATE = {};
     get: function () { return MW_I18N.t("live.state." + s); }, enumerable: true,
   });
 });
+
+/* ---------- live offset live-edge guard ---------- */
+/* For live streams, the offset should not push subtitle lookup past the live edge.
+ * The live edge is approximately player.getDuration() for a live stream.
+ * We clamp the offset max to (liveEdge - currentTime - 2s buffer) to avoid
+ * showing stale or missing subtitles. */
+function updateOffsetLiveEdge() {
+  if (!isLiveReceiving() || !state.player || !state.player.ready) {
+    // Not a live stream or player not ready: reset to default range
+    const offsetEl = $("offset");
+    if (offsetEl.max !== "3") {
+      offsetEl.max = "3";
+      offsetEl.min = "-3";
+      $("offset-wrap").classList.remove("live-edge-warning");
+    }
+    return;
+  }
+  
+  const currentTime = state.player.getCurrentTime ? state.player.getCurrentTime() : 0;
+  const duration = state.player.getDuration ? state.player.getDuration() : 0;
+  
+  if (!duration || duration <= currentTime) {
+    // Duration not available or invalid
+    return;
+  }
+  
+  // Live edge is at duration. Buffer of 2 seconds to avoid edge.
+  const buffer = 2.0;
+  const maxOffset = Math.max(0, duration - currentTime - buffer);
+  
+  const offsetEl = $("offset");
+  const currentMax = parseFloat(offsetEl.max);
+  
+  if (maxOffset < 3 && maxOffset !== currentMax) {
+    offsetEl.max = maxOffset.toFixed(1);
+    // Don't let min go positive - user might want negative offset
+    if (parseFloat(offsetEl.min) > -3) {
+      offsetEl.min = "-3";
+    }
+    // Show warning if current offset exceeds new max
+    if (state.offset > maxOffset) {
+      state.offset = maxOffset;
+      offsetEl.value = state.offset.toFixed(1);
+      $("offset-val").textContent = state.offset.toFixed(1) + "s";
+    }
+    $("offset-wrap").classList.add("live-edge-warning");
+  } else if (maxOffset >= 3) {
+    // Plenty of room, reset to default
+    if (currentMax !== 3) {
+      offsetEl.max = "3";
+      offsetEl.min = "-3";
+    }
+    $("offset-wrap").classList.remove("live-edge-warning");
+  }
+}

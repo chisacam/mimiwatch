@@ -90,6 +90,17 @@ function refreshScriptRow(row, c) {
     body.appendChild(tr);
   }
   row.classList.toggle("pending", c.kind === "final" && !trText);
+
+  // Auto-detect language failure indicator: cue has no source language and no translation
+  // (and is not a note). This happens when auto-detect was used but the language
+  // wasn't determined, or the source language is unknown.
+  if (c.kind !== "note" && !c.lang && !trText) {
+    const warn = document.createElement("b");
+    warn.className = "tr-missing-lang";
+    warn.title = t("panel.row.missingLang.title");
+    warn.textContent = t("panel.row.missingLang");
+    body.appendChild(warn);
+  }
   // The edit button. It is laid over the row and the CSS shows it on hover
   // only. It is attached anew on every redraw -- it closes over c, so leaving
   // the old one behind opens the editor on the value from before the edit

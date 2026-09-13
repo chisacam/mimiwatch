@@ -95,6 +95,7 @@ function bind() {
     $("offset-val").textContent = state.offset.toFixed(1) + "s";
     rememberChannelOffset();
     persist();
+    updateOffsetLiveEdge();
   });
   $("viewer-lang").addEventListener("change", () => { updateLangStatus(); persist(); saveViewerLang(); });
   $("open-script-window").addEventListener("click", openScriptWindow);

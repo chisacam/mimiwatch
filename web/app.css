@@ -5,6 +5,7 @@
   --text:#e8eaf0; --dim:#8d94a6;
   --accent:#5ee0c0;      /* caption green, legible on any frame */
   --warn:#f0b447;
+  --err:#ff6b6b;
   --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 *{box-sizing:border-box}
@@ -359,6 +360,9 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .check{display:flex; align-items:center; gap:.35rem; cursor:pointer}
 .check input{accent-color:var(--accent)}
 #offset-wrap{display:none}
+#offset-wrap.live-edge-warning{border:2px solid var(--warn); border-radius:6px; padding:2px; box-sizing:border-box}
+#offset-wrap.live-edge-warning input::-webkit-slider-thumb{background:var(--warn)}
+#offset-wrap.live-edge-warning input::-moz-range-thumb{background:var(--warn); border:none}
 
 .panel{border-left:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; min-height:0}
 .panel-head{
@@ -495,6 +499,11 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 .tr-stale{
   margin-left:.4rem; font-size:.68rem; font-weight:600;
   color:var(--warn); opacity:.85; white-space:nowrap;
+}
+/* Auto-detect failed to determine source language — no translation possible. */
+.tr-missing-lang{
+  margin-left:.4rem; font-size:.68rem; font-weight:600;
+  color:var(--err); opacity:.9; white-space:nowrap;
 }
 .line.on{background:#16221f; border-left-color:var(--accent)}
 .line .t{font-family:var(--mono); font-size:.68rem; color:var(--dim); padding-top:.15rem}

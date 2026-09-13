@@ -90,6 +90,11 @@ MW_I18N.add({
     en: "The source was edited, so this translation is of the old sentence",
     ko: "원문을 고친 뒤라 이 번역은 옛 문장의 것입니다",
   },
+  "panel.row.missingLang": { en: "⚠ No source language", ko: "⚠ 원문 언어 모름" },
+  "panel.row.missingLang.title": {
+    en: "Auto-detect could not determine the source language. Translation unavailable.",
+    ko: "자동 감지가 원문 언어를 찾지 못했습니다. 번역을 할 수 없습니다.",
+  },
   "panel.window.title": { en: "Subtitle log", ko: "자막 내역" },
   "panel.window.waiting": {
     en: "Pick the tab to share and the subtitles pile up here.",

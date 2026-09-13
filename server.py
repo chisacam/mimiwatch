@@ -793,6 +793,30 @@ class Handler(BaseHTTPRequestHandler):
         live.notify_drop(owner, int(cue_id))
         self._json({"ok": True, "deleted": int(cue_id)})
 
+    def post_cue_clear(self, body):
+        # Clear all cues for a live session. The session keeps running.
+        sid = (body.get("session") or "").strip()
+        if not sid:
+            return self._json({"error": "session is required"}, 400)
+        # Verify it's a live session that exists
+        s = live.get(sid)
+        if not s or s.source != "hls" and s.source != "tab":
+            return self._json({"error": "no such live session"}, 404)
+        # Clear all cues
+        store.replace_cues(sid, [])
+        # Notify the live session to clear its in-memory cues
+        s._recent.clear()
+        s._text_of.clear()
+        s._translated_ids.clear()
+        s._seq = 0
+        s.lines = 0
+        s.translated = 0
+        s._persist()
+        s.emit({"type": "status", **s.status()})
+        # Notify other windows
+        bus.publish({"type": "session", "id": sid, "cleared": True})
+        self._json({"ok": True, "cleared": True})
+
     def post_live_title(self, body):
         self._json(live.set_title(body.get("id", ""), body.get("title", "")))
 
@@ -1108,6 +1132,7 @@ POST_ROUTES = {
     "/api/cue": Handler.post_cue,
     "/api/cue/add": Handler.post_cue_add,
     "/api/cue/delete": Handler.post_cue_delete,
+    "/api/cue/clear": Handler.post_cue_clear,
     "/api/video/delete": Handler.post_video_delete,
     "/api/backends": Handler.post_backends,
     "/api/backends/delete": Handler.post_backends_delete,
@@ -1353,6 +1378,41 @@ def main(argv: list[str] | None = None):
     # every thirty seconds. It goes up with the server, and it is the session
     # side that is shut down with it.
     live.start_watcher_poller()
+
+    # Pre-warm default models in background (unless disabled)
+    if not os.environ.get("MIMIWATCH_NO_PREWARM"):
+        import threading
+        def _prewarm_default_models():
+            try:
+                import config
+                import models
+                import translate
+                import tcpp_asr
+                print("[prewarm] starting default model pre-warm", flush=True)
+                cfg = config.load()
+                # Pre-warm default ASR model
+                asr_id = config.active("asr", cfg)
+                asr_spec = config.find_asr(asr_id, cfg)
+                if asr_spec:
+                    try:
+                        tcpp_asr.resolve_asr(asr_spec, "ja")
+                        models.touch(("tcpp", asr_spec.get("path", ""), asr_spec.get("device", "auto")))
+                        print(f"[prewarm] ASR model {asr_id} loaded", flush=True)
+                    except Exception as e:
+                        print(f"[prewarm] ASR pre-warm failed: {e}", flush=True)
+                # Pre-warm default translation model
+                tr_id = config.active("tr", cfg)
+                tr_spec = config.find_backend(tr_id, cfg)
+                if tr_spec:
+                    try:
+                        translate.build(tr_spec, None, [])
+                        print(f"[prewarm] Translation model {tr_id} loaded", flush=True)
+                    except Exception as e:
+                        print(f"[prewarm] Translation pre-warm failed: {e}", flush=True)
+                print("[prewarm] default model pre-warm complete", flush=True)
+            except Exception as e:
+                print(f"[prewarm] failed: {e}", flush=True)
+        threading.Thread(target=_prewarm_default_models, daemon=True, name="model-prewarm").start()
 
     global _srv
     try:

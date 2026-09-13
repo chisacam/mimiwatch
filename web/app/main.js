@@ -196,7 +196,15 @@ function bind() {
   $("add-form").addEventListener("submit", submitAdd);
   document.querySelector('#add-form select[name="source"]')
     .addEventListener("change", e => setAddSource(e.target.value));
+  $("live-menu-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleLiveMenu($("live-menu").hidden);
+  });
+  $("live-clear-cues").addEventListener("click", clearLiveCues);
   $("live-stop").addEventListener("click", stopLive);
+  // Close live menu on outside click
+  document.addEventListener("click", () => toggleLiveMenu(false));
+  $("live-menu").addEventListener("click", (e) => e.stopPropagation());
   // Watching is a full-screen activity; reaching for the mouse to reclaim
   // width breaks it, so the toggle also answers to a key.
   document.addEventListener("keydown", (e) => {

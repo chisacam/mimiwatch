@@ -226,11 +226,11 @@ For live receiving, `markScript` returned early and never highlighted the curren
 | **P1** | UX-01 | Auto-detect failure indicator | Medium | `web/app/script-panel.js`, `state.js` | ✅ DONE |
 | **P1** | UX-03 | Live offset live-edge guard | Medium | `web/app/state.js`, `overlay.js` | ✅ DONE |
 | **P2** | UX-02 | Multiview focus key hints | Small | `web/app/tiles.js`, `index.html`, `app.css` | ✅ DONE |
-| **P2** | UX-04 | Glossary highlighting | Medium | `web/app/script-panel.js`, `translate.py` | 🔄 PENDING |
+| **P2** | UX-04 | Glossary highlighting | Medium | `web/app/script-panel.js`, `translate.py` | ✅ DONE |
 | **P2** | UX-05 | Burn button disable + tooltip | Small | `web/app/export.js`, `strings/core.js`, `app.css` | ✅ DONE |
-| **P2** | UX-06 | Clear all subtitles (live) | Medium | `web/app/live.js`, `server.py`, `store.py` | 🔄 PENDING |
+| **P2** | UX-06 | Clear all subtitles (live) | Medium | `web/app/live.js`, `server.py`, `store.py` | ✅ DONE |
 | **P2** | BUG-04 | Ring marker cap | Small | `live.py` | ✅ DONE |
-| **P3** | PERF-01 | Pre-warm default models | Medium | `server.py`, `app.py`, `models.py` | 🔄 PENDING |
+| **P3** | PERF-01 | Pre-warm default models | Medium | `server.py`, `app.py`, `models.py` | ✅ DONE |
 | **P3** | PERF-02 | Incremental FTS resync | Medium | `store.py` | ✅ DONE |
 | **P2** | UX-08 | Script panel live follow highlight | Small | `web/app/script-panel.js` | ✅ DONE |
 | **P3** | UX-07 | User-renamed title indicator | Small | `web/app/library.js`, `bus.js`, `app.css` | ✅ DONE |
@@ -251,9 +251,7 @@ cd /Users/chiyak/hobby/mimiwatch
 - `test_trim_text_of_does_not_retranslate` — Translation queue re-translation of trimmed lines
 
 **Still needed**:
-- Clear all subtitles for live session (UX-06)
-- Glossary term highlighting (UX-04)
-- Pre-warm default models (PERF-01)
+- (All review items completed)
 
 ---
 

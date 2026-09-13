@@ -569,6 +569,31 @@ function detachLive() {
   $("offset-wrap").style.display = "";
 }
 
+function toggleLiveMenu(open) {
+  const menu = $("live-menu"), btn = $("live-menu-btn");
+  menu.hidden = !open;
+  btn.classList.toggle("on", open);
+  btn.setAttribute("aria-expanded", String(!!open));
+  if (!open) return;
+  const r = btn.getBoundingClientRect();
+  menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  menu.style.left = "auto";
+  menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+}
+
+async function clearLiveCues() {
+  const live = state.live;
+  if (!live) return;
+  toggleLiveMenu(false);
+  if (!confirm(MW_I18N.t("live.clearCues.confirm"))) return;
+  const res = await fetch("/api/cue/clear", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session: live.id }),
+  }).then(r => r.json());
+  if (res.error) { alert(res.error); return; }
+  // The session will broadcast its cleared state via the bus
+}
+
 function stopLive() {
   // A tab share can outlive the session. Not let go together with the session,
   // Chrome's "sharing" indicator stays up and audio nobody reads keeps being

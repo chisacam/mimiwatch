@@ -339,6 +339,14 @@ MW_I18N.add({
     en: "Stop",
     ko: "중단"
   },
+  "live.clearCues": {
+    en: "Clear subtitles",
+    ko: "자막 지우기"
+  },
+  "live.clearCues.confirm": {
+    en: "Clear all subtitles for this live session? The session will keep running.",
+    ko: "이 라이브 세션의 모든 자막을 지울까요? 세션은 계속 실행됩니다."
+  },
   "header.manage": {
     en: "Manage ▾",
     ko: "관리 ▾"

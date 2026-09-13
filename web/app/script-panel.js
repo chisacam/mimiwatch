@@ -75,7 +75,8 @@ function refreshScriptRow(row, c) {
   if (trText) {
     const tr = document.createElement("div");
     tr.className = "tr";
-    tr.textContent = trText;
+    // Highlight glossary terms in the translation
+    tr.appendChild(highlightGlossaryTerms(trText));
     // If the source was edited, the translation attached to it is the
     // translation of the **sentence before the edit**. It is not deleted, only
     // marked as such -- a wrong translation still beats none, and whether to
@@ -520,6 +521,74 @@ function openPendingScriptWindow() {
     + '</style><div>' + t("panel.window.waiting") + '</div>');
   win.document.close();
   return win;
+}
+
+/* What happens when a line in the script is clicked.
+ *
+ * A different axis from "what to show" (setScriptView). That one is which of
+ * source and translation to draw; this one is what happens on a click. */
+
+function getGlossaryTerms() {
+  // For live sessions, terms are in state.live.glossary_terms
+  if (state.live && state.live.glossary_terms) {
+    return state.live.glossary_terms;
+  }
+  // For recordings, check if doc has glossary info
+  if (state.doc && state.doc.glossary_terms) {
+    return state.doc.glossary_terms;
+  }
+  return [];
+}
+
+function highlightGlossaryTerms(text) {
+  const terms = getGlossaryTerms();
+  if (!terms.length) return document.createTextNode(text);
+
+  const fragment = document.createDocumentFragment();
+  let remaining = text;
+  let lastIndex = 0;
+
+  // Sort terms by length (longest first) to avoid partial matches
+  const sortedTerms = [...terms].sort((a, b) => b.from.length - a.from.length);
+
+  while (remaining.length > 0) {
+    let matched = false;
+    for (const term of sortedTerms) {
+      const from = term.from;
+      const to = term.to;
+      const idx = remaining.indexOf(from);
+      if (idx === 0) {
+        // Match at the start
+        const span = document.createElement("span");
+        span.className = "glossary-term";
+        span.textContent = from;
+        span.title = `${from} → ${to}`;
+        fragment.appendChild(span);
+        remaining = remaining.slice(from.length);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      // No match at current position, find the next match
+      let nextIdx = remaining.length;
+      for (const term of sortedTerms) {
+        const idx = remaining.indexOf(term.from, 1);
+        if (idx !== -1 && idx < nextIdx) {
+          nextIdx = idx;
+        }
+      }
+      if (nextIdx === remaining.length) {
+        // No more matches
+        fragment.appendChild(document.createTextNode(remaining));
+        remaining = "";
+      } else {
+        fragment.appendChild(document.createTextNode(remaining.slice(0, nextIdx)));
+        remaining = remaining.slice(nextIdx);
+      }
+    }
+  }
+  return fragment;
 }
 
 /* What happens when a line in the script is clicked.

@@ -636,6 +636,7 @@ class LiveSession:
                 "site": self.site, "channel": self.channel,
                 "channel_key": self.channel_key,
                 "glossary": self.glossary_name,
+                "glossary_terms": self._glossary_terms,
                 "elapsed": round(time.time() - self.started, 1),
                 "lines": self.lines, "translated": self.translated}
 

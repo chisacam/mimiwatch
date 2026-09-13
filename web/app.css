@@ -513,6 +513,11 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
   margin-left:.4rem; font-size:.68rem; font-weight:600;
   color:var(--err); opacity:.9; white-space:nowrap;
 }
+/* Glossary term highlight in translation — underline with tooltip */
+.glossary-term{
+  text-decoration:underline; text-decoration-style:dotted;
+  text-decoration-color:var(--accent); cursor:help;
+}
 .line.on{background:#16221f; border-left-color:var(--accent)}
 .line .t{font-family:var(--mono); font-size:.68rem; color:var(--dim); padding-top:.15rem}
 .line .tx{font-size:.86rem; line-height:1.5}
@@ -621,6 +626,19 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   font-family:inherit;
 }
 .live-badge button:hover{background:#3a1a17; color:#fff}
+
+/* Live menu dropdown */
+#live-menu{
+  position:absolute; top:100%; right:0; margin-top:.2rem;
+  background:var(--panel); border:1px solid var(--line); border-radius:6px;
+  box-shadow:0 .5rem 1rem rgba(0,0,0,.4); min-width:140px; z-index:10;
+}
+#live-menu button{
+  display:block; width:100%; text-align:left; padding:.5rem .8rem;
+  background:transparent; border:none; color:var(--text);
+  font-size:.8rem; cursor:pointer;
+}
+#live-menu button:hover{background:var(--line)}
 .line.pending .tx{opacity:.65}
 .line.pending .t::after{content:"…"; color:var(--accent)}
 

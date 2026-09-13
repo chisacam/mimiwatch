@@ -21,7 +21,14 @@
          to be fixable afterwards. -->
     <button id="rename-live" class="seg" hidden data-i18n="header.rename"
             data-i18n-attr="title:header.rename.title"></button>
-    <div id="live-badge" class="live-badge" hidden>● LIVE <button id="live-stop" data-i18n="header.live.stop"></button></div>
+    <div id="live-badge" class="live-badge" hidden>
+      <span>● LIVE</span>
+      <button id="live-menu-btn" class="seg" aria-haspopup="true" aria-expanded="false">⋮</button>
+      <div id="live-menu" class="menu" hidden>
+        <button id="live-clear-cues" class="seg" data-i18n="live.clearCues"></button>
+        <button id="live-stop" class="seg" data-i18n="header.live.stop"></button>
+      </div>
+    </div>
   </div>
 
   <!-- Job status goes at the top. It used to float at the bottom right, where

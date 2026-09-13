@@ -287,6 +287,10 @@ MW_I18N.add({
     en: "Burn into video",
     ko: "영상에 번인"
   },
+  "export.burn.disabled.tip": {
+    en: "Burn-in requires a local video file. Streamed VODs cannot be burned.",
+    ko: "번인에는 로컬 비디오 파일이 필요합니다. 스트리밍 VOD는 번인할 수 없습니다.",
+  },
   "export.fmt": {
     en: "Format",
     ko: "형식"

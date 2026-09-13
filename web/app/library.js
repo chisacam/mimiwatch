@@ -324,10 +324,11 @@ async function openSearchResult(r) {
 }
 
 /* The bar up top is the place that answers "what am I watching right now". */
-function setNowTitle(title) {
+function setNowTitle(title, userRenamed = false) {
   const el = $("now-title");
-  el.textContent = title || t("library.nowTitle.empty");
+  el.textContent = (title || t("library.nowTitle.empty")) + (userRenamed ? " ✎" : "");
   el.classList.toggle("empty", !title);
+  el.classList.toggle("user-renamed", userRenamed);
   el.title = title || "";
 }
 

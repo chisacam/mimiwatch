@@ -133,6 +133,7 @@ class Ring:
             self._cv.notify_all()
 
     def _trim(self):
+        # Drop audio first when over max_frames (backpressure for focused sessions)
         while self._audio > self.max_frames:
             for i, it in enumerate(self._d):
                 if it[0] == "audio":
@@ -142,6 +143,18 @@ class Ring:
                     break
             else:
                 break
+        # Cap total deque length to prevent marker accumulation on stall
+        # (unfocused sessions, tab sessions when transcription stops)
+        TOTAL_CAP = self.max_frames * 2
+        while len(self._d) > TOTAL_CAP:
+            for i, it in enumerate(self._d):
+                if it[0] == "audio":
+                    del self._d[i]
+                    self._audio -= 1
+                    self.dropped_s += FRAME_S
+                    break
+            else:
+                del self._d[0]  # Drop oldest marker
 
     def push(self, item):
         with self._cv:

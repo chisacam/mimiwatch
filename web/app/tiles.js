@@ -243,6 +243,16 @@ function updateTileBar(tile) {
   }
   tile.el.querySelector(".tile-state").textContent = st;
   tile.el.classList.toggle("stopped", !!(live && live.state && !LIVE_RUNNING.includes(live.state)));
+
+  // Key hint for multiview focus (1-4)
+  const idx = state.tiles.indexOf(tile);
+  const keyEl = tile.el.querySelector(".tile-key-hint");
+  if (keyEl && state.tiles.length > 1 && idx >= 0 && idx < 4) {
+    keyEl.textContent = ["①", "②", "③", "④"][idx];
+    keyEl.style.display = "inline-block";
+  } else if (keyEl) {
+    keyEl.style.display = "none";
+  }
 }
 
 /* ---------- layouts ----------

@@ -77,6 +77,8 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 #now-title.empty{color:var(--dim); font-weight:400}
+#now-title.user-renamed{color:var(--accent)}
+#now-title.user-renamed::after{content:" ✎"; font-weight:400; font-size:.8em; color:var(--accent)}
 /* Inherits the title's slot exactly. A different size makes the bar lurch while
    the name is being edited, and in a narrow window even rewraps it. */
 .title-edit{
@@ -214,6 +216,12 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .tile-bar{pointer-events:auto; cursor:grab}
 .tile-cover{cursor:grab}
 .video-row{cursor:grab}
+
+/* Key hint for multiview focus (1-4) */
+.tile-key-hint{
+  flex:none; font-size:.7rem; color:var(--accent); opacity:.7;
+  font-family:var(--mono); margin-right:.2rem;
+}
 
 /* Layouts. In 1+2 / 1+3 the focused tile takes the big area and the rest flow
  * into the empty cells -- moving the focus changes only .focused, the DOM stays
@@ -577,6 +585,9 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   border-radius:6px; padding:.45rem 1rem; font-size:.82rem; cursor:pointer; font-family:inherit;
 }
 #add-form button.primary,#export-form button.primary{background:var(--accent); border-color:var(--accent); color:#04211b; font-weight:700}
+#add-form button:disabled,#export-form button:disabled{
+  opacity:.5; cursor:not-allowed;
+}
 #add-dialog{background:var(--panel); color:var(--text); border:1px solid var(--line);
   border-radius:12px; padding:0; max-width:480px; width:92vw}
 #add-dialog::backdrop{background:rgba(4,6,10,.7)}

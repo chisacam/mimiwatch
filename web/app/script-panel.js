@@ -439,12 +439,18 @@ function pinScriptToBottom() {
 }
 
 function markScript(i) {
-  // Nothing is marked while the stream is being received. It is always the last
-  // row then, and the script is already pinned to the bottom.
-  if (isLiveDoc() && isLiveReceiving()) return;
   const box = $("script");
   box.querySelectorAll(".line.on").forEach(el => el.classList.remove("on"));
   if (i < 0) return;
+
+  // For live receiving, the overlay always shows the most recent cue (last in array).
+  // We still highlight it so the user sees which line is current.
+  // But we don't scroll to center -- pinScriptToBottom handles scrolling for live.
+  const isLiveReceivingNow = isLiveDoc() && isLiveReceiving();
+  if (isLiveReceivingNow) {
+    i = state.cues.length - 1;
+  }
+
   // A row is found by cue id, not by position (data-i). The moment one row is
   // deleted, every position after it is off by one -- that is the bug where
   // following kept pointing at the row beside the right one after a line was
@@ -454,7 +460,10 @@ function markScript(i) {
   const el = c.id != null ? rowOf(c.id) : box.querySelector(`.line[data-i="${i}"]`);
   if (!el) return;
   el.classList.add("on");
-  if (state.follow) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  // For live receiving, pinScriptToBottom handles scrolling; don't fight it.
+  if (state.follow && !isLiveReceivingNow) {
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 }
 
 /* Script mode.

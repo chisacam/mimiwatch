@@ -1264,6 +1264,63 @@ def hard_exit(code: int = 0):
     os._exit(code)
 
 
+def _prewarm_default_models():
+    """Pre-warm the default ASR and translation models in a background thread.
+
+    This loads the models without blocking server startup. Can be disabled with
+    MIMIWATCH_NO_PREWARM=1.
+    """
+    if os.environ.get("MIMIWATCH_NO_PREWARM", "0") == "1":
+        print("mimiwatch: model pre-warming disabled via MIMIWATCH_NO_PREWARM", flush=True)
+        return
+
+    def _do_prewarm():
+        try:
+            cfg = config.load()
+
+            # Pre-warm default ASR model
+            asr_id = config.active("asr", cfg)
+            asr_spec = config.find_asr(asr_id, cfg)
+            if asr_spec and asr_spec.get("backend") == "tcpp":
+                # Resolve path and device same way the live session does
+                from tcpp_asr import resolve_asr
+                resolved = resolve_asr(asr_spec, None)  # lang=None for auto-detect
+                path = resolved["path"]
+                device = resolved["device"]
+                print(f"mimiwatch: pre-warming ASR model {path} on {device}", flush=True)
+                import transcribe_cpp as tc
+                models.shared(("tcpp", path, device),
+                              lambda: tc.Model(path, backend=device))
+                print(f"mimiwatch: ASR model pre-warmed", flush=True)
+
+            # Pre-warm default translation model
+            tr_id = config.active("tr", cfg)
+            tr_spec = config.find_backend(tr_id, cfg)
+            if tr_spec and tr_spec.get("backend") == "gemma":
+                # Extract Gemma parameters
+                device = (tr_spec.get("device", "auto") or "auto").strip().lower()
+                n_gpu_layers = 0 if device == "cpu" else -1
+                model_path = tr_spec.get("model_path")
+                if model_path and not os.path.isabs(model_path) and not os.path.exists(model_path):
+                    model_path = os.path.join(stream.model_dir(), model_path)
+                if not model_path:
+                    model_path = os.path.join(stream.model_dir(), "gemma-4-E4B_q4_0-it.gguf")
+                n_ctx = int(tr_spec.get("n_ctx", 2048))
+                threads = int(tr_spec.get("threads") or stream.default_threads(device))
+
+                print(f"mimiwatch: pre-warming translation model {model_path} on {device}", flush=True)
+                from llama_cpp import Llama
+                models.shared(("gemma", model_path, device, n_ctx, threads, n_gpu_layers),
+                              lambda: Llama(model_path=model_path, n_ctx=n_ctx,
+                                           n_threads=threads, n_gpu_layers=n_gpu_layers, verbose=False))
+                print(f"mimiwatch: translation model pre-warmed", flush=True)
+        except Exception as exc:
+            # Pre-warming is best-effort; don't fail server startup
+            print(f"mimiwatch: pre-warm failed (non-fatal): {exc}", file=sys.stderr, flush=True)
+
+    threading.Thread(target=_do_prewarm, daemon=True, name="model-prewarm").start()
+
+
 def main(argv: list[str] | None = None):
     """Bring the server up. `argv` is handed over by the tests and by the
     bundle's entry point (app.py).

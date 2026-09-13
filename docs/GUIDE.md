@@ -973,8 +973,9 @@ cases and can be chosen again.
 the popup. It splits "not visible" up and says which — `player not found` /
 `no room on screen` / `no subtitle in the current segment` / `subtitles off` /
 `clock stopped`. Where to look diverges from there. "Hide from page" only clears it from
-the screen — to end what was being transcribed, it is "Stop" on the mimiwatch
-page.
+the screen — to end what was being transcribed, it is "Stop", under the ⋮ beside
+"● LIVE" on the mimiwatch page. "Clear subtitles" sits in the same menu: it
+throws away the lines gathered so far and leaves the session running.
 
 List management, engine settings and subtitle editing are not in the popup. The
 mimiwatch page keeps them — building those too would make two sets.

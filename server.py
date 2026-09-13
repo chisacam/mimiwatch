@@ -1305,42 +1305,6 @@ def main(argv: list[str] | None = None):
     # side that is shut down with it.
     live.start_watcher_poller()
 
-    # Pre-warm default models in background (unless disabled)
-    if not os.environ.get("MIMIWATCH_NO_PREWARM"):
-        import threading
-        def _prewarm_default_models():
-            try:
-                import config
-                import models
-                import translate
-                import tcpp_asr
-                print("[prewarm] starting default model pre-warm", flush=True)
-                cfg = config.load()
-                # Pre-warm default ASR model
-                asr_id = config.active("asr", cfg)
-                asr_spec = config.find_asr(asr_id, cfg)
-                if asr_spec:
-                    try:
-                        tcpp_asr.resolve_asr(asr_spec, "ja")
-                        models.touch(("tcpp", asr_spec.get("path", ""),
-                                      asr_spec.get("device", "auto")))
-                        print(f"[prewarm] ASR model {asr_id} loaded", flush=True)
-                    except Exception as e:
-                        print(f"[prewarm] ASR pre-warm failed: {e}", flush=True)
-                # Pre-warm default translation model
-                tr_id = config.active("tr", cfg)
-                tr_spec = config.find_backend(tr_id, cfg)
-                if tr_spec:
-                    try:
-                        translate.build(tr_spec, None, [])
-                        print(f"[prewarm] Translation model {tr_id} loaded", flush=True)
-                    except Exception as e:
-                        print(f"[prewarm] Translation pre-warm failed: {e}", flush=True)
-                print("[prewarm] default model pre-warm complete", flush=True)
-            except Exception as e:
-                print(f"[prewarm] failed: {e}", flush=True)
-        threading.Thread(target=_prewarm_default_models, daemon=True, name="model-prewarm").start()
-
     global _srv
     try:
         _srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

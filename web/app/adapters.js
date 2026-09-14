@@ -320,17 +320,29 @@ function hlsAdapter() {
                          : t("adapter.hls.openFailed"));
       }
     };
-    if (v.canPlayType("application/vnd.apple.mpegurl")) {
+    // hls.js first, native second, and not the other way round. Chrome answers
+    // `canPlayType("application/vnd.apple.mpegurl")` with "maybe" -- truthy, and a
+    // lie: it sets the src, the manifest is fetched, and readyState sits at 0 for
+    // ever with no error to show for it (measured on a chzzk stream). Only Safari
+    // plays HLS from a src, and hls.js is fine there too, so asking the library
+    // whether it can work is the question that has a true answer.
+    let hlsJs = null;
+    try {
+      await loadScriptOnce("/static/vendor/hls.min.js", () => !!window.Hls);
+      hlsJs = window.Hls && Hls.isSupported() ? window.Hls : null;
+    } catch (err) {
+      // No library and no native playback is the end of the road; with native
+      // playback it is only a detour.
+      if (!v.canPlayType("application/vnd.apple.mpegurl")) { fail(err.message); return; }
+    }
+    if (!hlsJs) {
+      if (!v.canPlayType("application/vnd.apple.mpegurl")) {
+        fail(t("adapter.hls.reason.noMse"));
+        return;
+      }
       v.src = src.url;
       v.addEventListener("error", () => fail(t("adapter.hls.reason.native")), { once: true });
     } else {
-      try {
-        await loadScriptOnce("/static/vendor/hls.min.js", () => !!window.Hls);
-      } catch (err) {
-        fail(err.message);
-        return;
-      }
-      if (!(window.Hls && Hls.isSupported())) { fail(t("adapter.hls.reason.noMse")); return; }
       a.hls = new Hls({ lowLatencyMode: true, enableWorker: true });
       a.hls.on(Hls.Events.ERROR, (_e, data) => {
         if (data && data.fatal) fail(data.details || data.type);

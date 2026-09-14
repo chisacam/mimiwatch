@@ -93,12 +93,19 @@ function refreshScriptRow(row, c) {
     }
     body.appendChild(tr);
   }
-  // Auto-detect never settled on a source language, so there is nothing to
-  // translate from. That is a different state from "the translation has not
-  // arrived yet" -- marking it pending as well drew the waiting ellipsis on a
-  // line that is never going to get one.
+  // A line without a translation is in one of three states, and only one of them
+  // is "waiting". It can have no source language to translate from; it can be in
+  // the language being read, so there is nothing to translate; or the translation
+  // really is on its way. The ellipsis belongs to the third alone.
+  //
+  // The second is not an edge case. A Korean stream read in Korean produces it on
+  // every single line -- `should_translate` answers no when src == tgt, nothing is
+  // ever stored, and the whole transcript sat marked as still coming in.
+  const viewerLang = (state.doc && state.doc.viewer_lang) || "";
+  const sameLang = !!c.lang && !!viewerLang && c.lang === viewerLang;
   const missingLang = c.kind !== "note" && !c.lang && !trText;
-  row.classList.toggle("pending", c.kind === "final" && !trText && !missingLang);
+  row.classList.toggle("pending",
+                       c.kind === "final" && !trText && !missingLang && !sameLang);
   if (missingLang) {
     const warn = document.createElement("b");
     warn.className = "tr-missing-lang";

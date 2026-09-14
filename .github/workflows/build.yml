@@ -71,6 +71,17 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      # The Metal wheel is 18MB and was fetched fresh on every build. One of
+      # those arrived corrupt and cost a silent source build (see build.sh), so
+      # the downloads are kept between runs: a hit removes the fetch, and with
+      # it that failure. A miss only costs what every build paid before.
+      - name: Cache the pip downloads (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt', 'packaging/requirements-build.txt') }}
+          restore-keys: pip-${{ runner.os }}-
       - name: Build the bundle (macOS)
         if: runner.os == 'macOS'
         run: |

@@ -28,10 +28,32 @@ say "Build virtual environment ($VENV)"
 # For macOS arm64 the maintainer's index has a Metal wheel (0.3.35, py3-none). Take
 # that first and skip the source build (cmake, 5-10 minutes). Without it the
 # requirements install below builds it from source.
+#
+# Retried, because the failure that happens is not "no wheel". On the v0.6.0 build
+# the 18MB wheel arrived corrupt -- `BadZipFile: Bad CRC-32 for ggml-config.cmake`
+# -- and the old one-line fallback reported that as the wheel not existing, so the
+# job spent 2m35s of its 3m33s building from source with the log saying it had no
+# choice. pip's cached copy is dropped between attempts; keeping it would hand the
+# same broken bytes back.
 if [ "$(uname)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-  "$VENV/bin/pip" install -q --only-binary=:all: \
-    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal llama-cpp-python \
-    && echo "  llama-cpp-python: Metal wheel" || echo "  llama-cpp-python: no Metal wheel, building from source"
+  metal_log="$(mktemp)"
+  for attempt in 1 2 3; do
+    if "$VENV/bin/pip" install -q --only-binary=:all: \
+         --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal \
+         llama-cpp-python >"$metal_log" 2>&1; then
+      echo "  llama-cpp-python: Metal wheel (attempt $attempt)"
+      break
+    fi
+    if [ "$attempt" = 3 ]; then
+      # Whatever went wrong, in its own words. A fixed string here is what hid
+      # the corrupt download for a whole release.
+      echo "  llama-cpp-python: Metal wheel failed 3 times, building from source:"
+      tail -20 "$metal_log" | sed 's/^/    /'
+    else
+      "$VENV/bin/pip" cache remove 'llama_cpp_python*' >/dev/null 2>&1 || true
+    fi
+  done
+  rm -f "$metal_log"
 fi
 "$VENV/bin/pip" install -q -r "$ROOT/requirements.txt" -r "$HERE/requirements-build.txt"
 "$VENV/bin/pip" install -q -U "yt-dlp[default]" transcribe-cpp

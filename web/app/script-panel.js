@@ -766,6 +766,16 @@ function syncGlossaryPick() {
   const sel = scriptSelection();
   const btn = $("glossary-pick");
   if (!sel) { btn.hidden = true; return; }
+  // Following scrolls the panel out from under a selection that is still
+  // there. Dropping the button then meant dragging the word a second time,
+  // so it is moved with the line instead -- and let go only once the line it
+  // belongs to has left the panel, where it would otherwise float over
+  // whatever the toolbar or the player put underneath.
+  const box = $("script").getBoundingClientRect();
+  if (sel.rect.bottom < box.top || sel.rect.top > box.bottom) {
+    btn.hidden = true;
+    return;
+  }
   btn.hidden = false;
   // Placed after it is shown: a hidden button measures 0 and would sit in the
   // corner. Kept inside the window on both axes -- a selection at the bottom of

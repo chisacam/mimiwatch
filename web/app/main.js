@@ -212,7 +212,9 @@ function bind() {
   });
   $("glossary-pick").addEventListener("mousedown", (e) => e.preventDefault());
   $("glossary-pick").addEventListener("click", openGlossaryTerm);
-  $("script").addEventListener("scroll", hideGlossaryPick);
+  // Moved, not hidden: the selection survives the scroll, so the button that
+  // belongs to it should too.
+  $("script").addEventListener("scroll", syncGlossaryPick);
   $("glossary-term-form").addEventListener("submit", saveGlossaryTerm);
   $("glossary-term-close").addEventListener("click",
     () => $("glossary-term-dialog").close());

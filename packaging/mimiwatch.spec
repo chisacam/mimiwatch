@@ -92,6 +92,12 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# The mark is one SVG (web/icon.svg) with everything else rendered from it by
+# packaging/make-icons.sh. PyInstaller ignores the EXE icon anywhere but Windows,
+# and handing it a .ico on macOS only earns a warning, so it is asked for where
+# it means something; the .app takes the .icns further down.
+_EXE_ICON = os.path.join(SPECPATH, "icon.ico") if sys.platform == "win32" else None
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -108,6 +114,7 @@ exe = EXE(
     # app.py sends the log to a file instead.
     console=True,
     target_arch=None,
+    icon=_EXE_ICON,
     codesign_identity=os.environ.get("MIMIWATCH_CODESIGN") or None,
     entitlements_file=None,
 )
@@ -127,7 +134,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="mimiwatch.app",
-        icon=None,
+        icon=os.path.join(SPECPATH, "icon.icns"),
         bundle_identifier="dev.chisacam.mimiwatch",
         info_plist={
             "CFBundleName": "mimiwatch",

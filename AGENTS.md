@@ -171,6 +171,19 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 - Default engines are the light CPU pair (SenseVoice Small + M2M-100); the
   quality pair (whisper-large-v3-turbo + Gemma 4) is opt-in. Do not flip the
   default; the reasoning is in `measurements/RESULTS.md` §33–34.
+- Models load on first use and nothing is pre-warmed, and that is settled, not
+  an oversight. Which engines are the default is per-user, and which of them a
+  given start actually needs is not known until something is opened -- a thread
+  that loads them at startup spends that cost on someone who came to look at
+  the library. It was added and taken out again (`de388fd`); do not re-propose
+  it as an obvious win.
+- The channel glossary goes into the translation prompt and is not marked on
+  screen, also settled. Underlining the terms in the finished translation was
+  tried and removed (`837de5d`): a substring match over the output cannot tell
+  "the model used the term" from "it ignored it" or "it inflected it past
+  recognition", so it marks the one case that needs no marking and stays quiet
+  about the two that do. The wanted direction is the opposite one -- picking a
+  word out of a subtitle on screen and putting it *into* the glossary.
 - Live cues carry only a start time; VOD cues carry ranges. Export invents live
   end times (next cue, max 6 s, min 0.8 s).
 - Refined live lines replace finals under the same cue id. Cue arrays are

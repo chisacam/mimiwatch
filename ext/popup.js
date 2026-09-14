@@ -22,7 +22,7 @@ let tabId = null;
 /* Is this tab YouTube. It sits outside init so that when the language changes,
  * "Open this on a YouTube tab" can be rewritten in that language -- that string
  * is drawn once the moment the popup opens and then stays. */
-let onYouTube = false;
+let onSupportedSite = false;
 let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55, offset: 0,
               panel: false };
 /* The values used when starting a new session. Kept apart from the subtitle
@@ -79,7 +79,7 @@ let loading = false;
  * everything in a moment. */
 MW_I18N.onChange(() => {
   if (loading) return;
-  if (!onYouTube) fail(t("popup.errNotYouTube"));
+  if (!onSupportedSite) fail(t("popup.errNotSupportedSite"));
   syncProfileHint();
   syncResumeButton();
   syncHideButton();
@@ -95,8 +95,11 @@ function fail(text) {
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   tabId = tab && tab.id;
-  onYouTube = !!(tab && /^https:\/\/www\.youtube\.com\//.test(tab.url || ""));
-  if (!onYouTube) fail(t("popup.errNotYouTube"));
+  // The table decides, not a regular expression kept here. While this line
+  // named YouTube, the start buttons stayed locked on every other site the
+  // extension was given permission for, with nothing on screen to say why.
+  onSupportedSite = !!MimiYtId.siteOf(tab && tab.url);
+  if (!onSupportedSite) fail(t("popup.errNotSupportedSite"));
 
   const b = await send({ type: "base" });
   $("base").value = (b && b.data) || "http://localhost:8900";
@@ -116,7 +119,7 @@ async function init() {
 
   await loadFromServer();
   // Nothing to start if it is not a YouTube tab.
-  $("start-box").classList.toggle("busy", !onYouTube);
+  $("start-box").classList.toggle("busy", !onSupportedSite);
 }
 
 /* Everything read from the server. Called on first open and when the "Server"

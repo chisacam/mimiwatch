@@ -131,15 +131,25 @@ def main():
     # the popup's "server" field.
     check(any(h in ("http://localhost/*", "http://127.0.0.1/*") for h in hosts),
           f"the local server is reachable on any port ({hosts})")
-    # The YouTube host permission is needed for tabs.sendMessage -- activeTab
-    # only grants it at the moment the popup is clicked. Apart from those two,
-    # it must reach nowhere at all.
-    ALLOWED = ("http://localhost/", "http://127.0.0.1/", "https://www.youtube.com/")
+    # A site's host permission is needed for tabs.sendMessage -- activeTab only
+    # grants it at the moment the popup is clicked. Apart from the local server
+    # and the sites subtitles are laid on, it must reach nowhere at all.
+    SITES = ("https://www.youtube.com/", "https://chzzk.naver.com/")
+    ALLOWED = ("http://localhost/", "http://127.0.0.1/") + SITES
     stray = [h for h in hosts if not any(h.startswith(a) for a in ALLOWED)]
     check(not stray, f"nothing is opened outside the allowed hosts ({stray or 'none'})")
     matches = [x for cs in m.get("content_scripts", []) for x in cs.get("matches", [])]
-    check(matches and all("youtube.com" in x for x in matches),
-          f"it runs on YouTube only ({matches})")
+    check(matches and all(any(x.startswith(a) for a in SITES) for x in matches),
+          f"it runs only on the sites it lays subtitles on ({matches})")
+    # The manifest and the site table (ytid.js) have to name the same sites, and
+    # a site in one but not the other fails quietly: either the content script is
+    # injected into a page the table cannot identify, so the popup locks its own
+    # buttons with no reason given, or the table describes a player the script is
+    # never let near.
+    table = open(os.path.join(EXT, "ytid.js"), encoding="utf-8").read()
+    for site in SITES:
+        host = site.split("//", 1)[1].rstrip("/")
+        check(host in table, f"the site table knows {host}")
     # tabCapture is used in stage 3. It need not be there yet, but note it if it is.
     print(f"  ----  permissions: {', '.join(m.get('permissions', [])) or '(none)'}")
 

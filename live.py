@@ -396,6 +396,26 @@ def media_base_from(pdt: str | None, release_ts: float | None,
     return max(0.0, (first - release_ts) + window_s)
 
 
+def continue_base(from_playlist: float, resume_from: float) -> float:
+    """Where a resumed session's media clock starts.
+
+    `media_base_from` needs the broadcast's start time, and not every site has
+    one to give. chzzk's `timestamp` is *later* than its own PROGRAM-DATE-TIME
+    (measured: 10:59:02Z against 05:53:17Z), so the subtraction goes negative and
+    clamps to 0 -- on the first reception and on every resume alike. The resumed
+    session then numbered its lines from zero again, and because the panel sorts
+    by time, they were wedged in among the lines already there rather than added
+    after them.
+
+    Where the playlist cannot say, the session's own record can. A resumed clock
+    never starts earlier than where that session left off. A first reception has
+    no `resume_from`, and keeps whatever the playlist said.
+    """
+    if not resume_from:
+        return from_playlist
+    return max(from_playlist, resume_from)
+
+
 # Which final lines a refined line absorbed must not be decided by whether the
 # earlier characters are contained verbatim. Refinement re-decodes the joined
 # audio, so the same speech comes out slightly different (measured: `무기도
@@ -1236,7 +1256,9 @@ class LiveSession:
                 src, start_index = self._resolve_hls()
                 if src is None:
                     return      # _resolve_hls has already reported the error
-                self.media_base = self._recv_base   # no thread yet, so just copy it
+                # no thread yet, so just copy it
+                self._recv_base = continue_base(self._recv_base, self.resume_from)
+                self.media_base = self._recv_base
             else:
                 # Tab audio has neither a full playlist nor a broadcast time to
                 # line up with. The moment the user is listening to is 0 seconds

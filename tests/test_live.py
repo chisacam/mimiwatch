@@ -753,3 +753,25 @@ def test_clear_cues_keeps_the_id_space(session):
 
 def test_clear_cues_on_a_session_that_is_gone(isolated):
     assert live.clear_cues("nope") == {"error": "no such live session"}
+
+
+def test_a_resumed_clock_never_starts_before_where_it_stopped():
+    """The playlist's clock is not always one that survives a break.
+
+    chzzk gives no broadcast start time worth the name, so `media_base_from`
+    clamps to 0 every time it is asked. A session resumed on that would number
+    its lines from zero again and, since the panel sorts by time, wedge them in
+    among the lines already there instead of after them.
+    """
+    # A first reception keeps whatever the playlist said, whatever that is.
+    assert live.continue_base(0.0, 0.0) == 0.0
+    assert live.continue_base(931.0, 0.0) == 931.0
+    # A resume where the playlist has no usable clock (chzzk) continues from the
+    # session's own record instead.
+    assert live.continue_base(0.0, 264.1) == 264.1
+    # A resume where it does (YouTube: PDT minus the broadcast start keeps
+    # counting across the break) keeps the playlist's, which is the more accurate
+    # of the two and is already past where it stopped.
+    assert live.continue_base(931.0, 264.1) == 931.0
+    # And it is never dragged backwards by a stale record.
+    assert live.continue_base(931.0, 2000.0) == 2000.0

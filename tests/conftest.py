@@ -169,6 +169,13 @@ def isolated(tmp_path, monkeypatch):
     models.clear()
     live._sessions.clear()
     yield tmp_path
+    # A job thread outlives the test that started it. `wait_job` returns when the
+    # state turns, and `_note` writes the job to SQLite *after* that, so closing
+    # the connection here raced the thread's last save -- on CI that landed inside
+    # sqlite3 and took the interpreter down with it (segfault in store._write,
+    # run 34806619729). `jobs.wait_idle` is what the server's own shutdown waits
+    # on, for exactly this reason, and it returns at once when nothing is running.
+    jobs.wait_idle(5.0)
     if store._db is not None:
         store._db.close()
         store._db = None

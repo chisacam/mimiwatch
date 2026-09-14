@@ -199,6 +199,23 @@ function bind() {
     e.stopPropagation();
     toggleLiveMenu($("live-menu").hidden);
   });
+  // Picking a word out of a subtitle into the channel glossary. mouseup, not
+  // selectionchange: that fires on every character of the drag and would walk
+  // the button along under the pointer. The deferral lets the selection settle
+  // before it is measured.
+  document.addEventListener("mouseup", () => setTimeout(syncGlossaryPick, 0));
+  // Pressing anywhere else collapses the selection, so the button goes with it
+  // -- except on the button itself, where preventDefault keeps the selection
+  // alive long enough for the click to read it.
+  document.addEventListener("mousedown", (e) => {
+    if (e.target.id !== "glossary-pick") hideGlossaryPick();
+  });
+  $("glossary-pick").addEventListener("mousedown", (e) => e.preventDefault());
+  $("glossary-pick").addEventListener("click", openGlossaryTerm);
+  $("script").addEventListener("scroll", hideGlossaryPick);
+  $("glossary-term-form").addEventListener("submit", saveGlossaryTerm);
+  $("glossary-term-close").addEventListener("click",
+    () => $("glossary-term-dialog").close());
   $("live-clear-cues").addEventListener("click", clearLiveCues);
   $("live-stop").addEventListener("click", stopLive);
   // Close live menu on outside click

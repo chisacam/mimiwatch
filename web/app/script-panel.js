@@ -41,6 +41,10 @@ function scriptRow(c, i) {
     // default behaviour such as text selection, not the click event that
     // follows.
     if (state.scriptMode === "tr") return;
+    // Dragging across a line to pick a word out of it ends in a click on that
+    // line. Seeking then throws the playhead somewhere nobody asked for, and
+    // on a live stream that is the one move that cannot be taken back.
+    if (hasSelectionIn(row)) return;
     if (state.player) { state.player.seekTo(cueStart(c), true); state.player.playVideo(); }
   });
   // Picking in translation mode. This hangs on pointerdown rather than click
@@ -695,4 +699,134 @@ function setScriptView(v) {
     b.classList.toggle("on", b.dataset.sview === v));
   const p = loadPrefs(); savePrefs({ ...p, scriptView: v });
   pinScriptToBottom();
+}
+
+/* ---------- picking a word into the channel glossary ----------
+ *
+ * The glossary is a per-channel list of source → target terms written into the
+ * translation prompt (docs/GLOSSARY.md). Putting a word into it used to mean
+ * opening Manage, finding the channel among the others and typing the pair into
+ * a textarea -- by which time the line that prompted it has scrolled away. This
+ * is the same list, reached from the word on screen.
+ *
+ * Read mode only. `tr` mode takes pointerdown for picking rows and stops
+ * selection on purpose, and `edit` mode puts the line in an input of its own. */
+
+function hasSelectionIn(el) {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) return false;
+  return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
+}
+
+/* Which channel the term would be filed under, and what to call it on screen.
+ * A live tile knows its own channel; a recording carries the key the job wrote
+ * (jobs.py). Neither means there is nowhere to put a term, which the dialog
+ * says rather than filing it somewhere arbitrary. */
+function glossaryChannel() {
+  const tile = focusedTile();
+  if (tile && tile.live && tile.live.channelKey) {
+    return { key: tile.live.channelKey,
+             name: (tile.doc && tile.doc.title) || tile.live.channelKey };
+  }
+  if (state.doc && state.doc.channel_key) {
+    return { key: state.doc.channel_key,
+             name: state.doc.channel_name || state.doc.title || state.doc.channel_key };
+  }
+  return null;
+}
+
+/* M2M-100 has nowhere to put a prompt, so the glossary reaches it nowhere
+ * (translate.build). It is the default translator, so saying nothing here would
+ * make this a button that quietly does nothing for most people. */
+function glossaryTranslator() {
+  const tile = focusedTile();
+  const id = (tile && tile.live && tile.live.backend) || state.backend;
+  const b = (state.backends || []).find(x => x.id === id);
+  return { name: (b && (b.label || b.id)) || id || "",
+           takesGlossary: !!b && (b.backend === "gemma" || b.backend === "openai") };
+}
+
+function scriptSelection() {
+  if (state.scriptMode !== "read") return null;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const text = sel.toString().trim();
+  if (!text) return null;
+  const n = sel.anchorNode;
+  const el = n && (n.nodeType === 1 ? n : n.parentElement);
+  const holder = el && el.closest && el.closest(".line .tx, .line .tr");
+  if (!holder || !$("script").contains(holder)) return null;
+  return { text, side: holder.classList.contains("tr") ? "tr" : "tx",
+           rect: sel.getRangeAt(0).getBoundingClientRect() };
+}
+
+function hideGlossaryPick() { $("glossary-pick").hidden = true; }
+
+function syncGlossaryPick() {
+  const sel = scriptSelection();
+  const btn = $("glossary-pick");
+  if (!sel) { btn.hidden = true; return; }
+  btn.hidden = false;
+  // Placed after it is shown: a hidden button measures 0 and would sit in the
+  // corner. Kept inside the window on both axes -- a selection at the bottom of
+  // a long script is the normal case, not the edge one.
+  const r = btn.getBoundingClientRect();
+  const left = Math.min(Math.max(4, sel.rect.left), window.innerWidth - r.width - 4);
+  const above = sel.rect.top - r.height - 6;
+  btn.style.left = `${Math.round(left)}px`;
+  btn.style.top = `${Math.round(above > 4 ? above : sel.rect.bottom + 6)}px`;
+}
+
+function openGlossaryTerm() {
+  const sel = scriptSelection();
+  if (!sel) return;
+  hideGlossaryPick();
+  const f = $("glossary-term-form");
+  // Which half was picked decides which half is filled in. Dragging over the
+  // source gives the term; dragging over the translation gives the answer that
+  // was wrong, and the source is what has to be typed.
+  f.from.value = sel.side === "tx" ? sel.text : "";
+  f.to.value = sel.side === "tr" ? sel.text : "";
+  const ch = glossaryChannel();
+  f.dataset.channelKey = ch ? ch.key : "";
+  f.dataset.channelName = ch ? ch.name : "";
+  $("glossary-term-channel").textContent = ch
+    ? t("panel.glossary.channel", { name: ch.name, key: ch.key })
+    : t("panel.glossary.noChannel");
+  const tr = glossaryTranslator();
+  const note = $("glossary-term-note");
+  note.hidden = tr.takesGlossary;
+  if (!tr.takesGlossary) note.textContent = t("panel.glossary.noPrompt", { name: tr.name });
+  $("glossary-term-result").hidden = true;
+  $("glossary-term-error").hidden = true;
+  f.querySelector('button[type="submit"]').disabled = !ch;
+  $("glossary-term-dialog").showModal();
+  (f.from.value ? f.to : f.from).focus();
+}
+
+async function saveGlossaryTerm(e) {
+  e.preventDefault();
+  const f = $("glossary-term-form");
+  const term = { from: f.from.value.trim(), to: f.to.value.trim() };
+  const err = $("glossary-term-error");
+  if (!f.dataset.channelKey || !term.from || !term.to) return;
+  const res = await (await fetch("/api/glossaries/term", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channel_key: f.dataset.channelKey,
+                           name: f.dataset.channelName, ...term }),
+  })).json();
+  if (res.error) { err.textContent = res.error; err.hidden = false; return; }
+  err.hidden = true;
+  // `applied` is the sessions the server rebuilt the translator for. Saying
+  // "from the next line" when nothing was running would be a promise about
+  // something that is not happening.
+  const result = $("glossary-term-result");
+  result.textContent = t((res.applied || []).length
+    ? "panel.glossary.added" : "panel.glossary.addedLater", term);
+  result.hidden = false;
+  // The dialog stays open: terms come in handfuls, and reopening it per word
+  // would mean finding the next word with the dialog in the way.
+  f.from.value = ""; f.to.value = "";
+  f.from.focus();
+  if (typeof loadGlossaries === "function") loadGlossaries();
 }

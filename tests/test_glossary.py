@@ -108,6 +108,7 @@ def test_store_roundtrip():
 def test_routes_registered():
     assert "/api/glossaries" in server.GET_ROUTES
     assert "/api/glossaries" in server.POST_ROUTES
+    assert "/api/glossaries/term" in server.POST_ROUTES
 
 
 def test_live_session_glossary_sync():
@@ -127,3 +128,70 @@ def test_live_session_glossary_sync():
     s2.site, s2.channel = "other", ""
     s2._sync_glossary()
     assert s2.channel_key == "" and s2.glossary_name == ""
+
+
+def test_add_glossary_term_merges_into_what_is_already_there():
+    """One term at a time, without the caller having to send the whole list."""
+    store.save_glossary("youtube:UCx", "미미", [{"from": "a", "to": "b"}])
+    out = store.add_glossary_term("youtube:UCx", "ignored", "c", "d")
+    assert out["terms"] == [{"from": "a", "to": "b"}, {"from": "c", "to": "d"}]
+    # An existing glossary keeps its name. Adding a word off a subtitle is not
+    # a rename, and the name is what the settings list is read by.
+    assert out["name"] == "미미"
+    # The same source term is answered once, not twice -- two answers for one
+    # term in the prompt is worse than the old answer.
+    out = store.add_glossary_term("youtube:UCx", "", "a", "B2")
+    assert out["terms"] == [{"from": "a", "to": "B2"}, {"from": "c", "to": "d"}]
+    assert store.glossary("youtube:UCx")["terms"] == out["terms"]
+    # A channel with no glossary yet gets one, named by what was sent.
+    made = store.add_glossary_term("twitch:zzz", "젯", "x", "y")
+    assert made["name"] == "젯" and made["terms"] == [{"from": "x", "to": "y"}]
+    # All three are needed. A blank saves nothing rather than an empty term.
+    assert store.add_glossary_term("", "n", "a", "b") is None
+    assert store.add_glossary_term("youtube:UCx", "n", "", "b") is None
+    assert store.add_glossary_term("youtube:UCx", "n", "a", " ") is None
+    assert store.glossary("youtube:UCx")["terms"] == out["terms"]
+
+
+def _session(channel, backend_id):
+    import live
+    s = live.LiveSession(f"https://www.youtube.com/watch?v={channel}", None, "ko",
+                         backend_id)
+    s.site, s.channel = "youtube", channel
+    s._sync_glossary()
+    return s
+
+
+def test_reload_glossary_reaches_the_running_session_only(fake_translate):
+    """A term added mid-stream applies to the next line, not the next reconnect."""
+    import config
+    import live
+    tr_id = config.PROTECTED["tr"]
+    on_channel = _session("UCx", tr_id)
+    on_channel._tr = object()                 # stands for "the engines are built"
+    elsewhere = _session("UCother", tr_id)
+    elsewhere._tr = untouched = object()
+    not_started = _session("UCx", tr_id)      # focus never reached it
+    not_started._tr = None
+    no_such_backend = _session("UCx", "no-such-backend")
+    no_such_backend._tr = also_untouched = object()
+    for s in (on_channel, elsewhere, not_started, no_such_backend):
+        live._sessions[s.id] = s
+    try:
+        store.add_glossary_term("youtube:UCx", "미미", "커맨더", "지휘관")
+        assert live.reload_glossary("youtube:UCx") == [on_channel.id]
+        # The terms are on the session and the translator was built again with them.
+        assert on_channel._glossary_terms == [{"from": "커맨더", "to": "지휘관"}]
+        assert fake_translate[-1].spec["id"] == tr_id
+        # Another channel is left alone, and so is a session whose engines were
+        # never built -- it reads the glossary when it builds them.
+        assert elsewhere._tr is untouched
+        assert not_started._tr is None
+        # A session whose backend is gone keeps its translator. Building on a
+        # missing spec would drop it to M2M-100 without saying so.
+        assert no_such_backend._tr is also_untouched
+        assert live.reload_glossary("") == []
+        assert live.reload_glossary("youtube:nobody") == []
+    finally:
+        live._sessions.clear()
+

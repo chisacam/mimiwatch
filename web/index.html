@@ -616,6 +616,40 @@
   </form>
 </dialog>
 
+<!-- Picking a word out of a subtitle. The button follows the selection in the
+     script panel; the dialog is where the pair is finished. `position:fixed`,
+     so it sits at the top level rather than inside the panel that scrolls. -->
+<button id="glossary-pick" class="seg" hidden
+        data-i18n="panel.glossary.pick"></button>
+
+<dialog id="glossary-term-dialog">
+  <form id="glossary-term-form" class="settings-form">
+    <div class="dlg-head">
+      <h3 data-i18n="panel.glossary.title"></h3>
+    </div>
+    <p class="hint" id="glossary-term-channel"></p>
+    <label><span data-i18n="panel.glossary.from"></span>
+      <input name="from" required autocomplete="off" spellcheck="false">
+    </label>
+    <label><span data-i18n="panel.glossary.to"></span>
+      <input name="to" required autocomplete="off" spellcheck="false">
+    </label>
+    <!-- The light default translator has nowhere to put a prompt, so the
+         glossary reaches it nowhere. Saying so here is the difference between
+         a setting that waits for a better engine and one that silently does
+         nothing. -->
+    <p class="hint" id="glossary-term-note" hidden></p>
+    <p class="hint" id="glossary-term-result" hidden></p>
+    <p class="hint" id="glossary-term-error" hidden></p>
+    <div class="row">
+      <span class="grow"></span>
+      <button type="button" id="glossary-term-close" class="seg"
+              data-i18n="dialog.close"></button>
+      <button type="submit" class="primary" data-i18n="panel.glossary.save"></button>
+    </div>
+  </form>
+</dialog>
+
 <!-- `async`, deliberately. Left synchronous the parser stops here, and nothing at
      all is painted while the script is fetched from Google. Measured, this one
      line ate 4396ms and domInteractive was 4435ms -- with our own CSS and JS at

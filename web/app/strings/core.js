@@ -223,6 +223,10 @@ MW_I18N.add({
     en: "Subtitles",
     ko: "자막"
   },
+  "dialog.close": {
+    en: "Close",
+    ko: "닫기"
+  },
   "dialog.cancel": {
     en: "Cancel",
     ko: "취소"

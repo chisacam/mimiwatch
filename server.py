@@ -927,6 +927,25 @@ class Handler(BaseHTTPRequestHandler):
         self._json(out if out is not None
                    else {"channel_key": body.get("channel_key") or ""})
 
+    def post_glossary_term(self, body):
+        """One term, added from a subtitle on screen. The editor's own save
+        replaces the whole list; this one merges into it."""
+        key = (body.get("channel_key") or "").strip()
+        term_from = (body.get("from") or "").strip()
+        term_to = (body.get("to") or "").strip()
+        if not key:
+            return self._json({"error": "channel_key is required"}, 400)
+        if not term_from or not term_to:
+            return self._json({"error": "both from and to are required"}, 400)
+        out = store.add_glossary_term(key, body.get("name") or "", term_from, term_to)
+        if out is None:
+            return self._json({"error": "the term could not be saved"}, 400)
+        # Sessions already running on this channel pick it up now; the answer
+        # says which, so the screen does not promise more than happened.
+        applied = live.reload_glossary(key)
+        bus.publish({"type": "glossary", "id": key, "reason": "saved"})
+        self._json({**out, "applied": applied})
+
     def post_transcribe(self, body):
         url = (body.get("url") or "").strip()
         if not url:
@@ -1134,6 +1153,7 @@ POST_ROUTES = {
     "/api/update/download": Handler.post_update_download,
     "/api/update/apply": Handler.post_update_apply,
     "/api/glossaries": Handler.post_glossaries,
+    "/api/glossaries/term": Handler.post_glossary_term,
     "/api/burn": Handler.post_burn,
     "/api/watchers": Handler.post_watcher,
     "/api/watchers/toggle": Handler.post_watcher_toggle,

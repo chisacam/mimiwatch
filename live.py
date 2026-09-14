@@ -1989,6 +1989,35 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     return {"backend": backend_id}
 
 
+def reload_glossary(channel_key: str) -> list[str]:
+    """Put a changed glossary into the sessions already running on that channel.
+
+    The terms are rendered into the prompt when the translator is built, so a
+    glossary saved mid-session used to wait for the next build -- a reconnect,
+    or an engine swap. A term picked off a subtitle is a request about the line
+    after this one, so the translator is rebuilt here, the same way set_backend
+    does it. Lines already published keep the translation they were given.
+
+    Returns the sessions it reached, so the screen can say whether the term is
+    in effect now or only from the next build.
+    """
+    if not (channel_key or "").strip():
+        return []
+    done = []
+    for s in list(_sessions.values()):
+        if s.channel_key != channel_key or s._tr is None:
+            continue
+        spec = config.find_backend(s.backend_id)
+        if spec is None:
+            # Building on a missing spec drops the session to M2M-100 without
+            # saying so. Leave the translator alone and do not claim it applied.
+            continue
+        s._sync_glossary()
+        s._tr = mw_translate.build(spec, s.genre, s._glossary_terms)
+        done.append(s.id)
+    return done
+
+
 def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
            source: str = "", url: str = "", group: str = "") -> dict:
     """Join a broken session's reception back up **as the same session**.

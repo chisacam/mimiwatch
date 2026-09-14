@@ -712,6 +712,47 @@ def save_glossary(channel_key: str, name: str, terms: list) -> dict | None:
     return glossary(channel_key)
 
 
+def add_glossary_term(channel_key: str, name: str,
+                      term_from: str, term_to: str) -> dict | None:
+    """Put one term into a channel's glossary, keeping everything already in it.
+
+    Read, merge and write under the one lock rather than letting the caller read
+    the list and post it back whole. The editor saves the whole list, and a term
+    picked off a subtitle is added while a stream is running -- with the editor
+    possibly open in another window. Split across two requests, whichever of the
+    two saved second would erase the other.
+
+    A `from` already in the list has its `to` replaced rather than being added a
+    second time: the prompt would otherwise carry one term with two answers. An
+    existing glossary keeps its name; `name` is used only when there is none yet.
+    """
+    channel_key = (channel_key or "").strip()
+    term_from = (term_from or "").strip()
+    term_to = (term_to or "").strip()
+    if not channel_key or not term_from or not term_to:
+        return None
+    with _lock:
+        db = _connect()
+        row = db.execute("SELECT name, terms FROM glossaries WHERE channel_key = ?",
+                         (channel_key,)).fetchone()
+        terms = json.loads(row["terms"]) if row else []
+        name = row["name"] if row else ((name or "").strip() or channel_key)
+        for t in terms:
+            if t.get("from") == term_from:
+                t["to"] = term_to
+                break
+        else:
+            terms.append({"from": term_from, "to": term_to})
+        db.execute(
+            "INSERT INTO glossaries (channel_key, name, terms, updated) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(channel_key) DO UPDATE SET "
+            "name = excluded.name, terms = excluded.terms, "
+            "updated = excluded.updated",
+            (channel_key, name, json.dumps(terms, ensure_ascii=False), time.time()))
+        db.commit()
+    return {"channel_key": channel_key, "name": name, "terms": terms}
+
+
 # ---- Full-text search ----------------------------------------------------------
 #
 # `cues_fts` is an ordinary FTS5 table, not an external-content one. An

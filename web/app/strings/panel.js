@@ -95,6 +95,34 @@ MW_I18N.add({
     en: "Auto-detect could not determine the source language. Translation unavailable.",
     ko: "자동 감지가 원문 언어를 찾지 못했습니다. 번역을 할 수 없습니다.",
   },
+  "panel.glossary.pick": { en: "＋ Glossary", ko: "＋ 시어집" },
+  "panel.glossary.title": {
+    en: "Add a term to the channel glossary",
+    ko: "채널 시어집에 시어 넣기",
+  },
+  "panel.glossary.channel": {
+    en: "Goes into the glossary for {name} ({key})",
+    ko: "{name}({key}) 채널의 시어집에 들어갑니다",
+  },
+  "panel.glossary.noChannel": {
+    en: "This stream has no channel to file a glossary under, so a term cannot be added from here. Manage › Glossary takes a name of your own instead.",
+    ko: "이 방송은 시어집을 걸 채널이 없어 여기서는 넣을 수 없습니다. 「관리 › 채널 시어집」에서 이름을 직접 지어 만드십시오.",
+  },
+  "panel.glossary.from": { en: "Source", ko: "원어" },
+  "panel.glossary.to": { en: "Target", ko: "번역" },
+  "panel.glossary.save": { en: "Add", ko: "넣기" },
+  "panel.glossary.noPrompt": {
+    en: "The translator in use ({name}) takes no prompt, so the glossary goes without it. The term is still saved, and a prompt engine (Gemma, or an OpenAI-compatible one) will use it.",
+    ko: "지금 쓰는 번역 엔진({name})은 프롬프트를 쓰지 않아 시어집을 타지 못합니다. 저장은 되며, 프롬프트를 쓰는 엔진(Gemma·OpenAI 호환)으로 바꾸면 그때부터 적용됩니다.",
+  },
+  "panel.glossary.added": {
+    en: "Added {from} → {to}. The line after this one uses it.",
+    ko: "{from} → {to} 를 넣었습니다. 다음 줄부터 적용됩니다.",
+  },
+  "panel.glossary.addedLater": {
+    en: "Added {from} → {to}. It applies the next time the translator is built.",
+    ko: "{from} → {to} 를 넣었습니다. 번역기를 다시 만들 때부터 적용됩니다.",
+  },
   "panel.window.title": { en: "Subtitle log", ko: "자막 내역" },
   "panel.window.waiting": {
     en: "Pick the tab to share and the subtitles pile up here.",

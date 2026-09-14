@@ -185,6 +185,19 @@ def main():
             src = open(os.path.join(folder, name), encoding="utf-8").read()
             check(balanced(src), f"{os.path.relpath(os.path.join(folder, name), HERE)} has balanced brackets and quotes")
 
+    # Every adapter is discarded by having destroy() called on it, and every
+    # adapter's mount waits part way through. An adapter whose destroy does not
+    # say so leaves its own mount no way to find out, and the mount comes back
+    # from its wait and seats a player in a tile that has moved on -- which is
+    # how a resumed broadcast ended up with the last YouTube embed watched on
+    # top of it, seconds late. The rule is one line per adapter, so it is
+    # cheap to forget when the next adapter is written and cheap to check here.
+    adapters = open(os.path.join(WEB, "app", "adapters.js"), encoding="utf-8").read()
+    destroys = len(re.findall(r"^  a\.destroy = \(\) => \{", adapters, re.M))
+    marks = len(re.findall(r"^    a\.dead = true;", adapters, re.M))
+    check(destroys > 0 and marks == destroys,
+          f"every adapter's destroy marks it discarded ({marks} of {destroys})")
+
     print("\n[6] the transcript in the chat slot")
     if os.path.exists(os.path.join(EXT, "panel.js")):
         js = [x for cs in m.get("content_scripts", []) for x in cs.get("js", [])]

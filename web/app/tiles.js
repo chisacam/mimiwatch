@@ -205,7 +205,7 @@ async function mountTile(tile, src, opts = {}) {
   if (tile.adapter) tile.adapter.destroy();
   tile.playerEl.textContent = "";
   tile.src = src;
-  tile.adapter = adapterFor(src);
+  const a = tile.adapter = adapterFor(src);
   if (tile === focusedTile()) state.player = tile.adapter;
   updateTileBar(tile);
   try {
@@ -222,7 +222,12 @@ async function mountTile(tile, src, opts = {}) {
       onError: (msg, vid) => playerError(msg, vid, tile),
     });
   } catch (err) {
-    playerError((err && err.message) || String(err), null, tile);
+    // Only the adapter still seated may speak. Two mounts on one tile overlap
+    // whenever a seat is asked for while the one before is still waiting, and
+    // the one that lost would otherwise write its failure over the player that
+    // replaced it -- a notice about a stream nobody is watching, on top of one
+    // that is playing.
+    if (tile.adapter === a) playerError((err && err.message) || String(err), null, tile);
   }
 }
 

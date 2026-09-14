@@ -25,6 +25,11 @@
       // these are looked up each time rather than held on to.
       video: "video.html5-main-video",
       player: "#movie_player, .html5-video-player",
+      // Where the subtitle log goes when it is turned on: the right-hand
+      // column, and the chat whose place it takes. A site with neither named
+      // simply does not offer the log (panel.js).
+      column: "#secondary-inner, #secondary",
+      chat: "ytd-live-chat-frame#chat, #chat",
     },
     {
       // chzzk plays through NAVER's own player. The <video> carries a class of
@@ -38,6 +43,11 @@
       id: (u) => (u.pathname.match(/^\/live\/([0-9a-f]+)/) || [])[1] || "",
       video: "video.webplayer-internal-video",
       player: ".pzp-pc__video",
+      // Not filled in yet: chzzk's chat column has not been looked at, and a
+      // guessed selector here would hide the wrong thing on someone's screen.
+      // Until it is, the log stays off on chzzk and the overlay is unaffected.
+      column: "",
+      chat: "",
     },
   ];
 
@@ -52,7 +62,8 @@
     }
     for (const s of SITES) {
       if (!s.host(u.hostname)) continue;
-      return { site: s.site, id: s.id(u), video: s.video, player: s.player };
+      return { site: s.site, id: s.id(u), video: s.video, player: s.player,
+               column: s.column || "", chat: s.chat || "" };
     }
     return null;
   }

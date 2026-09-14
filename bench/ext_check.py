@@ -193,7 +193,13 @@ def main():
               "it is loaded before content.js (which uses MimiPanel)")
         pan = open(os.path.join(EXT, "panel.js"), encoding="utf-8").read()
         check("MimiPanel" in pan, "it exposes MimiPanel")
-        check("#secondary" in pan, "it finds YouTube's right-hand column")
+        # The column and the chat moved into the site table (ytid.js). What has
+        # to hold is still that the log knows where to go on a site that offers
+        # it, so the check follows it there instead of looking for a selector
+        # spelled out in this file.
+        check("MimiYtId.siteOf" in pan, "it takes its column from the site table")
+        table = open(os.path.join(EXT, "ytid.js"), encoding="utf-8").read()
+        check("#secondary" in table, "the table names YouTube's right-hand column")
         check("hidden.style.display" in pan or 'hidden.style.display = ""' in pan,
               "it puts the hidden chat back")
         css = open(os.path.join(EXT, "overlay.css"), encoding="utf-8").read()

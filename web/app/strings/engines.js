@@ -53,6 +53,18 @@ MW_I18N.add({
     en: "Videos and streams of this channel match the key. A name a person typed keys as manual:name.",
     ko: "이 채널의 영상과 방송이 키로 맞습니다. 사람이 입력한 이름은 manual:이름 으로 키가 됩니다.",
   },
+  "settings.glossary.form.current": {
+    en: "Use the one open",
+    ko: "지금 보는 채널",
+  },
+  "settings.glossary.form.current.title": {
+    en: "Fills in the key of {name}, the one the lookup uses",
+    ko: "{name}의 키를 채웁니다 — 조회가 실제로 쓰는 그 키입니다",
+  },
+  "settings.glossary.form.current.none": {
+    en: "Nothing with a channel is open. A raw m3u8 has no channel to key by.",
+    ko: "채널이 있는 것이 열려 있지 않습니다. m3u8 주소는 키로 삼을 채널이 없습니다.",
+  },
   "settings.glossary.form.terms": {
     en: "Terms — one per line",
     ko: "시어 — 한 줄에 하나씩",

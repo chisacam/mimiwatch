@@ -888,6 +888,14 @@ function showGlossaryForm(g) {
   f.key.value = g ? g.channel_key : "";
   f.terms.value = g ? g.terms.map(x => `${x.from} → ${x.to}`).join("\n") : "";
   $("glossary-form-delete").hidden = !g;
+  // Nothing open, or open with no channel, means there is no key to offer.
+  // Saying which of the two is the difference between a dead button and one
+  // that explains itself.
+  const ch = typeof glossaryChannel === "function" ? glossaryChannel() : null;
+  const cur = $("glossary-form-current");
+  cur.disabled = !ch;
+  cur.title = ch ? t("settings.glossary.form.current.title", { name: ch.name })
+                 : t("settings.glossary.form.current.none");
   $("glossary-form-error").hidden = true;
   $("settings-body").hidden = true;
   $("engine-form").hidden = true;
@@ -934,6 +942,20 @@ async function deleteGlossary(key) {
   backToEngineList();
 }
 
+/* The key of what is on screen, which is the key the lookup derives. Typing a
+ * name instead keys as manual:name, and `live.py` never passes a manual name,
+ * so a glossary keyed that way is never reached from a live session. */
+function useCurrentChannel() {
+  const ch = typeof glossaryChannel === "function" ? glossaryChannel() : null;
+  if (!ch) return;
+  const f = $("glossary-form");
+  f.key.value = ch.key;
+  // The name is what the list is read by, so an existing one is left alone.
+  if (!f.name.value.trim()) f.name.value = ch.name;
+  f.name.dispatchEvent(new Event("input"));
+}
+
+$("glossary-form-current").addEventListener("click", useCurrentChannel);
 $("glossary-add").addEventListener("click", () => showGlossaryForm(null));
 $("glossary-form-back").addEventListener("click", backToEngineList);
 $("glossary-form-delete").addEventListener("click",

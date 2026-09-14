@@ -599,7 +599,16 @@
       <button type="button" id="glossary-form-back" class="seg" data-i18n="settings.glossary.form.back"></button>
     </div>
     <label><span data-i18n="settings.glossary.form.name"></span> <input name="name" required data-i18n-attr="placeholder:settings.glossary.form.namePlaceholder"></label>
-    <label><span data-i18n="settings.glossary.form.key"></span> <input name="key" data-i18n-attr="placeholder:settings.glossary.form.keyPlaceholder">
+    <!-- The key is the whole game: a name typed here keys as manual:name, and a
+         live session never derives that shape, so such a glossary is never
+         looked up. The button fills in the key of whatever is open, which is
+         the one the lookup will actually use. -->
+    <label><span data-i18n="settings.glossary.form.key"></span>
+      <span class="row">
+        <input name="key" class="grow" data-i18n-attr="placeholder:settings.glossary.form.keyPlaceholder">
+        <button type="button" id="glossary-form-current" class="seg"
+                data-i18n="settings.glossary.form.current"></button>
+      </span>
       <small data-i18n="settings.glossary.form.keyHint"></small>
     </label>
     <label><span data-i18n="settings.glossary.form.terms"></span>

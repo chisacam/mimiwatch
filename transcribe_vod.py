@@ -32,6 +32,7 @@ import wave
 
 import numpy as np
 
+import chzzk
 import stream
 from stream import build_vad
 from tcpp_asr import build_live_asr
@@ -143,9 +144,32 @@ def convert_local(src: str, dest: str, should_stop=None) -> str:
     return dest
 
 
+def probe_chzzk(no: str, url: str) -> dict:
+    """What chzzk says about one of its recordings, in probe's shape.
+
+    It carries three things yt-dlp's `-j` never gave this flow -- the site, the
+    channel id and a real thumbnail -- because the recording is resolved from
+    chzzk's own endpoints (see `chzzk.py` for why it has to be).
+
+    The id is prefixed the way a local file's is. A recording number is bare
+    digits, and a doc id that says nothing about where it came from is a doc the
+    page cannot pick a player for.
+    """
+    try:
+        d = chzzk.resolve(no)
+    except chzzk.ChzzkError as exc:
+        raise VodError(str(exc)) from exc
+    return {"id": "chzzk-" + no, "title": d["title"], "duration": d["duration"],
+            "uploader": d["uploader"], "is_live": False, "url": url,
+            "site": "chzzk", "channel": d["channel"], "thumbnail": d["thumbnail"]}
+
+
 def probe(url: str) -> dict:
     if is_local_source(url):
         return probe_local(url)
+    no = chzzk.video_no(url)
+    if no:
+        return probe_chzzk(no, url)
     try:
         out = subprocess.run(stream.ytdlp_args("-j", url=url),
                              capture_output=True, text=True,
@@ -177,9 +201,24 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
     if os.path.exists(dest):
         print(f"[vod] reusing cached audio {dest}", file=sys.stderr)
         return dest
+    # A chzzk recording is resolved here rather than left to yt-dlp, and the
+    # URL that comes back is fed to the same downloader. The format has to be
+    # widened for it: what we hand over is one file, so `bestaudio` alone finds
+    # nothing to pick and yt-dlp stops with "Requested format is not available".
+    # The rendition asked for is the cheapest one. The sound is identical in
+    # every rendition and the picture is not: 43x fewer bits on a rewind
+    # (192 kbps against 8384), and 565 MB against 26 GB for the progressive
+    # file of a seven-hour broadcast.
+    no = chzzk.video_no(url)
+    if no:
+        try:
+            url = chzzk.resolve(no, audio=True)["audio_url"]
+        except chzzk.ChzzkError as exc:
+            raise VodError(str(exc)) from exc
+    fmt = "bestaudio/best" if no else "bestaudio"
     tmp = dest + ".src"
     proc = subprocess.Popen(
-        stream.ytdlp_args("-f", "bestaudio", "-o", tmp, url=url),
+        stream.ytdlp_args("-f", fmt, "-o", tmp, url=url),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         **stream.child_io(stderr=False))
     while True:

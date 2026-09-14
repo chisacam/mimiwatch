@@ -26,6 +26,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import bus
+import chzzk
 import config
 import export
 import jobs
@@ -161,7 +162,8 @@ class Handler(BaseHTTPRequestHandler):
             items.append({k: d.get(k) for k in
                           ("id", "title", "duration", "uploader", "source_lang",
                            "viewer_lang", "translated", "audio_seconds",
-                           "backends_done", "url", "source")} |
+                           "backends_done", "url", "source", "site",
+                           "thumbnail")} |
                          {"cues": store.cue_count(vid)})
         self._json(items)
 
@@ -644,6 +646,20 @@ class Handler(BaseHTTPRequestHandler):
             except vod.VodError as exc:
                 return self._json({"error": str(exc)}, 400)
             return self._json({**meta, "site": "file", "channel": ""})
+        # A chzzk recording does not go through yt-dlp either, and for a harder
+        # reason than a local file: for many of them yt-dlp cannot open the
+        # manifest at all (chzzk.py carries the measurement). Answering from
+        # chzzk's own endpoints also gets the thumbnail, which `-j` never had.
+        no = chzzk.video_no(url)
+        if no:
+            try:
+                meta = vod.probe_chzzk(no, url)
+            except vod.VodError as exc:
+                return self._json({"error": str(exc)}, 400)
+            # No `play_url`: it expires within the day, and nothing plays a
+            # recording until it has been transcribed. The page asks for one
+            # then, through /api/video/playurl.
+            return self._json({**meta, "video_id": meta["id"], "play_url": ""})
         try:
             out = sp.run(stream.ytdlp_args("-j", url=url),
                          capture_output=True, text=True,
@@ -826,6 +842,25 @@ class Handler(BaseHTTPRequestHandler):
         rather than stored: the URL carries a token that expires."""
         res = live.play_url((body.get("id") or "").strip())
         self._json(res, 400 if res.get("error") else 200)
+
+    def post_video_playurl(self, body):
+        """Something playable for a finished recording, made a moment ago.
+
+        The same rule as the live side: a chzzk URL is signed and expires
+        within the day, so it is never stored on the doc and never handed back
+        from one. `kind` says which player to seat -- "hls" for the rewind of a
+        broadcast, "mp4" for a file served whole.
+        """
+        vid = os.path.basename((body.get("id") or "").strip())
+        doc = store.doc(vid) or {}
+        no = chzzk.video_no(doc.get("url") or "")
+        if not no:
+            return self._json({"error": "not a chzzk recording"}, 404)
+        try:
+            d = chzzk.resolve(no)
+        except chzzk.ChzzkError as exc:
+            return self._json({"error": str(exc)}, 502)
+        self._json({"url": d["play_url"], "kind": d["play_kind"]})
 
     def post_live_title(self, body):
         self._json(live.set_title(body.get("id", ""), body.get("title", "")))
@@ -1164,6 +1199,7 @@ POST_ROUTES = {
     "/api/cue/delete": Handler.post_cue_delete,
     "/api/cue/clear": Handler.post_cue_clear,
     "/api/video/delete": Handler.post_video_delete,
+    "/api/video/playurl": Handler.post_video_playurl,
     "/api/backends": Handler.post_backends,
     "/api/backends/delete": Handler.post_backends_delete,
     "/api/asr-backends": Handler.post_asr_backends,

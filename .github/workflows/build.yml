@@ -71,17 +71,17 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      # The Metal wheel is 18MB and was fetched fresh on every build. One of
-      # those arrived corrupt and cost a silent source build (see build.sh), so
-      # the downloads are kept between runs: a hit removes the fetch, and with
-      # it that failure. A miss only costs what every build paid before.
-      - name: Cache the pip downloads (macOS)
+      # The wheel build.sh keeps, so the llama-cpp-python source build happens
+      # once rather than every release. Caching pip's own download directory was
+      # tried first and is worse than useless here: upstream's wheel is damaged
+      # at the source, so that cache would have preserved the broken file.
+      - name: Keep the llama-cpp-python wheel between runs (macOS)
         if: runner.os == 'macOS'
         uses: actions/cache@v4
         with:
-          path: ~/Library/Caches/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt', 'packaging/requirements-build.txt') }}
-          restore-keys: pip-${{ runner.os }}-
+          path: .wheels
+          key: llama-wheel-${{ runner.os }}-py3.12-${{ hashFiles('requirements.txt') }}
+          restore-keys: llama-wheel-${{ runner.os }}-py3.12-
       - name: Build the bundle (macOS)
         if: runner.os == 'macOS'
         run: |

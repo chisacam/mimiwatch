@@ -25,35 +25,58 @@ say() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 say "Build virtual environment ($VENV)"
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
-# For macOS arm64 the maintainer's index has a Metal wheel (0.3.35, py3-none). Take
-# that first and skip the source build (cmake, 5-10 minutes). Without it the
-# requirements install below builds it from source.
+# llama-cpp-python on Apple Silicon. The source build takes minutes (cmake, all of
+# llama.cpp), so a wheel is worth having -- but the maintainer's prebuilt Metal
+# wheels cannot be relied on. 0.3.33, 0.3.34 and 0.3.35 each fail a CRC check, on a
+# different member every time, and two downloads of 0.3.35 come back byte for byte
+# identical: the published files are damaged, and no amount of retrying or caching
+# fixes a file that is wrong at the source. The v0.6.0 build spent 2m35s of its
+# 3m33s on the fallback while the log claimed there was no wheel at all.
 #
-# Retried, because the failure that happens is not "no wheel". On the v0.6.0 build
-# the 18MB wheel arrived corrupt -- `BadZipFile: Bad CRC-32 for ggml-config.cmake`
-# -- and the old one-line fallback reported that as the wheel not existing, so the
-# job spent 2m35s of its 3m33s building from source with the log saying it had no
-# choice. pip's cached copy is dropped between attempts; keeping it would hand the
-# same broken bytes back.
+# So: keep a wheel of our own. Look in the wheelhouse first, then upstream, and
+# only build one when neither gives something whole -- and keep that build, so the
+# next run does not repeat it. CI keeps the directory between runs; on a developer
+# machine it simply persists.
+#
+# Everything is checked before it is trusted, ours included. That check is the one
+# thing that would have found this in the first place.
+WHEELHOUSE="${MIMIWATCH_WHEELHOUSE:-$ROOT/.wheels}"
+
+whole() {
+  [ -f "$1" ] && python3 -c \
+    'import sys,zipfile; sys.exit(1 if zipfile.ZipFile(sys.argv[1]).testzip() else 0)' \
+    "$1" 2>/dev/null
+}
+newest_wheel() { ls -t "$WHEELHOUSE"/llama_cpp_python-*.whl 2>/dev/null | head -1; }
+
 if [ "$(uname)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-  metal_log="$(mktemp)"
-  for attempt in 1 2 3; do
-    if "$VENV/bin/pip" install -q --only-binary=:all: \
+  say "llama-cpp-python (Metal)"
+  mkdir -p "$WHEELHOUSE"
+  kept="$(newest_wheel)"
+  if whole "$kept"; then
+    "$VENV/bin/pip" install -q "$kept"
+    echo "  from the wheelhouse: $(basename "$kept")"
+  else
+    if [ -n "$kept" ]; then
+      echo "  the kept wheel is damaged, dropping it"
+      rm -f "$WHEELHOUSE"/llama_cpp_python-*.whl
+    fi
+    dl_log="$(mktemp)"
+    if "$VENV/bin/pip" download -q --only-binary=:all: --no-deps -d "$WHEELHOUSE" \
          --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal \
-         llama-cpp-python >"$metal_log" 2>&1; then
-      echo "  llama-cpp-python: Metal wheel (attempt $attempt)"
-      break
-    fi
-    if [ "$attempt" = 3 ]; then
-      # Whatever went wrong, in its own words. A fixed string here is what hid
-      # the corrupt download for a whole release.
-      echo "  llama-cpp-python: Metal wheel failed 3 times, building from source:"
-      tail -20 "$metal_log" | sed 's/^/    /'
+         llama-cpp-python >"$dl_log" 2>&1 && whole "$(newest_wheel)"; then
+      "$VENV/bin/pip" install -q "$(newest_wheel)"
+      echo "  from upstream: $(basename "$(newest_wheel)")"
     else
-      "$VENV/bin/pip" cache remove 'llama_cpp_python*' >/dev/null 2>&1 || true
+      rm -f "$WHEELHOUSE"/llama_cpp_python-*.whl
+      echo "  no whole wheel upstream; building one and keeping it. Why it was not usable:"
+      tail -6 "$dl_log" | sed 's/^/    /'
+      "$VENV/bin/pip" wheel -q --no-deps -w "$WHEELHOUSE" llama-cpp-python
+      "$VENV/bin/pip" install -q "$(newest_wheel)"
+      echo "  built and kept: $(basename "$(newest_wheel)")"
     fi
-  done
-  rm -f "$metal_log"
+    rm -f "$dl_log"
+  fi
 fi
 "$VENV/bin/pip" install -q -r "$ROOT/requirements.txt" -r "$HERE/requirements-build.txt"
 "$VENV/bin/pip" install -q -U "yt-dlp[default]" transcribe-cpp

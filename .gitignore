@@ -23,6 +23,10 @@ __pycache__/
 .claude/*
 !.claude/skills/
 
+# packaging/build.sh 가 보관하는 llama-cpp-python 휠. 상류 휠이 깨져 있어
+# 직접 빌드한 것을 여기에 두고 다시 씁니다.
+.wheels/
+
 # 자체 가상환경 (.venv-build 는 packaging/build.sh 가 만듭니다)
 .venv/
 .venv-build/

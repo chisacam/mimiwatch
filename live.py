@@ -2048,6 +2048,41 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     return {"backend": backend_id}
 
 
+def play_url(session_id: str) -> dict:
+    """A manifest the page can play for a session, resolved now.
+
+    It is not kept with the session, because it carries a token that expires;
+    a stored one would be handed to the player as a URL that answers 403. So a
+    screen that needs a picture asks for a fresh one, which costs a yt-dlp call
+    and only happens when a tile is actually being seated.
+
+    Only for a site with no embed of its own. YouTube and Twitch put themselves
+    on screen, and tab audio has no picture to find.
+    """
+    s = get(session_id)
+    url = s.url if s is not None else (store.session(session_id) or {}).get("url") or ""
+    if not url:
+        return {"error": "no such session"}
+    try:
+        out = subprocess.run(stream.ytdlp_args("-j", url=url),
+                             capture_output=True, text=True,
+                             timeout=stream.YTDLP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return {"error": "yt-dlp did not answer in time"}
+    if out.returncode != 0:
+        return {"error": (out.stderr or "").strip()[:200] or "could not resolve the address"}
+    try:
+        d = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return {"error": "could not read what yt-dlp said"}
+    found = play_url_of(d)
+    if not found:
+        return {"error": "that address has no manifest this page can play"}
+    if s is not None:
+        s.play_url = found
+    return {"url": found}
+
+
 def reload_glossary(channel_key: str) -> list[str]:
     """Put a changed glossary into the sessions already running on that channel.
 

@@ -821,6 +821,12 @@ class Handler(BaseHTTPRequestHandler):
         res = live.clear_cues(sid)
         self._json(res, 404 if res.get("error") else 200)
 
+    def post_live_playurl(self, body):
+        """A manifest for a session whose site has no embed. Resolved when asked
+        rather than stored: the URL carries a token that expires."""
+        res = live.play_url((body.get("id") or "").strip())
+        self._json(res, 400 if res.get("error") else 200)
+
     def post_live_title(self, body):
         self._json(live.set_title(body.get("id", ""), body.get("title", "")))
 
@@ -1139,6 +1145,7 @@ POST_ROUTES = {
     "/api/live/start": Handler.post_live_start,
     "/api/live/capture": Handler.post_live_capture,
     "/api/live/title": Handler.post_live_title,
+    "/api/live/playurl": Handler.post_live_playurl,
     "/api/live/backend": Handler.post_live_backend,
     "/api/live/asr": Handler.post_live_asr,
     "/api/live/stop": Handler.post_live_stop,

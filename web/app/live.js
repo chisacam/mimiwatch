@@ -254,9 +254,33 @@ async function openSessionInTile(tile, st) {
     source_lang: st.source_lang || "", viewer_lang: st.viewer_lang,
     translated: false, backends_done: [st.backend], live: true,
   });
-  tile.src = srcOf(st);
+  tile.src = await seatable(st);
   tile.title = st.title || st.url || "";
   updateTileBar(tile);
+}
+
+/* What to seat in the tile for this session.
+ *
+ * A site with no embed (chzzk) is played from its own manifest, and that URL
+ * carries a token that expires, so it is not kept with the session -- a stored
+ * one would reach the player as an address that answers 403. A session the
+ * server has just come back to, or one that has been sitting stopped, therefore
+ * arrives without one and `srcOf` has nothing to give. Asking for a fresh one
+ * costs a yt-dlp call on the server and happens only here, seating a tile.
+ *
+ * Tab audio is skipped: the picture is the user's own tab and there is nothing
+ * to resolve. */
+async function seatable(st) {
+  let src = srcOf(st);
+  if (src.site !== "none" || st.source === "tab" || !st.url) return src;
+  try {
+    const res = await (await fetch("/api/live/playurl", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: st.id }),
+    })).json();
+    if (res && res.url) { st.play_url = res.url; src = srcOf(st); }
+  } catch (_) { /* no picture; the tile is left empty rather than showing another */ }
+  return src;
 }
 
 /* Puts a session and a document into a tile. On the focused tile, the screen's globals (state.live and the rest) go with it. */
@@ -314,11 +338,15 @@ function showTileInPanels(tile) {
 
 async function attachLive(tile) {
   const live = tile.live;
-  // A session with no video (m3u8, tab audio) skips the player below, so the
-  // notice box left behind by whatever was watched before is cleared here.
+  // The notice box left behind by whatever was watched before is cleared here.
   clearPlayerError(tile);
   const src = tile.src || { site: "none" };
-  if (src.site !== "none") await mountTile(tile, src, { muted: tile !== focusedTile() });
+  // Seated even when there is nothing to seat. Skipping the call left the tile
+  // holding whatever was in it before, so opening a chzzk broadcast the server
+  // had no manifest for showed the last YouTube player watched, still playing.
+  // mountTile takes the old one out and puts the do-nothing adapter in, which is
+  // what a session with no picture of its own (tab audio) wanted all along.
+  await mountTile(tile, src, { muted: tile !== focusedTile() });
   const es = new EventSource(`/api/live/events/${live.id}`);
   live.es = es;
   es.onmessage = (ev) => {

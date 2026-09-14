@@ -503,6 +503,10 @@
       <label><span data-i18n="update.token"></span>
         <input id="update-token" type="password" autocomplete="off" spellcheck="false"
                data-i18n-attr="placeholder:update.token.ph">
+        <!-- It is written to this browser on every keystroke, which is fine and
+             was invisible: the field looked like something still waiting to be
+             submitted. This line is the receipt. -->
+        <small id="update-token-state"></small>
       </label>
       <p class="hint" data-i18n="update.token.hint"></p>
     </section>
@@ -530,7 +534,7 @@
        transcription it has to be a GGUF transcribe.cpp reads, for translation a
        chat model llama.cpp reads -- which only shows once it has been downloaded
        and first used. -->
-  <form id="model-form" hidden>
+  <form id="model-form" class="settings-form" hidden>
     <div class="dlg-head">
       <h3 data-i18n="model.title"></h3>
       <button type="button" id="model-form-back" class="seg" data-i18n="model.back"></button>
@@ -563,7 +567,7 @@
     </div>
   </form>
 
-  <form id="engine-form" hidden>
+  <form id="engine-form" class="settings-form" hidden>
     <div class="dlg-head">
       <h3 id="form-title" data-i18n="engine.title"></h3>
       <button type="button" id="form-back" class="seg" data-i18n="engine.back"></button>
@@ -589,7 +593,7 @@
 
   <!-- One channel's glossary: a name, the key it is looked up by, and the
        terms, one line each. docs/GLOSSARY.md. -->
-  <form id="glossary-form" hidden>
+  <form id="glossary-form" class="settings-form" hidden>
     <div class="dlg-head">
       <h3 id="glossary-form-title" data-i18n="settings.glossary.form.add"></h3>
       <button type="button" id="glossary-form-back" class="seg" data-i18n="settings.glossary.form.back"></button>

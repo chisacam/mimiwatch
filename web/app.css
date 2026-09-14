@@ -663,7 +663,11 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   border-radius:12px; padding:0; max-width:560px; width:94vw;
 }
 #settings-dialog::backdrop{background:rgba(4,6,10,.72)}
-#settings-body,#engine-form{display:flex; flex-direction:column; gap:1rem; padding:1.3rem}
+/* Every screen inside the settings dialog, not one of them. These rules used
+   to name #engine-form alone, so the model form, the glossary form and the
+   token field came out as browser defaults -- white boxes in Arial on a dark
+   panel. A form added later has only to carry the class. */
+#settings-body,.settings-form{display:flex; flex-direction:column; gap:1rem; padding:1.3rem}
 .dlg-head{display:flex; align-items:center; justify-content:space-between}
 .dlg-head h3{margin:0; font-size:1rem}
 .engine-group{display:flex; flex-direction:column; gap:.5rem}
@@ -691,19 +695,33 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 .engine-row button.danger{border-color:#5a2b2b; color:#e07a7a}
 .engine-row button.danger:hover{background:#2a1616}
 .engine-row.locked button.danger{opacity:.35; cursor:not-allowed}
-#engine-form label{display:flex; flex-direction:column; gap:.25rem; font-size:.76rem; color:var(--dim)}
-#engine-form input{
+#settings-body label,.settings-form label{
+  display:flex; flex-direction:column; gap:.25rem; font-size:.76rem; color:var(--dim);
+}
+/* textarea and select as well as input -- the glossary's term list is a
+   textarea, and it was the only white box left after the inputs were fixed. */
+#settings-body input,#settings-body select,#settings-body textarea,
+.settings-form input,.settings-form select,.settings-form textarea{
   background:#0d1017; color:var(--text); border:1px solid var(--line);
   border-radius:6px; padding:.45rem .6rem; font-size:.85rem; font-family:inherit;
 }
-#engine-form small{color:var(--dim); font-size:.7rem; line-height:1.5}
-#engine-form .row{display:flex; gap:.5rem}
-#engine-form .grow{flex:1}
-#engine-form button.primary{
+.settings-form textarea{resize:vertical; min-height:6rem; line-height:1.6}
+#settings-body input:focus-visible,.settings-form input:focus-visible,
+.settings-form textarea:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+#settings-body small,.settings-form small{color:var(--dim); font-size:.7rem; line-height:1.5}
+.settings-form .row{display:flex; gap:.5rem}
+.settings-form .grow{flex:1}
+.settings-form button.primary{
   background:var(--accent); border:1px solid var(--accent); color:#04211b;
   font-weight:700; border-radius:6px; padding:.45rem 1.1rem; font-size:.82rem;
   cursor:pointer; font-family:inherit;
 }
+/* The buttons beside it (Back, Delete) carry .seg, which is styled up in the
+   toolbar block; only .danger needs saying again here. */
+.settings-form button.seg.danger{border-color:#5a2b2b; color:#e07a7a}
+.settings-form button.seg.danger:hover{background:#2a1616}
+#update-token-state{color:var(--dim)}
+#update-token-state.saved{color:var(--accent)}
 /* Back when the transcription and translation pickers stood side by side in the
  * header, their widths had to be pinned -- a long engine name pushed the header
  * out. Now they stand vertically inside the "Manage" menu, where that

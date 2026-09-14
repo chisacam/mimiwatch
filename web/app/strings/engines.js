@@ -656,6 +656,14 @@ MW_I18N.add({
   },
   "update.token.hint": {
     en: "Kept in this browser and sent to api.github.com only. The MIMIWATCH_GITHUB_TOKEN environment variable works the same and also covers the automatic once-a-day check.",
-    ko: "이 브라우저에만 두고 api.github.com으로만 보내습니다. MIMIWATCH_GITHUB_TOKEN 환경 변수도 동일하며, 하루 한 번의 자동 검사까지 함께 커버합니다.",
+    ko: "이 브라우저에만 두고 api.github.com으로만 보냅니다. MIMIWATCH_GITHUB_TOKEN 환경 변수도 동일하며, 하루 한 번의 자동 검사까지 함께 커버합니다.",
+  },
+  "update.token.saved": {
+    en: "Saved in this browser as you type",
+    ko: "입력하는 대로 이 브라우저에 저장됩니다",
+  },
+  "update.token.none": {
+    en: "Empty — the check runs without a token",
+    ko: "비어 있습니다 — 토큰 없이 검사합니다",
   },
 });

@@ -62,6 +62,10 @@ function srcOf(x) {
     const channel = (x.channel || (tw ? tw[1] : "")).toLowerCase();
     return channel ? { site: "twitch", channel } : { site: "none" };
   }
+  // chzzk publishes no embed, so the page plays the manifest the server
+  // resolved (live.play_url_of). Its CDN answers `access-control-allow-origin:
+  // *`, which is what makes that possible at all.
+  if (x.site === "chzzk") return x.play_url ? { site: "hls", url: x.play_url } : { site: "none" };
   if (/\.m3u8(\?|$)/i.test(url)) return { site: "hls", url };
   return { site: "none" };
 }

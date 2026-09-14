@@ -509,15 +509,36 @@ def test_multiview_groups_sessions_and_moves_focus(monkeypatch):
 def test_site_of_tells_the_embed_apart():
     yt = {"extractor_key": "Youtube", "webpage_url_domain": "youtube.com", "id": "abc123XYZ_-",
           "channel_id": "UCx"}
-    assert live.site_of(yt) == {"site": "youtube", "video_id": "abc123XYZ_-", "channel": "UCx"}
+    assert live.site_of(yt) == {"site": "youtube", "video_id": "abc123XYZ_-",
+                                "channel": "UCx", "play_url": ""}
     tw = {"extractor_key": "TwitchStream", "webpage_url_domain": "twitch.tv", "id": "40500071752",
           "uploader_id": "Monstercat", "display_id": "monstercat"}
-    assert live.site_of(tw) == {"site": "twitch", "video_id": "40500071752", "channel": "monstercat"}
+    assert live.site_of(tw) == {"site": "twitch", "video_id": "40500071752",
+                                "channel": "monstercat", "play_url": ""}
     # Even with empty metadata, the login name is salvaged from the URL
     assert live.site_of({}, "https://www.twitch.tv/Shroud?x=1")["channel"] == "shroud"
+    # chzzk has no embed, so it is the one site that carries a manifest for the
+    # page to play. The channel is the hex id, the shape a glossary is keyed by.
+    cz = {"extractor_key": "CHZZKLive", "webpage_url_domain": "chzzk.naver.com",
+          "id": "c0d9", "channel_id": "c0d9",
+          "formats": [{"format_id": "hls-3", "protocol": "m3u8_native", "height": 720,
+                       "url": "https://cdn.example/720.m3u8"},
+                      {"format_id": "hls-ll-4", "protocol": "m3u8_native", "height": 1080,
+                       "url": "https://cdn.example/1080-ll.m3u8"},
+                      {"format_id": "hls-4", "protocol": "m3u8_native", "height": 1080,
+                       "url": "https://cdn.example/1080.m3u8"}]}
+    assert live.site_of(cz) == {"site": "chzzk", "video_id": "c0d9", "channel": "c0d9",
+                                "play_url": "https://cdn.example/1080.m3u8"}
+    # The tallest plain rendition, not the low-latency one beside it: hls.js is
+    # fussier about partial segments than about an ordinary playlist.
+    assert live.play_url_of(cz) == "https://cdn.example/1080.m3u8"
+    assert live.play_url_of({"formats": [{"format_id": "hls-ll-4", "protocol": "m3u8_native",
+                                          "height": 1080, "url": "https://cdn.example/ll.m3u8"}]}) \
+        == "https://cdn.example/ll.m3u8"
+    assert live.play_url_of({}) == ""
     gen = {"extractor_key": "Generic", "webpage_url_domain": "cdn.example", "id": "master"}
     assert live.site_of(gen, "https://cdn.example/live/master.m3u8") == {
-        "site": "other", "video_id": "master", "channel": ""}
+        "site": "other", "video_id": "master", "channel": "", "play_url": ""}
     assert live.looks_like_m3u8("https://cdn.example/a/b.m3u8?tok=1")
     assert not live.looks_like_m3u8("https://www.youtube.com/watch?v=x")
 

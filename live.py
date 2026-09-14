@@ -199,6 +199,27 @@ _TWITCH_LOGIN = re.compile(r"twitch\.tv/(?!videos/)([A-Za-z0-9_]+)", re.I)
 _M3U8 = re.compile(r"\.m3u8(\?|$)", re.I)
 
 
+def play_url_of(d: dict) -> str:
+    """The HLS the browser can play, out of a yt-dlp `-j` result.
+
+    Only for a site with no embed of its own. YouTube and Twitch are put on the
+    screen through their own players, so the picture never comes from here; chzzk
+    has no embed, and its manifests answer `access-control-allow-origin: *`
+    (measured), so the page can hold the same m3u8 the server is transcribing.
+
+    The plain rendition is preferred over the low-latency one: `hls-ll-*` is a
+    partial-segment stream, and hls.js is fussier about those than about the
+    ordinary playlist, which is the wrong thing to be adventurous about for a
+    picture that only has to stay in step with the subtitles.
+    """
+    fmts = [f for f in (d.get("formats") or [])
+            if f.get("url") and str(f.get("protocol") or "").startswith("m3u8")]
+    if not fmts:
+        return ""
+    plain = [f for f in fmts if "-ll-" not in str(f.get("format_id") or "")]
+    return max(plain or fmts, key=lambda f: f.get("height") or 0)["url"]
+
+
 def site_of(d: dict, url: str = "") -> dict:
     """Pick out of a yt-dlp `-j` result only what the UI needs for embedding.
 
@@ -207,22 +228,31 @@ def site_of(d: dict, url: str = "") -> dict:
     Twitch id is a numeric stream number, and putting it in the YouTube player shows
     nothing.
 
-      site     "youtube" | "twitch" | "other"
-      channel  the Twitch login name (the embed finds the channel by it). Empty elsewhere
+      site     "youtube" | "twitch" | "chzzk" | "other"
+      channel  the Twitch login name (the embed finds the channel by it), or the
+               channel id on YouTube and chzzk. Empty elsewhere
       video_id yt-dlp's id as it is (the video id on YouTube)
+      play_url the HLS for a site with no embed. Empty where the site has one
     """
     key = (d.get("extractor_key") or d.get("extractor") or "").lower()
     dom = (d.get("webpage_url_domain") or "").lower()
     vid = d.get("id") or ""
     if key.startswith("youtube") or "youtube" in dom or "youtu.be" in dom:
-        return {"site": "youtube", "video_id": vid, "channel": d.get("channel_id") or ""}
+        return {"site": "youtube", "video_id": vid,
+                "channel": d.get("channel_id") or "", "play_url": ""}
+    # chzzk has no embeddable player, so the page plays the manifest itself.
+    # The channel is the hex id, which is also the video id on a live address --
+    # the same shape YouTube has, and unlike Twitch, where it is a login name.
+    if key.startswith("chzzk") or "chzzk.naver.com" in dom:
+        return {"site": "chzzk", "video_id": vid,
+                "channel": d.get("channel_id") or "", "play_url": play_url_of(d)}
     if key.startswith("twitch") or "twitch" in dom or "twitch.tv/" in (url or "").lower():
         login = d.get("uploader_id") or d.get("display_id") or ""
         if not login:
             m = _TWITCH_LOGIN.search(url or "")
             login = m.group(1) if m else ""
-        return {"site": "twitch", "video_id": vid, "channel": login.lower()}
-    return {"site": "other", "video_id": vid, "channel": ""}
+        return {"site": "twitch", "video_id": vid, "channel": login.lower(), "play_url": ""}
+    return {"site": "other", "video_id": vid, "channel": "", "play_url": ""}
 
 
 def looks_like_m3u8(url: str) -> bool:
@@ -527,8 +557,12 @@ class LiveSession:
         self._focus = threading.Event()
         self._focus.set()
         self.group = ""             # multiview bundle id. Empty means a session receiving alone
-        self.site = ""              # "youtube" | "twitch" | "other" (site_of). Picks the embed
-        self.channel = ""           # the Twitch login name
+        self.site = ""              # "youtube" | "twitch" | "chzzk" | "other" (site_of)
+        self.channel = ""           # the Twitch login name, or the channel id elsewhere
+        # Only for a site with no embed (chzzk). It carries a token that expires, so
+        # it is handed out on the one-shot paths and not on the per-line status --
+        # that one is published for every subtitle line and saved with each of them.
+        self.play_url = ""
         self._warm_persisted_s = 0.0   # the _recv_s at the last status write while on standby
         self._asr = None            # released on stop; see _release()
         # The recogniser object is let go when the session ends, but which engine
@@ -594,7 +628,7 @@ class LiveSession:
                 return None
             return [(seq, data) for seq, data in self._elog if seq > last]
 
-    def status(self) -> dict:
+    def status(self, detail: bool = False) -> dict:
         return {"id": self.id, "state": self.state, "error": self.error,
                 "title": self.title, "title_by_user": self.title_by_user,
                 "url": self.url, "video_id": self.video_id,
@@ -621,7 +655,9 @@ class LiveSession:
                 "channel_key": self.channel_key,
                 "glossary": self.glossary_name,
                 "elapsed": round(time.time() - self.started, 1),
-                "lines": self.lines, "translated": self.translated}
+                "lines": self.lines, "translated": self.translated,
+                # Asked for when a screen attaches, not on every line.
+                **({"play_url": self.play_url} if detail else {})}
 
     def _persist(self):
         st = self.status()
@@ -1265,6 +1301,7 @@ class LiveSession:
             self.video_id = d.get("id", "") or ""
             info = site_of(d, self.url)
             self.site, self.channel = info["site"], info["channel"]
+            self.play_url = info.get("play_url") or ""
             self._sync_glossary()
             # yt-dlp's generic extractor does not know whether a raw m3u8 is live
             # (is_live is None). The user entered it as live, so unknown counts as
@@ -1896,7 +1933,7 @@ def get(session_id: str) -> LiveSession | None:
 def status_of(session_id: str) -> dict | None:
     s = get(session_id)
     if s is not None:
-        return s.status()
+        return s.status(detail=True)
     return store.session(session_id)
 
 
@@ -1912,7 +1949,7 @@ def recent(limit: int = 50) -> list[dict]:
     `?limit=`.
     """
     with _lock:
-        live_now = {sid: s.status() for sid, s in _sessions.items()}
+        live_now = {sid: s.status(detail=True) for sid, s in _sessions.items()}
     out = []
     for row in store.sessions(limit):
         out.append({**row, **live_now.get(row["id"], {})})

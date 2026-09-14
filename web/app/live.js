@@ -204,7 +204,8 @@ async function startLive(url, lang, probe) {
     viewer_lang: $("viewer-lang").value, translated: false,
     backends_done: [state.backend], live: true,
   });
-  t.src = srcOf({ site: probe.site, video_id: probe.id, channel: probe.channel, url });
+  t.src = srcOf({ site: probe.site, video_id: probe.id, channel: probe.channel,
+                  play_url: probe.play_url, url });
   showTileInPanels(t);
   addLiveToPicker(probe, res.id);
   await attachLive(t);

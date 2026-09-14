@@ -70,6 +70,8 @@ reasoning.
 | 표본 / 절 | sample / section |
 | 문턱 / 손잡이 | threshold / knob |
 | 되쪼개기 | re-split |
+| 시어집 / 시어 | glossary / term |
+| 원어 → 번역 | source → target |
 | 테스트 | test |
 
 `measurements/RESULTS.md` is English too, with `RESULTS.ko.md` beside it. Its

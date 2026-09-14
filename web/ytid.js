@@ -43,11 +43,14 @@
       id: (u) => (u.pathname.match(/^\/live\/([0-9a-f]+)/) || [])[1] || "",
       video: "video.webplayer-internal-video",
       player: ".pzp-pc__video",
-      // Not filled in yet: chzzk's chat column has not been looked at, and a
-      // guessed selector here would hide the wrong thing on someone's screen.
-      // Until it is, the log stays off on chzzk and the overlay is unaffected.
-      column: "",
-      chat: "",
+      // The chat column, and the chat inside it. Everything else on this page is
+      // named by a CSS-module hash (`_container_b8csn_2`, `_container_8lqsk_1`)
+      // which is rebuilt on every deploy, so `#aside-chatting` is the one handle
+      // worth holding -- and the chat is reached through it rather than by a
+      // class of its own. The chat is not in an iframe; the only frame on the
+      // page is a banner, and it is 548x0.
+      column: "#aside-chatting",
+      chat: "#aside-chatting > div",
     },
   ];
 

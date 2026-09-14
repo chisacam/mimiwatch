@@ -12,14 +12,15 @@ The screen has three columns. **The video list is on the left**, the player is
 in the middle, **the subtitle log is on the right**. Both sides collapse — the
 list with `V`, the subtitle log with `S`.
 
-**Put a YouTube URL, a Twitch channel URL or an m3u8 URL into "＋ Add" on the
-left.** The server decides whether it is live or a VOD, so you do not have to
-choose. A bare m3u8 gives no way to know, so it is treated as live. Hovering a
+**Put a YouTube URL, a Twitch channel URL, a chzzk URL or an m3u8 URL into
+"＋ Add" on the left.** The server decides whether it is live or a VOD, so you
+do not have to choose. A bare m3u8 gives no way to know, so it is treated as live. Hovering a
 row in the list shows 🗑, which deletes **that row's video**.
 
 The list shows the thumbnails YouTube hands out. The player is already
 embedded, so the browser talks to Google anyway — this is not a new party to
-talk to. A session where you pasted an m3u8 directly has no video id, so the
+talk to. A row that brought a picture of its own (a chzzk recording) shows that
+one instead. A session where you pasted an m3u8 directly has no video id, so the
 slot is simply empty.
 
 **The transcription and translation engines are chosen as you add it.** It
@@ -43,6 +44,31 @@ decides which language the subtitles come out in. The last choice is stored on
 the server (in the settings file), so the web page and the browser extension
 share one value: the default you set in one place follows you to the other, and
 it survives a fresh browser profile.
+
+### chzzk
+
+A chzzk address goes into the same box — a broadcast (`chzzk.naver.com/live/…`)
+or a recording (`chzzk.naver.com/video/…`).
+
+**The picture comes from chzzk's own manifest.** chzzk publishes no embed
+player, so the page plays the address the server resolved: hls.js for a
+broadcast and for the rewind of one, a plain video element for a recording
+served as a single file. That address is signed and expires within the day, so
+it is fetched at the moment you open the row and is never stored — a kept one
+answers 403.
+
+**Recordings do not go through yt-dlp.** For many of them yt-dlp cannot read
+chzzk's manifest at all, so the server asks chzzk's own endpoints instead
+(`chzzk.py`; the measurement is
+[RESULTS section 53](../measurements/RESULTS.md)). The recording's own
+thumbnail comes back in the same answer, and for transcription the cheapest
+rendition is taken — the sound is the same in all of them and the video is not
+(565MB against 26GB on a seven-hour broadcast).
+
+**A subscriber-only or age-rated recording needs the login.** chzzk cookies are
+pasted into the engine panel rather than read from the browser, because the
+login is Naver's and not chzzk's, and they are kept apart from the YouTube ones
+so neither overwrites the other. Public broadcasts and recordings need nothing.
 
 ### Genre
 
@@ -165,7 +191,7 @@ that movement immediately takes the layer away.
 
 When you want to watch several viewpoints together, as with a collab, **"⊞ Add
 tile"** attaches another live stream next to the one you are watching —
-YouTube, Twitch or m3u8, any of them, up to four. **Dragging a row from the
+YouTube, Twitch, chzzk or m3u8, any of them, up to four. **Dragging a row from the
 list onto the player area** attaches it too — a stream that is being received
 comes in as it is, a stopped one is resumed as the same session and comes in as
 a waiting tile. The layout is chosen from vertical, horizontal, 1+2, 1+3 and
@@ -197,9 +223,11 @@ the member sessions as "interrupted" — re-bundling is the user's job.
 
 Twitch uses the official embed player. That player only opens if the parent
 page is `localhost` or `127.0.0.1`, so always open the screen as one of those
-two (the server only opens that way). A bare m3u8 is played with hls.js — if
+two (the server only opens that way). A bare m3u8, and chzzk, are played with hls.js — if
 the stream server blocks cross-origin access (CORS) the picture does not open,
 but the subtitles keep piling up, because the server receives it with ffmpeg.
+(chzzk's media hosts allow it, which is what makes playing them from our page
+possible at all.)
 
 ### Past streams
 
@@ -873,7 +901,8 @@ window.
 A stream whose embedding is blocked cannot be put into our page. **The extension
 lays subtitles onto the YouTube page itself**, so it is not bound by that
 restriction. You watch the video on YouTube as usual, and only the subtitles
-appear on top of it.
+appear on top of it. It runs on chzzk as well, on a broadcast page and on a
+recording page alike.
 
 There is one bonus. Here the real `<video>` can be grabbed, so `currentTime` is
 read directly — on our page the embedded player's clock cannot be read, so live
@@ -898,7 +927,7 @@ The server (`./run.sh`) has to be up separately.
 
 ### Using it
 
-Press the extension icon on a YouTube tab and the popup appears.
+Press the extension icon on a YouTube or chzzk tab and the popup appears.
 
 **Overlaying something already received** — pick a live session or a VOD in
 "What to overlay" and those subtitles attach to the screen. If that tab is not

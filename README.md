@@ -114,9 +114,9 @@ The screen has three columns. **The video library is on the left**, the player
 in the middle, **the subtitle transcript on the right**. Either side folds
 away — `V` for the library, `S` for the transcript.
 
-1. Into **"＋ Add" on the left** goes a YouTube URL, a Twitch channel URL, an
-   m3u8 URL, or a file path on this machine. Whether it is live or a VOD is for
-   the server to decide.
+1. Into **"＋ Add" on the left** goes a YouTube URL, a Twitch channel URL, a
+   chzzk URL (a broadcast or a recording), an m3u8 URL, or a file path on this
+   machine. Whether it is live or a VOD is for the server to decide.
 2. **Set the source language.** Left empty, the model decides for itself, and
    when that detection wavers a whole sentence comes out in another language.
 3. Pick **the transcription engine, the translation engine and the genre**

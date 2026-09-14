@@ -81,7 +81,14 @@ function rowActions({ value, session, title, stopped, deletable, videoId, st }) 
         await resumeSession(session, why);
       });
     }
-    if (videoId) {
+    // "Take the whole thing in" needs an address for the recording of what was
+    // watched live, and the id is only enough to build one on YouTube. On chzzk
+    // the id is the channel's, so this offered
+    // "youtube.com/watch?v=<chzzk channel>" -- nobody's video -- and the
+    // broadcast address it was watched at is not a recording either: chzzk
+    // publishes the rewind under a number of its own that nothing here knows.
+    // So the button is left out rather than made to fail.
+    if (videoId && (!st || !st.site || st.site === "youtube")) {
       add("vre", "⟳", t("library.action.whole.tip"), () =>
         openRetranscribe(`https://www.youtube.com/watch?v=${videoId}`,
                          (st && st.source_lang) || "", title));
@@ -102,7 +109,26 @@ function rowActions({ value, session, title, stopped, deletable, videoId, st }) 
   return box;
 }
 
-function videoRow({ value, session, title, meta, live, stopped, deletable, videoId, st }) {
+/* The picture for a row, or "" for a row that gets the grey placeholder.
+ *
+ * The id used to be poured straight into YouTube's thumbnail host. A chzzk
+ * recording's id is "chzzk-15186552", so every one of those rows asked
+ * i.ytimg.com for a video it has never heard of and took the 404 -- and the
+ * recording's real thumbnail, which the probe had already brought back, went
+ * unused. So a row that carries its own picture uses it, and the ytimg guess is
+ * left for the ids that are shaped like a YouTube video id (eleven characters
+ * of its own alphabet) rather than for everything that is not a local file. */
+const YT_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+
+function rowThumbUrl(thumbnail, videoId) {
+  if (thumbnail) return thumbnail;
+  if (videoId && YT_VIDEO_ID.test(videoId)) {
+    return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/mqdefault.jpg`;
+  }
+  return "";
+}
+
+function videoRow({ value, session, title, meta, live, stopped, deletable, videoId, thumbnail, st }) {
   const row = document.createElement("div");
   row.className = "video-row" + (live ? " live" : "") + (stopped ? " stopped" : "");
   row.dataset.value = value;
@@ -114,8 +140,9 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   if (group) row.classList.add("mv");
 
   // In a list of nothing but titles it does not come at a glance which stream
-  // is which. We use the thumbnail YouTube hands out as it is -- the player is
-  // embedded already, so the browser talks to Google either way.
+  // is which. For a YouTube row we use the thumbnail YouTube hands out as it is
+  // -- the player is embedded already, so the browser talks to Google either
+  // way -- and a row that brought its own picture uses that one (rowThumbUrl).
   const th = document.createElement("img");
   th.className = "vth";
   th.alt = "";
@@ -127,7 +154,8 @@ function videoRow({ value, session, title, meta, live, stopped, deletable, video
   // the DOM, and the browser then never works out when to lift the delay: one
   // picture out of 22 appeared and the rest hung there. At about 10KB apiece
   // there is nothing to win by putting them off either.
-  if (videoId) th.src = `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/mqdefault.jpg`;
+  const thumbUrl = rowThumbUrl(thumbnail, videoId);
+  if (thumbUrl) th.src = thumbUrl;
   else th.classList.add("blank");
   // Keep the space even when it does not load. Ragged row heights make the list harder to read.
   th.addEventListener("error", () => { th.removeAttribute("src"); th.classList.add("blank"); });
@@ -464,7 +492,7 @@ async function refreshVideoList(selectId, pre) {
     const running = LIVE_RUNNING.includes(s.state);
     box.appendChild(videoRow({
       value: "live:" + s.id, session: s.id,
-      title: s.title || s.url, videoId: s.video_id || "",
+      title: s.title || s.url, videoId: s.video_id || "", thumbnail: s.thumbnail || "",
       meta: running ? t("library.row.lines", { n: s.cues })
         : t("library.row.linesState", { n: s.cues, state: LIVE_STATE[s.state] || s.state }),
       // Only a finished stream can be deleted. One still receiving needs "Stop" first.
@@ -477,6 +505,7 @@ async function refreshVideoList(selectId, pre) {
     const mins = secs ? t("library.row.minutes", { n: Math.round(secs / 60) }) : "";
     box.appendChild(videoRow({
       value: v.id, title: v.title, videoId: v.source === "file" ? "" : v.id,
+      thumbnail: v.thumbnail || "",
       meta: [v.source_lang + (v.translated ? `→${v.viewer_lang}` : ""), mins]
         .filter(Boolean).join("  ·  "),
       deletable: true, st: v,

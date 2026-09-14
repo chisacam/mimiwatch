@@ -189,6 +189,10 @@ MW_I18N.add({
     en: "Open on YouTube",
     ko: "유튜브에서 열기",
   },
+  "player.error.openOriginal": {
+    en: "Open the original page",
+    ko: "원본 페이지 열기",
+  },
   "player.fullscreen.enter": {
     en: "⛶ Fullscreen",
     ko: "⛶ 전체화면",
@@ -220,6 +224,14 @@ MW_I18N.add({
   "player.lang.translated": {
     en: "Source <b>{src}</b> → translated to <b>{viewer}</b>",
     ko: "원본 <b>{src}</b> → <b>{viewer}</b> 번역됨",
+  },
+  "player.playurl.failed": {
+    en: "Could not get a playable address for this recording. The subtitle log on the right is still readable.",
+    ko: "이 녹화본을 재생할 주소를 받지 못했습니다. 자막 내역은 오른쪽에서 그대로 읽을 수 있습니다.",
+  },
+  "player.playurl.failedReason": {
+    en: "Could not get a playable address for this recording ({reason}). The subtitle log on the right is still readable.",
+    ko: "이 녹화본을 재생할 주소를 받지 못했습니다 ({reason}). 자막 내역은 오른쪽에서 그대로 읽을 수 있습니다.",
   },
   "tile.error.needLive": {
     en: "Open a live stream first. A tile attaches next to it.",

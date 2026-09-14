@@ -150,6 +150,20 @@ def main():
     for site in SITES:
         host = site.split("//", 1)[1].rstrip("/")
         check(host in table, f"the site table knows {host}")
+    # A chzzk recording's id is spelled out twice -- the server builds it in
+    # transcribe_vod.probe_chzzk and the site table pulls the same string out of
+    # the address -- and the two are compared for equality, not merely used side
+    # by side: the popup hands the server's id to the content script, which
+    # measures it against the table's on every navigation. A prefix changed on
+    # one side only takes the overlay down the moment the page moves, with
+    # nothing on screen to say why. So the prefix is read off the server rather
+    # than written here, and the table has to carry the same one.
+    vodsrc = open(os.path.join(HERE, "transcribe_vod.py"), encoding="utf-8").read()
+    pre = re.search(r'"id":\s*"([a-z]+-)"\s*\+\s*no', vodsrc)
+    check(pre is not None, "the server prefixes a chzzk recording id (transcribe_vod)")
+    if pre:
+        check(f'"{pre.group(1)}"' in table,
+              f"the site table builds the same chzzk recording id ({pre.group(1)}<n>)")
     # tabCapture is used in stage 3. It need not be there yet, but note it if it is.
     print(f"  ----  permissions: {', '.join(m.get('permissions', [])) or '(none)'}")
 

@@ -10,6 +10,7 @@
  *
  *     MimiYtId.siteOf("https://chzzk.naver.com/live/c0d9").site   // "chzzk"
  *     MimiYtId.videoIdOf("https://www.youtube.com/live/abc")      // "abc"
+ *     MimiYtId.videoIdOf("https://chzzk.naver.com/video/1518")    // "chzzk-1518"
  *     MimiYtId.videoIdOf("https://example.com/")                  // ""
  */
 (function (root) {
@@ -36,11 +37,36 @@
       // its own, and taking it rather than the first <video> on the page
       // matters: the page also holds an ad player (`video#midPlayer`, 0x0 and
       // paused), and which of the two comes first in the document is not
-      // something to rely on. The id in the address is the channel's, which is
-      // the same value the server keys a glossary by (live.site_of).
+      // something to rely on. The id in a live address is the channel's, which
+      // is the same value the server keys a glossary by (live.site_of); a
+      // recording's is a different space, and `id` below says how the two are
+      // kept apart.
       site: "chzzk",
       host: (h) => h === "chzzk.naver.com",
-      id: (u) => (u.pathname.match(/^\/live\/([0-9a-f]+)/) || [])[1] || "",
+      // Two id spaces, kept apart on purpose. siteOf() matches on the host
+      // alone, so a recording page (`/video/15186552`) counted as supported
+      // while this returned "" for it: content.js compared "" against "" on
+      // every navigation and so could never take the overlay down between two
+      // recordings -- its ask() branch was unreachable as well -- and
+      // background.js wrote no `vid:` record for a tab-captured one. A
+      // broadcast id is the channel's hex (`/live/c0d9723c…`) and a recording
+      // id is a decimal number, so one bare `[0-9a-f]+` over both would fold
+      // them into a single string with nothing left to tell which was meant:
+      // `15186552` is legal hex too.
+      //
+      // The prefix is not invented here. The server already names a chzzk
+      // recording `chzzk-<number>` (transcribe_vod.probe_chzzk, the way a local
+      // file is `file-<hash>`), that is the id the popup's picker carries, and
+      // content.js measures the picked id against this one -- a bare number
+      // here would never equal the server's and would take the overlay down the
+      // moment the page moved. A broadcast stays bare for the same reason: it
+      // is yt-dlp's id, which is what the server reports as `video_id`.
+      id: (u) => {
+        const live = (u.pathname.match(/^\/live\/([0-9a-f]+)/) || [])[1];
+        if (live) return live;
+        const vod = (u.pathname.match(/^\/video\/(\d+)/) || [])[1];
+        return vod ? "chzzk-" + vod : "";
+      },
       video: "video.webplayer-internal-video",
       player: ".pzp-pc__video",
       // The chat column, and the chat inside it. Everything else on this page is

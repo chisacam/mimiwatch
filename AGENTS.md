@@ -142,6 +142,7 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 | `stream.py` | VAD → transcribe → refine loop (ported from hayamimi), yt-dlp cookie config |
 | `tcpp_asr.py` / `asr.py` | transcribe.cpp GGUF adapter; OpenAI-compatible remote ASR (VOD chunked, live per-utterance) |
 | `transcribe_vod.py` | VOD → timestamped cues; CLI calls `jobs.start_transcribe` (same path as the server) |
+| `chzzk.py` | chzzk recordings (`chzzk.naver.com/video/<n>`) resolved from chzzk's own endpoints instead of yt-dlp: metadata, a play URL that expires, the cheapest rendition for transcription |
 | `translate.py` | Translation backends behind one interface: local Gemma (default), M2M-100 (CT2, CPU), OpenAI-compatible; genre prompts |
 | `jobs.py` | Background VOD transcription and (re)translation; the single translate loop |
 | `store.py` | SQLite (`data/mimiwatch.db`): jobs/sessions as JSON blobs, cues as a real table; one locked connection |
@@ -199,5 +200,12 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
   leaves sessions as "중단됨", which is a different state from user stop.
 - yt-dlp lives in `.venv` (system copies go stale and silently return no
   formats). YouTube VODs and cookie-based access need a JS runtime (deno).
+- chzzk recordings are resolved by `chzzk.py`, not by yt-dlp. yt-dlp walks
+  chzzk's DASH manifest and dies on it (`KeyError('sourceURL')`; making that
+  read tolerant only moves the failure one line on), and the recording the
+  owner tests with is exactly that shape. What comes back is signed and expires
+  within the day, so it is resolved when something is about to play and never
+  stored -- the same rule the live side already has (`live.play_url`).
+  `measurements/RESULTS.md` §53.
 - Windows GPU path is Vulkan for every vendor; see `docs/WINDOWS.md` before
   proposing CUDA/ROCm builds.

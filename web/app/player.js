@@ -25,6 +25,42 @@ function updateLangStatus() {
 }
 
 /* ---------- loading ---------- */
+/* What to seat in the tile for a finished recording.
+ *
+ * Everything that was not a local file used to go to the YouTube player with
+ * the doc id as the video id. A chzzk recording's id is "chzzk-15186552", so
+ * the embed answered error 2 (a bad id) and the tile sat there empty. chzzk
+ * publishes no embed of its own either, so the page plays what the server
+ * resolved for it -- an HLS manifest for the rewind of a broadcast, an mp4 for
+ * one served whole. That address is signed and expires within the day, which is
+ * why it is asked for at the moment of opening and never kept on the doc or in
+ * localStorage. */
+async function playSrcOf(doc, id) {
+  // A local-file transcription is a video YouTube does not have. Open the endpoint where the server serves the original.
+  if (doc.source === "file") {
+    return { site: "media", url: `/api/media/${encodeURIComponent(id)}` };
+  }
+  if (doc.site !== "chzzk") return { site: "youtube", video_id: id };
+  let res;
+  try {
+    res = await (await fetch("/api/video/playurl", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    })).json();
+  } catch (err) {
+    res = { error: (err && err.message) || String(err) };
+  }
+  if (!res || !res.url) {
+    const why = (res && res.error) || "";
+    throw new Error(why ? t("player.playurl.failedReason", { reason: why })
+                        : t("player.playurl.failed"));
+  }
+  // "mp4" is one file served whole, so a bare <video> plays it; anything else
+  // is a manifest and goes to hls.js.
+  return res.kind === "mp4" ? { site: "media", url: res.url }
+                            : { site: "hls", url: res.url };
+}
+
 async function loadVideo(id) {
   const doc = await (await fetch(`/api/video/${id}`)).json();
   // A recording is watched in a single tile. Broadcasts the other tiles were watching are only detached from the screen.
@@ -40,12 +76,25 @@ async function loadVideo(id) {
   setNowTitle(doc.title);
   applyModeForDoc();
   clearPlayerError(t);
-  // A local-file transcription is a video YouTube does not have. Open the endpoint where the server serves the original.
-  const src = doc.source === "file"
-    ? { site: "media", url: `/api/media/${encodeURIComponent(id)}` }
-    : { site: "youtube", video_id: id };
+  let src;
+  try {
+    src = await playSrcOf(doc, id);
+  } catch (err) {
+    // The tile is emptied rather than left as it was. A player that keeps
+    // running behind the notice reads as this recording playing, which is the
+    // state 3ad0a41 took out of the live path.
+    await mountTile(t, { site: "none" });
+    playerError((err && err.message) || String(err), null, t);
+    updateTileBar(t);
+    syncMvControls();
+    return;
+  }
   const a = t.adapter;
-  if (a && a.kind === (src.site === "media" ? "media" : "youtube") && a.ready && a.load) a.load(src);
+  // The kind has to be the site itself. Anything that was not "media" counted
+  // as "youtube" here, so an hls source arriving after a YouTube video was
+  // handed to the YouTube adapter, which called loadVideoById(undefined) -- and
+  // the other way round, a YouTube video after a local file kept the <video>.
+  if (a && a.kind === src.site && a.ready && a.load) a.load(src);
   else await mountTile(t, src);
   updateTileBar(t);
   syncMvControls();
@@ -107,7 +156,11 @@ function whenApiReady() {
  * clue what to do about it. Members-only broadcasts in particular usually have
  * embedding blocked and come back as 101/150, and that is not a problem we can
  * fix but a case for watching it on YouTube. The server writes the subtitles
- * down separately, so the script on the right still reads fine then. */
+ * down separately, so the script on the right still reads fine then.
+ *
+ * Only the YouTube adapter gets here -- these codes are its own. The players
+ * seated for every other site report in words of their own (adapter.hls.*,
+ * adapter.media.*), so none of them is described in YouTube's vocabulary. */
 function embedErrorText(code) {
   if (code === 101 || code === 150) return t("player.embed.blocked");
   if (code === 100) return t("player.embed.notFound");
@@ -134,12 +187,20 @@ function playerError(msg, videoId, tile = focusedTile()) {
     tile.el.appendChild(box);
   }
   box.textContent = msg;
-  if (videoId) {
+  // Where to go and watch it instead. The video id comes from the YouTube
+  // adapter and is YouTube's alone; every other site has no id to build a watch
+  // address out of, so the doc keeps its own and that is the link. A chzzk
+  // recording was being offered
+  // "https://www.youtube.com/watch?v=chzzk-15186552", which is nobody's video.
+  const url = (tile.doc && tile.doc.url) || "";
+  const href = videoId ? `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`
+                       : (/^https?:\/\//i.test(url) ? url : "");
+  if (href) {
     const a = document.createElement("a");
-    a.href = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+    a.href = href;
     a.target = "_blank";
     a.rel = "noopener";
-    a.textContent = t("player.error.openOnYouTube");
+    a.textContent = videoId ? t("player.error.openOnYouTube") : t("player.error.openOriginal");
     a.className = "seg";
     box.append(document.createElement("br"), a);
   }

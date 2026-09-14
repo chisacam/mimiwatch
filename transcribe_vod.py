@@ -216,9 +216,15 @@ def fetch_audio(url: str, dest: str, should_stop=None) -> str:
         except chzzk.ChzzkError as exc:
             raise VodError(str(exc)) from exc
     fmt = "bestaudio/best" if no else "bestaudio"
+    # Fragments eight at a time. A chzzk rewind is an HLS playlist of 782
+    # two-second pieces, and fetching them one after another took 188 s for a
+    # 26-minute broadcast against 4.8 s with -N 8 -- the wait was round trips,
+    # not bandwidth. It costs nothing where there are no fragments to spread:
+    # the same option over a YouTube VOD's single audio file measured 3.5 s
+    # against 3.8 s, which is noise.
     tmp = dest + ".src"
     proc = subprocess.Popen(
-        stream.ytdlp_args("-f", fmt, "-o", tmp, url=url),
+        stream.ytdlp_args("-N", "8", "-f", fmt, "-o", tmp, url=url),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         **stream.child_io(stderr=False))
     while True:

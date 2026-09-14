@@ -828,7 +828,11 @@ MW_I18N.onChange(() => {
 let glossaries = [];
 
 async function loadGlossaries() {
-  glossaries = (await fetch("/api/glossaries")).json().catch(() => []) || [];
+  // The await on .json() was missing, so this held the Promise rather than the
+  // list. renderGlossaryList reads .length off it, gets undefined, and draws
+  // "no glossaries yet" -- so a channel saved a second earlier looked like a
+  // save that had not worked, while the row sat in the table all along.
+  glossaries = await fetch("/api/glossaries").then(r => r.json()).catch(() => []);
   renderGlossaryList();
 }
 

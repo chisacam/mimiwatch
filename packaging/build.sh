@@ -47,7 +47,11 @@ whole() {
     'import sys,zipfile; sys.exit(1 if zipfile.ZipFile(sys.argv[1]).testzip() else 0)' \
     "$1" 2>/dev/null
 }
-newest_wheel() { ls -t "$WHEELHOUSE"/llama_cpp_python-*.whl 2>/dev/null | head -1; }
+# `|| true` is load-bearing. Under `set -euo pipefail` a command substitution
+# whose pipeline fails takes the script with it, and `ls` fails whenever the
+# wheelhouse is empty -- which is exactly the first run. That killed the macOS
+# job 17s in, one line after the heading it had just printed.
+newest_wheel() { ls -t "$WHEELHOUSE"/llama_cpp_python-*.whl 2>/dev/null | head -1 || true; }
 
 if [ "$(uname)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
   say "llama-cpp-python (Metal)"

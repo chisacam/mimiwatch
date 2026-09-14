@@ -135,7 +135,9 @@ function bind() {
   $("settings-close").addEventListener("click", () => $("settings-dialog").close());
   $("shutdown").addEventListener("click", shutdownServer);
   $("quit").addEventListener("click", shutdownServer);
-  $("cookies-delete").addEventListener("click", deleteCookies);
+  $("cookies-youtube-delete").addEventListener("click", () => deleteCookies("youtube"));
+  $("cookies-chzzk-delete").addEventListener("click", () => deleteCookies("chzzk"));
+  $("cookies-chzzk-save").addEventListener("click", saveChzzkCookies);
   $("form-back").addEventListener("click", showEngineList);
   $("engine-form").addEventListener("submit", saveEngine);
   // Models and tools. A background thread on the server does the downloading and the progress arrives over the bus.

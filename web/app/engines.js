@@ -779,29 +779,54 @@ async function submitSetup(e) {
   if ((res.queued || []).length) openSettings();     // shows the download progress
 }
 
-/* ---------- the YouTube login cookies ----------
- * Shows whether the cookies the extension handed over are on the server, and
- * deletes them. The server never gives the contents out -- only present or not,
- * how many, and when they arrived. They are the keys to an account, so deleting
- * them once they have served their purpose is the right thing. */
+/* ---------- the login cookies ----------
+ * One row per site. The server never gives the contents out -- only whether they
+ * are there, how many, and when they arrived. They are the keys to an account, so
+ * each site can be deleted on its own, and deleting them once they have served
+ * their purpose is the right thing. */
+const COOKIE_SITES = ["youtube", "chzzk"];
+
 async function loadCookies() {
   let st;
   try { st = await (await fetch("/api/cookies")).json(); } catch (_) { return; }
-  const hint = $("cookies-hint"), del = $("cookies-delete");
-  if (!hint) return;
-  if (st.present) {
-    const when = st.updated ? new Date(st.updated * 1000).toLocaleString() : "";
-    hint.textContent = t("engines.cookies.present", { n: st.count || 0, when });
-    del.hidden = false;
-  } else {
-    hint.textContent = st.env ? t("engines.cookies.none.env") : t("engines.cookies.none");
-    del.hidden = true;
-  }
+  const env = $("cookies-env");
+  if (env) env.hidden = !st.env;
+  COOKIE_SITES.forEach((site) => {
+    const state = $(`cookies-${site}-state`), del = $(`cookies-${site}-delete`);
+    if (!state) return;
+    const s = (st.sites || {})[site] || {};
+    if (s.present) {
+      const when = s.updated ? new Date(s.updated * 1000).toLocaleString() : "";
+      state.textContent = t("engines.cookies.site.present", { n: s.count || 0, when });
+    } else {
+      state.textContent = t("engines.cookies.site.none");
+    }
+    if (del) del.hidden = !s.present;
+  });
 }
 
-async function deleteCookies() {
+async function deleteCookies(site) {
   if (!confirm(t("engines.cookies.delete.confirm"))) return;
-  await fetch("/api/cookies/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  await fetch("/api/cookies/delete", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ site }),
+  });
+  await loadCookies();
+}
+
+/* chzzk's cookies are pasted rather than read: the login is Naver's, and letting
+ * the extension read it would mean asking for naver.com as a whole. */
+async function saveChzzkCookies() {
+  const box = $("cookies-chzzk-text"), err = $("cookies-error");
+  if (!box) return;
+  const res = await (await fetch("/api/cookies/chzzk", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cookies: box.value }),
+  })).json();
+  if (res.error) { err.textContent = res.error; err.hidden = false; return; }
+  err.hidden = true;
+  // The keys to an account do not stay sitting in a textarea.
+  box.value = "";
   await loadCookies();
 }
 

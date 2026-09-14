@@ -152,6 +152,42 @@ MW_I18N.add({
   },
 
   /* engines.js -- engines, models & tools, first-time setup, cookies, shutdown */
+  "engines.cookies.env": {
+    en: "The MIMIWATCH_YTDLP_COOKIES environment variable is set, and yt-dlp uses that file instead of anything below.",
+    ko: "MIMIWATCH_YTDLP_COOKIES 환경 변수가 설정되어 있어, yt-dlp는 아래의 것 대신 그 파일을 씁니다.",
+  },
+  "engines.cookies.site.none": {
+    en: "not signed in",
+    ko: "로그인 없음",
+  },
+  "engines.cookies.site.present": {
+    en: "{n} cookies · {when}",
+    ko: "쿠키 {n}개 · {when}",
+  },
+  "settings.cookies.save": {
+    en: "Save",
+    ko: "저장",
+  },
+  "settings.cookies.site.youtube": {
+    en: "YouTube",
+    ko: "YouTube",
+  },
+  "settings.cookies.site.chzzk": {
+    en: "CHZZK",
+    ko: "치지직",
+  },
+  "settings.cookies.chzzk.paste": {
+    en: "CHZZK cookies",
+    ko: "치지직 쿠키",
+  },
+  "settings.cookies.chzzk.placeholder": {
+    en: ".naver.com\tTRUE\t/\tTRUE\t1800000000\tNID_AUT\t…",
+    ko: ".naver.com\tTRUE\t/\tTRUE\t1800000000\tNID_AUT\t…",
+  },
+  "settings.cookies.chzzk.hint": {
+    en: "Pasted, not read from the browser: the login belongs to Naver, not to chzzk, so the extension would need the run of naver.com to fetch it. Export a cookies.txt in Netscape format while signed in to chzzk and paste it here. It is kept apart from the YouTube ones, so neither overwrites the other.",
+    ko: "브라우저에서 읽지 않고 붙여 넣는 방식입니다 — 로그인이 치지직이 아니라 네이버의 것이라, 확장이 가져오려면 naver.com 전체 권한이 필요하기 때문입니다. 치지직에 로그인한 상태에서 Netscape 형식 cookies.txt를 내보내 여기에 붙여 넣으십시오. 유튜브 쿠키와 따로 보관되어 서로를 덮어쓰지 않습니다.",
+  },
   "engines.cookies.delete.confirm": {
     en: "Delete the YouTube login cookies held on the server? A stream being received goes on without them from its next reconnect.",
     ko: "서버에 있는 유튜브 로그인 쿠키를 지울까요? 받는 중인 방송은 다음 재접속부터 쿠키 없이 갑니다.",

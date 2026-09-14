@@ -487,12 +487,40 @@
       <p class="hint" data-i18n="settings.setup.hint"></p>
     </section>
 
+    <!-- Login cookies, one row per site. YouTube's are handed over by the
+         extension; chzzk's are pasted, because the login belongs to Naver and
+         reading it would mean giving the extension the run of naver.com. -->
     <section class="engine-group" id="cookies-group">
       <div class="group-head">
         <h4 data-i18n="settings.cookies.title"></h4>
-        <button id="cookies-delete" class="seg danger" hidden data-i18n="settings.cookies.delete"></button>
+      </div>
+      <p class="hint" id="cookies-env" hidden data-i18n="engines.cookies.env"></p>
+      <div class="engine-list">
+        <div class="engine-row">
+          <div class="name"><span data-i18n="settings.cookies.site.youtube"></span>
+            <span class="meta" id="cookies-youtube-state"></span></div>
+          <button id="cookies-youtube-delete" class="danger" hidden
+                  data-i18n="settings.cookies.delete"></button>
+        </div>
+        <div class="engine-row">
+          <div class="name"><span data-i18n="settings.cookies.site.chzzk"></span>
+            <span class="meta" id="cookies-chzzk-state"></span></div>
+          <button id="cookies-chzzk-delete" class="danger" hidden
+                  data-i18n="settings.cookies.delete"></button>
+        </div>
       </div>
       <p class="hint" id="cookies-hint" data-i18n="settings.cookies.hint"></p>
+      <label><span data-i18n="settings.cookies.chzzk.paste"></span>
+        <textarea id="cookies-chzzk-text" rows="4" spellcheck="false"
+                  data-i18n-attr="placeholder:settings.cookies.chzzk.placeholder"></textarea>
+        <small data-i18n="settings.cookies.chzzk.hint"></small>
+      </label>
+      <div class="row">
+        <span class="grow"></span>
+        <button type="button" id="cookies-chzzk-save" class="seg"
+                data-i18n="settings.cookies.save"></button>
+      </div>
+      <p class="hint" id="cookies-error" hidden></p>
     </section>
 
     <section class="engine-group" id="update-group">

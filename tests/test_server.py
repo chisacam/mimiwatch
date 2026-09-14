@@ -182,34 +182,67 @@ def test_viewer_lang_roundtrip(server):
 
 
 def test_pushed_cookies_are_stored_privately_and_used(server):
-    """Cookies handed over by the extension: stored 0600, never in a response, added to the yt-dlp arguments, gone once deleted."""
+    """Login cookies: stored 0600 per site, never in a response, joined into the file
+    yt-dlp is given, and one site's are neither overwritten nor deleted by the other's."""
     base, _ = server
     s, b = req(base, "/api/cookies")
-    assert s == 200 and json.loads(b)["present"] is False
+    assert s == 200 and json.loads(b)["sites"]["youtube"]["present"] is False
     assert req(base, "/api/cookies/youtube", body={"cookies": "no tabs here"})[0] == 400
-    txt = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsecret-value\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PSID\tsecret2\n"
-    s, b = req(base, "/api/cookies/youtube", body={"cookies": txt})
+    yt = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsecret-value\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PSID\tsecret2\n"
+    s, b = req(base, "/api/cookies/youtube", body={"cookies": yt})
     st = json.loads(b)
-    assert s == 200 and st["present"] and st["count"] == 2 and "secret" not in b.decode()
+    assert s == 200 and st["sites"]["youtube"]["count"] == 2 and "secret" not in b.decode()
     import paths
     path = os.path.join(SERVER_HOME, "cookies", "youtube.txt")
     assert os.path.exists(path)
     if os.name != "nt":
         assert oct(os.stat(path).st_mode & 0o777) == "0o600"
     assert "secret-value" in open(path, encoding="utf-8").read()
-    # Whether it lands in the server process's yt-dlp arguments is checked directly by pointing stream at the same HOME.
+
+    # The second site does not land on the first. While there was one file, this
+    # is exactly what handing over chzzk's cookies did to YouTube's.
+    cz = ".naver.com\tTRUE\t/\tTRUE\t0\tNID_AUT\tnaver-secret\n"
+    s, b = req(base, "/api/cookies/chzzk", body={"cookies": cz})
+    st = json.loads(b)
+    assert s == 200 and st["sites"]["chzzk"]["count"] == 1
+    assert st["sites"]["youtube"]["count"] == 2
+    assert "naver-secret" not in b.decode()
+    cz_path = os.path.join(SERVER_HOME, "cookies", "chzzk.txt")
+    assert os.path.exists(cz_path) and os.path.exists(path)
+
+    # What yt-dlp is handed is the join of the two, not either one of them.
     import stream
     stream.reset_tool_cache()
     os.environ["MIMIWATCH_HOME"] = str(SERVER_HOME)
     try:
         assert paths.cookies_path() == path
+        assert paths.cookies_path("chzzk") == cz_path
         args = stream._cookie_args()
-        assert args[:1] == ["--cookies"] and args[1] == path
+        assert args[:1] == ["--cookies"] and args[1] == paths.cookies_merged_path()
+        joined = open(args[1], encoding="utf-8").read()
+        assert "secret-value" in joined and "naver-secret" in joined
     finally:
         del os.environ["MIMIWATCH_HOME"]
         stream.reset_tool_cache()
+
+    # Deleting one site leaves the other, and the join loses the deleted one.
+    s, b = req(base, "/api/cookies/delete", body={"site": "chzzk"})
+    st = json.loads(b)
+    assert st["sites"]["chzzk"]["present"] is False
+    assert st["sites"]["youtube"]["present"] is True
+    assert not os.path.exists(cz_path) and os.path.exists(path)
+    os.environ["MIMIWATCH_HOME"] = str(SERVER_HOME)
+    try:
+        stream.reset_tool_cache()
+        joined = open(stream._cookie_args()[1], encoding="utf-8").read()
+        assert "naver-secret" not in joined and "secret-value" in joined
+    finally:
+        del os.environ["MIMIWATCH_HOME"]
+        stream.reset_tool_cache()
+
+    # With no site named, everything goes.
     s, b = req(base, "/api/cookies/delete", body={})
-    assert json.loads(b)["present"] is False and not os.path.exists(path)
+    assert json.loads(b)["sites"]["youtube"]["present"] is False and not os.path.exists(path)
 
 
 def test_static_and_index(server):

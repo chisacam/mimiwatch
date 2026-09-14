@@ -115,11 +115,29 @@ def which(name: str) -> str | None:
     return tool(name)
 
 
-def cookies_path() -> str:
-    """The YouTube login cookies the extension handed over (Netscape format). They are
-    the key to an account, so they are kept apart from the settings and the log rather
-    than mixed in with them, and the writer makes the file 0600."""
-    return os.path.join(home(), "cookies", "youtube.txt")
+def cookies_dir() -> str:
+    """Where the login cookies live. They are the key to an account, so they are kept
+    apart from the settings and the log rather than mixed in with them, and the writer
+    makes every file 0600."""
+    return os.path.join(home(), "cookies")
+
+
+def cookies_path(site: str = "youtube") -> str:
+    """One site's login cookies, in Netscape format.
+
+    One file per site, because a file is written whole. While there was a single
+    one, handing over a second site's cookies overwrote the first site's, and
+    deleting either took both -- which is the wrong answer to "log in to chzzk as
+    well". The caller passes a name it chose, never one off a URL.
+    """
+    return os.path.join(cookies_dir(), f"{site}.txt")
+
+
+def cookies_merged_path() -> str:
+    """The one file yt-dlp is handed. Every line of a Netscape file carries the
+    domain it belongs to, so the sites travel together perfectly well; they are
+    kept apart on disk only so that a write or a delete touches one of them."""
+    return os.path.join(cookies_dir(), "all.txt")
 
 
 def log_path() -> str:

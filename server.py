@@ -332,31 +332,36 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(exc)[:200]}, 400)
         self._json({"path": dest, "name": os.path.basename(dest)})
 
-    # ---- YouTube cookies -----------------------------------------------------
-    # The extension reads the browser's login cookies and hands them over (only
-    # when the user presses it each time). It is the only way to take a
-    # members-only stream in "by address". Because they are the keys to an
-    # account: the file is 0600, the contents are written down nowhere, only
-    # present/absent and the time they arrived show on the screen, and they can
-    # be deleted at any time.
+    # ---- login cookies -------------------------------------------------------
+    # Cookies are the only way to take a stream the account can see and the world
+    # cannot: a members-only YouTube stream, an age-gated or subscriber-only chzzk
+    # one. YouTube's come from the extension, which reads them from the browser
+    # when the user presses the button. chzzk's are pasted in, because the
+    # extension cannot read them -- the login is Naver's, not chzzk's, and giving
+    # the extension the run of naver.com to fetch it is a bigger ask than exporting
+    # a file once.
+    #
+    # One file per site (paths.cookies_path). They are the keys to an account, so
+    # every file is 0600, the contents are never sent back out -- only whether they
+    # are there, how many and when -- and either site can be deleted on its own.
 
     def get_cookies(self):
         self._json(_cookies_status())
 
-    def post_cookies_youtube(self, body):
+    def _take_cookies(self, site: str, body: dict):
         text = body.get("cookies")
         if not isinstance(text, str) or "\t" not in text:
             return self._json({"error": "Cookie text in Netscape format is required"}, 400)
         lines = [ln for ln in text.splitlines() if _is_cookie_line(ln)]
         if not lines:
-            return self._json({"error": "The cookies are empty -- are you logged in to YouTube?"},
+            return self._json({"error": f"No cookie lines found -- are you logged in to {site}?"},
                               400)
-        path = paths.cookies_path()
+        path = paths.cookies_path(site)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("# Netscape HTTP Cookie File\n"
-                    "# YouTube login cookies handed over by the mimiwatch extension.\n"
+                    f"# {site} login cookies, kept by mimiwatch.\n"
                     "# They are the key to the account.\n")
             f.write(text if text.endswith("\n") else text + "\n")
         os.replace(path + ".tmp", path)
@@ -365,13 +370,29 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass                        # Windows has no modes
         stream.reset_tool_cache()       # --cookies goes on from the next yt-dlp call
-        print(f"[cookies] took in {len(lines)} YouTube cookies", file=sys.stderr, flush=True)
+        print(f"[cookies] took in {len(lines)} {site} cookies", file=sys.stderr, flush=True)
         self._json(_cookies_status())
 
+    def post_cookies_youtube(self, body):
+        self._take_cookies("youtube", body)
+
+    def post_cookies_chzzk(self, body):
+        self._take_cookies("chzzk", body)
+
     def post_cookies_delete(self, body):
-        path = paths.cookies_path()
+        # A site of its own, or everything when none is named. Deleting one used
+        # to take the other with it, there being only one file.
+        site = (body.get("site") or "").strip()
+        sites = [site] if site in COOKIE_SITES else list(COOKIE_SITES)
+        for s in sites:
+            try:
+                os.remove(paths.cookies_path(s))
+            except FileNotFoundError:
+                pass
+        # The join is rebuilt from what is left; without this the deleted site
+        # would keep travelling inside it.
         try:
-            os.remove(path)
+            os.remove(paths.cookies_merged_path())
         except FileNotFoundError:
             pass
         stream.reset_tool_cache()
@@ -1148,6 +1169,7 @@ POST_ROUTES = {
     "/api/models/add": Handler.post_models_add,
     "/api/setup": Handler.post_setup,
     "/api/cookies/youtube": Handler.post_cookies_youtube,
+    "/api/cookies/chzzk": Handler.post_cookies_chzzk,
     "/api/cookies/delete": Handler.post_cookies_delete,
     "/api/update/check": Handler.post_update_check,
     "/api/update/download": Handler.post_update_download,
@@ -1213,19 +1235,30 @@ def _is_cookie_line(ln: str) -> bool:
     return bool(ln) and (not ln.startswith("#") or ln.startswith("#HttpOnly_"))
 
 
+# The sites cookies can be kept for. A closed set: the name becomes a filename,
+# and it is never taken from a URL.
+COOKIE_SITES = ("youtube", "chzzk")
+
+
 def _cookies_status() -> dict:
-    """Whether the cookie file is there and when it arrived. The contents are
+    """Which sites have cookies, how many and when they arrived. The contents are
     never sent out."""
-    path = paths.cookies_path()
     env = (os.environ.get("MIMIWATCH_YTDLP_COOKIES") or "").strip()
-    if not os.path.isfile(path):
-        return {"present": False, "env": bool(env)}
-    try:
-        with open(path, encoding="utf-8") as f:
-            n = sum(1 for ln in f if _is_cookie_line(ln))
-    except OSError:
-        n = 0
-    return {"present": True, "count": n, "updated": os.path.getmtime(path), "env": bool(env)}
+    sites = {}
+    for site in COOKIE_SITES:
+        path = paths.cookies_path(site)
+        if not os.path.isfile(path):
+            sites[site] = {"present": False}
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                n = sum(1 for ln in f if _is_cookie_line(ln))
+        except OSError:
+            n = 0
+        sites[site] = {"present": True, "count": n, "updated": os.path.getmtime(path)}
+    # The environment variable wins over all of them (stream.cookie_args), so the
+    # screen says so rather than showing a file that is not being used.
+    return {"env": bool(env), "sites": sites}
 
 
 # Stopping serve_forever() needs the server object, but the handler is a class

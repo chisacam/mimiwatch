@@ -274,13 +274,53 @@ def _cookie_args() -> list[str]:
     # environment variable is there, that side comes first. Deleting the file
     # ("Delete" on the screen) drops it from the next call on --
     # reset_tool_cache is called along with it.
-    pushed = paths.cookies_path()
-    if os.path.isfile(pushed):
+    pushed = merged_cookie_file()
+    if pushed:
         return ["--cookies", pushed]
     browser = (os.environ.get("MIMIWATCH_YTDLP_COOKIES_BROWSER") or "").strip()
     if browser:
         return ["--cookies-from-browser", browser]
     return []
+
+
+def merged_cookie_file() -> str:
+    """The per-site cookie files joined into the one yt-dlp takes, or "" when
+    there are none.
+
+    Rebuilt whenever a site file is newer than the join, so nothing has to
+    remember to call it -- the screen writes a file, the next yt-dlp call sees a
+    newer mtime and rebuilds. It also means an install from before the files were
+    split keeps working: its `youtube.txt` is simply one of the parts.
+    """
+    d = paths.cookies_dir()
+    try:
+        parts = sorted(os.path.join(d, n) for n in os.listdir(d)
+                       if n.endswith(".txt") and n != "all.txt")
+    except OSError:
+        return ""
+    if not parts:
+        return ""
+    out = paths.cookies_merged_path()
+    newest = max(os.path.getmtime(p) for p in parts)
+    if not os.path.isfile(out) or os.path.getmtime(out) < newest:
+        fd = os.open(out + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("# Netscape HTTP Cookie File\n"
+                    "# Built by mimiwatch from the per-site files beside it.\n")
+            for p in parts:
+                try:
+                    with open(p, encoding="utf-8") as src:
+                        for ln in src:
+                            if not ln.startswith("#"):
+                                f.write(ln if ln.endswith("\n") else ln + "\n")
+                except OSError:
+                    continue
+        os.replace(out + ".tmp", out)
+        try:
+            os.chmod(out, 0o600)
+        except OSError:
+            pass                    # Windows has no modes
+    return out
 
 
 def default_threads(device: str) -> int:

@@ -755,6 +755,10 @@ def test_only_a_stood_up_ffmpeg_is_counted_as_an_attach(session, monkeypatch):
     thing left on screen.
     """
     s = session
+    # CI installs numpy, pytest and ruff and nothing else, so there is no ffmpeg
+    # on the machine and `read_plan` asking for its path raises. The name is what
+    # this test needs, never the program -- Popen is a stub two lines on.
+    monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
     monkeypatch.setattr(live.subprocess, "Popen", lambda *a, **k: object())
     assert s.status()["attached"] == 0
     s._spawn_ffmpeg("src", -2)

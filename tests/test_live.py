@@ -583,6 +583,202 @@ def test_reconnect_inside_the_session_still_rewinds(session, monkeypatch):
     assert idx == 150 and s.gap_s == 0.0      # 300 s in = from the 150th 2 s segment, nothing lost
 
 
+def _chzzk_playlist(monkeypatch, session):
+    """A playlist that cannot say where in the broadcast it is.
+
+    chzzk's `timestamp` is *later* than its own PROGRAM-DATE-TIME, so the
+    subtraction `media_base_from` makes goes negative and clamps to 0 -- on the
+    first reception and on every reattach alike. Returns that clamp so a test
+    can show it is the clamp and not a coincidence.
+    """
+    import datetime
+    later = datetime.datetime.fromisoformat("2026-01-01T05:00:00+00:00").timestamp()
+    _fake_playlist(monkeypatch, session, release_ts=later)
+    monkeypatch.setattr(live.LiveSession, "_spawn_ffmpeg", lambda self, src, idx: None)
+    return later
+
+
+def test_a_reconnect_keeps_the_media_clock_where_reception_reached(session, monkeypatch):
+    """A reattach must not put the clock back to the front of the broadcast.
+
+    `continue_base` closed this for a resumed session. A reattach goes through
+    the same `_resolve_hls`, which overwrites `_recv_base` with whatever the
+    playlist says, and then sets `_recv_s` to 0 -- so on a site whose playlist
+    says nothing the session started numbering its lines from zero again, and
+    because the panel sorts by time they were wedged in among the lines already
+    standing rather than added after them. Switching the video saving is a
+    reattach taken on demand, which is how this came back within a minute of
+    the button existing.
+    """
+    s = session
+    later = _chzzk_playlist(monkeypatch, s)
+    assert live.media_base_from("2026-01-01T00:20:00Z", later, 600.0) == 0.0
+    s._recv_base, s._recv_s = 0.0, 264.1      # reception has reached 264.1 s
+    assert s._reconnect(1) == "ok"
+    assert s._recv_base >= 264.1 and s._recv_s == 0.0
+    # A second one does not walk it backwards either -- the guard has to read
+    # the clock as it stands now, not as it stood when the session began.
+    s._recv_s = 30.0
+    assert s._reconnect(2) == "ok"
+    assert s._recv_base >= 294.1 and s._recv_s == 0.0
+
+
+def test_a_reconnect_keeps_the_playlist_clock_when_it_is_the_one_ahead(session, monkeypatch):
+    """The control. Where the playlist *can* say, its word is the accurate one.
+
+    YouTube gives a broadcast start time, so PDT minus that keeps counting
+    across the break and is already past where reception stopped. `continue_base`
+    is a max, so guarding the reattach must leave that case exactly as it was.
+    """
+    s = session
+    _fake_playlist(monkeypatch, s)            # first segment 1200 s in, 600 s window
+    monkeypatch.setattr(live.LiveSession, "_spawn_ffmpeg", lambda self, src, idx: None)
+    s._recv_base, s._recv_s = 0.0, 1000.0     # the window has moved past where it stopped
+    assert s._reconnect(1) == "ok"
+    assert s._recv_base == 1200.0             # the playlist's, not the session's 1000
+
+
+def test_media_offset_separates_a_real_zero_from_no_answer():
+    """0.0 and None are different answers and `_resume_point` acts on which.
+
+    A broadcast in its first window really is at 0 and can be rewound into. A
+    playlist whose two numbers contradict each other is not at 0, it is unknown,
+    and the old clamp spelled both of them 0.
+    """
+    import datetime
+    at = datetime.datetime.fromisoformat("2026-01-01T00:00:00+00:00").timestamp()
+    later = datetime.datetime.fromisoformat("2026-01-01T05:00:00+00:00").timestamp()
+    # The playlist's front is the broadcast's start: a real answer, and a rewind
+    # measured from it lands where it should.
+    assert live.media_offset("2026-01-01T00:00:00Z", at, 0.0) == 0.0
+    assert live.media_offset("2026-01-01T00:20:00Z", at, 0.0) == 1200.0
+    # Nothing to subtract.
+    assert live.media_offset(None, at, 0.0) is None
+    assert live.media_offset("2026-01-01T00:20:00Z", None, 0.0) is None
+    assert live.media_offset("not a timestamp", at, 0.0) is None
+    # chzzk: both numbers are there and they disagree about which came first.
+    assert live.media_offset("2026-01-01T00:20:00Z", later, 0.0) is None
+    # The clock still spells all of those 0, because `continue_base` is what
+    # answers for it there.
+    assert live.media_base_from("2026-01-01T00:20:00Z", later, 0.0) == 0.0
+    assert live.media_base_from("2026-01-01T00:20:00Z", at, 0.0) == 1200.0
+
+
+def test_a_playlist_that_cannot_say_where_it_is_does_not_rewind(session, monkeypatch):
+    """A rewind needs a measurement, and reading 0 for "cannot say" invents one.
+
+    On the chzzk reattach this was found on the invented measurement put the read
+    a window's length behind where reception stopped -- 264 s received, a 600 s
+    window, and ffmpeg told to start at segment 132 -- so about 72 s of speech was
+    transcribed and published a second time. Joining at the live edge loses the
+    seconds across the break instead, which on a site read this way is inherent,
+    and says so in the subtitles without quoting a length it did not measure.
+    """
+    import datetime
+    s = session
+    later = datetime.datetime.fromisoformat("2026-01-01T05:00:00+00:00").timestamp()
+    _fake_playlist(monkeypatch, s, release_ts=later)
+    s.resume_from, s._rewind = 264.1, True
+    src, idx = s._resolve_hls(reconnect=True)
+    assert idx == -2                          # the live edge. It used to be segment 132
+    assert s.gap_s == 0.0 and s._gap_unknown is True
+
+
+def test_a_legitimate_zero_offset_still_rewinds(session, monkeypatch):
+    """The control. Every broadcast is at 0 for its first window.
+
+    The discriminator is the playlist's two numbers disagreeing, never the offset
+    coming out 0 -- a session that broke a few minutes into a broadcast has a real
+    0 for its playlist's front and the whole point is that it rewinds into it.
+    """
+    s = session
+    _fake_playlist(monkeypatch, s, pdt="2026-01-01T00:00:00Z")   # front == broadcast start
+    s.resume_from, s._rewind = 300.0, True
+    src, idx = s._resolve_hls(reconnect=True)
+    assert idx == 150 and s.gap_s == 0.0      # 300 s in = the 150th 2 s segment
+    assert s._gap_unknown is False
+
+
+def _rebase_note(session):
+    """The note `_reconnect` sent through the ring, which is where it goes."""
+    return [it[2] for it in session._ring._d if it[0] == "rebase"][-1]
+
+
+def test_an_unmeasured_hole_is_announced_without_a_number(session, monkeypatch):
+    """Two failures are being kept apart here, and they pull in opposite directions.
+
+    Saying nothing leaves a hole in the transcript that reads as reception
+    quietly going wrong, which is the thing `gap_s` notes exist to prevent.
+    Saying "about N s" when N was never measured is worse still, and on this path
+    there was a real N to borrow: `gap_s` is not cleared by anything else, so a
+    session that resumed with a measured 800 s hole announced that same 800 s
+    again as the length of the next break.
+    """
+    import datetime
+    s = session
+    monkeypatch.setattr(live.LiveSession, "_spawn_ffmpeg", lambda self, src, idx: None)
+    later = datetime.datetime.fromisoformat("2026-01-01T05:00:00+00:00").timestamp()
+    _fake_playlist(monkeypatch, s, release_ts=later)
+    s._recv_base, s._recv_s = 0.0, 264.1
+    s.gap_s = 800.0                           # left over from the resume that started this session
+    assert s._reconnect(1) == "ok"
+    note = _rebase_note(s)
+    assert "800" not in note and " s went unreceived" not in note
+    assert "does not say how much" in note and "reception was cut" in note
+    # A switch the user asked for says so, the same distinction the measured note makes.
+    s._recv_s = 10.0
+    assert s._reconnect(2, requested=True) == "ok"
+    assert "saving was switched" in _rebase_note(s)
+
+
+def test_a_window_that_could_not_be_read_does_not_reuse_the_last_measurement(session, monkeypatch):
+    """The same borrowed number, reached the other way.
+
+    This branch already said in its own comment that it does not write down what
+    it could not measure, and it was leaving `gap_s` standing for `_reconnect` to
+    read.
+    """
+    s = session
+    _fake_playlist(monkeypatch, s, window_s=0.0)     # the window could not be read
+    s.resume_from, s._rewind = 1500.0, True
+    s.gap_s = 800.0
+    src, idx = s._resolve_hls(reconnect=True)
+    assert idx == -2 and s.gap_s == 0.0 and s._gap_unknown is True
+
+
+def test_only_a_stood_up_ffmpeg_is_counted_as_an_attach(session, monkeypatch):
+    """`attached` is the only thing in the status that moves when a reattach
+    finishes, and the screen takes the "switching the video saving" notice down
+    on it. So it has to mean one thing: a process is reading now. A reattach that
+    could not resolve must leave it alone, or the notice comes down over a
+    reception that never came back and the session's own error is the only true
+    thing left on screen.
+    """
+    s = session
+    monkeypatch.setattr(live.subprocess, "Popen", lambda *a, **k: object())
+    assert s.status()["attached"] == 0
+    s._spawn_ffmpeg("src", -2)
+    assert s.status()["attached"] == 1
+
+    def no_playlist(reconnect=False):
+        raise RuntimeError("network")
+    s._resolve_hls = no_playlist
+    assert s._reconnect(1) == "retry"
+    assert s.status()["attached"] == 1
+    # A broadcast that has ended does not stand one up either.
+    s._resolve_hls = lambda reconnect=False: (None, None)
+    assert s._reconnect(2) == "ended"
+    assert s.status()["attached"] == 1
+    # One that attached does.
+    s._resolve_hls = lambda reconnect=False: ("src", -2)
+    assert s._reconnect(3) == "ok"
+    assert s.status()["attached"] == 2
+    # And the status saying so reaches the screen -- no other line on the
+    # reattach path writes one, so without it the count moved where nobody
+    # could see it.
+    assert [e for e in s.emitted if e.get("type") == "status"][-1]["attached"] == 2
+
+
 def test_multiview_add_resumes_a_stopped_session_as_a_warm_member(monkeypatch):
     monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
     store.save_session({"id": "old-9", "state": "stopped", "stopped_by": "user", "url": "https://x/old",

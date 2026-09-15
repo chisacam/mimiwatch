@@ -1235,14 +1235,24 @@ says the switch is under way for exactly as long as it is: it comes down when
 the new process is actually reading, not after a count of seconds, which would
 say reception was back whenever the re-resolution ran long.
 
-**The transcription normally survives it.** A break that falls inside the DVR
-window is picked back up where it stopped, so what the viewer sees is the
-subtitles falling behind for a moment and catching up. Where the window cannot
-be read, those seconds are genuinely lost — and the subtitles say so in wording
-of their own, `⋯ about N s went unreceived while the saving was switched ⋯`,
-which is deliberately not what a break that happened by itself says. A break you
-asked for is not counted against either of the counts that watch for something
-failing over and over, the reattach count or the one that gives up on the video.
+**The transcription survives it wherever the playlist has a clock to line it up
+against.** A break that falls inside the DVR window is then picked back up where
+it stopped, so what the viewer sees is the subtitles falling behind for a moment
+and catching up — YouTube and Twitch are that case. Rewinding to the right place
+means knowing where the playlist's own front sits in the broadcast, though, and
+not every site says: chzzk publishes a start time *later* than its own first
+segment, so its two numbers cannot be subtracted from each other, and a bare
+m3u8 may carry neither. Reception then joins at the live edge instead and the
+seconds across the break really are lost, the same as where the window cannot be
+read at all. **The subtitles say so either way, and say only what was
+measured** — `⋯ about N s went unreceived while the saving was switched ⋯` where
+the length is known, and `⋯ some of the broadcast went unreceived while the
+saving was switched. This site's playlist does not say how much ⋯` where it is
+not. Quoting an N there would be quoting the last break's, which is what it used
+to do. Both are deliberately not what a break that happened by itself says. A
+break you asked for is not counted against either of the counts that watch for
+something failing over and over, the reattach count or the one that gives up on
+the video.
 
 **Asking for the video again is a genuine retry.** Giving up on it is permanent
 for the session, so one rendition that could not be resolved at four in the

@@ -584,23 +584,52 @@ def manifest_info(m3u8: str) -> dict:
     return info
 
 
-def media_base_from(pdt: str | None, release_ts: float | None,
-                    window_s: float) -> float:
-    """Media position of the audio we are about to receive.
+def media_offset(pdt: str | None, release_ts: float | None,
+                 window_s: float) -> float | None:
+    """Media position of the audio we are about to receive, or None when the
+    playlist cannot say.
 
     PDT is the wall clock of the playlist's first segment and
     release_timestamp is when the broadcast began, so their difference is
     the media offset. We skip to the live edge, so add the window we chose
     not to read.
+
+    **None is not the same answer as 0.0**, and the difference is what
+    `_resume_point` reads. There are three ways to have no usable offset and
+    only two of them are a number that is missing: the site gives no PDT (or one
+    that will not parse), the site gives no start time, or -- chzzk -- it gives
+    both and they contradict each other.
+    chzzk's `timestamp` is *later* than its own PROGRAM-DATE-TIME (measured:
+    10:59:02Z against 05:53:17Z, so the subtraction comes out -16800 s), and a
+    broadcast cannot have begun after its own first segment. A negative
+    difference therefore does not mean "near the start", it means the two
+    numbers are not talking about the same thing, and no size of disagreement is
+    small enough to trust: if they disagree about which came first, neither is
+    the one to build a rewind on. A genuine 0.0 -- the playlist's front *is* the
+    broadcast's start, which is every broadcast in its first window -- is a real
+    answer and comes back as one.
     """
     if not pdt or not release_ts:
-        return 0.0
+        return None
     try:
         stamp = pdt.replace("Z", "+00:00")
         first = __import__("datetime").datetime.fromisoformat(stamp).timestamp()
     except Exception:
-        return 0.0
-    return max(0.0, (first - release_ts) + window_s)
+        return None
+    at = (first - release_ts) + window_s
+    return at if at >= 0.0 else None
+
+
+def media_base_from(pdt: str | None, release_ts: float | None,
+                    window_s: float) -> float:
+    """Where the media clock starts, with "cannot say" written as 0.
+
+    The same question `media_offset` answers, for the callers that have somewhere
+    else to turn when the playlist has nothing: `_resolve_hls` hands this to
+    `continue_base`, which puts the session's own record over it.
+    """
+    at = media_offset(pdt, release_ts, window_s)
+    return at if at is not None else 0.0
 
 
 def continue_base(from_playlist: float, resume_from: float) -> float:
@@ -803,6 +832,13 @@ class LiveSession:
         # The stretch that could not be filled (seconds). Above 0, it is written
         # into the subtitles.
         self.gap_s = 0.0
+        # Set when there was a hole and its length could not be measured, which
+        # is a third state `gap_s` has no room for -- 0.0 means "nothing was
+        # lost" and this means "something was, and this playlist does not say how
+        # much". Both get a line in the subtitles, because the guide's rule is
+        # that no silent hole is left behind, and neither of them may quote a
+        # number that was not measured.
+        self._gap_unknown = False
         # yt-dlp fills this in for hls; the browser supplies it for tab.
         self.title = title
         # The channel's glossary. The channel is known the moment the probe
@@ -1642,7 +1678,30 @@ class LiveSession:
 
         Returns (ffmpeg's -live_start_index, seconds skipped).
         """
-        first = media_base_from(info.get("pdt"), release_ts, 0.0)
+        first = media_offset(info.get("pdt"), release_ts, 0.0)
+        if first is None:
+            # The playlist cannot say where its own front sits in the broadcast
+            # (`media_offset` has the three ways that happens). Reading 0 for it
+            # was not a neutral default: it says the front of the window *is* the
+            # start of the broadcast, so `want` became the whole session clock
+            # and the rewind landed a window's length behind where reception
+            # stopped -- measured on the chzzk reattach this was found on, 264 s
+            # received, a 600 s window, index 132, which is about 72 s of speech
+            # transcribed and published a second time. The `continue_base`
+            # guard `_reconnect` applies turned that from overwriting the earlier
+            # lines into duplicating them, which is better and is still the same
+            # fault.
+            #
+            # So: the same answer this function already gives when the window
+            # cannot be read, for the same stated reason. Join at the live edge
+            # and rewind nothing. The seconds across the break really are lost
+            # then -- inherent to reading the playlist directly with no clock to
+            # line it up against -- but they are lost by a rule rather than
+            # by a guess, and `_gap_unknown` is what keeps them from being lost
+            # quietly.
+            self.gap_s = 0.0
+            self._gap_unknown = True
+            return -2, self.window_s
         segs = int(info.get("segments") or 0)
         seg_dur = (self.window_s / segs) if segs else float(info.get("target") or 2.0)
         want = self.resume_from - first        # how many seconds to skip from the playlist's front
@@ -1651,21 +1710,32 @@ class LiveSession:
             # The window could not be read. Receive from the live edge without
             # attempting a rewind, and since how much was lost is unknown, do
             # not write it down.
+            #
+            # Clearing `gap_s` is part of not writing it down and was missing:
+            # nothing else on this path clears it, so a session that resumed with
+            # a measured 800 s hole and later reattached through here announced
+            # that same 800 s over again as the length of a break it had not
+            # measured at all.
+            self.gap_s = 0.0
+            self._gap_unknown = True
             return -2, self.window_s
         if want <= 0:
             # The point where we stopped has already been pushed out of the
             # window. Receive from the oldest thing left, and write the space
             # in between down as lost.
             self.gap_s = max(0.0, -want)
+            self._gap_unknown = False
             return 0, 0.0
         if want >= self.window_s:
             # There is nothing inside the window left unfilled -- the point
             # where we stopped is still past the live edge, so just resume
             # from the edge.
             self.gap_s = 0.0
+            self._gap_unknown = False
             return -2, self.window_s
         idx = max(0, int(want / seg_dur))
         self.gap_s = 0.0
+        self._gap_unknown = False
         return idx, idx * seg_dur
 
     def _release(self):
@@ -2007,13 +2077,22 @@ class LiveSession:
         self._recv_s = 0.0
         print(f"[live] session {self.id} reattached (attempt {attempt}"
               + (", requested" if requested else "")
-              + f", missing stretch {self.gap_s:.0f}s)", flush=True)
+              + (", missing stretch not measurable" if self._gap_unknown
+                 else f", missing stretch {self.gap_s:.0f}s") + ")", flush=True)
         # The new time base and the notice about the missing stretch go **through**
         # the ring. Publishing them directly here would make them arrive ahead of the
         # old chunks still in the ring, and those chunks would be stamped with the
         # new base.
         note = ""
-        if self.gap_s >= 1.0:
+        if self._gap_unknown:
+            # Said without a number, the way the tab-audio note is. A hole that
+            # was not measured must not borrow a figure from one that was.
+            note = ("⋯ some of the broadcast went unreceived while the saving "
+                    "was switched. This site's playlist does not say how much ⋯"
+                    if requested else
+                    "⋯ some of the broadcast went unreceived while reception "
+                    "was cut. This site's playlist does not say how much ⋯")
+        elif self.gap_s >= 1.0:
             note = (f"⋯ about {int(self.gap_s)} s went unreceived while the "
                     "saving was switched ⋯" if requested else
                     f"⋯ about {int(self.gap_s)} s went unreceived while "
@@ -2021,6 +2100,7 @@ class LiveSession:
         self._ring.push(("rebase", self._recv_base, note))
         self._spawn_ffmpeg(src, start_index)
         self.gap_s = 0.0
+        self._gap_unknown = False
         # Nothing else on this path writes a status, and a reattach is the one
         # break a user sits and waits through -- the switch that caused it is a
         # button they pressed. `attached` has just gone up, so this is the event

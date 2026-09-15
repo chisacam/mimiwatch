@@ -142,8 +142,9 @@ the WAV and the mp4 together. The picture is copied as it arrives and only the
 sound is re-encoded, so what it costs is disk and not CPU. It applies to a
 stream the server fetches and to nothing else: a microphone or tab session
 uploads sound and has no picture to save, so the box is hidden for those
-sources. Off unless ticked, the same as the audio — and unticked, nothing about
-reception changes at all.
+sources. Off unless ticked, the same as the audio — and whether it is ticked or
+not, nothing about reception changes: the sound is read from the same
+audio-only rendition either way.
 
 There is no MB an hour to quote for it. The audio figure is arithmetic off a
 sample format that never changes; a video rendition has no fixed anything —
@@ -1131,22 +1132,33 @@ turns amber and says *saving the audio stopped* instead.
 ### Saving the video too
 
 Tick **Save the video as well** and the picture is kept beside the sound, as
-`data/recordings/<date>-<session id>.mp4`. Five things are worth knowing before
+`data/recordings/<date>-<session id>.mp4`. Six things are worth knowing before
 leaving it running overnight.
 
 **The broadcast is fetched once and fanned out.** With the box ticked, the
-rendition mimiwatch reads is the muxed one, and that one read feeds three
-things: the subtitles, the WAV if that box is ticked too, and the mp4. Two of
-them are outputs of the ffmpeg itself — the sound on a pipe and the broadcast
-into the file; the WAV is written in Python off that same pipe, which is how it
-stays one contiguous file across reconnects. A second process pulling a muxed
-copy of its own was the other way to build it, and it costs the stream's
-bandwidth twice and two sets of segment requests for one broadcast. With the box
-unticked nothing about reception changes at all: the audio-only rendition, the
-same command, the same subtitles. Multiview runs up to four
-sessions, so four mp4s can be growing at once — but they are the four reads that
-were happening anyway, now carrying their pixels through to disk instead of
-dropping them.
+picture becomes a second *input* on the ffmpeg that was already running, and
+that one process feeds three things: the subtitles, the WAV if that box is
+ticked too, and the mp4. Two of them are its own outputs — the sound on a pipe
+and the broadcast into the file; the WAV is written in Python off that same
+pipe, which is how it stays one contiguous file across reconnects. A second
+process pulling a copy of its own was the other way to build it, and it costs
+the stream's bandwidth twice and two sets of segment requests for one
+broadcast.
+
+**The picture is an added input, not a changed one.** The sound ffmpeg
+transcribes from is the same audio-only rendition it reads with the box
+unticked, so ticking it changes nothing the VAD hears and nothing the WAV keeps
+— the same samples, the same subtitles. It has to work this way on YouTube,
+where a live broadcast has no single file with both streams in it at all: the
+eight formats an extraction returns are six video-only and two audio-only, and
+asking for one pre-muxed file fails outright (*Requested format is not
+available*), which is what saving the video used to do there every time. Sites
+that do serve one file with both in it — every format of a live chzzk channel is
+that shape, and none of them is audio-only — come back as a single address, and
+there it is one input again and the sound is taken out of the picture's
+rendition as before. Multiview runs up to four sessions, so four mp4s can be
+growing at once — but they are the four reads that were happening anyway, now
+carrying their pixels through to disk instead of dropping them.
 
 **The cost of one read is that the outputs share a fate.** An mp4 that cannot be
 written — a full disk, a volume that went read-only — ends the process feeding the
@@ -1157,8 +1169,8 @@ itself, and it is bounded. Five parts in a row that ended within half a minute o
 starting and **the video is given up on for the rest of the session** — the
 status line turns amber and says *saving the video stopped*, with the reason, and
 everything after that resolves audio-only and goes on with the subtitles. If the
-muxed rendition cannot be resolved at all, the session falls back to the
-audio-only one at once and says so in the same place. Losing the subtitles
+picture cannot be resolved at all, the session falls back to the audio-only
+rendition at once and says so in the same place. Losing the subtitles
 because the picture was unavailable is the wrong trade.
 
 **The picture is copied; the sound is re-encoded.** `-c:v copy -c:a aac`, and
@@ -1204,15 +1216,15 @@ Turning it on again opens a *second* file rather than continuing the first, the
 same way **Resume** does.
 
 **Switching the video costs a reconnect.** The ffmpeg now reading the broadcast
-was given a rendition and a list of outputs chosen for the answer that held when
-it started — audio-only with one output, or muxed with two — and neither of those
-can be changed under a running process. So the switch ends it and stands the next
-one up straight away, rather than waiting for a break that a broadcast can run
-for hours without. Measured on one machine against a live YouTube broadcast,
-resolving the address again took `yt-dlp -j` 1.6–2.1 s plus `yt-dlp -f best -g`
-1.7–2.0 s — **3.5–4.2 seconds**, with the respawn and the first segment after
-that. Another machine and another network will differ; read it as *a few
-seconds*, not as a figure.
+was given the inputs and outputs the answer that held when it started called
+for — the sound alone with one output, or the picture as a second input with
+two — and neither of those can be changed under a running process. So the switch
+ends it and stands the next one up straight away, rather than waiting for a
+break that a broadcast can run for hours without. Measured on one machine
+against a live YouTube broadcast, resolving the addresses again took `yt-dlp -j`
+1.6–2.1 s plus one `yt-dlp -g` 1.7–2.0 s — **3.5–4.2 seconds**, with the respawn
+and the first segment after that. Another machine and another network will
+differ; read it as *a few seconds*, not as a figure.
 
 **The transcription normally survives it.** A break that falls inside the DVR
 window is picked back up where it stopped, so what the viewer sees is the
@@ -1224,8 +1236,8 @@ asked for is not counted against either of the counts that watch for something
 failing over and over, the reattach count or the one that gives up on the video.
 
 **Asking for the video again is a genuine retry.** Giving up on it is permanent
-for the session, so one muxed rendition that could not be resolved at four in
-the morning, or five parts in a row that died on the spot, means an overnight
+for the session, so one rendition that could not be resolved at four in the
+morning, or five parts in a row that died on the spot, means an overnight
 broadcast saves no picture for the rest of its run however long that is.
 Switching the video off and on clears that and tries again.
 

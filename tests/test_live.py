@@ -1033,14 +1033,16 @@ def test_resume_carries_the_recording_flag_back(monkeypatch):
 
 
 # ---- Saving the video of a broadcast the server pulls ----------------------------
-# The broadcast is fetched once and fanned out: one ffmpeg, one input, the sound
-# down the pipe to the VAD and the picture into an mp4. Nothing is spawned here --
+# The broadcast is fetched once and fanned out: one ffmpeg, the sound down the pipe
+# to the VAD and the picture into an mp4. How many inputs that takes is the site's
+# answer, not ours -- a YouTube live broadcast has no single file with both streams
+# in it, so the picture comes in as a second input. Nothing is spawned here --
 # `read_plan` is the seam the argv can be read across without an ffmpeg anywhere
 # near it, the same way `burn.plan` can be read.
 
-def _plan(monkeypatch, src, start_index, out=""):
+def _plan(monkeypatch, src, start_index, out="", video_src=""):
     monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
-    return live.read_plan(src, start_index, out)
+    return live.read_plan(src, start_index, out, video_src)
 
 
 def test_not_saving_the_video_leaves_the_reading_command_as_it_was(monkeypatch):
@@ -1055,12 +1057,46 @@ def test_not_saving_the_video_leaves_the_reading_command_as_it_was(monkeypatch):
     ]
 
 
-def test_saving_the_video_adds_an_output_rather_than_a_second_fetch(monkeypatch):
-    """One input, two outputs. The pcm output is what it was, and the mp4 comes
-    out of the same read -- a second ffmpeg with a muxed URL of its own would
-    fetch the broadcast twice, which is the stream's bandwidth twice over and two
-    sets of segment requests for one broadcast."""
-    cmd = _plan(monkeypatch, "https://example.invalid/muxed.m3u8", -2, "/tmp/out.mp4")
+def test_saving_the_video_adds_an_input_rather_than_a_second_fetch(monkeypatch):
+    """Two inputs, two outputs, one process -- and the sound is the rendition
+    transcription would have read anyway.
+
+    A YouTube live broadcast has no single file with both streams in it (the
+    measurement is in `resolve_video`), so `-f best` failed every time and the
+    feature never worked there. The picture comes in as its own input instead,
+    and because the sound is still the audio-only rendition, **the transcription
+    side does not change at all when the box is ticked**: the same samples reach
+    the VAD and the same WAV is written. A second ffmpeg pulling the picture
+    would have fetched the broadcast twice over instead.
+    """
+    cmd = _plan(monkeypatch, "https://example.invalid/audio.m3u8", -2, "/tmp/out.mp4",
+                "https://example.invalid/video.m3u8")
+    assert cmd == [
+        "ffmpeg", "-loglevel", "error", "-nostdin", "-y",
+        "-live_start_index", "-2", "-i", "https://example.invalid/video.m3u8",
+        "-live_start_index", "-2", "-i", "https://example.invalid/audio.m3u8",
+        "-map", "1:a:0",
+        "-vn", "-ac", "1", "-ar", str(live.SAMPLE_RATE), "-f", "s16le", "-",
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac",
+        "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+        "-f", "mp4", "/tmp/out.mp4",
+    ]
+    assert cmd.count("-i") == 2
+    # The sound ffmpeg transcribes from is the audio address, whichever input it
+    # sits on -- that is the whole of what "an added input, not a changed one"
+    # means, and it is the line that would break if the two were ever swapped.
+    assert cmd[cmd.index("-map") - 1] == "https://example.invalid/audio.m3u8"
+
+
+def test_one_muxed_address_is_still_one_input(monkeypatch):
+    """A site that hands back a single file with both streams in it -- every
+    format of a live chzzk channel is that shape, and none of them is audio-only
+    -- must still work, and with one input rather than the same address opened
+    twice. There the sound does come out of the muxed rendition, as it always
+    did."""
+    cmd = _plan(monkeypatch, "https://example.invalid/muxed.m3u8", -2, "/tmp/out.mp4",
+                "https://example.invalid/muxed.m3u8")
     assert cmd == [
         "ffmpeg", "-loglevel", "error", "-nostdin", "-y",
         "-live_start_index", "-2", "-i", "https://example.invalid/muxed.m3u8",
@@ -1089,6 +1125,12 @@ def test_each_output_names_the_stream_it_wants(monkeypatch):
     assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"] == \
         ["0:a:0", "0:v:0", "0:a:0"]
     assert "0:a" not in cmd and "0:v" not in cmd
+    # With two inputs the maps name the input as well, and the picture is input 0
+    # so that the mp4's video map reads the same in both shapes.
+    two = _plan(monkeypatch, "https://example.invalid/audio.m3u8", -2, "/tmp/out.mp4",
+                "https://example.invalid/video.m3u8")
+    assert [two[i + 1] for i, a in enumerate(two) if a == "-map"] == \
+        ["1:a:0", "0:v:0", "1:a:0"]
 
 
 def test_the_picture_is_copied_and_only_the_sound_re_encoded(monkeypatch):
@@ -1166,17 +1208,77 @@ def test_a_pushed_source_has_no_video_to_save():
                             "local-m2m100", record_video=True).record_video is True
 
 
-def test_a_muxed_rendition_that_cannot_be_resolved_costs_only_the_video(session,
-                                                                       monkeypatch):
+def test_resolve_video_hands_back_the_picture_and_the_sound(monkeypatch):
+    """Two addresses, because on a live YouTube broadcast there is no one file
+    with both streams in it.
+
+    `-g` prints the selected formats in the order the selector named them, so
+    the picture is the first line and the sound the second (measured against a
+    live broadcast: line 0 was itag 270, line 1 itag 234). The media time is
+    read off the *audio* manifest -- that is the playlist the transcription
+    input reads, and every timing behaviour around it was measured there.
+    """
+    monkeypatch.setattr(live.subprocess, "run",
+                        _probe("http://x/video.m3u8\nhttp://x/audio.m3u8\n"))
+    monkeypatch.setattr(live, "manifest_info", lambda u: {"read": u})
+    assert live.resolve_video("https://example.invalid/live") == \
+        ("http://x/video.m3u8", "http://x/audio.m3u8", {"read": "http://x/audio.m3u8"})
+
+
+def test_one_address_back_stands_in_for_both(monkeypatch):
+    """A site whose formats all carry both streams answers the pair selector
+    with a single file, and that is a working answer rather than a failure --
+    every format of a live chzzk channel is that shape (measured: 10 formats,
+    not one of them audio-only). The same address for both is what `read_plan`
+    reads as one input."""
+    monkeypatch.setattr(live.subprocess, "run", _probe("http://x/muxed.m3u8\n"))
+    monkeypatch.setattr(live, "manifest_info", lambda u: {})
+    video, audio, _ = live.resolve_video("https://example.invalid/live")
+    assert video == audio == "http://x/muxed.m3u8"
+
+
+def test_the_picture_is_resolved_beside_the_sound_not_instead_of_it(session,
+                                                                    monkeypatch):
+    """What the session does with the two addresses, end to end: the sound is
+    what `_resolve_hls` returns and therefore what transcription reads, the
+    picture is kept for the argv, and `_spawn_ffmpeg` puts them together.
+
+    The old code resolved one address for both and handed it to transcription,
+    so ticking the box changed the rendition the VAD heard. It does not any
+    more, and this is the line that says so.
+    """
+    s = session
+    s.record_video = True
+    monkeypatch.setattr(live.subprocess, "run", _probe(LIVE_META))
+    monkeypatch.setattr(live, "resolve_video",
+                        lambda url: ("http://x/video.m3u8", "http://x/audio.m3u8", {}))
+    monkeypatch.setattr(live, "resolve_audio",
+                        lambda url, youtube=True: pytest.fail("resolved the sound twice"))
+    src, idx = s._resolve_hls()
+    assert src == "http://x/audio.m3u8" and s._vid_src == "http://x/video.m3u8"
+
+    monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
+    cmds = []
+    monkeypatch.setattr(live.subprocess, "Popen",
+                        lambda cmd, **kw: cmds.append(cmd) or _FakeFF(b""))
+    s._spawn_ffmpeg(src, idx)
+    assert cmds[-1] == live.read_plan("http://x/audio.m3u8", -2, s._vid_path,
+                                      "http://x/video.m3u8")
+    assert cmds[-1].count("-i") == 2
+
+
+def test_a_video_rendition_that_cannot_be_resolved_costs_only_the_video(session,
+                                                                        monkeypatch):
     """Losing the subtitles because the picture was unavailable is the wrong
     trade.
 
     `resolve_video` failing where `resolve_audio` would have worked is a
     plausible thing for a site to do -- a rendition behind a login, a format list
-    that came back without a muxed entry -- and the session goes on with the
-    audio-only rendition it would have resolved anyway. Once it has given up, it
-    stays given up: retrying every reconnect would spend a yt-dlp call per break
-    on something that has already been answered.
+    that came back with nothing playable in it -- and the session goes on with
+    the audio-only rendition it would have resolved anyway, with no second input
+    left behind in the argv. Once it has given up, it stays given up: retrying
+    every reconnect would spend a yt-dlp call per break on something that has
+    already been answered.
     """
     s = session
     s.record_video = True
@@ -1193,7 +1295,7 @@ def test_a_muxed_rendition_that_cannot_be_resolved_costs_only_the_video(session,
     assert s.state != "error" and s.error is None
     assert "no rendition with the picture" in s.status()["recording_video_error"]
     assert s._saving_video() is False
-    assert s._next_video_part() == ""
+    assert s._next_video_part() == "" and s._vid_src == ""
 
 
 def test_parts_that_die_at_once_drop_the_video_and_not_the_subtitles(

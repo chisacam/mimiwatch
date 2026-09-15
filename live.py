@@ -321,30 +321,56 @@ VIDEO_RECONNECT_TRIES = 5
 VIDEO_PART_OK_S = 30.0
 
 
-def resolve_video(url: str) -> tuple[str, dict]:
-    """A rendition with the picture still in it, and what its manifest says
-    about media time.
+# The format the picture is asked for. `bestvideo*+bestaudio` is a pair -- the
+# picture and the sound as two renditions -- and `/best` after it is the single
+# pre-muxed file, for the sites that have one. See `resolve_video`.
+VIDEO_FORMAT = "bestvideo*+bestaudio/best"
 
-    The same shape `resolve_audio` returns, because it stands in for it: a
-    session that is saving the video reads the muxed rendition and takes the
-    sound out of it, rather than pulling the broadcast a second time.
 
-    `best` is yt-dlp's name for the best single file that already carries both
-    streams, so `-g` prints exactly one URL and there is nothing to mux here.
+def resolve_video(url: str) -> tuple[str, str, dict]:
+    """The rendition with the picture in it, the rendition with the sound in it,
+    and what the *audio* manifest says about media time.
 
-    `manifest_info` reads a muxed variant manifest as happily as an audio-only
-    one -- it looks at EXTINF, TARGETDURATION, PROGRAM-DATE-TIME and ENDLIST,
-    none of which know what is inside the segments. Measured against a real
-    muxed variant (test-streams.mux.dev x36xhzz, 720p h264+aac): 64 segments, a
-    634.6 s window, ENDLIST seen. A *master* playlist gives zeros for all of it,
-    but that is equally true of the audio side and `-g` hands back a variant.
+    It used to ask for `-f best` -- yt-dlp's name for the best single file that
+    already carries both streams -- and on a YouTube live broadcast there is no
+    such file, so saving the video failed every time with *Requested format is
+    not available*. Measured 2026-09 against a live YouTube broadcast: the `-j`
+    extraction returns 8 formats (229-234, 269, 270), 233 and 234 audio-only and
+    the rest video-only, and **not one of them carries both streams**. Where
+    `-F` shows the muxed itags 91-96 at all they come from another player client
+    (visionos) and are not in the list `-f` selects from -- `-f best`, `-f b`,
+    `-f 96/95/94/93/92/91` and `-f "best[vcodec!=none][acodec!=none]"` were all
+    refused with that same line. So the feature never worked on YouTube live,
+    and would not have worked on any site that serves the picture and the sound
+    apart.
+
+    Hence a pair, `bestvideo*+bestaudio`, which succeeds there and makes `-g`
+    print two URLs: the picture first and the sound second, in the order the
+    selector named them (measured: line 0 is itag 270, line 1 is itag 234).
+    The `/best` after it is for the sites that do hand back one file with both
+    in it -- every format of a live chzzk channel carries both streams and there
+    is no audio-only entry at all (measured: 10 formats, all muxed), so the pair
+    selector fails there and the single URL is the right answer. One line back
+    means one input for ffmpeg; two lines mean two (`read_plan`).
+
+    **The sound is the rendition transcription always read**, which is the point
+    of resolving both here rather than taking the sound out of a muxed file.
+    `bestaudio` came back as itag 234 -- the first one `resolve_audio` asks for
+    -- so with two inputs the samples the VAD sees, and the WAV beside them, are
+    what they would have been with saving switched off. The picture is an added
+    input, not a changed one. On a site with one muxed URL that is not true and
+    cannot be, and there transcription reads the muxed rendition as before.
+
+    The media time comes from the audio manifest for the same reason: it is the
+    playlist the transcription input reads, and everything measured around it --
+    the DVR window, `-live_start_index`, the resume point -- was measured there.
 
     What comes back is signed and expires within the day, which is why it is
     resolved every time ffmpeg is stood up and never stored -- the same rule
     the play URL already has (`live.play_url`).
     """
     try:
-        out = subprocess.run(stream.ytdlp_args("-f", "best", "-g", url=url),
+        out = subprocess.run(stream.ytdlp_args("-f", VIDEO_FORMAT, "-g", url=url),
                              capture_output=True, text=True,
                              timeout=stream.YTDLP_TIMEOUT_S,
                              **stream.child_io(stderr=False))
@@ -359,19 +385,38 @@ def resolve_video(url: str) -> tuple[str, dict]:
         # different address is what is missing.
         raise RuntimeError("yt-dlp found no rendition with the picture in it"
                            + (f": {why[-1]}" if why else ""))
-    return lines[0], manifest_info(lines[0])
+    # Two lines are a pair; one is a muxed file standing in for both, and then
+    # the picture and the sound are the same address read once.
+    video, audio = (lines[0], lines[1]) if len(lines) > 1 else (lines[0], lines[0])
+    return video, audio, manifest_info(audio)
 
 
-def read_plan(src: str, start_index, video_out: str = "") -> list[str]:
+def read_plan(src: str, start_index, video_out: str = "",
+              video_src: str = "") -> list[str]:
     """The reading ffmpeg's command, as a list. A test can read it without
     running it, the way `burn.plan` can be read.
 
     One input and one output is what this has always been: the sound, mono
     16 kHz signed 16-bit, on stdout for the VAD. `video_out` adds a second
     output to the same process, so a broadcast that is being saved is **fetched
-    once and fanned out** rather than pulled twice by two ffmpegs. The
-    transcription pipeline reads the muxed rendition in that case
-    (`resolve_video`) and drops the pixels on its own output with `-vn`.
+    once and fanned out** rather than pulled twice by two ffmpegs.
+
+    `video_src` adds a second **input**, and it is what makes the feature work
+    at all on a site that serves the picture and the sound apart -- which is
+    every YouTube live broadcast, where there is no single file with both in it
+    (`resolve_video` carries the measurement). The picture goes in as input 0
+    and the sound as input 1, so the pcm output reads `1:a:0` and the mp4 takes
+    `0:v:0` from one input and `1:a:0` from the other. Still one process and
+    still one read of each stream.
+
+    That the sound is its own input is the good half of it: `src` is the
+    audio-only rendition transcription would have read with saving switched off,
+    so **the picture is an added input and not a changed one** -- the samples
+    reaching the VAD and the WAV do not depend on whether the mp4 is being
+    written. A site that hands back a single muxed URL (chzzk) comes through
+    with `video_src` equal to `src`, and then it is one input as before, the
+    sound taken out of the muxed rendition and the pixels dropped on the pcm
+    output with `-vn`.
 
     `-live_start_index -2` starts two segments from the end of the playlist.
     Without it ffmpeg reads a full-DVR playlist from the top and transcribes the
@@ -386,7 +431,11 @@ def read_plan(src: str, start_index, video_out: str = "") -> list[str]:
     stream of type audio*, delivering 0 bytes to the pipe -- which is a session
     with no subtitles at all. `-g` normally hands back a single variant so this
     rarely bites, but naming the first audio and the first video stream is
-    correct and costs nothing.
+    correct and costs nothing. With two inputs they also have to name *which*
+    input, and naming the wrong one is at least loud: `-map 0:a:0` against a
+    video-only input is refused before anything is read (*Stream map matches no
+    streams*, exit 234, nothing on the pipe), rather than quietly transcribing
+    something else.
 
     **The picture is copied and only the sound is re-encoded**, which is not the
     obvious `-c copy` and was not a free choice. HLS delivers MPEG-TS segments,
@@ -418,12 +467,18 @@ def read_plan(src: str, start_index, video_out: str = "") -> list[str]:
         # the name and opening it -- without it ffmpeg stops to ask, and with
         # `-nostdin` there is nobody there to answer.
         cmd += ["-y"]
+    # The picture first when it is a rendition of its own, so the sound is the
+    # last input either way and the mp4's video map is `0:v:0` in both shapes.
+    split = bool(video_out and video_src and video_src != src)
+    if split:
+        cmd += ["-live_start_index", str(start_index), "-i", video_src]
     cmd += ["-live_start_index", str(start_index), "-i", src]
+    audio_map = "1:a:0" if split else "0:a:0"
     if video_out:
-        cmd += ["-map", "0:a:0"]
+        cmd += ["-map", audio_map]
     cmd += ["-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"]
     if video_out:
-        cmd += ["-map", "0:v:0", "-map", "0:a:0",
+        cmd += ["-map", "0:v:0", "-map", audio_map,
                 "-c:v", "copy", "-c:a", "aac",
                 "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
                 "-f", "mp4", video_out]
@@ -706,6 +761,13 @@ class LiveSession:
         # every file that has been opened, in order. `_vid_began` is when the
         # part now being written was opened and `_vid_bad` how many in a row
         # died on the spot -- see _video_part_ended.
+        # `_vid_src` is the picture's own address, as the last resolve found it:
+        # set by `_resolve_hls` and read by `_spawn_ffmpeg`, because the argv is
+        # chosen where the process is stood up and the address where the
+        # broadcast is resolved. Empty whenever the next ffmpeg is to have no
+        # second input -- the session is not saving the video, or the site
+        # handed back one muxed address for both.
+        self._vid_src = ""
         self._vid_stem = ""
         self._vid_path = ""
         self._vid_parts: list[str] = []
@@ -1259,12 +1321,16 @@ class LiveSession:
 
     # ---- the session's own video ------------------------------------------
     #
-    # Not a recorder of its own. A session that was asked for the video reads
-    # the *muxed* rendition (`_resolve_hls`) and the one ffmpeg fans it out:
-    # the sound down the pipe to the VAD, the broadcast itself into an mp4
-    # (`read_plan`). A second process pulling a second copy of the same
-    # broadcast was the other way to do it, and it costs the stream's bandwidth
-    # twice and two sets of segment requests for one broadcast.
+    # Not a recorder of its own. A session that was asked for the video takes
+    # the picture as a second *input* on the ffmpeg it was already running
+    # (`_resolve_hls` resolves both addresses, `read_plan` builds the argv), and
+    # that one process fans the read out: the sound down the pipe to the VAD,
+    # the broadcast itself into an mp4. A second process pulling a second copy
+    # of the same broadcast was the other way to do it, and it costs the
+    # stream's bandwidth twice and two sets of segment requests for one
+    # broadcast. The sound is the same audio-only rendition the session would
+    # have read with the video switched off, so nothing on the transcription
+    # side changes when the box is ticked.
     #
     # What one process costs instead is that the outputs share a fate: an mp4
     # that cannot be written ends the process feeding the subtitles too. The
@@ -1313,8 +1379,8 @@ class LiveSession:
         """The part the last ffmpeg was writing has ended. Decide whether the
         video is still worth attempting.
 
-        A part ending is the normal case and not a fault -- the muxed URL is
-        signed and expires, and reception breaks -- so a part that ran for
+        A part ending is the normal case and not a fault -- the addresses are
+        signed and expire, and reception breaks -- so a part that ran for
         VIDEO_PART_OK_S counts as a recording that worked and clears the count,
         the same rule the read loop applies when sound arrives. Parts that die
         on the spot are the shape that means the mp4 output itself is the
@@ -1378,8 +1444,8 @@ class LiveSession:
         """End the ffmpeg now reading so that the reading thread stands the
         next one up. Returns whether there was one to end.
 
-        Saving the video changes what ffmpeg is told to do -- a muxed rendition
-        and two outputs, or an audio-only one and a single output -- and a
+        Saving the video changes what ffmpeg is told to do -- the picture as a
+        second input and two outputs, or the sound alone and one output -- and a
         running process cannot be told either of those things. So the switch is
         a reconnect, and it is made the same way a break is: the flag goes up,
         the process is ended, and `_read_until_end` reaps it and calls
@@ -1613,8 +1679,10 @@ class LiveSession:
 
     def _spawn_ffmpeg(self, src: str, start_index):
         # What the argv is and why is in `read_plan`; this decides only whether
-        # a part file goes into it. For standard I/O see stream.child_io -- that
-        # is where inheriting the parent's handles used to fall over on Windows.
+        # a part file goes into it, and the picture's own input comes from the
+        # resolve that chose `src` (`_vid_src`). For standard I/O see
+        # stream.child_io -- that is where inheriting the parent's handles used
+        # to fall over on Windows.
         #
         # The part the last ffmpeg was writing is judged first, so that giving
         # up on the video takes effect before the next name is chosen rather
@@ -1631,7 +1699,7 @@ class LiveSession:
             # a directory, which is the trade this whole feature refuses.
             self._video_failed(exc)
             out = ""
-        self._ff = subprocess.Popen(read_plan(src, start_index, out),
+        self._ff = subprocess.Popen(read_plan(src, start_index, out, self._vid_src),
                                     stdout=subprocess.PIPE, **stream.child_io())
         if out:
             # After the Popen, so a process that could not be started leaves no
@@ -1962,16 +2030,22 @@ class LiveSession:
                 return None, None
 
         youtube = self.site != "other" and self.site != "twitch"
+        # Cleared on every resolve, so it can never describe a ffmpeg other than
+        # the one about to be stood up over this address.
+        self._vid_src = ""
         if self._saving_video():
-            # A session that is saving the video reads the muxed rendition and
-            # takes the sound out of that, instead of fetching the broadcast a
-            # second time. A rendition that cannot be resolved must not cost the
-            # session, though -- losing the subtitles because the picture was
-            # unavailable is the wrong trade -- so it falls back to the
-            # audio-only rendition that would have been resolved anyway, says
-            # why in the status, and runs.
+            # A session that is saving the video resolves the picture and the
+            # sound in one call and hands both to one ffmpeg, instead of
+            # fetching the broadcast a second time. `src` is the audio rendition
+            # either way, so nothing about transcription changes -- see
+            # `resolve_video`, which has why the media time is read off it.
+            # A rendition that cannot be resolved must not cost the session,
+            # though -- losing the subtitles because the picture was unavailable
+            # is the wrong trade -- so it falls back to the audio-only rendition
+            # that would have been resolved anyway, says why in the status, and
+            # runs.
             try:
-                src, info = resolve_video(self.url)
+                self._vid_src, src, info = resolve_video(self.url)
             except Exception as exc:
                 self._video_failed(exc)
                 src, info = resolve_audio(self.url, youtube=youtube)
@@ -2939,15 +3013,16 @@ def set_record(session_id: str, record: bool | None = None,
     one that is open. No ffmpeg is involved, nothing is resolved again, and not
     a sample goes missing on either side of the switch.
 
-    Saving the video cannot be, because the running ffmpeg is reading a
-    rendition chosen for the answer that was true when it started: audio-only
-    with one output, or muxed with two. Neither can be changed under a running
-    process, so the switch is a reconnect (`_request_respawn`), taken
-    immediately rather than left for the next natural break -- a broadcast can
-    run for hours without one. **Measured on this machine against a live
-    YouTube broadcast**, the re-resolution is `yt-dlp -j` 1.63-2.14 s plus
-    `yt-dlp -f best -g` 1.68-2.04 s, so 3.5-4.2 s, and the respawn and the
-    first segment come after it. One machine and one network on one afternoon:
+    Saving the video cannot be, because the running ffmpeg was given the inputs
+    and outputs the answer that was true when it started called for: the sound
+    alone with one output, or the picture as a second input with two. Neither
+    can be changed under a running process, so the switch is a reconnect
+    (`_request_respawn`), taken immediately rather than left for the next
+    natural break -- a broadcast can run for hours without one. **Measured on
+    this machine against a live YouTube broadcast**, the re-resolution is
+    `yt-dlp -j` 1.63-2.14 s plus one `yt-dlp -g` for the renditions
+    1.68-2.04 s, so 3.5-4.2 s, and the respawn and the first segment come after
+    it. One machine and one network on one afternoon:
     read it as *a few seconds*, not as a figure. The transcription is not lost
     across it -- `_resume_point` picks the reading back up where it stopped
     when the break falls inside the DVR window, which a break this short

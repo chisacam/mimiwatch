@@ -80,8 +80,16 @@ MW_I18N.add({
     ko: "소리를 파일로 저장"
   },
   "add.record.hint": {
-    en: "Writes what the session receives to data/recordings as a WAV, so a better engine — or speaker labels, which only the VOD side has — can be run over it afterwards. The samples are 16 kHz mono 16-bit, so 16000 × 2 = 32 KB a second: about 115 MB an hour, and nothing deletes it for you. A microphone or tab session saves its audio whether or not this is ticked; ticking it adds the saving to a stream the server fetches itself.",
-    ko: "세션이 받은 소리를 data/recordings에 WAV로 씁니다. 나중에 더 나은 엔진으로, 또는 녹화본 쪽에만 있는 화자 구분을 붙여 다시 전사할 수 있습니다. 표본이 16kHz 모노 16비트라 16000×2=초당 32KB, 곧 한 시간에 115MB쯤이고 저절로 지워지지 않습니다. 마이크·탭 세션은 이 칸과 무관하게 소리를 저장하고, 이 칸은 서버가 직접 받아 오는 방송에 저장을 붙입니다."
+    en: "Writes what the session receives to data/recordings as a WAV, so a better engine — or speaker labels, which only the VOD side has — can be run over it afterwards. Nothing is kept unless this is ticked, whatever the source. The samples are 16 kHz mono 16-bit, so 16000 × 2 = 32 KB a second: about 115 MB an hour, and nothing deletes it for you.",
+    ko: "세션이 받은 소리를 data/recordings에 WAV로 씁니다. 나중에 더 나은 엔진으로, 또는 녹화본 쪽에만 있는 화자 구분을 붙여 다시 전사할 수 있습니다. 어떤 소스든 이 칸을 켜지 않으면 아무것도 남지 않습니다. 표본이 16kHz 모노 16비트라 16000×2=초당 32KB, 곧 한 시간에 115MB쯤이고 저절로 지워지지 않습니다."
+  },
+  "add.recordVideo": {
+    en: "Save the video as well",
+    ko: "영상도 파일로 저장"
+  },
+  "add.recordVideo.hint": {
+    en: "Copies the broadcast itself to data/recordings as an mp4, alongside the audio. The picture is copied as it arrives — only the sound is re-encoded, which costs a fraction of one core — so this is paid for in disk rather than CPU. Only for a stream the server fetches: a microphone or tab session uploads sound and has no picture to save. Off unless ticked. There is no MB an hour to quote here the way there is for audio — what it comes to depends on the rendition the site hands over — and a long broadcast is left in several numbered files.",
+    ko: "방송 자체를 소리와 나란히 data/recordings에 mp4로 복사합니다. 그림은 온 그대로 복사하고 소리만 다시 인코딩하므로 — 코어 하나의 일부만 씁니다 — 드는 것은 CPU가 아니라 디스크입니다. 서버가 받아 오는 방송에만 해당합니다. 마이크·탭 세션은 소리만 올려 보내므로 저장할 그림이 없습니다. 켜지 않으면 저장하지 않습니다. 소리처럼 한 시간에 몇 MB라고 적을 수 있는 숫자는 없습니다. 사이트가 내주는 화질에 따라 달라지고, 긴 방송은 번호가 붙은 파일 여러 개로 남습니다."
   },
   "add.refine": {
     en: "Polish with refined lines",

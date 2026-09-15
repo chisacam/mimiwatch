@@ -196,6 +196,8 @@ function bind() {
     .addEventListener("change", e => { state.refine = e.target.checked; persist(); });
   document.querySelector('#add-form input[name="record"]')
     .addEventListener("change", e => { state.record = e.target.checked; persist(); });
+  document.querySelector('#add-form input[name="record_video"]')
+    .addEventListener("change", e => { state.recordVideo = e.target.checked; persist(); });
   $("add-form").addEventListener("submit", submitAdd);
   document.querySelector('#add-form select[name="source"]')
     .addEventListener("change", e => setAddSource(e.target.value));

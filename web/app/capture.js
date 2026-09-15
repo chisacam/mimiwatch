@@ -268,7 +268,7 @@ async function startMicCapture(title, lang) {
       title: name, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
       asr: state.asr, refine: state.refine, genre: currentGenre(),
       profile: document.querySelector('#add-form select[name="profile"]').value,
-      ...recordArg(),
+      record: state.record, record_video: state.recordVideo,
     }),
   })).json();
   if (res.error) {
@@ -314,7 +314,7 @@ async function startTabCapture(title, lang) {
       title: name, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
       asr: state.asr, refine: state.refine, genre: currentGenre(),
       profile: document.querySelector('#add-form select[name="profile"]').value,
-      ...recordArg(),
+      record: state.record, record_video: state.recordVideo,
     }),
   })).json();
   if (res.error) {

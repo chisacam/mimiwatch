@@ -702,7 +702,8 @@ class Handler(BaseHTTPRequestHandler):
             profile=body.get("profile") or "broadcast",
             asr_backend_id=body.get("asr") or config.active("asr"),
             refine=bool(body.get("refine", True)),
-            record=optional_flag_from_body(body, "record"),
+            record=bool(body.get("record")),
+            record_video=bool(body.get("record_video")),
             genre=body.get("genre")))
 
     def post_live_capture(self, body):
@@ -716,7 +717,8 @@ class Handler(BaseHTTPRequestHandler):
             profile=body.get("profile") or "broadcast",
             asr_backend_id=body.get("asr") or config.active("asr"),
             refine=bool(body.get("refine", True)),
-            record=optional_flag_from_body(body, "record"),
+            record=bool(body.get("record")),
+            record_video=bool(body.get("record_video")),
             genre=body.get("genre"),
             source="tab",
             title=(body.get("title") or "").strip() or "Tab audio"))
@@ -739,7 +741,8 @@ class Handler(BaseHTTPRequestHandler):
             profile=body.get("profile") or "broadcast",
             asr_backend_id=body.get("asr") or config.active("asr"),
             refine=bool(body.get("refine", True)),
-            record=optional_flag_from_body(body, "record"),
+            record=bool(body.get("record")),
+            record_video=bool(body.get("record_video")),
             genre=body.get("genre"),
             source="mic",
             title=(body.get("title") or "").strip() or "Microphone"))
@@ -756,7 +759,8 @@ class Handler(BaseHTTPRequestHandler):
                     profile=body.get("profile") or "broadcast",
                     asr_backend_id=body.get("asr") or config.active("asr"),
                     refine=bool(body.get("refine", True)),
-                    record=optional_flag_from_body(body, "record"),
+                    record=bool(body.get("record")),
+                    record_video=bool(body.get("record_video")),
                     genre=body.get("genre"))
 
     def post_multiview(self, body):
@@ -1255,20 +1259,6 @@ POST_ROUTES = {
     "/api/watchers/toggle": Handler.post_watcher_toggle,
     "/api/watchers/delete": Handler.post_watcher_delete,
 }
-
-
-def optional_flag_from_body(body: dict, key: str) -> bool | None:
-    """A checkbox that has three states on the wire: on, off, and not sent.
-
-    `bool(body.get(key))` collapses the last two, and for `record` that is a
-    regression rather than a default -- a caller that does not know about the
-    field (the extension, a script, an older page still loaded in a tab) would
-    turn recording off on the microphone and tab sources, where the recording
-    is the reason the session was started at all. None goes to the callee and
-    means "the source decides".
-    """
-    v = body.get(key)
-    return None if v is None else bool(v)
 
 
 def speaker_threshold_from_body(body: dict) -> float | None:

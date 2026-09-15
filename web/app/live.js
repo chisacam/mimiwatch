@@ -195,7 +195,7 @@ async function startLive(url, lang, probe) {
       url, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
       asr: state.asr, refine: state.refine, genre: currentGenre(),
       profile: document.querySelector('#add-form select[name="profile"]').value,
-      ...recordArg(),
+      record: state.record, record_video: state.recordVideo,
     }),
   })).json();
   if (res.error) { jobError(res.error); return; }
@@ -541,19 +541,30 @@ function onLiveStatus(m, tile = focusedTile()) {
   if (tile === focusedTile()) renderLiveStatus(tile);
 }
 
-/* What the session is doing with the audio, as a piece of the status line.
+/* What the session is doing with the audio and the video, as a piece of the
+ * status line.
  *
  * A failed write has to reach the screen. The session goes on transcribing
- * after one (live.py `_record` reports the error and hands the same bytes to
- * the transcriber), so subtitles keep arriving and nothing else on the page
- * would look any different from a session that is saving its audio -- and a
- * recording that stopped with nobody told is the exact failure that saving the
- * audio exists to prevent. */
+ * after one (live.py `_record` and `_video_failed` report the error and let
+ * everything else run), so subtitles keep arriving and nothing else on the page
+ * would look any different from a session that is saving -- and a recording
+ * that stopped with nobody told is the exact failure that saving exists to
+ * prevent. The two fail separately even though one ffmpeg now feeds both, so
+ * both are asked: the WAV is written here in Python off the pipe and the mp4 is
+ * an output of that ffmpeg, so either can stop with the other still going, and
+ * whichever it was has to say so on its own line. */
 function recordingNote(m) {
+  const bits = [];
   if (m.recording_error)
-    return " · " + t("live.status.recordFailed", { error: esc(m.recording_error) });
-  if (!m.recording) return "";
-  return " · " + t("live.status.recording", { n: Math.round(m.recording_s || 0) });
+    bits.push(t("live.status.recordFailed", { error: esc(m.recording_error) }));
+  else if (m.recording)
+    bits.push(t("live.status.recording", { n: Math.round(m.recording_s || 0) }));
+  if (m.recording_video_error)
+    bits.push(t("live.status.recordVideoFailed", { error: esc(m.recording_video_error) }));
+  else if (m.recording_video)
+    bits.push(t("live.status.recordingVideo",
+                { mb: Math.round((m.recording_video_bytes || 0) / 1048576) }));
+  return bits.map(b => " · " + b).join("");
 }
 
 /* Writes the focused tile's session state into the top bar (#lang-status), the
@@ -591,10 +602,11 @@ function renderLiveStatus(tile) {
     // transcribing the whole video instead.
     if (isPushedSource(m.source) || m.url) offerResume(m.id, stopReason(m), m);
   }
-  // The whole line goes amber when saving the audio failed, even though the
-  // session itself is fine. `.status.warn b` is what colours the bold runs, so
-  // the class has to sit here rather than on the fragment.
-  el.className = m.recording_error ? "status warn" : "status";
+  // The whole line goes amber when saving failed -- sound or picture -- even
+  // though the session itself is fine. `.status.warn b` is what colours the
+  // bold runs, so the class has to sit here rather than on the fragment.
+  el.className = (m.recording_error || m.recording_video_error)
+    ? "status warn" : "status";
   const src = m.source_lang || "auto";
   const eng = (m.asr || "").replace(/-Q8_0$|\.gguf$/g, "");
   el.innerHTML = t("live.status.headline", { state: LIVE_STATE[m.state] || m.state,

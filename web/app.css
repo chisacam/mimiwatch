@@ -402,8 +402,12 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   flex:none; padding:.5rem 1rem .3rem;
 }
 .panel-search input{
-  width:100%; box-sizing:border-box;
+  /* `type="search"` draws a widget of its own on top of whatever it is given --
+   * its own rounded field and its own font -- so the house look above only
+   * lands once that is switched off. */
+  width:100%; box-sizing:border-box; appearance:none; -webkit-appearance:none;
 }
+.panel-search input::placeholder{color:var(--dim); opacity:1}
 .script{
   flex:1; overflow-y:auto; padding:.5rem 0 3rem; scrollbar-width:thin;
   --script-size:13px;
@@ -735,16 +739,21 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 #settings-body label,.settings-form label{
   display:flex; flex-direction:column; gap:.25rem; font-size:.76rem; color:var(--dim);
 }
-/* textarea and select as well as input -- the glossary's term list is a
-   textarea, and it was the only white box left after the inputs were fixed. */
+/* The one place a text box is given the house look. textarea and select as well
+   as input -- the glossary's term list is a textarea, and it was the only white
+   box left after the inputs were fixed. The library's search box was the next
+   one: it sat outside every form here, so it kept the browser's own widget --
+   a white field in a dark panel -- until it was added to this list. */
 #settings-body input,#settings-body select,#settings-body textarea,
-.settings-form input,.settings-form select,.settings-form textarea{
+.settings-form input,.settings-form select,.settings-form textarea,
+.panel-search input{
   background:#0d1017; color:var(--text); border:1px solid var(--line);
   border-radius:6px; padding:.45rem .6rem; font-size:.85rem; font-family:inherit;
 }
 .settings-form textarea{resize:vertical; min-height:6rem; line-height:1.6}
 #settings-body input:focus-visible,.settings-form input:focus-visible,
-.settings-form textarea:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+.settings-form textarea:focus-visible,
+.panel-search input:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 #settings-body small,.settings-form small{color:var(--dim); font-size:.7rem; line-height:1.5}
 #settings-body .row,.settings-form .row{display:flex; gap:.5rem}
 #settings-body .grow,.settings-form .grow{flex:1}

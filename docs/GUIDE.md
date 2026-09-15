@@ -119,6 +119,20 @@ more accurate, but the subtitle settles late and a line that is already up
 changes. On a stream where short remarks come and go fast, switching it off and
 sending each sentence out immediately is easier to follow. The default is on.
 
+**Save the audio** — writes what the session receives to
+`data/recordings/<date>-<session id>.wav`, so a better transcriber, or speaker
+labels, can be run over it afterwards. *Meetings and seminars* below is what
+that is for. The default is off for a stream the server fetches, and the cost is
+arithmetic rather than a measurement: the samples are 16 kHz mono 16-bit, so
+16000 × 2 = 32 KB a second — about 115 MB an hour, and roughly 800 MB for a
+seven-hour broadcast, of which multiview can run four at once. Nothing deletes
+them for you.
+
+A microphone or tab session saves its audio whether or not the box is ticked.
+There the recording is the reason the session was started and the sound exists
+nowhere else, so leaving the box alone does not switch that off: the box adds
+the saving to a stream the server fetches itself.
+
 ### Screen controls
 
 | | |
@@ -1047,6 +1061,30 @@ If writing the file fails — a full disk, a directory that cannot be created �
 the session says so in its status and **keeps transcribing**. Losing the
 recording must not also lose the subtitles already on screen.
 
+### Saving a stream the server fetches
+
+Tick **Save the audio** in **⊕ Add** and a broadcast the server pulls is written
+down as well, to the same directory and in the same format. Three things about
+that file differ from a microphone one.
+
+**It is contiguous audio, not a clock.** Reception breaks, and the session
+reattaches by standing ffmpeg back up, so one session can span several ffmpeg
+processes — which is why the file is written on the Python side rather than as a
+second ffmpeg output: it stays one file across all of them. What never arrived
+is simply not in it. The gap is closed up rather than padded with silence, so
+the recording runs *shorter* than the broadcast by however much was missed, and
+the subtitles are where that is written down (`⋯ about N s went unreceived ⋯`).
+Padding it back out to real time is a change that would have to be measured
+first, and nothing has measured it.
+
+**Resuming writes a second file.** **Resume** continues the same session — the
+same id, the same subtitles — but it opens a new recording, named for the time
+it started. One broadcast that was resumed once leaves two WAVs side by side.
+
+**A failed write is on screen, not in a log.** The session keeps transcribing
+after one, so nothing else on the page would look any different; the status line
+turns amber and says *saving the audio stopped* instead.
+
 ### What the microphone path does not do
 
 - **No device picker.** The system default input is used. Choose another one in
@@ -1130,7 +1168,7 @@ lsof -ti:8900 | xargs kill
 |---|---|
 | `backends.json` | Engine settings (not committed to git). `MIMIWATCH_CONFIG` can point at another file |
 | `data/mimiwatch.db` | Jobs, sessions and **all the subtitles** (VOD and live). `MIMIWATCH_DATA_DIR` can move the location |
-| `data/recordings/` | The WAV a microphone or tab session wrote. Never deleted automatically — it is the one artifact that cannot be made again |
+| `data/recordings/` | The WAV a session wrote — always for a microphone or tab session, and for a stream the server fetches when **Save the audio** is ticked. About 115 MB an hour (16 kHz × 2 bytes = 32 KB/s). Never deleted automatically — it is the one artifact that cannot be made again |
 | `data/legacy/` | `<video id>.json` left behind by old versions. Nobody reads them |
 | `~/.local/share/mimiwatch/models` | Models (`%LOCALAPPDATA%\mimiwatch\models` on Windows) |
 | `ext/` | The browser extension (loaded unpacked) |

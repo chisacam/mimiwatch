@@ -583,6 +583,59 @@ def test_reconnect_inside_the_session_still_rewinds(session, monkeypatch):
     assert idx == 150 and s.gap_s == 0.0      # 300 s in = from the 150th 2 s segment, nothing lost
 
 
+def _chzzk_playlist(monkeypatch, session):
+    """A playlist that cannot say where in the broadcast it is.
+
+    chzzk's `timestamp` is *later* than its own PROGRAM-DATE-TIME, so the
+    subtraction `media_base_from` makes goes negative and clamps to 0 -- on the
+    first reception and on every reattach alike. Returns that clamp so a test
+    can show it is the clamp and not a coincidence.
+    """
+    import datetime
+    later = datetime.datetime.fromisoformat("2026-01-01T05:00:00+00:00").timestamp()
+    _fake_playlist(monkeypatch, session, release_ts=later)
+    monkeypatch.setattr(live.LiveSession, "_spawn_ffmpeg", lambda self, src, idx: None)
+    return later
+
+
+def test_a_reconnect_keeps_the_media_clock_where_reception_reached(session, monkeypatch):
+    """A reattach must not put the clock back to the front of the broadcast.
+
+    `continue_base` closed this for a resumed session. A reattach goes through
+    the same `_resolve_hls`, which overwrites `_recv_base` with whatever the
+    playlist says, and then sets `_recv_s` to 0 -- so on a site whose playlist
+    says nothing the session started numbering its lines from zero again, and
+    because the panel sorts by time they were wedged in among the lines already
+    standing rather than added after them. Switching the video saving is a
+    reattach taken on demand, which is how this came back within a minute of
+    the button existing.
+    """
+    s = session
+    later = _chzzk_playlist(monkeypatch, s)
+    assert live.media_base_from("2026-01-01T00:20:00Z", later, 600.0) == 0.0
+    s._recv_base, s._recv_s = 0.0, 264.1      # reception has reached 264.1 s
+    assert s._reconnect(1) == "ok"
+    assert s._recv_base >= 264.1 and s._recv_s == 0.0
+    # A second one does not walk it backwards either -- the guard has to read
+    # the clock as it stands now, not as it stood when the session began.
+    s._recv_s = 30.0
+    assert s._reconnect(2) == "ok"
+    assert s._recv_base >= 294.1 and s._recv_s == 0.0
+
+
+def test_a_reconnect_keeps_the_playlist_clock_when_it_is_the_one_ahead(session, monkeypatch):
+    """The control. Where the playlist *can* say, its word is the accurate one.
+
+    YouTube gives a broadcast start time, so PDT minus that keeps counting
+    across the break and is already past where reception stopped. `continue_base`
+    is a max, so guarding the reattach must leave that case exactly as it was.
+    """
+    s = session
+    _fake_playlist(monkeypatch, s)            # first segment 1200 s in, 600 s window
+    monkeypatch.setattr(live.LiveSession, "_spawn_ffmpeg", lambda self, src, idx: None)
+    s._recv_base, s._recv_s = 0.0, 1000.0     # the window has moved past where it stopped
+    assert s._reconnect(1) == "ok"
+    assert s._recv_base == 1200.0             # the playlist's, not the session's 1000
 def test_multiview_add_resumes_a_stopped_session_as_a_warm_member(monkeypatch):
     monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
     store.save_session({"id": "old-9", "state": "stopped", "stopped_by": "user", "url": "https://x/old",

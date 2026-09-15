@@ -604,7 +604,12 @@ def media_base_from(pdt: str | None, release_ts: float | None,
 
 
 def continue_base(from_playlist: float, resume_from: float) -> float:
-    """Where a resumed session's media clock starts.
+    """Where a session's media clock starts once it has already received some.
+
+    Both paths that re-resolve a playlist go through here: a session resumed
+    after the server stopped (`_run`) and one that reattached without ever
+    stopping (`_reconnect`) -- switching the video saving is the second kind,
+    taken on demand rather than waited for.
 
     `media_base_from` needs the broadcast's start time, and not every site has
     one to give. chzzk's `timestamp` is *later* than its own PROGRAM-DATE-TIME
@@ -614,9 +619,9 @@ def continue_base(from_playlist: float, resume_from: float) -> float:
     by time, they were wedged in among the lines already there rather than added
     after them.
 
-    Where the playlist cannot say, the session's own record can. A resumed clock
-    never starts earlier than where that session left off. A first reception has
-    no `resume_from`, and keeps whatever the playlist said.
+    Where the playlist cannot say, the session's own record can. A clock that is
+    picked back up never starts earlier than where that session left off. A first
+    reception has no `resume_from`, and keeps whatever the playlist said.
     """
     if not resume_from:
         return from_playlist
@@ -1972,6 +1977,16 @@ class LiveSession:
             return "retry"
         if src is None:
             return "ended"
+        # The same guard a resume gets, for the same reason. `_resolve_hls` has
+        # just overwritten `_recv_base` with whatever the playlist says, and on a
+        # site that cannot say it says 0 (`continue_base` has the measurement) --
+        # so without this the clock went back to the front of the broadcast with
+        # `_recv_s` zeroed beside it, and the lines from here on were wedged in
+        # among the ones already standing rather than added after them. `777ecf9`
+        # closed that for a resume; a reattach walks the same path and was left
+        # open, and it was hard to reach until switching the video saving made
+        # one happen on demand.
+        self._recv_base = continue_base(self._recv_base, self.resume_from)
         self._recv_s = 0.0
         print(f"[live] session {self.id} reattached (attempt {attempt}"
               + (", requested" if requested else "")

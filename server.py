@@ -940,7 +940,11 @@ class Handler(BaseHTTPRequestHandler):
     # list comes down together.
 
     def get_watchers(self):
-        self._json({"watchers": store.watchers()})
+        # The poller's state rides along with the list. It is process state and
+        # has no row of its own, and a pass that changes nothing publishes
+        # nothing on the bus, so the screen has to ask for it -- which it does
+        # on the same request it already makes for the list.
+        self._json({"watchers": store.watchers(), "poller": live.watcher_status()})
 
     def post_watcher(self, body):
         url = (body.get("url") or "").strip()

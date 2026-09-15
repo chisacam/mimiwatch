@@ -5,6 +5,8 @@ network, no model loaded: the start the poller makes is faked too, and the
 poller only ever reads a session's address and state). The routes are in
 `test_server.py`, which owns the module-scoped server.
 """
+import time
+
 import live
 import store
 
@@ -104,3 +106,33 @@ def test_unknown_probe_keeps_the_finding(isolated, monkeypatch):
     started = _run_tick(monkeypatch, {"u1": None})
     assert started == []                        # the screen may be free; the probe did not say
     assert [w for w in store.watchers() if w["url"] == "u1"][0]["live"]
+
+
+# ---- what the poller says about itself -----------------------------------
+#
+# A pass that finds nothing changed writes no row and publishes nothing, so
+# the finish time kept in the module is the only sign the loop is alive.
+
+def test_status_before_any_pass(isolated, monkeypatch):
+    """Never polled is a state of its own, not a very old poll."""
+    monkeypatch.setattr(live, "_watcher_last_pass", None)
+    st = live.watcher_status()
+    assert st["last_pass"] is None
+    assert st["poll_s"] == live.WATCH_POLL_S
+    assert not st["running"]            # no poller thread in this process
+
+
+def test_pass_records_when_it_finished(isolated, monkeypatch):
+    monkeypatch.setattr(live, "_watcher_last_pass", None)
+    store.add_watcher("u1", "n1")
+    before = time.time()
+    _run_tick(monkeypatch, {"u1": True})
+    assert live.watcher_status()["last_pass"] >= before
+
+
+def test_a_pass_that_changes_nothing_still_records(isolated, monkeypatch):
+    """The case the stamp exists for: nothing watched, nothing to write, and
+    before this the screen had no way to tell that from a dead thread."""
+    monkeypatch.setattr(live, "_watcher_last_pass", None)
+    _run_tick(monkeypatch, {})
+    assert live.watcher_status()["last_pass"] is not None

@@ -126,9 +126,12 @@
       <input id="library-search" type="search" autocomplete="off"
              data-i18n-attr="placeholder:library.search.ph">
     </div>
-    <div id="watch-section" class="watch-section" hidden>
+    <!-- Not hidden while empty any more: the head carries the one button that
+         adds a first address, so hiding it hid the way in. library.js says why. -->
+    <div id="watch-section" class="watch-section">
       <div class="watch-head">
         <span class="watch-title" data-i18n="library.watch"></span>
+        <span id="watch-status" class="watch-status"></span>
         <button id="watch-add" class="seg" data-i18n="library.watch.add"
                 data-i18n-attr="title:library.watch.add.title"></button>
       </div>

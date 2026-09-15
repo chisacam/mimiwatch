@@ -1230,7 +1230,10 @@ break that a broadcast can run for hours without. Measured on one machine
 against a live YouTube broadcast, resolving the addresses again took `yt-dlp -j`
 1.6–2.1 s plus one `yt-dlp -g` 1.7–2.0 s — **3.5–4.2 seconds**, with the respawn
 and the first segment after that. Another machine and another network will
-differ; read it as *a few seconds*, not as a figure.
+differ; read it as *a few seconds*, not as a figure. The strip above the player
+says the switch is under way for exactly as long as it is: it comes down when
+the new process is actually reading, not after a count of seconds, which would
+say reception was back whenever the re-resolution ran long.
 
 **The transcription normally survives it.** A break that falls inside the DVR
 window is picked back up where it stopped, so what the viewer sees is the

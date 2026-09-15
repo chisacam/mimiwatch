@@ -846,6 +846,17 @@ class LiveSession:
         # (`_read_until_end`); see `_request_respawn` for why it is a flag
         # rather than the API thread spawning anything itself.
         self._respawn = False
+        # How many ffmpegs this session has stood up. The screen is the reason it
+        # exists: switching the video saving is a reattach the user asked for and
+        # waits through, and nothing else in the status changes when the new
+        # process starts reading -- `state` stays "running" throughout, `recv_s`
+        # only goes back to 0, and `media_base` does not move until the new time
+        # base has travelled the ring, which needs sound and focus. So a page that
+        # put "switching…" up when the button was pressed had nothing to watch for
+        # and left it up for the rest of the session. It counts attempts that
+        # succeeded, so a reattach that could not resolve leaves it where it was
+        # and the session's own error is what reaches the screen instead.
+        self._attached = 0
         # Between the reading side (the ffmpeg thread, or feed() for a tab) and the
         # transcribing thread. See Ring. There are two clocks -- `_recv_*` is where
         # the reading side has **received** to, and `media_base`/`audio_s` is where
@@ -970,6 +981,9 @@ class LiveSession:
                 # former stands still while the latter keeps going. Resume uses the latter.
                 "recv_s": round(self._recv_s, 1),
                 "recv_t": round(self._recv_base + self._recv_s, 2),
+                # How many ffmpegs have been stood up. The screen watches it to
+                # know a reattach it asked for is over; see `_attached`.
+                "attached": self._attached,
                 "ring_s": round(self._ring.seconds(), 1),
                 "focused": self._focus.is_set(), "group": self.group,
                 "site": self.site, "channel": self.channel,
@@ -1761,6 +1775,9 @@ class LiveSession:
             out = ""
         self._ff = subprocess.Popen(read_plan(src, start_index, out, self._vid_src),
                                     stdout=subprocess.PIPE, **stream.child_io())
+        # After the Popen for the same reason the part name below is: a process
+        # that could not be started is not one that is reading.
+        self._attached += 1
         if out:
             # After the Popen, so a process that could not be started leaves no
             # part in the status that nothing ever wrote to.
@@ -2004,6 +2021,12 @@ class LiveSession:
         self._ring.push(("rebase", self._recv_base, note))
         self._spawn_ffmpeg(src, start_index)
         self.gap_s = 0.0
+        # Nothing else on this path writes a status, and a reattach is the one
+        # break a user sits and waits through -- the switch that caused it is a
+        # button they pressed. `attached` has just gone up, so this is the event
+        # that takes their "switching…" notice down.
+        self._persist()
+        self.emit({"type": "status", **self.status()})
         return "ok"
 
     def _run(self):

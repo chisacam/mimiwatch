@@ -636,6 +636,41 @@ def test_a_reconnect_keeps_the_playlist_clock_when_it_is_the_one_ahead(session, 
     s._recv_base, s._recv_s = 0.0, 1000.0     # the window has moved past where it stopped
     assert s._reconnect(1) == "ok"
     assert s._recv_base == 1200.0             # the playlist's, not the session's 1000
+
+
+def test_only_a_stood_up_ffmpeg_is_counted_as_an_attach(session, monkeypatch):
+    """`attached` is the only thing in the status that moves when a reattach
+    finishes, and the screen takes the "switching the video saving" notice down
+    on it. So it has to mean one thing: a process is reading now. A reattach that
+    could not resolve must leave it alone, or the notice comes down over a
+    reception that never came back and the session's own error is the only true
+    thing left on screen.
+    """
+    s = session
+    monkeypatch.setattr(live.subprocess, "Popen", lambda *a, **k: object())
+    assert s.status()["attached"] == 0
+    s._spawn_ffmpeg("src", -2)
+    assert s.status()["attached"] == 1
+
+    def no_playlist(reconnect=False):
+        raise RuntimeError("network")
+    s._resolve_hls = no_playlist
+    assert s._reconnect(1) == "retry"
+    assert s.status()["attached"] == 1
+    # A broadcast that has ended does not stand one up either.
+    s._resolve_hls = lambda reconnect=False: (None, None)
+    assert s._reconnect(2) == "ended"
+    assert s.status()["attached"] == 1
+    # One that attached does.
+    s._resolve_hls = lambda reconnect=False: ("src", -2)
+    assert s._reconnect(3) == "ok"
+    assert s.status()["attached"] == 2
+    # And the status saying so reaches the screen -- no other line on the
+    # reattach path writes one, so without it the count moved where nobody
+    # could see it.
+    assert [e for e in s.emitted if e.get("type") == "status"][-1]["attached"] == 2
+
+
 def test_multiview_add_resumes_a_stopped_session_as_a_warm_member(monkeypatch):
     monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
     store.save_session({"id": "old-9", "state": "stopped", "stopped_by": "user", "url": "https://x/old",

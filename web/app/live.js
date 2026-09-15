@@ -506,6 +506,20 @@ function onLiveStatus(m, tile = focusedTile()) {
   if (!live) return;
   live.state = m.state;
   live.lastStatus = m;
+  // The "switching the video saving" notice comes down here, and only here.
+  // `attached` counts the ffmpegs the session has stood up, so a value other
+  // than the one remembered when the button was pressed means the new one is
+  // reading -- which is the thing the notice is about, and the only honest
+  // signal that it has happened. A session that gave up instead reports its own
+  // error, and that is what should be on screen rather than a notice saying the
+  // reception is on its way back. Hidden only while this tile is the focused
+  // one, because the strip is a single band shared by every tile.
+  if (live.awaitAttach != null
+      && (m.attached !== live.awaitAttach || m.state === "error"
+          || m.state === "stopped")) {
+    live.awaitAttach = null;
+    if (tile === focusedTile()) hideLiveNotice();
+  }
   if (m.asr_backend) live.asr = m.asr_backend;
   if (m.backend) live.backend = m.backend;
   if (tile.doc) tile.doc.title_by_user = !!m.title_by_user;
@@ -625,7 +639,14 @@ async function onRecordToggle(e) {
   // Said before the answer comes back, not after. The switch costs a reconnect
   // of a few seconds and the answer is what arrives at the end of it, so a
   // notice written afterwards would appear once reception was already back.
-  if (field === "record_video") showLiveNotice(t("live.record.videoSwitching"));
+  // What is remembered with it is how many ffmpegs the session had stood up at
+  // the moment of the press; `onLiveStatus` takes the notice down when that
+  // number changes. The reconnect happens on the server after the route has
+  // already answered, so the answer itself cannot say the reception is back.
+  if (field === "record_video") {
+    live.awaitAttach = live.lastStatus.attached ?? 0;
+    showLiveNotice(t("live.record.videoSwitching"));
+  }
   let res;
   try {
     res = await (await fetch("/api/live/record", {
@@ -638,13 +659,20 @@ async function onRecordToggle(e) {
   btn.disabled = false;
   if (res.error) {
     // What the server kept doing is what it was doing before, so nothing on
-    // screen changes except the reason.
+    // screen changes except the reason. Nothing is being waited for either.
+    live.awaitAttach = null;
     showLiveNotice(t("live.record.switchFailed", { error: res.error }));
     return;
   }
-  if (field === "record_video" && res.reconnect)
-    showLiveNotice(t("live.record.videoSwitching"));
-  else if (field === "record_video") hideLiveNotice();
+  if (!res.reconnect) {
+    // Nothing was stood up again, so there is no signal coming and the strip
+    // must not be left carrying one. The audio half never interrupts anything,
+    // and the video half answers `reconnect: false` when there was no ffmpeg to
+    // end -- the session is still resolving, or the reading thread is between
+    // processes, and the change lands on the next spawn with no break at all.
+    live.awaitAttach = null;
+    hideLiveNotice();
+  }
   live.lastStatus = { ...live.lastStatus, record: res.record,
                       record_video: res.record_video };
   if (tile === focusedTile()) renderLiveStatus(tile);

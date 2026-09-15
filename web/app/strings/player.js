@@ -145,6 +145,14 @@ MW_I18N.add({
     en: "{n} lines",
     ko: "{n}줄",
   },
+  "live.status.recordFailed": {
+    en: "<b>saving the audio stopped</b> ({error})",
+    ko: "<b>소리 저장이 멈췄습니다</b>({error})",
+  },
+  "live.status.recording": {
+    en: "saving <b>{n}s</b>",
+    ko: "저장 <b>{n}초</b>",
+  },
   "live.status.standby": {
     en: "<b>Standby</b> (receiving audio only)",
     ko: "<b>대기</b>(소리만 받는 중)",

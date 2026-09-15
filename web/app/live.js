@@ -195,6 +195,7 @@ async function startLive(url, lang, probe) {
       url, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
       asr: state.asr, refine: state.refine, genre: currentGenre(),
       profile: document.querySelector('#add-form select[name="profile"]').value,
+      ...recordArg(),
     }),
   })).json();
   if (res.error) { jobError(res.error); return; }
@@ -540,6 +541,21 @@ function onLiveStatus(m, tile = focusedTile()) {
   if (tile === focusedTile()) renderLiveStatus(tile);
 }
 
+/* What the session is doing with the audio, as a piece of the status line.
+ *
+ * A failed write has to reach the screen. The session goes on transcribing
+ * after one (live.py `_record` reports the error and hands the same bytes to
+ * the transcriber), so subtitles keep arriving and nothing else on the page
+ * would look any different from a session that is saving its audio -- and a
+ * recording that stopped with nobody told is the exact failure that saving the
+ * audio exists to prevent. */
+function recordingNote(m) {
+  if (m.recording_error)
+    return " · " + t("live.status.recordFailed", { error: esc(m.recording_error) });
+  if (!m.recording) return "";
+  return " · " + t("live.status.recording", { n: Math.round(m.recording_s || 0) });
+}
+
 /* Writes the focused tile's session state into the top bar (#lang-status), the
  * badge and the notice strip. When a state event arrives and when the focus
  * comes to this tile -- the two have to write the same words. */
@@ -562,7 +578,8 @@ function renderLiveStatus(tile) {
   if (m.state === "interrupted") {
     el.className = "status warn";
     el.innerHTML = t("live.status.interrupted",
-                     { state: LIVE_STATE.interrupted, n: m.lines || 0 });
+                     { state: LIVE_STATE.interrupted, n: m.lines || 0 })
+      + recordingNote(m);
     offerResume(m.id, stopReason(m), m);
     return;
   }
@@ -574,14 +591,18 @@ function renderLiveStatus(tile) {
     // transcribing the whole video instead.
     if (isPushedSource(m.source) || m.url) offerResume(m.id, stopReason(m), m);
   }
-  el.className = "status";
+  // The whole line goes amber when saving the audio failed, even though the
+  // session itself is fine. `.status.warn b` is what colours the bold runs, so
+  // the class has to sit here rather than on the fragment.
+  el.className = m.recording_error ? "status warn" : "status";
   const src = m.source_lang || "auto";
   const eng = (m.asr || "").replace(/-Q8_0$|\.gguf$/g, "");
   el.innerHTML = t("live.status.headline", { state: LIVE_STATE[m.state] || m.state,
                                              src, viewer: m.viewer_lang })
     + (eng ? " · " + t("live.status.engine", { engine: esc(eng) }) : "")
     + (m.lines ? " · " + t("live.status.lines", { n: m.lines }) : "")
-    + (m.focused === false ? " · " + t("live.status.standby") : "");
+    + (m.focused === false ? " · " + t("live.status.standby") : "")
+    + recordingNote(m);
 }
 
 /* "Stop" ends the transcription session, not the viewing. Nothing here

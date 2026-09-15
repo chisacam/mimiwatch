@@ -33,7 +33,7 @@ const state = {
   // subtitle size scale.
   fsBaseHeight: 0, cuePx: 0,
   cuePos: null,        // { x, y } as ratios. restore() fills it -- see DEFAULT_CUE_POS
-  backend: "local-gemma", asr: "tcpp-best", refine: true,
+  backend: "local-gemma", asr: "tcpp-best", refine: true, record: false,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   models: null,        // the answer from /api/models. Model and tool list and state (engines.js)
   live: null,          // { id, es, store } while a broadcast is running (store: MimiCues)
@@ -42,6 +42,16 @@ const state = {
   // { id, focus, members }, mvLayout is the chosen layout name.
   tiles: [], focus: null, mv: null, mvLayout: "",
 };
+
+/* The "Save the audio" box as a live-start body field -- present only when it
+ * is ticked.
+ *
+ * Sending `record: false` when it is not ticked would be a regression rather
+ * than a default. The server reads a missing field as "the source decides"
+ * (live.LiveSession), and for a microphone or tab session that decision is to
+ * record, which is the reason such a session is started at all. So an unticked
+ * box says nothing, and a ticked one says "this one as well". */
+const recordArg = () => (state.record ? { record: true } : {});
 
 /* A cue can hold one translation per backend, so switching backends is a
  * lookup when the work has already been done and a job when it has not. */
@@ -204,7 +214,7 @@ function persist() {
     backend: state.backend,
     profile: (document.querySelector('#add-form select[name="profile"]') || {}).value,
     genre: (document.querySelector('#add-form select[name="genre"]') || {}).value,
-    asr: state.asr, refine: state.refine,
+    asr: state.asr, refine: state.refine, record: state.record,
     mvLayout: state.mvLayout,
   });
 }

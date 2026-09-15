@@ -2293,6 +2293,16 @@ WATCH_PROBE_TIMEOUT_S = 20
 
 _watcher_stop = threading.Event()
 _watcher_thread: threading.Thread | None = None
+# Nothing anywhere said the polling was still happening. A pass that finds no
+# change writes nothing and publishes nothing -- `store.set_watcher_live` is a
+# deliberate no-op on an unchanged finding, so `updated` never moves for an
+# address that stays offline -- and a loop taking its passes looked exactly
+# like a thread that had died. The finish time of each pass is kept here, in
+# memory: it is process state, not stored state, and writing it to the row
+# would undo the very no-op that keeps the rows still. It stays `None` until
+# the first pass ends, so "nothing checked yet" is not read as "checked a long
+# time ago".
+_watcher_last_pass: float | None = None
 
 
 def probe_live(url: str) -> bool | None:
@@ -2328,7 +2338,11 @@ def probe_live(url: str) -> bool | None:
 def _watcher_tick() -> None:
     """One pass. At most one session is started per pass, and only when the
     screen is free of running sessions.
+
+    A pass that raises does not reach the stamp, which is the point: what is
+    recorded is a pass that *finished*, not one that was attempted.
     """
+    global _watcher_last_pass
     for w in store.watchers():
         if not w["enabled"]:
             continue
@@ -2351,6 +2365,23 @@ def _watcher_tick() -> None:
         print(f"mimiwatch: watcher {w['name'] or w['url']} is live -- started {s['id']}",
               flush=True)
         break                           # one per pass; the rest next time
+    _watcher_last_pass = time.time()
+
+
+def watcher_status() -> dict:
+    """What the poller itself is doing, for the screen to say out loud.
+
+    Three separate states, because they want three different sentences: the
+    thread is not there at all, it is there and has not finished a pass yet,
+    or it finished one at `last_pass`. `poll_s` travels with them so the
+    screen can tell a gap that is ordinary from one that is not, without
+    having the interval written into it twice.
+    """
+    return {
+        "last_pass": _watcher_last_pass,
+        "poll_s": WATCH_POLL_S,
+        "running": _watcher_thread is not None and _watcher_thread.is_alive(),
+    }
 
 
 def start_watcher_poller() -> None:

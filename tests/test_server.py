@@ -430,7 +430,13 @@ def test_watcher_routes(server):
     """The watched list: add, set the will, delete. No address gets a 400, an unknown one a 404."""
     base, port = server
     s, b = req(base, "/api/watchers")
-    assert s == 200 and json.loads(b)["watchers"] == []
+    got = json.loads(b)
+    assert s == 200 and got["watchers"] == []
+    # The poller's own state rides along on the same request. The thread goes
+    # up before the socket does, so by the time this is answered it is alive.
+    assert got["poller"]["running"]
+    assert got["poller"]["poll_s"] == 30
+    assert "last_pass" in got["poller"]
 
     s, _ = req(base, "/api/watchers", body={})
     assert s == 400                             # no address

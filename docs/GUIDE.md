@@ -446,6 +446,19 @@ seconds. On a channel page it looks for the one live among the recordings; on a
 stream address it reads the live flag outright. A finding it cannot read keeps
 the one it had before.
 
+**The section stands whether or not anything is in it**, and it did not always.
+While it hid itself on an empty list, the one button that leaves a first
+address went with it, and the feature was indistinguishable from one that does
+not exist.
+
+Beside the title, the head says what the checking is doing: how long ago the
+last pass finished, "checking…" until the first one ends, or "watcher stopped"
+when the polling thread is not there at all. That last one is what a restart
+fixes. None of it is written down -- it is the running process's own state, so
+a restart clears it and the count begins again at the first pass. The screen
+asks for it every 15 seconds while the tab is being looked at, and not at all
+while it is not.
+
 Each address has a **watch** (the small circle): turn it off to put the address
 on hold, delete it from the list at any time. Clicking a row that is live
 starts it by hand -- the same thing the server does on its own, done while you

@@ -365,8 +365,20 @@ function setNowTitle(title, userRenamed = false) {
 /* The watched list -- the addresses the server polls, and starts receiving by
  * itself the moment one of them goes live. The rule for when it starts is the
  * server's (live.py, the watchers section); the list here only shows it, and
- * sets or unsets the will. It is hidden while empty, so the screen stays as it
- * was for someone who leaves nothing to be watched. */
+ * sets or unsets the will.
+ *
+ * The section used to hide itself while the list was empty, so that the screen
+ * stayed as it was for someone who leaves nothing to be watched. That also hid
+ * the ＋ Watch button, which is the only way to leave a first address -- the
+ * whole feature was indistinguishable from one that does not exist. The head
+ * now always stands and a quiet line takes the place of the rows.
+ *
+ * The head also carries what the poller is doing, because nothing else does: a
+ * pass that finds no change writes no row and publishes nothing on the bus, so
+ * a loop taking its passes and a thread that died read the same from here. */
+
+const WATCH_STATUS_MS = 15000;   // the poll is every 30 s; asking twice as often is plenty
+let watchStatusTimer = null;
 
 async function refreshWatchList() {
   const res = await (await fetch("/api/watchers")).json();
@@ -374,9 +386,47 @@ async function refreshWatchList() {
   const list = $("watch-list");
   if (!section || !list) return;
   const ws = res.watchers || [];
-  section.hidden = !ws.length;
   list.textContent = "";
+  if (!ws.length) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = t("library.watch.empty");
+    list.appendChild(e);
+  }
   ws.forEach(w => list.appendChild(watchRow(w)));
+  setWatchStatus(res.poller);
+  // "12s ago" has to keep moving on its own, and the bus is silent on a pass
+  // that changed nothing, so the head is re-asked on a clock. One clock: this
+  // function is called on every notice and on every edit of the list, and
+  // without the clear each of those left another timer running behind it.
+  clearInterval(watchStatusTimer);
+  watchStatusTimer = setInterval(pollWatchStatus, WATCH_STATUS_MS);
+}
+
+/* Only while the tab is looked at. Chrome throttles a background tab's timers
+ * rather than stopping them, so without this a tab left open overnight would
+ * go on asking the server for a line nobody is reading -- the same rule bus.js
+ * follows when it waits for the tab to come back before re-reading. */
+async function pollWatchStatus() {
+  if (document.visibilityState !== "visible") return;
+  try {
+    const res = await (await fetch("/api/watchers")).json();
+    setWatchStatus(res.poller);
+  } catch (_) { /* the next tick asks again */ }
+}
+
+/* Three states, three sentences: no thread, a thread that has not finished a
+ * pass yet, and the time the last pass finished. Absent `poller` (an older
+ * server answering a newer screen) says nothing at all rather than guessing. */
+function setWatchStatus(p) {
+  const el = $("watch-status");
+  if (!el) return;
+  if (!p) { el.textContent = ""; return; }
+  if (!p.running) { el.textContent = t("library.watch.stopped"); return; }
+  if (p.last_pass == null) { el.textContent = t("library.watch.checking"); return; }
+  const secs = Math.max(0, Math.round(Date.now() / 1000 - p.last_pass));
+  el.textContent = secs < 90 ? t("library.watch.checked", { n: secs })
+                             : t("library.watch.checked.min", { n: Math.round(secs / 60) });
 }
 
 function watchRow(w) {

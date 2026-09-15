@@ -612,6 +612,29 @@ MW_I18N.add({
     en: "receiving now",
     ko: "지금 받는 중",
   },
+  // The head of the section, saying whether the polling is still happening.
+  // Minutes take over from seconds past 90 s: the pass is every 30 s, so a
+  // three-digit second count means something is wrong and reads better as one.
+  "library.watch.checked": {
+    en: "checked {n}s ago",
+    ko: "{n}초 전 확인",
+  },
+  "library.watch.checked.min": {
+    en: "checked {n}m ago",
+    ko: "{n}분 전 확인",
+  },
+  "library.watch.checking": {
+    en: "checking…",
+    ko: "확인하는 중…",
+  },
+  "library.watch.stopped": {
+    en: "watcher stopped",
+    ko: "감시가 멎었습니다",
+  },
+  "library.watch.empty": {
+    en: "Nothing watched yet. Leave an address with “＋ Watch” and it is received on its own the moment it goes live.",
+    ko: "아직 감시하는 주소가 없습니다. 「＋ 감시」로 주소를 남기면 라이브가 되는 순간 알아서 받기 시작합니다.",
+  },
   "library.watch.disable.tip": {
     en: "Stop watching — leave it be even when it goes live",
     ko: "감시 멈춤 — 시작해도 안 받습니다",

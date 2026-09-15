@@ -135,12 +135,15 @@ when the box was ticked, unticking it did nothing at all. A box that can only be
 ticked is not a setting, and a recording nobody asked for is the wrong thing to
 leave on disk.
 
-**Save the video as well** — copies the broadcast itself to
-`data/recordings/<date>-<session id>.mp4`, alongside the audio. The picture is
-copied as it arrives and only the sound is re-encoded, so what it costs is disk
-and not CPU. It applies to a stream the server fetches and to nothing else: a microphone or tab session uploads sound
-and has no picture to save, so the box is hidden for those sources. Off unless
-ticked, the same as the audio.
+**Save the video as well** — writes the broadcast itself to
+`data/recordings/<date>-<session id>.mp4`, alongside the audio. With it ticked
+the broadcast is **fetched once and fanned out**: one read feeds the subtitles,
+the WAV and the mp4 together. The picture is copied as it arrives and only the
+sound is re-encoded, so what it costs is disk and not CPU. It applies to a
+stream the server fetches and to nothing else: a microphone or tab session
+uploads sound and has no picture to save, so the box is hidden for those
+sources. Off unless ticked, the same as the audio — and unticked, nothing about
+reception changes at all.
 
 There is no MB an hour to quote for it. The audio figure is arithmetic off a
 sample format that never changes; a video rendition has no fixed anything —
@@ -1122,15 +1125,35 @@ turns amber and says *saving the audio stopped* instead.
 ### Saving the video too
 
 Tick **Save the video as well** and the picture is kept beside the sound, as
-`data/recordings/<date>-<session id>.mp4`. Four things are worth knowing before
+`data/recordings/<date>-<session id>.mp4`. Five things are worth knowing before
 leaving it running overnight.
 
-**It is a second process, not a second output.** The recorder is an ffmpeg of
-its own, given a muxed rendition of its own. The transcription pipeline
-deliberately resolves an *audio-only* rendition, so putting video through that
-one would mean fetching pixels only to throw them away again — and the two would
-then reconnect together, where as it stands either can die without touching the
-other. The subtitles come out exactly as they would with the box unticked.
+**The broadcast is fetched once and fanned out.** With the box ticked, the
+rendition mimiwatch reads is the muxed one, and that one read feeds three
+things: the subtitles, the WAV if that box is ticked too, and the mp4. Two of
+them are outputs of the ffmpeg itself — the sound on a pipe and the broadcast
+into the file; the WAV is written in Python off that same pipe, which is how it
+stays one contiguous file across reconnects. A second process pulling a muxed
+copy of its own was the other way to build it, and it costs the stream's
+bandwidth twice and two sets of segment requests for one broadcast. With the box
+unticked nothing about reception changes at all: the audio-only rendition, the
+same command, the same subtitles. Multiview runs up to four
+sessions, so four mp4s can be growing at once — but they are the four reads that
+were happening anyway, now carrying their pixels through to disk instead of
+dropping them.
+
+**The cost of one read is that the outputs share a fate.** An mp4 that cannot be
+written — a full disk, a volume that went read-only — ends the process feeding the
+subtitles as well, so **a failed recording interrupts reception for as long as a
+reconnect takes** (a few seconds, and the stretch that was missed is written into
+the subtitles as `⋯ about N s went unreceived ⋯`). The session recovers by
+itself, and it is bounded. Five parts in a row that ended within half a minute of
+starting and **the video is given up on for the rest of the session** — the
+status line turns amber and says *saving the video stopped*, with the reason, and
+everything after that resolves audio-only and goes on with the subtitles. If the
+muxed rendition cannot be resolved at all, the session falls back to the
+audio-only one at once and says so in the same place. Losing the subtitles
+because the picture was unavailable is the wrong trade.
 
 **The picture is copied; the sound is re-encoded.** `-c:v copy -c:a aac`, and
 the audio half is not a free choice. HLS delivers MPEG-TS segments whose AAC
@@ -1145,13 +1168,12 @@ is the cheap half: half a minute of 4 Mbps video remuxed this way cost 0.17 s of
 CPU against 0.03 s for a pure copy. The expensive half is still a byte copy.
 
 **A long broadcast leaves several files.** The URL the site hands out is signed
-and expires within the day, so the recorder's ffmpeg ends while the broadcast
-goes on. It resolves again and opens the next part beside the first —
-`… (2).mp4`, `… (3).mp4` — because a copy cannot be resumed into the middle of a
-file the way audio frames can be appended to one. Five starts that die
-immediately and it gives up and says so; a part that ran for half a minute
-resets that count. A **Resume** opens its own set of parts under its own
-timestamp, the same way it opens a second WAV.
+and expires within the day, and reception breaks on its own besides, so the
+ffmpeg reading the broadcast ends while the broadcast goes on. Every reattach
+opens the next part beside the first — `… (2).mp4`, `… (3).mp4` — because a copy
+cannot be resumed into the middle of a file the way audio frames can be appended
+to one. A **Resume** opens its own set of parts under its own timestamp, the same
+way it opens a second WAV.
 
 **A file cut off still plays.** It is written as fragmented mp4
 (`+frag_keyframe+empty_moov+default_base_moof`), so the index goes down as the
@@ -1160,13 +1182,6 @@ stopped — which is how a program people close ends most of the time — leaves
 file that plays up to its last complete fragment, losing at most one keyframe
 interval, with nothing to repair afterwards. The WAV beside it is the opposite
 case, and needs the repair described above.
-
-**A failure costs nothing else.** If the rendition cannot be resolved, or ffmpeg
-cannot be started, or it dies for good, the reason goes on the status line the
-way a failed WAV does (*saving the video stopped*) and the session carries on
-transcribing, translating and writing its audio. Multiview runs up to four
-sessions, so four video recorders can run at once — four muxed streams being
-pulled and written, on top of the four audio ones.
 
 ### What the microphone path does not do
 

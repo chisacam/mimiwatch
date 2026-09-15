@@ -306,31 +306,41 @@ def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
                        + hint + " [" + " / ".join(why) + "]")
 
 
-# How many times the video recorder starts over before it gives up. The muxed
-# URL it is handed is signed and expires, so its ffmpeg ending while the
-# broadcast goes on is the normal case rather than a fault -- but a URL that
-# dies the instant it is opened would otherwise put yt-dlp in a loop with
-# nothing to stop it. The audio side is bounded the same way
+# How many parts that died on the spot the video recording gets before it is
+# given up on for the rest of the session. A broadcast that is being saved is
+# fetched once and fanned out -- one ffmpeg, the sound down the pipe and the
+# picture into an mp4 -- so an mp4 output that cannot be written takes reception
+# down with it. `_read_until_end` reaps and reattaches, so the session recovers;
+# what it cannot do by itself is notice that it will fail again the same way for
+# as long as the broadcast lasts. The audio side is bounded the same way
 # (HLS_RECONNECT_TRIES).
 VIDEO_RECONNECT_TRIES = 5
 
-# A part that ran this long counts as a recording that worked, so the retry
-# count starts over -- the same rule `_read_until_end` applies when sound
-# arrives.
+# A part that ran this long counts as a recording that worked, so the count
+# starts over -- the same rule `_read_until_end` applies when sound arrives.
 VIDEO_PART_OK_S = 30.0
 
 
-def resolve_video(url: str) -> str:
-    """A rendition with the picture still in it, for the video recorder.
+def resolve_video(url: str) -> tuple[str, dict]:
+    """A rendition with the picture still in it, and what its manifest says
+    about media time.
 
-    Deliberately not `resolve_audio`: that one asks for an audio-only rendition
-    on purpose, and going through it would mean fetching pixels only to throw
-    them away again with `-vn`. `best` is yt-dlp's name for the best single file
-    that already carries both streams, so `-g` prints exactly one URL and there
-    is nothing to mux here.
+    The same shape `resolve_audio` returns, because it stands in for it: a
+    session that is saving the video reads the muxed rendition and takes the
+    sound out of it, rather than pulling the broadcast a second time.
+
+    `best` is yt-dlp's name for the best single file that already carries both
+    streams, so `-g` prints exactly one URL and there is nothing to mux here.
+
+    `manifest_info` reads a muxed variant manifest as happily as an audio-only
+    one -- it looks at EXTINF, TARGETDURATION, PROGRAM-DATE-TIME and ENDLIST,
+    none of which know what is inside the segments. Measured against a real
+    muxed variant (test-streams.mux.dev x36xhzz, 720p h264+aac): 64 segments, a
+    634.6 s window, ENDLIST seen. A *master* playlist gives zeros for all of it,
+    but that is equally true of the audio side and `-g` hands back a variant.
 
     What comes back is signed and expires within the day, which is why it is
-    resolved when a part is about to be opened and never stored -- the same rule
+    resolved every time ffmpeg is stood up and never stored -- the same rule
     the play URL already has (`live.play_url`).
     """
     try:
@@ -349,12 +359,34 @@ def resolve_video(url: str) -> str:
         # different address is what is missing.
         raise RuntimeError("yt-dlp found no rendition with the picture in it"
                            + (f": {why[-1]}" if why else ""))
-    return lines[0]
+    return lines[0], manifest_info(lines[0])
 
 
-def video_plan(src: str, out: str) -> list[str]:
-    """The ffmpeg command that writes a broadcast's video down, as a list. A test
-    can read it without running it.
+def read_plan(src: str, start_index, video_out: str = "") -> list[str]:
+    """The reading ffmpeg's command, as a list. A test can read it without
+    running it, the way `burn.plan` can be read.
+
+    One input and one output is what this has always been: the sound, mono
+    16 kHz signed 16-bit, on stdout for the VAD. `video_out` adds a second
+    output to the same process, so a broadcast that is being saved is **fetched
+    once and fanned out** rather than pulled twice by two ffmpegs. The
+    transcription pipeline reads the muxed rendition in that case
+    (`resolve_video`) and drops the pixels on its own output with `-vn`.
+
+    `-live_start_index -2` starts two segments from the end of the playlist.
+    Without it ffmpeg reads a full-DVR playlist from the top and transcribes the
+    broadcast's opening greetings while the viewer watches its live edge.
+    `-nostdin`: the sound comes back over the stdout pipe, so ffmpeg has no
+    reason to look at standard input, and this also stops it taking key presses
+    when run in a terminal.
+
+    **The maps are explicit and have to be.** A master playlist opens as one
+    input with every variant in it, and with a bare `-map 0:a` ffmpeg found five
+    audio streams and died with *s16le muxer does not support more than one
+    stream of type audio*, delivering 0 bytes to the pipe -- which is a session
+    with no subtitles at all. `-g` normally hands back a single variant so this
+    rarely bites, but naming the first audio and the first video stream is
+    correct and costs nothing.
 
     **The picture is copied and only the sound is re-encoded**, which is not the
     obvious `-c copy` and was not a free choice. HLS delivers MPEG-TS segments,
@@ -378,22 +410,35 @@ def video_plan(src: str, out: str) -> list[str]:
     file grows, so a file cut off in the middle loses at most the fragment being
     written and needs no repair.
     """
-    return [
-        stream.ffmpeg_cmd(), "-loglevel", "error", "-nostdin", "-y",
-        "-i", src,
-        "-c:v", "copy", "-c:a", "aac",
-        "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-        "-f", "mp4", out,
-    ]
+    cmd = [stream.ffmpeg_cmd(), "-loglevel", "error", "-nostdin"]
+    if video_out:
+        # `-y` goes in only with the mp4, so the audio-only command stays the
+        # one it has always been. The part file was chosen unused, so there is
+        # nothing to overwrite; what this answers is the gap between choosing
+        # the name and opening it -- without it ffmpeg stops to ask, and with
+        # `-nostdin` there is nobody there to answer.
+        cmd += ["-y"]
+    cmd += ["-live_start_index", str(start_index), "-i", src]
+    if video_out:
+        cmd += ["-map", "0:a:0"]
+    cmd += ["-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"]
+    if video_out:
+        cmd += ["-map", "0:v:0", "-map", "0:a:0",
+                "-c:v", "copy", "-c:a", "aac",
+                "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+                "-f", "mp4", video_out]
+    return cmd
 
 
 def video_part_path(stem: str) -> str:
     """The next unused part file of one session's video recording.
 
-    A signed URL expires and its ffmpeg ends where the audio side would
-    reconnect, so one long broadcast leaves several files. They are numbered
-    rather than stamped afresh, so they sort together and read in order --
-    `burn.out_path_for` numbers a re-burn the same way.
+    A signed URL expires and the ffmpeg reading it ends, and the session answers
+    that by resolving again and standing a new one up -- so one long broadcast
+    leaves one file per reconnect, because a copy cannot be resumed into the
+    middle of an existing file the way audio frames can be appended. They are
+    numbered rather than stamped afresh, so they sort together and read in order
+    -- `burn.out_path_for` numbers a re-burn the same way.
     """
     d = paths.recordings_dir()
     p = os.path.join(d, f"{stem}.mp4")
@@ -639,15 +684,17 @@ class LiveSession:
         # while a video rendition has no such figure at all: whichever one the
         # site hands over decides it.
         self.record_video = bool(record_video) and not self.pushed
-        # Set when the recorder opens its first part; see _record_video. The
-        # stem is fixed for the session so the parts sort together, and
-        # `_vid_parts` is every file it has opened, in order.
-        self._vproc: subprocess.Popen | None = None
-        self._vid_thread: threading.Thread | None = None
+        # Set when the first part is opened; see _spawn_ffmpeg. The stem is
+        # fixed for the session so the parts sort together, and `_vid_parts` is
+        # every file that has been opened, in order. `_vid_began` is when the
+        # part now being written was opened and `_vid_bad` how many in a row
+        # died on the spot -- see _video_part_ended.
         self._vid_stem = ""
         self._vid_path = ""
         self._vid_parts: list[str] = []
         self._vid_error = ""
+        self._vid_began = 0.0
+        self._vid_bad = 0
         prof = PROFILES.get(profile, PROFILES["broadcast"])
         self.profile = profile if profile in PROFILES else "broadcast"
         self.max_speech = prof["max_speech"]
@@ -1179,82 +1226,91 @@ class LiveSession:
 
     # ---- the session's own video ------------------------------------------
     #
-    # Entirely apart from transcription, and on purpose. The read loop's ffmpeg
-    # resolves an *audio-only* rendition (`resolve_audio`), so putting video
-    # through it would mean fetching pixels only to drop them again -- and a
-    # recorder sharing that pipe would make every reconnect of one a reconnect
-    # of the other. This is a second ffmpeg, given its own muxed URL, copying
-    # bytes to disk while the first one is still feeding the VAD.
+    # Not a recorder of its own. A session that was asked for the video reads
+    # the *muxed* rendition (`_resolve_hls`) and the one ffmpeg fans it out:
+    # the sound down the pipe to the VAD, the broadcast itself into an mp4
+    # (`read_plan`). A second process pulling a second copy of the same
+    # broadcast was the other way to do it, and it costs the stream's bandwidth
+    # twice and two sets of segment requests for one broadcast.
+    #
+    # What one process costs instead is that the outputs share a fate: an mp4
+    # that cannot be written ends the process feeding the subtitles too. The
+    # read loop reaps and reattaches, so the session recovers by itself -- but
+    # left alone it would recover into the same failure for as long as the
+    # broadcast lasts, so `_video_part_ended` bounds it. After
+    # VIDEO_RECONNECT_TRIES parts that died on the spot the video is given up
+    # on, and every reconnect after that resolves audio-only and carries on
+    # with the subtitles.
+    #
+    # It runs the other way too, and that is new: `_push_audio` holds the
+    # reading thread while the ring is full on a focused session, so a
+    # transcriber that falls far enough behind now stalls the mp4 as well --
+    # where the separate recorder went on writing regardless. The ring is
+    # INGEST_MAX_S deep, so it takes minutes of falling behind to reach, and
+    # what follows is the HLS read dropping behind the DVR window, which is a
+    # reconnect. Not measured; written down because the fan-out is what
+    # connected them.
 
-    def _start_video(self) -> None:
-        """Stand the video recorder up, if this session was asked for one."""
-        if not self.record_video or self._vid_thread is not None:
-            return
-        self._vid_stem = f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id}"
-        self._vid_thread = threading.Thread(target=self._record_video,
-                                            name=f"vid-{self.id}", daemon=True)
-        self._vid_thread.start()
+    def _saving_video(self) -> bool:
+        """Is the next ffmpeg to carry an mp4 output.
 
-    def _record_video(self) -> None:
-        """Copy the broadcast to disk for as long as the session runs. Runs on
-        its own thread.
-
-        Why the recorder has to start over at all: the URL `resolve_video`
-        hands out is signed and expires, so ffmpeg ends while the broadcast is
-        still going -- the same event the read loop answers by reattaching. It
-        is answered here by resolving again and opening the **next part**
-        beside the first (`... (2).mp4`), because a copy cannot be resumed into
-        the middle of an existing file the way audio frames can be appended. A
-        long broadcast therefore leaves several files, which both guides say.
-
-        A failure never costs anything else. The same policy `_record` has for
-        the WAV: the reason is written down once in `_vid_error` for the status
-        to carry, the thread leaves, and the subtitles, the translations and
-        the WAV carry on as though nothing had been asked for.
+        `_vid_error` being in the condition is what makes giving up stick: once
+        it is set, `_resolve_hls` goes back to resolving audio-only and the argv
+        goes back to what it is for a session that never asked, for the rest of
+        the session.
         """
-        tries = 0
-        while not self._stop.is_set():
-            try:
-                src = resolve_video(self.url)
-                os.makedirs(paths.recordings_dir(), exist_ok=True)
-                out = video_part_path(self._vid_stem)
-                proc = subprocess.Popen(video_plan(src, out), **stream.child_io())
-            except Exception as exc:
-                self._video_failed(exc)
-                return
-            self._vproc = proc
-            self._vid_path = out
-            self._vid_parts.append(out)
-            print(f"[live] session {self.id} recording video to {out}", flush=True)
-            began = time.time()
-            try:
-                proc.wait()
-            except Exception:
-                pass
-            self._reap_video()
-            lasted = time.time() - began
-            # A broadcast that is over is not a failure to report. The read loop
-            # writes `stopped_by` before the session is torn down, so a recorder
-            # that finds it set has nothing left to attach to and says nothing.
-            if self._stop.is_set() or self.stopped_by:
-                break
-            tries = 0 if lasted >= VIDEO_PART_OK_S else tries + 1
-            if tries > VIDEO_RECONNECT_TRIES:
-                self._video_failed(RuntimeError(
-                    f"it stopped and {VIDEO_RECONNECT_TRIES} attempts to start it "
-                    "again did not last"))
-                return
-            # Straight on when the part that just ended had been running, a
-            # growing wait when they are dying immediately.
-            if self._stop.wait(min(3.0 * tries, 15.0)):
-                break
-        if self._vid_parts:
-            print(f"[live] session {self.id} recorded video to "
-                  f"{len(self._vid_parts)} file(s), "
-                  f"{self._video_bytes() / 1e6:.0f} MB", flush=True)
+        return bool(self.record_video and not self.pushed and not self._vid_error)
+
+    def _next_video_part(self) -> str:
+        """The file the ffmpeg about to be stood up writes its video to, or ""
+        when this session is not saving one.
+
+        The stem is made once and the parts are numbered under it, so a
+        broadcast that reconnected reads as one recording in a directory
+        listing rather than as unrelated files.
+        """
+        if not self._saving_video():
+            return ""
+        if not self._vid_stem:
+            self._vid_stem = f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id}"
+        os.makedirs(paths.recordings_dir(), exist_ok=True)
+        return video_part_path(self._vid_stem)
+
+    def _video_part_ended(self) -> None:
+        """The part the last ffmpeg was writing has ended. Decide whether the
+        video is still worth attempting.
+
+        A part ending is the normal case and not a fault -- the muxed URL is
+        signed and expires, and reception breaks -- so a part that ran for
+        VIDEO_PART_OK_S counts as a recording that worked and clears the count,
+        the same rule the read loop applies when sound arrives. Parts that die
+        on the spot are the shape that means the mp4 output itself is the
+        problem, and those are counted, because every one of them cost the
+        subtitles a reconnect.
+
+        Called from `_spawn_ffmpeg` and nowhere else, which is what keeps a
+        broadcast that simply finished from being told its recording failed.
+        Judging the part where the old ffmpeg ended looked equivalent and is
+        not: that point is one step *before* the reconnect that discovers the
+        broadcast is over, so "the session is stopping" is not true yet and a
+        guard on it never fires. A session that is standing another ffmpeg up
+        is, by definition, one that is carrying on.
+        """
+        began, self._vid_began = self._vid_began, 0.0
+        if not began:
+            return                       # the first ffmpeg of the session
+        if time.time() - began >= VIDEO_PART_OK_S:
+            self._vid_bad = 0
+            return
+        self._vid_bad += 1
+        if self._vid_bad >= VIDEO_RECONNECT_TRIES:
+            self._video_failed(RuntimeError(
+                f"{VIDEO_RECONNECT_TRIES} parts in a row ended within "
+                f"{VIDEO_PART_OK_S:.0f}s of starting. Reception carries on "
+                "without the video"))
 
     def _video_bytes(self) -> int:
-        """How much the video recorder has written, over every part.
+        """How much the video recording has come to, over every part.
 
         Asked of the filesystem rather than counted, because ffmpeg owns the
         writing and not a byte of it passes through this process. A part that
@@ -1269,49 +1325,21 @@ class LiveSession:
         return total
 
     def _video_failed(self, exc: BaseException) -> None:
-        """Record why the video recording stopped, once, and let the rest run on.
+        """Give up on the video for the rest of the session, once, and let
+        everything else run on.
 
         Reported, never swallowed, for the reason `_record` gives: a recording
         that stopped with nobody told is the failure recording exists to
         prevent. The status is the only place a user would look, so that is
-        where it goes.
+        where it goes -- and `_saving_video` reads it back, so the reconnect
+        after this one resolves audio-only and the subtitles, the translations
+        and the WAV carry on as though the video had never been asked for.
         """
+        if self._vid_error:
+            return
         self._vid_error = str(exc) or exc.__class__.__name__
-        print(f"[live] session {self.id} video recording failed, the session "
-              f"continues: {self._vid_error}", file=sys.stderr, flush=True)
-        self._reap_video()
-
-    def _reap_video(self, timeout: float = 5.0) -> None:
-        """Wait on the video ffmpeg so it is not left `<defunct>`, the same way
-        `_reap_ff` does for the reading one.
-
-        Longer than that one's two seconds because this process has a file to
-        finish: asked to stop, ffmpeg writes the fragment it is holding before
-        it goes.
-        """
-        p, self._vproc = self._vproc, None
-        if p is None:
-            return
-        try:
-            p.wait(timeout=timeout)
-        except Exception:
-            pass
-
-    def _stop_video(self) -> None:
-        """Ask the video ffmpeg to finish, on the session's way out.
-
-        terminate() and not kill(): on SIGTERM ffmpeg closes the fragment it is
-        writing and leaves. A killed one still leaves a playable file -- that is
-        what the `-movflags` in `video_plan` are for -- but the last few seconds
-        are worth the moment it takes to ask.
-        """
-        p = self._vproc
-        if p is None:
-            return
-        try:
-            p.terminate()
-        except Exception:
-            pass
+        print(f"[live] session {self.id} is no longer saving the video, the "
+              f"session continues: {self._vid_error}", file=sys.stderr, flush=True)
 
     def stop(self):
         self.stopped_by = self.stopped_by or "user"
@@ -1321,10 +1349,6 @@ class LiveSession:
         ff = self._ff
         if ff:
             ff.terminate()
-        # The video recorder is a process of its own, so it has to be asked
-        # separately. Left alone it would go on writing to a file belonging to
-        # a session that is over.
-        self._stop_video()
         # A pushed session has no reading thread, so nobody puts ("end",) in.
         # The transcribing side is waiting on the ring, so it is woken here
         # directly.
@@ -1446,17 +1470,36 @@ class LiveSession:
         self._close_translator()
         self._tr = None
         self._recent.clear()
-        if self._ff:
+        ff = self._ff
+        if ff:
+            # terminate before kill, and waited on for longer than `_reap_ff`
+            # alone would wait. The mp4 is an output of this same process now,
+            # and on SIGTERM ffmpeg writes the fragment it is holding before it
+            # goes; killed outright it leaves a file that still plays (that is
+            # what the `-movflags` are for) but loses the last seconds of it.
+            # Killed anyway if it does not take the hint -- a reader stuck on a
+            # dead socket must not hold the session open.
             try:
-                self._ff.kill()
+                ff.terminate()
             except Exception:
                 pass
-            self._reap_ff()
-        # terminate rather than kill, so the mp4 gets its closing fragment, and
-        # then waited on -- a video ffmpeg left behind is a process a user sees
-        # in ps long after the session has gone.
-        self._stop_video()
-        self._reap_video()
+            # Five seconds only when there is a file to finish; a session that
+            # was not saving the video has nothing to flush and keeps the two
+            # `_reap_ff` has always waited.
+            self._reap_ff(timeout=5.0 if self._vid_parts else 2.0)
+            if ff.poll() is None:
+                try:
+                    ff.kill()
+                    ff.wait(timeout=1.0)     # or it is left <defunct>
+                except Exception:
+                    pass
+        if self._vid_parts:
+            # Said out loud for the reason `_close_recording` says the WAV's
+            # path: a recording nobody was told about is one nobody finds
+            # again, and this one is several files rather than one.
+            print(f"[live] session {self.id} recorded video to "
+                  f"{len(self._vid_parts)} file(s), "
+                  f"{self._video_bytes() / 1e6:.0f} MB", flush=True)
 
     def _reap_ff(self, timeout: float = 2.0):
         """Reap the ffmpeg that ended (or was just killed).
@@ -1492,27 +1535,47 @@ class LiveSession:
         t.join(timeout)
 
     def _spawn_ffmpeg(self, src: str, start_index):
-        # -live_start_index -2 starts two segments from the end of the
-        # playlist. Without it ffmpeg reads a full-DVR playlist from the top
-        # and transcribes the broadcast's opening greetings while the viewer
-        # watches its live edge.
-        # `-nostdin`: we take the sound over the stdout pipe. ffmpeg has no
-        # reason to look at standard input, and this also stops it taking key
-        # presses when run in a terminal. For standard I/O see stream.child_io
-        # -- that is where inheriting the parent's handles used to fall over on
-        # Windows.
-        self._ff = subprocess.Popen(
-            [stream.ffmpeg_cmd(), "-loglevel", "error", "-nostdin",
-             "-live_start_index", str(start_index), "-i", src,
-             "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"],
-            stdout=subprocess.PIPE, **stream.child_io())
+        # What the argv is and why is in `read_plan`; this decides only whether
+        # a part file goes into it. For standard I/O see stream.child_io -- that
+        # is where inheriting the parent's handles used to fall over on Windows.
+        #
+        # The part the last ffmpeg was writing is judged first, so that giving
+        # up on the video takes effect before the next name is chosen rather
+        # than one part later.
+        self._video_part_ended()
+        try:
+            out = self._next_video_part()
+        except OSError as exc:
+            # The same rule `_record` has for the WAV, and it was not being kept
+            # here: `_reconnect` calls this outside its own try, so an OSError
+            # from making the recordings directory (a read-only volume, a
+            # permission change, a file sitting on the path) came out of the
+            # reading thread and ended the session -- losing the subtitles over
+            # a directory, which is the trade this whole feature refuses.
+            self._video_failed(exc)
+            out = ""
+        self._ff = subprocess.Popen(read_plan(src, start_index, out),
+                                    stdout=subprocess.PIPE, **stream.child_io())
+        if out:
+            # After the Popen, so a process that could not be started leaves no
+            # part in the status that nothing ever wrote to.
+            self._vid_path = out
+            if out not in self._vid_parts:
+                # ffmpeg opens its output as it starts, so the next part gets
+                # the next number -- unless it died before opening anything, in
+                # which case `video_part_path` reads a filesystem with no file
+                # on it and hands back the same name. Reusing it is right (there
+                # is nothing there to overwrite); listing it twice is not, and
+                # `_video_bytes` would count that one file once per attempt.
+                self._vid_parts.append(out)
+            self._vid_began = time.time()
+            print(f"[live] session {self.id} recording video to {out}", flush=True)
 
     def _start_reader(self, src, start_index):
         """Stand ffmpeg up and start the thread that reads it. A pushed session
         has nothing to do here because `feed()` plays the reading role."""
         if self.pushed:
             return
-        self._start_video()
         self._spawn_ffmpeg(src, start_index)
         self._rx = threading.Thread(target=self._read_loop, name=f"rx-{self.id}",
                                     daemon=True)
@@ -1796,7 +1859,22 @@ class LiveSession:
                 self.emit({"type": "status", **self.status()})
                 return None, None
 
-        src, info = resolve_audio(self.url, youtube=self.site != "other" and self.site != "twitch")
+        youtube = self.site != "other" and self.site != "twitch"
+        if self._saving_video():
+            # A session that is saving the video reads the muxed rendition and
+            # takes the sound out of that, instead of fetching the broadcast a
+            # second time. A rendition that cannot be resolved must not cost the
+            # session, though -- losing the subtitles because the picture was
+            # unavailable is the wrong trade -- so it falls back to the
+            # audio-only rendition that would have been resolved anyway, says
+            # why in the status, and runs.
+            try:
+                src, info = resolve_video(self.url)
+            except Exception as exc:
+                self._video_failed(exc)
+                src, info = resolve_audio(self.url, youtube=youtube)
+        else:
+            src, info = resolve_audio(self.url, youtube=youtube)
         if reconnect and info.get("ended"):
             # The playlist says itself that it is finished (a recording's m3u8).
             # yt-dlp does not know whether it is live so it never says "ended", and

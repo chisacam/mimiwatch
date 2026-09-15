@@ -549,8 +549,10 @@ function onLiveStatus(m, tile = focusedTile()) {
  * everything else run), so subtitles keep arriving and nothing else on the page
  * would look any different from a session that is saving -- and a recording
  * that stopped with nobody told is the exact failure that saving exists to
- * prevent. The two recorders fail independently, so both are asked: a video
- * recorder that died while the WAV is fine has to say so on its own line. */
+ * prevent. The two fail separately even though one ffmpeg now feeds both, so
+ * both are asked: the WAV is written here in Python off the pipe and the mp4 is
+ * an output of that ffmpeg, so either can stop with the other still going, and
+ * whichever it was has to say so on its own line. */
 function recordingNote(m) {
   const bits = [];
   if (m.recording_error)
@@ -600,7 +602,7 @@ function renderLiveStatus(tile) {
     // transcribing the whole video instead.
     if (isPushedSource(m.source) || m.url) offerResume(m.id, stopReason(m), m);
   }
-  // The whole line goes amber when saving failed -- either recorder -- even
+  // The whole line goes amber when saving failed -- sound or picture -- even
   // though the session itself is fine. `.status.warn b` is what colours the
   // bold runs, so the class has to sit here rather than on the fragment.
   el.className = (m.recording_error || m.recording_video_error)

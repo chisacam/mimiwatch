@@ -151,6 +151,12 @@ whichever one the site hands over decides the size — so the honest instruction
 is to watch the directory the first time. *Saving a stream the server fetches*
 below has the rest of it.
 
+**Neither answer is final.** Both boxes appear again as switches on the status
+line of a session that is receiving, so a broadcast that turns out to be worth
+keeping can be saved from the middle without being stopped and started again.
+What that costs — nothing for the audio, a reconnect of a few seconds for the
+video — is in *Switching the saving while the broadcast runs* below.
+
 ### Screen controls
 
 | | |
@@ -1182,6 +1188,49 @@ stopped — which is how a program people close ends most of the time — leaves
 file that plays up to its last complete fragment, losing at most one keyframe
 interval, with nothing to repair afterwards. The WAV beside it is the opposite
 case, and needs the repair described above.
+
+### Switching the saving while the broadcast runs
+
+A session that is receiving carries the two boxes again, as switches on its
+status line. The add form is asked before the broadcast has started, and for a
+broadcast that is the hardest moment to answer the question: what makes one
+worth keeping usually happens once it is under way.
+
+**Switching the audio costs nothing at all.** The bytes are already flowing past
+the writer, so turning it on opens a WAV on the next block that arrives and
+turning it off closes the one that is open. Nothing is interrupted, nothing is
+resolved again, and not a sample goes missing on either side of the switch.
+Turning it on again opens a *second* file rather than continuing the first, the
+same way **Resume** does.
+
+**Switching the video costs a reconnect.** The ffmpeg now reading the broadcast
+was given a rendition and a list of outputs chosen for the answer that held when
+it started — audio-only with one output, or muxed with two — and neither of those
+can be changed under a running process. So the switch ends it and stands the next
+one up straight away, rather than waiting for a break that a broadcast can run
+for hours without. Measured on one machine against a live YouTube broadcast,
+resolving the address again took `yt-dlp -j` 1.6–2.1 s plus `yt-dlp -f best -g`
+1.7–2.0 s — **3.5–4.2 seconds**, with the respawn and the first segment after
+that. Another machine and another network will differ; read it as *a few
+seconds*, not as a figure.
+
+**The transcription normally survives it.** A break that falls inside the DVR
+window is picked back up where it stopped, so what the viewer sees is the
+subtitles falling behind for a moment and catching up. Where the window cannot
+be read, those seconds are genuinely lost — and the subtitles say so in wording
+of their own, `⋯ about N s went unreceived while the saving was switched ⋯`,
+which is deliberately not what a break that happened by itself says. A break you
+asked for is not counted against either of the counts that watch for something
+failing over and over, the reattach count or the one that gives up on the video.
+
+**Asking for the video again is a genuine retry.** Giving up on it is permanent
+for the session, so one muxed rendition that could not be resolved at four in
+the morning, or five parts in a row that died on the spot, means an overnight
+broadcast saves no picture for the rest of its run however long that is.
+Switching the video off and on clears that and tries again.
+
+A microphone or tab session has one switch rather than two, for the same reason
+its add form has one box: sound is uploaded and there is no picture to save.
 
 ### What the microphone path does not do
 

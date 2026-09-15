@@ -1129,13 +1129,13 @@ def test_the_next_video_part_is_numbered_beside_the_first():
     way."""
     d = live.paths.recordings_dir()
     os.makedirs(d, exist_ok=True)
-    first = live.video_part_path("20260915-120000-abc")
+    first = live.part_path("20260915-120000-abc")
     assert first == os.path.join(d, "20260915-120000-abc.mp4")
     open(first, "wb").close()
-    second = live.video_part_path("20260915-120000-abc")
+    second = live.part_path("20260915-120000-abc")
     assert second == os.path.join(d, "20260915-120000-abc (2).mp4")
     open(second, "wb").close()
-    assert live.video_part_path("20260915-120000-abc") == \
+    assert live.part_path("20260915-120000-abc") == \
         os.path.join(d, "20260915-120000-abc (3).mp4")
 
 
@@ -1220,7 +1220,7 @@ def test_parts_that_die_at_once_drop_the_video_and_not_the_subtitles(
         cmds.append(cmd)
         if cmd[-1].endswith(".mp4"):
             # ffmpeg makes its output file as it starts, and that is what
-            # `video_part_path` reads to find the next free number.
+            # `part_path` reads to find the next free number.
             open(cmd[-1], "wb").close()
         return fake_ffmpeg(1)          # one chunk, then the pipe closes at once
     monkeypatch.setattr(live.subprocess, "Popen", fake_popen)
@@ -1337,7 +1337,7 @@ def test_a_recordings_directory_that_cannot_be_made_costs_only_the_video(monkeyp
 
 def test_a_part_ffmpeg_never_opened_is_not_counted_twice(monkeypatch):
     """ffmpeg creates its output file as it starts, so an input it cannot open
-    leaves no file at all -- and `video_part_path` reads the filesystem, so the
+    leaves no file at all -- and `part_path` reads the filesystem, so the
     next part is handed back the same name.
 
     Reusing it is right: there is nothing there to overwrite. Listing it twice
@@ -1382,3 +1382,215 @@ def test_resume_carries_the_video_flag_back(monkeypatch):
     assert live.resume("vid-3")["resumed"]
     assert live.get("vid-3").record_video is False
     live._sessions.clear()
+
+
+# ---- Switching the saving on a session that is already running ------------------
+# Both flags used to be settled in __init__ and never move again, which put the
+# decision at the one moment a broadcast makes it hardest: before it has started.
+# The two halves of the switch cost very different things, and that difference is
+# what these pin.
+
+def _registered(s: live.LiveSession) -> live.LiveSession:
+    """Put a session in the registry, which is where `set_record` looks."""
+    live._sessions[s.id] = s
+    return s
+
+
+class _Terminates(_FakeFF):
+    """An ffmpeg that writes nothing down its pipe and writes down being asked to end."""
+
+    def __init__(self):
+        super().__init__(b"")
+        self.terminated = 0
+
+    def terminate(self):
+        self.terminated += 1
+
+
+def test_the_audio_switch_opens_and_closes_the_file_with_nothing_interrupted():
+    """Saving the audio is switched on the bytes that are already flowing.
+
+    `_record` is handed blocks the reading side has already read, so turning it
+    on opens a WAV on the next one and turning it off closes the one that is
+    open. No ffmpeg is involved and nothing is resolved again -- the process
+    reading the broadcast must not be touched at all, because there is nothing
+    about it that the answer changes.
+    """
+    s = _registered(_hls())
+    s._ff = _Terminates()
+    assert live.set_record(s.id, record=True) == {
+        "record": True, "record_video": False, "reconnect": False}
+    s._record(_pcm(1600))
+    first = s._wav_path
+    assert first and s.status()["recording"] == first
+
+    assert live.set_record(s.id, record=False)["record"] is False
+    s._record(_pcm(1600))                    # arrives after the switch: not in the file
+    with wave.open(first, "rb") as w:
+        assert w.getnframes() == 1600
+    # The process reading the broadcast was never touched, in either direction.
+    assert s._ff.terminated == 0 and s._respawn is False
+
+    # And on again: a second file, not a continuation of the first. `recording_s`
+    # is the length of the file `recording` names, so both start over.
+    live.set_record(s.id, record=True)
+    assert s.status()["recording"] == "" and s.status()["recording_s"] == 0
+    s._record(_pcm(800))
+    assert s._wav_path != first
+    s._close_recording()
+    with wave.open(s._wav_path, "rb") as w:
+        assert w.getnframes() == 800
+
+
+def test_the_video_switch_asks_for_the_reading_ffmpeg_to_be_stood_up_again():
+    """Saving the video cannot be switched on a running process.
+
+    The ffmpeg now reading was given a rendition and an output list chosen for
+    the answer that held when it started -- audio-only with one output, or muxed
+    with two -- and neither can be changed under it. So the switch ends it and
+    lets the reading thread stand the next one up, which is the only code that
+    knows how to find the place again. It is taken at once rather than left for
+    the next natural break: a broadcast can run for hours without one.
+    """
+    s = _registered(_hls())
+    s._ff = _Terminates()
+    res = live.set_record(s.id, record_video=True)
+    assert res == {"record": False, "record_video": True, "reconnect": True}
+    assert s._respawn is True and s._ff.terminated == 1
+    assert s._saving_video() is True
+
+    # Off is a respawn too: the process now running is the muxed one with two
+    # outputs, and it goes on writing the mp4 until it is replaced.
+    s._respawn = False
+    assert live.set_record(s.id, record_video=False)["reconnect"] is True
+    assert s._respawn is True and s._ff.terminated == 2
+
+    # Asking for what is already true changes nothing and breaks nothing.
+    s._respawn = False
+    assert live.set_record(s.id, record_video=False)["reconnect"] is False
+    assert s._respawn is False and s._ff.terminated == 2
+
+
+def test_a_requested_break_does_not_spend_a_reconnect_attempt(monkeypatch):
+    """`HLS_RECONNECT_TRIES` is there to notice reception that will not come
+    back, and a process we ended ourselves says nothing about that.
+
+    The session here has already used every attempt it has. A break that
+    happened to it gives up on the spot; the same break, asked for, starts the
+    count over and reattaches.
+    """
+    monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
+    monkeypatch.setattr(live.subprocess, "Popen", lambda cmd, **kw: _FakeFF(b""))
+
+    def one_reattach(s):
+        """Run the read loop with every attempt already spent. A playlist comes
+        back for the first reattach and the broadcast is over after it, so the
+        loop ends either way -- what differs is whether it reattaches at all."""
+        asked = []
+        s._ff = _FakeFF(b"")
+
+        def resolve(reconnect=False):
+            asked.append(reconnect)
+            return ("src", -2) if len(asked) == 1 else (None, None)
+        s._resolve_hls = resolve
+        s._stop.wait = lambda t: False
+        s._read_until_end(live.CHUNK * 2, attempt=live.HLS_RECONNECT_TRIES)
+
+    lost = _hls()
+    one_reattach(lost)
+    assert lost.stopped_by == "stream" and lost.state == "error"
+
+    asked = _hls()
+    asked._respawn = True
+    one_reattach(asked)
+    assert asked.stopped_by == "ended" and asked.state != "error"
+    assert asked._respawn is False           # read once and cleared
+
+
+def test_a_requested_break_does_not_count_against_the_video_part_budget(monkeypatch):
+    """`VIDEO_RECONNECT_TRIES` is there to notice an mp4 output that keeps
+    failing, and a part cut short because the user pressed the switch is not one.
+
+    Left uncounted it would be: this session is one bad part away from giving up
+    on the video, and the part now open was started a moment ago.
+    """
+    monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
+    monkeypatch.setattr(live.subprocess, "Popen", lambda cmd, **kw: _FakeFF(b""))
+    s = _registered(_hls())
+    s.record_video = True
+    s._ff = _Terminates()
+    s._vid_bad = live.VIDEO_RECONNECT_TRIES - 1
+    s._vid_began = time.time()                       # a part opened a moment ago
+    assert live.set_record(s.id, record_video=False)["reconnect"] is True
+    s._spawn_ffmpeg("src", -2)                       # where a part is judged
+    assert s._vid_bad == live.VIDEO_RECONNECT_TRIES - 1
+    assert s._vid_error == "" and s.status()["recording_video_error"] == ""
+
+
+def test_turning_the_video_on_again_is_a_genuine_retry():
+    """Giving up on the video is permanent for the session, and that is what
+    makes the switch worth having.
+
+    One `resolve_video` that came back wrong at four in the morning, or five bad
+    parts in a row, and an overnight broadcast saves nothing for the rest of its
+    run however long that is. `_vid_error` is what makes it stick, so asking for
+    the video again clears it -- asking is exactly the request that should mean
+    "try once more".
+    """
+    s = _registered(_hls())
+    s.record_video = True
+    s._ff = _Terminates()
+    s._video_failed(RuntimeError("yt-dlp found no rendition with the picture in it"))
+    assert s._saving_video() is False
+
+    assert live.set_record(s.id, record_video=False)["record_video"] is False
+    res = live.set_record(s.id, record_video=True)
+    assert res["record_video"] is True and res["reconnect"] is True
+    assert s._vid_error == "" and s._vid_bad == 0 and s._saving_video() is True
+    assert s.status()["recording_video_error"] == ""
+
+
+def test_a_pushed_session_switches_its_audio_and_has_no_video_to_switch():
+    """A microphone or tab session uploads sound and nothing else, so
+    `record_video` is dropped there the same way `__init__` drops it. The audio
+    half is the half that matters for that source and it has to keep working.
+    """
+    s = _registered(live.LiveSession("", None, "ko", "local-m2m100", source="mic",
+                                     title="m"))
+    s._tr = None
+    assert live.set_record(s.id, record=True)["record"] is True
+    assert s.feed(_pcm(live.CHUNK * 2))["ok"]
+    assert s.status()["recording"] and s.status()["recording_s"] > 0
+
+    res = live.set_record(s.id, record_video=True)
+    assert res["record_video"] is False and res["reconnect"] is False
+    assert s.record_video is False and s.status()["record_video"] is False
+    s.stop()
+
+
+def test_a_switch_is_answered_and_a_mistake_is_not_swallowed():
+    """A session that is not there, and a request that asks for nothing."""
+    assert live.set_record("no-such-session", record=True)["error"] == "no such session"
+    s = _registered(_hls())
+    assert "required" in live.set_record(s.id)["error"]
+    assert s.record is False and s.record_video is False
+
+
+def test_a_switch_survives_a_restart(monkeypatch):
+    """The flags ride in `status()`, so `_persist` puts them in SQLite and
+    `resume` reads them back -- a session switched at midnight and resumed at
+    two has to come back switched. Nothing was written for this; what the test
+    is for is that nothing has to be.
+    """
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
+    s = _registered(_hls())
+    s._ff = _Terminates()
+    live.set_record(s.id, record=True, record_video=True)
+    st = store.session(s.id)
+    assert st["record"] is True and st["record_video"] is True
+
+    store.save_session({**st, "state": "stopped", "stopped_by": "user"}, "")
+    live._sessions.clear()
+    assert live.resume(s.id)["resumed"]
+    back = live.get(s.id)
+    assert back.record is True and back.record_video is True

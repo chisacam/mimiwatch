@@ -430,21 +430,27 @@ def read_plan(src: str, start_index, video_out: str = "") -> list[str]:
     return cmd
 
 
-def video_part_path(stem: str) -> str:
-    """The next unused part file of one session's video recording.
+def part_path(stem: str, ext: str = ".mp4") -> str:
+    """The next unused file under `stem` in the recordings directory.
 
     A signed URL expires and the ffmpeg reading it ends, and the session answers
     that by resolving again and standing a new one up -- so one long broadcast
-    leaves one file per reconnect, because a copy cannot be resumed into the
-    middle of an existing file the way audio frames can be appended. They are
-    numbered rather than stamped afresh, so they sort together and read in order
-    -- `burn.out_path_for` numbers a re-burn the same way.
+    leaves one video file per reconnect, because a copy cannot be resumed into
+    the middle of an existing file the way audio frames can be appended. They
+    are numbered rather than stamped afresh, so they sort together and read in
+    order -- `burn.out_path_for` numbers a re-burn the same way.
+
+    The WAV goes through it too, and for a plainer reason. Its name is a
+    timestamp to the second, which was unique for as long as a session could
+    open only one of them; `set_record` can now close one and open the next
+    inside that second, and `wave.open(path, "wb")` would have written the
+    second recording straight over the first.
     """
     d = paths.recordings_dir()
-    p = os.path.join(d, f"{stem}.mp4")
+    p = os.path.join(d, f"{stem}{ext}")
     n = 2
     while os.path.exists(p):
-        p = os.path.join(d, f"{stem} ({n}).mp4")
+        p = os.path.join(d, f"{stem} ({n}){ext}")
         n += 1
     return p
 
@@ -631,6 +637,17 @@ class LiveSession:
         self._wav_path = ""
         self._wav_error = ""
         self._wav_s = 0.0
+        # The writer's own lock. Until saving could be switched mid-session
+        # (`set_record`) the file was opened, written and closed by one thread
+        # -- the reading thread for a broadcast the server pulls, the request
+        # thread for one the browser pushes -- so there was nothing to guard.
+        # Now the API thread can close the file while that thread is in the
+        # middle of a write, and a `writeframes` on a file closed a microsecond
+        # earlier raises, which `_record` would report as a recording that
+        # failed. Turning a box off must not leave an error on the status. It
+        # is an RLock because the failure path closes the file from inside the
+        # write it is already holding.
+        self._wav_lock = threading.RLock()
         # Half a frame carried over from the last block. `_record` takes blocks
         # of any length now -- ffmpeg's last read before it ends is whatever was
         # left in the pipe -- so a block can stop half way through a 16-bit
@@ -756,6 +773,12 @@ class LiveSession:
         # raises ValueError or absorbs the wrong line.
         self._pub_lock = threading.RLock()
         self._ff: subprocess.Popen | None = None
+        # Set when this session wants the ffmpeg it is reading stood up again
+        # -- saving the video was switched, so the argv and the rendition have
+        # both changed under it. Read and cleared by the reading thread alone
+        # (`_read_until_end`); see `_request_respawn` for why it is a flag
+        # rather than the API thread spawning anything itself.
+        self._respawn = False
         # Between the reading side (the ffmpeg thread, or feed() for a tab) and the
         # transcribing thread. See Ring. There are two clocks -- `_recv_*` is where
         # the reading side has **received** to, and `media_base`/`audio_s` is where
@@ -1177,19 +1200,26 @@ class LiveSession:
         if not buf:
             return
         try:
-            if self._wav is None:
-                os.makedirs(paths.recordings_dir(), exist_ok=True)
-                name = f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id}.wav"
-                self._wav_path = os.path.join(paths.recordings_dir(), name)
-                w = wave.open(self._wav_path, "wb")
-                w.setnchannels(1)
-                w.setsampwidth(2)
-                w.setframerate(SAMPLE_RATE)
-                self._wav = w
-                print(f"[live] session {self.id} recording to {self._wav_path}",
-                      flush=True)
-            self._wav.writeframes(buf)
-            self._wav_s += len(buf) / 2 / SAMPLE_RATE
+            with self._wav_lock:
+                # Asked again inside the lock. `set_record` can have turned the
+                # box off between the test at the top of this function and
+                # here, and then the file this block would open is one nobody
+                # asked for and nothing will close.
+                if not self.record:
+                    return
+                if self._wav is None:
+                    os.makedirs(paths.recordings_dir(), exist_ok=True)
+                    self._wav_path = part_path(
+                        f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id}", ".wav")
+                    w = wave.open(self._wav_path, "wb")
+                    w.setnchannels(1)
+                    w.setsampwidth(2)
+                    w.setframerate(SAMPLE_RATE)
+                    self._wav = w
+                    print(f"[live] session {self.id} recording to {self._wav_path}",
+                          flush=True)
+                self._wav.writeframes(buf)
+                self._wav_s += len(buf) / 2 / SAMPLE_RATE
         except Exception as exc:
             # Reported, never swallowed: a recording that stopped without
             # anyone being told is the failure this whole feature exists to
@@ -1200,8 +1230,10 @@ class LiveSession:
             self._close_recording()
 
     def _close_recording(self) -> None:
-        """Finish the WAV. Safe to call more than once, and on a session that
-        never recorded anything.
+        """Finish the WAV. Safe to call more than once, on a session that never
+        recorded anything, and from a thread other than the one writing --
+        `set_record` closes it from the API thread while the reading thread is
+        still handing blocks to `_record`, which is what `_wav_lock` is for.
 
         A WAV carries its length in the header, which `wave` writes on close.
         A process that is killed rather than stopped therefore leaves the
@@ -1214,15 +1246,16 @@ class LiveSession:
         inventing the other half of it would put a value into the archive that
         no microphone produced.
         """
-        w, self._wav = self._wav, None
-        if w is None:
-            return
-        try:
-            w.close()
-            print(f"[live] session {self.id} recorded {self._wav_s:.0f}s "
-                  f"to {self._wav_path}", flush=True)
-        except Exception as exc:
-            self._wav_error = self._wav_error or str(exc)
+        with self._wav_lock:
+            w, self._wav = self._wav, None
+            if w is None:
+                return
+            try:
+                w.close()
+                print(f"[live] session {self.id} recorded {self._wav_s:.0f}s "
+                      f"to {self._wav_path}", flush=True)
+            except Exception as exc:
+                self._wav_error = self._wav_error or str(exc)
 
     # ---- the session's own video ------------------------------------------
     #
@@ -1274,7 +1307,7 @@ class LiveSession:
         if not self._vid_stem:
             self._vid_stem = f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id}"
         os.makedirs(paths.recordings_dir(), exist_ok=True)
-        return video_part_path(self._vid_stem)
+        return part_path(self._vid_stem)
 
     def _video_part_ended(self) -> None:
         """The part the last ffmpeg was writing has ended. Decide whether the
@@ -1340,6 +1373,50 @@ class LiveSession:
         self._vid_error = str(exc) or exc.__class__.__name__
         print(f"[live] session {self.id} is no longer saving the video, the "
               f"session continues: {self._vid_error}", file=sys.stderr, flush=True)
+
+    def _request_respawn(self) -> bool:
+        """End the ffmpeg now reading so that the reading thread stands the
+        next one up. Returns whether there was one to end.
+
+        Saving the video changes what ffmpeg is told to do -- a muxed rendition
+        and two outputs, or an audio-only one and a single output -- and a
+        running process cannot be told either of those things. So the switch is
+        a reconnect, and it is made the same way a break is: the flag goes up,
+        the process is ended, and `_read_until_end` reaps it and calls
+        `_reconnect`, which is the only code that knows how to find the place
+        again (`_resume_point`). The API thread spawning a replacement itself
+        would be two threads owning `_ff`, and the reading thread is already in
+        a blocking `read()` on the pipe of the process it thinks is its own.
+
+        `_ff` is read once for the reason `stop` reads it once: the reading
+        thread's `_reap_ff` sets it to None, so reading it twice raised
+        AttributeError.
+
+        What the flag changes on the other side is bookkeeping, and both halves
+        of it matter. A break the user asked for is not a reattach that failed,
+        so it does not spend one of `HLS_RECONNECT_TRIES`; and the part it cuts
+        short is not a recording that keeps failing, so it does not count
+        towards `VIDEO_RECONNECT_TRIES` either. `_vid_began` is cleared here
+        because 0.0 is what `_video_part_ended` already reads as "there is
+        nothing to judge".
+        """
+        if self._stop.is_set():
+            return False                 # the session is ending; it needs no ffmpeg
+        ff = self._ff
+        if ff is None:
+            # Nothing is reading yet (still resolving), or the reading thread is
+            # between processes. The next `_spawn_ffmpeg` asks `_saving_video()`
+            # afresh, so the change lands without a break at all.
+            return False
+        self._respawn = True
+        self._vid_began = 0.0
+        try:
+            ff.terminate()
+        except Exception:
+            # A process that has already ended is the outcome asked for. The
+            # read returns EOF either way and the reading thread carries on.
+            pass
+        return True
 
     def stop(self):
         self.stopped_by = self.stopped_by or "user"
@@ -1563,7 +1640,7 @@ class LiveSession:
             if out not in self._vid_parts:
                 # ffmpeg opens its output as it starts, so the next part gets
                 # the next number -- unless it died before opening anything, in
-                # which case `video_part_path` reads a filesystem with no file
+                # which case `part_path` reads a filesystem with no file
                 # on it and hands back the same name. Reusing it is right (there
                 # is nothing there to overwrite); listing it twice is not, and
                 # `_video_bytes` would count that one file once per attempt.
@@ -1644,15 +1721,25 @@ class LiveSession:
                 self._push_audio(samples)
             if self._stop.is_set():
                 break
-            # ffmpeg ended by itself. Either the broadcast is over, or the
-            # playlist briefly did not arrive. Reap it first (so it is not left
-            # a zombie), then finalise the utterance being held.
+            # ffmpeg ended. Either the broadcast is over, or the playlist
+            # briefly did not arrive -- or this session ended it on purpose
+            # because saving the video was switched (`_request_respawn`). The
+            # first two are things that happened to the session and the third
+            # is something it asked for, and they are told apart here and
+            # nowhere else. A requested break starts the retry count over:
+            # HLS_RECONNECT_TRIES is there to notice reception that will not
+            # come back, and a process we ended ourselves says nothing about
+            # that. Reap it first (so it is not left a zombie), then finalise
+            # the utterance being held.
+            requested, self._respawn = self._respawn, False
+            if requested:
+                attempt = 0
             self._reap_ff()
             self._ring.push(("flush",))
             reattached = False
             while not self._stop.is_set() and attempt < HLS_RECONNECT_TRIES:
                 attempt += 1
-                outcome = self._reconnect(attempt)
+                outcome = self._reconnect(attempt, requested=requested)
                 if outcome == "ok":
                     reattached = True
                     break
@@ -1724,12 +1811,22 @@ class LiveSession:
         # Only focus was lost. Finalise the utterance being held and withdraw quietly.
         yield None
 
-    def _reconnect(self, attempt: int) -> str:
+    def _reconnect(self, attempt: int, requested: bool = False) -> str:
         """Stand ffmpeg back up at the break.
 
         Returns "ok" (attached) / "ended" (the broadcast is over) / "retry"
         (could not attach right now). If it attached, `self._ff` is the new
         process.
+
+        `requested` is a break this session asked for rather than one that
+        happened to it -- saving the video was switched, so the rendition and
+        the argv had to change (`_request_respawn`). It changes nothing about
+        how the place is found; it changes what the viewer is told, because
+        seconds missing because of a button they pressed and seconds missing
+        because the broadcast dropped are not the same event, and a line that
+        reads like reception failed would send someone looking for a fault
+        there is not. Usually there is no line at all: the break is a few
+        seconds and the DVR window covers it, so `gap_s` comes back 0.
         """
         # Where reception got to so far. The new playlist's time base
         # (_recv_base) is recomputed here, so _recv_s counts from 0 again --
@@ -1745,14 +1842,19 @@ class LiveSession:
         if src is None:
             return "ended"
         self._recv_s = 0.0
-        print(f"[live] session {self.id} reattached (attempt {attempt}, "
-              f"missing stretch {self.gap_s:.0f}s)", flush=True)
+        print(f"[live] session {self.id} reattached (attempt {attempt}"
+              + (", requested" if requested else "")
+              + f", missing stretch {self.gap_s:.0f}s)", flush=True)
         # The new time base and the notice about the missing stretch go **through**
         # the ring. Publishing them directly here would make them arrive ahead of the
         # old chunks still in the ring, and those chunks would be stamped with the
         # new base.
-        note = (f"⋯ about {int(self.gap_s)} s went unreceived while reception was cut ⋯"
-                if self.gap_s >= 1.0 else "")
+        note = ""
+        if self.gap_s >= 1.0:
+            note = (f"⋯ about {int(self.gap_s)} s went unreceived while the "
+                    "saving was switched ⋯" if requested else
+                    f"⋯ about {int(self.gap_s)} s went unreceived while "
+                    "reception was cut ⋯")
         self._ring.push(("rebase", self._recv_base, note))
         self._spawn_ffmpeg(src, start_index)
         self.gap_s = 0.0
@@ -2815,6 +2917,94 @@ def set_asr(session_id: str, asr_backend_id: str) -> dict:
     s._persist()
     s.emit({"type": "status", **s.status()})
     return {"asr": asr_backend_id, **info}
+
+
+def set_record(session_id: str, record: bool | None = None,
+               record_video: bool | None = None) -> dict:
+    """Turn a running session's saving on or off. Whichever of the two is
+    passed is the one that changes.
+
+    It could only be decided when the session was started, and a broadcast is
+    the one thing where that is the wrong moment to have to decide: what makes
+    it worth keeping usually happens after it has started. The engines were
+    already switchable in place (`set_backend`, `set_asr`) for the same reason.
+
+    **The two halves cost very different things, and that is the shape of this
+    function.**
+
+    Saving the audio changes with no interruption whatsoever. `_record` is
+    handed bytes that are already flowing -- from the read loop for a broadcast
+    the server pulls, from `feed()` for one the browser pushes -- so turning it
+    on opens a WAV on the next block that arrives and turning it off closes the
+    one that is open. No ffmpeg is involved, nothing is resolved again, and not
+    a sample goes missing on either side of the switch.
+
+    Saving the video cannot be, because the running ffmpeg is reading a
+    rendition chosen for the answer that was true when it started: audio-only
+    with one output, or muxed with two. Neither can be changed under a running
+    process, so the switch is a reconnect (`_request_respawn`), taken
+    immediately rather than left for the next natural break -- a broadcast can
+    run for hours without one. **Measured on this machine against a live
+    YouTube broadcast**, the re-resolution is `yt-dlp -j` 1.63-2.14 s plus
+    `yt-dlp -f best -g` 1.68-2.04 s, so 3.5-4.2 s, and the respawn and the
+    first segment come after it. One machine and one network on one afternoon:
+    read it as *a few seconds*, not as a figure. The transcription is not lost
+    across it -- `_resume_point` picks the reading back up where it stopped
+    when the break falls inside the DVR window, which a break this short
+    normally does, and what the viewer sees is the subtitles falling behind and
+    catching up. Where the window cannot be read those seconds really are gone,
+    and the subtitles say so in their own words.
+
+    **Turning the video on again is a genuine retry.** `_vid_error` is what
+    makes giving up stick, so a session that lost a `resolve_video` call at
+    startup, or wore through `VIDEO_RECONNECT_TRIES` bad parts at four in the
+    morning, would otherwise never save a frame however long it ran. Clearing
+    it here is the only way back, and asking for it again is exactly the
+    request that should mean "try once more". The audio half clears `_wav_error`
+    for the same reason: a write that failed on a full disk should be
+    retryable once the disk is not full.
+
+    A pushed session has no picture at all (`record_video` is dropped in
+    `__init__` for those), so the video half of this is dropped there too and
+    the answer reports what actually holds. The audio half works on every
+    source alike.
+    """
+    s = get(session_id)
+    if not s:
+        return {"error": "no such session"}
+    if record is None and record_video is None:
+        return {"error": "record or record_video is required"}
+    if record is not None and bool(record) != s.record:
+        s.record = bool(record)
+        if s.record:
+            # A second file, not a continuation of the first: the name carries
+            # a timestamp and `recording_s` is the length of the file
+            # `recording` names, so both are put back to nothing here. Carrying
+            # the old length over would report the new file as longer than it
+            # is, which is the status telling a small lie about an archive.
+            with s._wav_lock:
+                s._wav_error = ""
+                s._wav_path = ""
+                s._wav_s = 0.0
+                s._wav_odd = b""
+        else:
+            s._close_recording()
+    reconnect = False
+    if (record_video is not None and not s.pushed
+            and bool(record_video) != s.record_video):
+        s.record_video = bool(record_video)
+        if s.record_video:
+            s._vid_error = ""
+            s._vid_bad = 0
+        reconnect = s._request_respawn()
+    # Nothing else to do for either the list, the other windows or the next
+    # restart: both flags ride in `status()`, `_persist` writes that to SQLite
+    # (which is what `resume` reads them back out of) and puts it on the change
+    # feed, and the session's own subscribers get it as a status event.
+    s._persist()
+    s.emit({"type": "status", **s.status()})
+    return {"record": s.record, "record_video": s.record_video,
+            "reconnect": reconnect}
 
 
 def stop(session_id: str) -> dict:

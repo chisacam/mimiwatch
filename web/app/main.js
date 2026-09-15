@@ -224,6 +224,9 @@ function bind() {
   $("glossary-term-form").addEventListener("submit", saveGlossaryTerm);
   $("glossary-term-close").addEventListener("click",
     () => $("glossary-term-dialog").close());
+  // Delegated: the status line is rewritten whole on every status event, so a
+  // listener on the buttons themselves would be thrown away with them.
+  $("lang-status").addEventListener("click", onRecordToggle);
   $("live-clear-cues").addEventListener("click", clearLiveCues);
   $("live-stop").addEventListener("click", stopLive);
   // Close live menu on outside click

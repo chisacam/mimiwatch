@@ -426,6 +426,30 @@ def test_cue_add_validates(server):
     assert code == 400
 
 
+def test_live_record_route(server):
+    """Switching a running session's saving: the route is registered, an unknown
+    session is a 404 and a body that asks for neither thing is a 400.
+
+    A body with neither field is a mistake rather than a no-op -- answering 200
+    to it would let a page with a typo in the field name report that it had
+    switched something. The path itself has to be told apart from an unknown
+    one, which is also a 404, so the message is read and not just the code.
+    """
+    base, _ = server
+    code, body = req(base, "/api/live/record", {"id": "nope", "record": True})
+    assert code == 404 and json.loads(body)["error"] == "no such session"
+    code, body = req(base, "/api/live/record", {"id": "nope", "record_video": True})
+    assert code == 404 and json.loads(body)["error"] == "no such session"
+    code, body = req(base, "/api/live/record", {"id": "nope"})
+    assert code == 400 and "required" in json.loads(body)["error"]
+    # An unregistered path answers "not found", which is what tells the two 404s
+    # apart. Whether a pushed session keeps its video flag dropped is pinned in
+    # tests/test_live.py -- a session started through this server needs an
+    # engine to stay alive, and there is none here.
+    code, body = req(base, "/api/live/recording", {"id": "nope", "record": True})
+    assert code == 404 and json.loads(body)["error"] == "not found"
+
+
 def test_watcher_routes(server):
     """The watched list: add, set the will, delete. No address gets a 400, an unknown one a 404."""
     base, port = server

@@ -901,6 +901,23 @@ class Handler(BaseHTTPRequestHandler):
     def post_live_asr(self, body):
         self._json(live.set_asr(body.get("id", ""), body.get("asr", "")))
 
+    def post_live_record(self, body):
+        """Switch a running session's saving. `record` is the WAV and
+        `record_video` the mp4; whichever is in the body is the one that
+        changes, and a body with neither is a mistake rather than a no-op.
+
+        The two cost different things -- the audio not a sample, the video a
+        reconnect of a few seconds -- and `live.set_record` carries why.
+        """
+        record, record_video = body.get("record"), body.get("record_video")
+        if record is None and record_video is None:
+            return self._json({"error": "record or record_video is required"}, 400)
+        res = live.set_record(
+            (body.get("id") or "").strip(),
+            record=None if record is None else bool(record),
+            record_video=None if record_video is None else bool(record_video))
+        self._json(res, 404 if res.get("error") else 200)
+
     def post_live_stop(self, body):
         self._json(live.stop(body.get("id", "")))
 
@@ -1218,6 +1235,7 @@ POST_ROUTES = {
     "/api/live/playurl": Handler.post_live_playurl,
     "/api/live/backend": Handler.post_live_backend,
     "/api/live/asr": Handler.post_live_asr,
+    "/api/live/record": Handler.post_live_record,
     "/api/live/stop": Handler.post_live_stop,
     "/api/live/resume": Handler.post_live_resume,
     "/api/active": Handler.post_active,

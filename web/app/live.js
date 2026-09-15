@@ -567,6 +567,89 @@ function recordingNote(m) {
   return bits.map(b => " · " + b).join("");
 }
 
+/* The two saving switches, as part of the same status line that reports what
+ * they are doing.
+ *
+ * They are here rather than in the add form because the form is asked before
+ * the broadcast has started, and a broadcast is the one thing where that is
+ * the wrong moment to decide: what makes it worth keeping usually happens
+ * after it is under way. The form keeps its boxes -- they are the answer for
+ * a broadcast you already know you want -- and this is the answer for the one
+ * you did not.
+ *
+ * Only while the session is receiving. A stopped session has nothing to switch;
+ * what it offers instead is "Resume", which carries both flags back.
+ *
+ * The video switch is left out for a pushed source, the same way the form hides
+ * its box: the extension and the capture page upload sound and nothing else, so
+ * there is no picture to save.
+ *
+ * They go at the **head** of the line rather than beside the recording note
+ * they belong to, because .bar clips at the right and .status cuts with an
+ * ellipsis: a status reading "Receiving · source ja → ko · transcription
+ * sensevoice · 312 lines · saving 1200s · video 350 MB" is already wider than
+ * the slot on a laptop, and anything past the cut cannot be clicked at all.
+ * What is cut has to be the prose, not the only thing on the line that does
+ * something. */
+function recordingToggles(m) {
+  if (!LIVE_RUNNING.includes(m.state)) return "";
+  const one = (field, on, label, hint) =>
+    `<button type="button" class="rec-toggle${on ? " on" : ""}"`
+    + ` data-record="${field}" data-on="${on ? "1" : "0"}"`
+    + ` title="${esc(t(hint))}" aria-pressed="${on ? "true" : "false"}">`
+    + `${esc(t(label))}</button>`;
+  let out = one("record", !!m.record, "live.record.audio",
+                "live.record.audioHint");
+  if (!isPushedSource(m.source))
+    out += one("record_video", !!m.record_video, "live.record.video",
+               "live.record.videoHint");
+  return out + " ";
+}
+
+/* Switches one of them on the session being watched.
+ *
+ * The answer is written into `lastStatus` and the line drawn again rather than
+ * waiting for the status event the server sends: that event arrives over SSE a
+ * moment later and would leave the button looking unpressed in between, which
+ * reads as a click that did nothing. The event redraws the same thing when it
+ * lands. */
+async function onRecordToggle(e) {
+  const btn = e.target.closest(".rec-toggle");
+  if (!btn) return;
+  const tile = focusedTile();
+  const live = tile && tile.live;
+  if (!live || !live.lastStatus) return;
+  const field = btn.dataset.record;
+  const want = btn.dataset.on !== "1";
+  btn.disabled = true;
+  // Said before the answer comes back, not after. The switch costs a reconnect
+  // of a few seconds and the answer is what arrives at the end of it, so a
+  // notice written afterwards would appear once reception was already back.
+  if (field === "record_video") showLiveNotice(t("live.record.videoSwitching"));
+  let res;
+  try {
+    res = await (await fetch("/api/live/record", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: live.id, [field]: want }),
+    })).json();
+  } catch (err) {
+    res = { error: String(err) };
+  }
+  btn.disabled = false;
+  if (res.error) {
+    // What the server kept doing is what it was doing before, so nothing on
+    // screen changes except the reason.
+    showLiveNotice(t("live.record.switchFailed", { error: res.error }));
+    return;
+  }
+  if (field === "record_video" && res.reconnect)
+    showLiveNotice(t("live.record.videoSwitching"));
+  else if (field === "record_video") hideLiveNotice();
+  live.lastStatus = { ...live.lastStatus, record: res.record,
+                      record_video: res.record_video };
+  if (tile === focusedTile()) renderLiveStatus(tile);
+}
+
 /* Writes the focused tile's session state into the top bar (#lang-status), the
  * badge and the notice strip. When a state event arrives and when the focus
  * comes to this tile -- the two have to write the same words. */
@@ -609,8 +692,9 @@ function renderLiveStatus(tile) {
     ? "status warn" : "status";
   const src = m.source_lang || "auto";
   const eng = (m.asr || "").replace(/-Q8_0$|\.gguf$/g, "");
-  el.innerHTML = t("live.status.headline", { state: LIVE_STATE[m.state] || m.state,
-                                             src, viewer: m.viewer_lang })
+  el.innerHTML = recordingToggles(m)
+    + t("live.status.headline", { state: LIVE_STATE[m.state] || m.state,
+                                  src, viewer: m.viewer_lang })
     + (eng ? " · " + t("live.status.engine", { engine: esc(eng) }) : "")
     + (m.lines ? " · " + t("live.status.lines", { n: m.lines }) : "")
     + (m.focused === false ? " · " + t("live.status.standby") : "")

@@ -124,6 +124,15 @@ async function submitAdd(e) {
   if (e.submitter && e.submitter.value === "cancel") return;
   const f = e.target;
 
+  // The microphone has no URL and no probe either, and unlike a tab it has no
+  // title to read off the stream -- only the user knows what room this is.
+  if (f.source.value === "mic") {
+    const title = f.tab_title.value.trim();
+    f.tab_title.value = "";
+    await startMicCapture(title, f.lang.value || null);
+    return;
+  }
+
   // Tab audio has no URL to fetch. It skips the probe too -- only the user
   // knows what they are listening to, and the server cannot reach that tab.
   if (f.source.value === "tab") {
@@ -201,17 +210,22 @@ async function submitAdd(e) {
  * unused field standing blurs what has to be filled in, so the fields change
  * with the source. */
 function setAddSource(v) {
-  const tab = v === "tab", file = v === "file";
-  $("url-field").hidden = tab || file;
-  $("tab-title-field").hidden = !tab;
+  const tab = v === "tab", file = v === "file", mic = v === "mic";
+  const pushed = tab || mic;          // sound the browser uploads: no URL, no probe
+  $("url-field").hidden = pushed || file;
+  $("tab-title-field").hidden = !pushed;
   $("file-field").hidden = !file;
-  $("channel-field").hidden = tab || file;
+  $("channel-field").hidden = pushed || file;
   $("source-hint").textContent = tab ? t("jobs.source.hint.tab")
+    : mic ? t("jobs.source.hint.mic")
     : file ? t("jobs.source.hint.file")
     : t("jobs.source.hint.url");
-  // A VOD only ever comes from a URL or a file. Tab audio is always live.
+  // A VOD only ever comes from a URL or a file, and speaker labels are a VOD
+  // feature. A pushed session is always live, so the box would promise labels
+  // that cannot arrive -- for a microphone the labels come from transcribing
+  // the recording afterwards, which the hint says.
   document.querySelector('#add-form input[name="speakers"]')
-    .closest("label").hidden = tab;
+    .closest("label").hidden = pushed;
   syncSpeakerOptions();
 }
 
@@ -220,7 +234,7 @@ function setAddSource(v) {
  * nothing carries over from a previous job. */
 function syncSpeakerOptions() {
   const f = $("add-form");
-  const show = f.speakers.checked && f.source.value !== "tab";
+  const show = f.speakers.checked && !isPushedSource(f.source.value);
   $("speaker-options").hidden = !show;
   $("speaker-options-hint").hidden = !show;
 }

@@ -33,6 +33,7 @@ function offerResume(sessionId, why, st) {
   const box = $("live-notice");
   box.textContent = {
     tab: t("live.resume.tab"),
+    mic: t("live.resume.mic"),
     error: t("live.resume.error"),
     interrupted: t("live.resume.interrupted"),
     stopped: t("live.resume.stopped"),
@@ -66,7 +67,7 @@ async function resumeSession(sessionId, why, btn) {
   // The script window is claimed here. This is the only point where this click
   // is still alive -- once the share window below has been picked, Chrome blocks
   // window.open. The same reason and the same order as at the start.
-  const pending = why === "tab" ? openPendingScriptWindow() : null;
+  const pending = isPushedSource(why) ? openPendingScriptWindow() : null;
   if (pending) state.scriptWin = pending;
 
   // Resumes with the engine the picker points at right now. If it was changed
@@ -90,18 +91,23 @@ async function resumeSession(sessionId, why, btn) {
   state.live = null;
   await resumeLive(sessionId);
   await refreshVideoList();
-  // The server cannot rewind tab audio. It only continues once the browser hands
-  // it over again -- with the session alive but no sound arriving, it stays
-  // "receiving" and never gains a line.
-  if (res.source !== "tab") return;
-  const media = await requestTabAudio();
+  // The server cannot rewind audio the browser pushed. It only continues once
+  // the browser hands it over again -- with the session alive but no sound
+  // arriving, it stays "receiving" and never gains a line.
+  //
+  // This test was `res.source !== "tab"`, which a mic session passes: resume
+  // would have returned here and left a live session that never receives
+  // anything, with nothing on screen saying why.
+  if (!isPushedSource(res.source)) return;
+  const mic = res.source === "mic";
+  const media = mic ? await requestMicAudio() : await requestTabAudio();
   if (!media) {
     if (pending) { pending.close(); state.scriptWin = null; }
     // The session is alive again but no sound is arriving. Without writing that
     // state onto the screen there is no way to tell why it says "receiving" and
     // never gains a line.
-    tabStageNotice(t("live.tab.reshare"));
-    showLiveNotice(t("live.tab.reshareLong"));
+    tabStageNotice(t(mic ? "live.mic.reshare" : "live.tab.reshare"));
+    showLiveNotice(t(mic ? "live.mic.reshareLong" : "live.tab.reshareLong"));
     return;
   }
   await pipeCapture(media, sessionId);
@@ -111,7 +117,9 @@ async function resumeSession(sessionId, why, btn) {
 
 /* Why it stopped, as the notice strip's string key. `resumeLive` and the list rows use the same rule. */
 function stopReason(st) {
-  if (st.source === "tab") return "tab";
+  // The source doubles as the reason key for a pushed session: what ended is
+  // the share or the microphone, and those need different words.
+  if (isPushedSource(st.source)) return st.source;
   if (st.stopped_by === "ended") return "ended";
   if (st.state === "interrupted") return "interrupted";
   if (st.state === "error" || st.stopped_by === "stream") return "error";
@@ -187,6 +195,7 @@ async function startLive(url, lang, probe) {
       url, lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
       asr: state.asr, refine: state.refine, genre: currentGenre(),
       profile: document.querySelector('#add-form select[name="profile"]').value,
+      ...recordArg(),
     }),
   })).json();
   if (res.error) { jobError(res.error); return; }
@@ -229,7 +238,7 @@ async function resumeLive(sessionId) {
   // A tab session has no video to seat. attachLive clears the notice left by
   // whatever was watched before on its way through, so this flow's notice is
   // written again after it.
-  if (st.source === "tab") {
+  if (isPushedSource(st.source)) {
     const running = LIVE_RUNNING.includes(st.state);
     tabStageNotice(running ? "" : MW_I18N.t("live.tab.logOnly"), t);
   }
@@ -326,7 +335,7 @@ function showTileInPanels(tile) {
   state.jobId = null;
   $("live-badge").hidden = !isLiveReceiving();
   // Tab audio has no video to line up against, so the offset means nothing either.
-  $("offset-wrap").style.display = !live ? "" : (live.source === "tab" ? "none" : "flex");
+  $("offset-wrap").style.display = !live ? "" : (isPushedSource(live.source) ? "none" : "flex");
   setNowTitle(tile.doc ? tile.doc.title : null,
               !!(tile.doc && tile.doc.title_by_user));
   hideLiveNotice();
@@ -532,6 +541,21 @@ function onLiveStatus(m, tile = focusedTile()) {
   if (tile === focusedTile()) renderLiveStatus(tile);
 }
 
+/* What the session is doing with the audio, as a piece of the status line.
+ *
+ * A failed write has to reach the screen. The session goes on transcribing
+ * after one (live.py `_record` reports the error and hands the same bytes to
+ * the transcriber), so subtitles keep arriving and nothing else on the page
+ * would look any different from a session that is saving its audio -- and a
+ * recording that stopped with nobody told is the exact failure that saving the
+ * audio exists to prevent. */
+function recordingNote(m) {
+  if (m.recording_error)
+    return " · " + t("live.status.recordFailed", { error: esc(m.recording_error) });
+  if (!m.recording) return "";
+  return " · " + t("live.status.recording", { n: Math.round(m.recording_s || 0) });
+}
+
 /* Writes the focused tile's session state into the top bar (#lang-status), the
  * badge and the notice strip. When a state event arrives and when the focus
  * comes to this tile -- the two have to write the same words. */
@@ -545,7 +569,7 @@ function renderLiveStatus(tile) {
   if (m.state === "error") {
     el.className = "status warn";
     el.textContent = m.error || t("live.status.error");
-    if (m.source === "tab" || m.url) offerResume(m.id, stopReason(m), m);
+    if (isPushedSource(m.source) || m.url) offerResume(m.id, stopReason(m), m);
     return;
   }
   // An interrupted session is not an error. Reception broke off, but the cues
@@ -554,7 +578,8 @@ function renderLiveStatus(tile) {
   if (m.state === "interrupted") {
     el.className = "status warn";
     el.innerHTML = t("live.status.interrupted",
-                     { state: LIVE_STATE.interrupted, n: m.lines || 0 });
+                     { state: LIVE_STATE.interrupted, n: m.lines || 0 })
+      + recordingNote(m);
     offerResume(m.id, stopReason(m), m);
     return;
   }
@@ -564,16 +589,20 @@ function renderLiveStatus(tile) {
     // strip. A stopped session can be resumed whatever the reason it stopped --
     // only a broadcast that has ended has nothing to resume, and there we offer
     // transcribing the whole video instead.
-    if (m.source === "tab" || m.url) offerResume(m.id, stopReason(m), m);
+    if (isPushedSource(m.source) || m.url) offerResume(m.id, stopReason(m), m);
   }
-  el.className = "status";
+  // The whole line goes amber when saving the audio failed, even though the
+  // session itself is fine. `.status.warn b` is what colours the bold runs, so
+  // the class has to sit here rather than on the fragment.
+  el.className = m.recording_error ? "status warn" : "status";
   const src = m.source_lang || "auto";
   const eng = (m.asr || "").replace(/-Q8_0$|\.gguf$/g, "");
   el.innerHTML = t("live.status.headline", { state: LIVE_STATE[m.state] || m.state,
                                              src, viewer: m.viewer_lang })
     + (eng ? " · " + t("live.status.engine", { engine: esc(eng) }) : "")
     + (m.lines ? " · " + t("live.status.lines", { n: m.lines }) : "")
-    + (m.focused === false ? " · " + t("live.status.standby") : "");
+    + (m.focused === false ? " · " + t("live.status.standby") : "")
+    + recordingNote(m);
 }
 
 /* "Stop" ends the transcription session, not the viewing. Nothing here

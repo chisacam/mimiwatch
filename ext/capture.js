@@ -15,7 +15,7 @@
  *       post: (arrayBuffer) => fetch(...).then(r => r.json()),   // returns the server's answer
  *       onEnded, onError(msg), onDropped(seconds),
  *     });
- *     MimiCapture.stop(cap);
+ *     await MimiCapture.stopAndFlush(cap);   // stop() alone drops the tail
  *
  * Playing the sound back to the user is not done here. This graph is the shape
  * the recognizer wants (16kHz mono), not the shape a person listens to -- the
@@ -114,6 +114,27 @@
     }
   }
 
+  /* Send what is still buffered, then let the audio go.
+   *
+   * stop() used to clear the interval and tear the graph down, which threw
+   * away everything the timer had not yet caught -- up to INGEST_S (2 s) of
+   * sound, on every session, unconditionally. For a broadcast that is the
+   * goodbye; for a meeting it is the closing agreement, which is the part a
+   * record is wanted for. The flush goes first and is awaited, because
+   * disconnecting the node is what stops new frames arriving and closing the
+   * context is what makes the buffer unreachable.
+   *
+   * `cap.stopped` is set only after the flush: flush() returns early on a
+   * stopped capture, so setting it first would make this a no-op -- which is
+   * precisely the bug, written the other way round. */
+  async function stopAndFlush(cap) {
+    if (!cap || cap.stopped) return;
+    if (cap.n) {
+      try { await flush(cap); } catch (_) { /* the tail is lost; the rest is not */ }
+    }
+    stop(cap);
+  }
+
   function stop(cap) {
     if (!cap || cap.stopped) return;
     cap.stopped = true;
@@ -124,5 +145,5 @@
     cap.media.getTracks().forEach((t) => t.stop());
   }
 
-  root.MimiCapture = { start, stop, toPCM, INGEST_S };
+  root.MimiCapture = { start, stop, stopAndFlush, toPCM, INGEST_S };
 })(typeof window !== "undefined" ? window : globalThis);

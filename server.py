@@ -702,6 +702,7 @@ class Handler(BaseHTTPRequestHandler):
             profile=body.get("profile") or "broadcast",
             asr_backend_id=body.get("asr") or config.active("asr"),
             refine=bool(body.get("refine", True)),
+            record=optional_flag_from_body(body, "record"),
             genre=body.get("genre")))
 
     def post_live_capture(self, body):
@@ -715,9 +716,33 @@ class Handler(BaseHTTPRequestHandler):
             profile=body.get("profile") or "broadcast",
             asr_backend_id=body.get("asr") or config.active("asr"),
             refine=bool(body.get("refine", True)),
+            record=optional_flag_from_body(body, "record"),
             genre=body.get("genre"),
             source="tab",
             title=(body.get("title") or "").strip() or "Tab audio"))
+
+    def post_live_mic(self, body):
+        # A session fed by the machine's own microphone. Same intake as
+        # /api/live/capture -- the browser holds the device and uploads PCM to
+        # /api/ingest -- and it differs only in where the sound came from,
+        # which the source records so the UI and the recording can say so.
+        #
+        # This is the meeting and seminar path. What makes it usable for that
+        # is not the live subtitles but the WAV the session writes: speaker
+        # labels live on the VOD side (speaker_id.py), so the finished record
+        # comes from transcribing the recording afterwards, not from the lines
+        # that scrolled past during the meeting.
+        self._json(live.start(
+            "", body.get("lang") or None,
+            body.get("viewer_lang") or "ko",
+            body.get("backend") or config.active("tr"),
+            profile=body.get("profile") or "broadcast",
+            asr_backend_id=body.get("asr") or config.active("asr"),
+            refine=bool(body.get("refine", True)),
+            record=optional_flag_from_body(body, "record"),
+            genre=body.get("genre"),
+            source="mic",
+            title=(body.get("title") or "").strip() or "Microphone"))
 
     # ---- Multiview -----------------------------------------------------------
     # Several streams on one screen. The rules for groups and focus are in
@@ -731,6 +756,7 @@ class Handler(BaseHTTPRequestHandler):
                     profile=body.get("profile") or "broadcast",
                     asr_backend_id=body.get("asr") or config.active("asr"),
                     refine=bool(body.get("refine", True)),
+                    record=optional_flag_from_body(body, "record"),
                     genre=body.get("genre"))
 
     def post_multiview(self, body):
@@ -1183,6 +1209,7 @@ POST_ROUTES = {
     "/api/transcribe": Handler.post_transcribe,
     "/api/live/start": Handler.post_live_start,
     "/api/live/capture": Handler.post_live_capture,
+    "/api/live/mic": Handler.post_live_mic,
     "/api/live/title": Handler.post_live_title,
     "/api/live/playurl": Handler.post_live_playurl,
     "/api/live/backend": Handler.post_live_backend,
@@ -1228,6 +1255,20 @@ POST_ROUTES = {
     "/api/watchers/toggle": Handler.post_watcher_toggle,
     "/api/watchers/delete": Handler.post_watcher_delete,
 }
+
+
+def optional_flag_from_body(body: dict, key: str) -> bool | None:
+    """A checkbox that has three states on the wire: on, off, and not sent.
+
+    `bool(body.get(key))` collapses the last two, and for `record` that is a
+    regression rather than a default -- a caller that does not know about the
+    field (the extension, a script, an older page still loaded in a tab) would
+    turn recording off on the microphone and tab sources, where the recording
+    is the reason the session was started at all. None goes to the callee and
+    means "the source decides".
+    """
+    v = body.get(key)
+    return None if v is None else bool(v)
 
 
 def speaker_threshold_from_body(body: dict) -> float | None:

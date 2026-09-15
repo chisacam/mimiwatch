@@ -71,6 +71,17 @@ def data_dir() -> str:
     return os.path.join(home(), "data") if frozen() else os.path.join(BASE, "data")
 
 
+def recordings_dir() -> str:
+    """Where a session's own audio is written.
+
+    Beside the store, not inside it: the DB holds text that is cheap to make
+    again from the audio, while the audio is the one thing that cannot be made
+    again at all. Keeping them in sibling directories means a user who wants to
+    clear transcripts can do it without touching the recordings.
+    """
+    return os.path.join(data_dir(), "recordings")
+
+
 def config_path() -> str:
     env = os.environ.get("MIMIWATCH_CONFIG")
     if env:

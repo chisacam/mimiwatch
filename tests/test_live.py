@@ -1,10 +1,12 @@
 """The live session's publish path and its reconnects. No model is loaded."""
 import json
 import numpy as np
+import os
 import pytest
 import subprocess
 import threading
 import time
+import wave
 
 import live
 import store
@@ -775,3 +777,234 @@ def test_a_resumed_clock_never_starts_before_where_it_stopped():
     assert live.continue_base(931.0, 264.1) == 931.0
     # And it is never dragged backwards by a stale record.
     assert live.continue_base(931.0, 2000.0) == 2000.0
+
+
+# ---- The session's own audio: carrying the tail and writing the WAV --------------
+# hayamimi, which this ingest path was ported from, kept no audio, and a meeting
+# transcribed with it on 2026-09-11 could never be transcribed again at better
+# quality because the sound was gone. These tests pin the two things that turned
+# out to be load-bearing for a record: every uploaded sample reaches the
+# transcriber, and every uploaded sample reaches the file.
+
+def _pcm(n_samples: int) -> bytes:
+    """Distinguishable int16 PCM -- a ramp, so a dropped stretch shows up as a
+    gap in the values rather than as more silence among silence."""
+    return (np.arange(n_samples, dtype=np.int32) % 1000).astype(np.int16).tobytes()
+
+
+def test_feed_carries_the_misaligned_tail_instead_of_dropping_it():
+    """An upload is a multiple of the worklet's 128 samples, not of the VAD's 1600.
+
+    The loop used to be `range(0, len(raw) - need + 1, need)`, so the remainder
+    was dropped and never made up: two uploads of 2.5 and 1.1 chunks yielded
+    two chunks instead of three, silently. Three is the whole of what arrived.
+    """
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="tab", title="t")
+    s._tr = None
+    first = s.feed(_pcm(live.CHUNK * 2 + 500))     # 2 chunks + a 500-sample tail
+    assert first["ok"] and abs(first["queued_s"] - 0.2) < 1e-9
+    second = s.feed(_pcm(live.CHUNK - 500))        # the tail completes the third
+    assert abs(second["queued_s"] - 0.3) < 1e-9    # 3 chunks, not 2
+    assert abs(s._recv_s - 0.3) < 1e-9
+
+
+def test_mic_session_is_pushed_and_records_every_sample():
+    """A mic session takes uploaded audio like a tab one, and writes it down.
+
+    The recordings directory is a tmpdir already: conftest's `isolated` fixture
+    redirects it for every test, because a session records as soon as it is fed
+    and not only when the test is about recording.
+    """
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m")
+    s._tr = None
+    assert s.pushed and s.source == "mic"
+    blocks = [_pcm(live.CHUNK * 2 + 500), _pcm(live.CHUNK - 500), _pcm(777)]
+    for b in blocks:
+        assert s.feed(b)["ok"]
+    assert s.status()["recording"] and not s.status()["recording_error"]
+    s.stop()
+    written = b"".join(blocks)
+    with wave.open(s._wav_path, "rb") as w:
+        assert w.getnchannels() == 1 and w.getsampwidth() == 2
+        assert w.getframerate() == live.SAMPLE_RATE
+        assert w.readframes(w.getnframes()) == written
+    live._sessions.clear()
+
+
+def test_recording_failure_leaves_the_transcription_running(monkeypatch):
+    """A full disk costs the recording, never the subtitles already on screen.
+
+    The error has to be visible, though: a recording that stopped with nobody
+    told is the failure this feature exists to prevent, moved one level down.
+    """
+    monkeypatch.setattr(live.wave, "open", lambda *a, **k: (_ for _ in ()).throw(OSError("no space left")))
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m")
+    s._tr = None
+    r = s.feed(_pcm(live.CHUNK * 2))
+    assert r["ok"] and abs(r["queued_s"] - 0.2) < 1e-9      # audio still queued
+    assert "no space left" in s.status()["recording_error"]
+    assert s.status()["recording_s"] == 0
+    live._sessions.clear()
+
+
+def test_stop_flushes_the_carried_tail_so_the_last_words_are_transcribed():
+    """The fragment shorter than one chunk is zero-padded, not discarded -- the
+    end of a meeting is where the closing agreement is."""
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="tab", title="t")
+    s._tr = None
+    s.feed(_pcm(500))                      # nothing reaches the ring yet
+    assert abs(s._recv_s) < 1e-9
+    s.stop()
+    assert abs(s._recv_s - live.FRAME_S) < 1e-9   # one padded chunk did
+
+
+# ---- Saving a broadcast the server pulls ----------------------------------------
+# The recorder was written for the pushed sources and called from feed() alone, so
+# an hls session -- the one kind the user cannot re-capture from their own machine
+# -- wrote nothing at all. What these pin is the seam it is now called across: the
+# transcriber takes whole VAD chunks and the file takes every byte that arrived,
+# and those are not the same set of bytes.
+
+class _FakeStdout:
+    """ffmpeg's stdout. `read(n)` short-reads at the end, like a real pipe that has
+    been closed -- which is the read the file and the transcriber disagree about."""
+
+    def __init__(self, data: bytes):
+        self.data, self.pos = data, 0
+
+    def read(self, n: int) -> bytes:
+        out = self.data[self.pos:self.pos + n]
+        self.pos += len(out)
+        return out
+
+
+class _FakeFF:
+    def __init__(self, data: bytes):
+        self.stdout = _FakeStdout(data)
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+
+def _hls(record=None) -> live.LiveSession:
+    s = live.LiveSession("https://example.invalid/live", "ja", "ko", "local-m2m100",
+                         record=record)
+    s._tr = None
+    return s
+
+
+def _read(s: live.LiveSession, data: bytes) -> str:
+    """Run the reading thread over `data` right here and report what the transcribing
+    side took out of the ring ("S" a chunk, "N" a marker). No ffmpeg is spawned and
+    nothing goes near the network: `_resolve_hls` says the broadcast is over, so
+    there is no reconnect either."""
+    s._ff = _FakeFF(data)
+    s._resolve_hls = lambda reconnect=False: (None, None)
+    s._stop.wait = lambda t: False
+    s._read_loop()
+    s._close_recording()
+    return "".join("S" if isinstance(c, np.ndarray) else "N" for c in s._consume())
+
+
+def test_an_hls_session_records_the_tail_the_transcriber_has_to_drop():
+    """Every byte ffmpeg produced reaches the file, including the short final read.
+
+    The transcriber cannot take that read -- it is less than one VAD chunk, and the
+    loop breaks on it -- but it is still audio that exists nowhere else, and the
+    whole reason for keeping a file is that it cannot be made again.
+    """
+    data = _pcm(live.CHUNK * 2 + 320)          # two whole chunks and 0.02 s more
+    s = _hls(record=True)
+    assert _read(s, data) == "SSN"             # the transcriber saw the two chunks only
+    with wave.open(s._wav_path, "rb") as w:
+        assert w.getnchannels() == 1 and w.getsampwidth() == 2
+        assert w.getframerate() == live.SAMPLE_RATE
+        assert w.getnframes() == len(data) // 2
+        assert w.readframes(w.getnframes()) == data
+    live._sessions.clear()
+
+
+def test_an_hls_session_not_asked_to_record_writes_nothing():
+    """The default for a pulled broadcast is off, and off means no file at all --
+    not an empty one. Seven hours is about 800 MB (16000 Hz x 2 bytes = 32 KB/s),
+    and multiview runs up to four of them at once."""
+    s = _hls()
+    assert s.record is False
+    assert _read(s, _pcm(live.CHUNK * 2)) == "SSN"
+    assert s.status()["recording"] == "" and s._wav is None
+    d = live.paths.recordings_dir()
+    assert not os.path.isdir(d) or os.listdir(d) == []
+
+
+def test_a_block_that_splits_a_sample_keeps_every_byte_and_whole_frames():
+    """`_record` takes blocks of any length now, so one can stop half way through a
+    16-bit sample. The half leads the next block.
+
+    It is not that writing it through corrupts the file -- `wave` concatenates the
+    bytes and the file reads back byte for byte either way. It is that the half
+    leaves `_wav_s` a fraction of a frame out, and `_wav_s` is the `recording_s`
+    the status publishes, so the length on screen stops being a count of samples.
+    What must not change is the bytes: nothing dropped, nothing written twice.
+    """
+    s = _hls(record=True)
+    data = _pcm(2000)                          # 4000 bytes
+    s._record(data[:1501])                     # ends mid-sample
+    assert s._wav_s * live.SAMPLE_RATE == 750  # whole samples, not 750.5
+    s._record(data[1501:])
+    s._close_recording()
+    with wave.open(s._wav_path, "rb") as w:
+        assert w.readframes(w.getnframes()) == data
+    live._sessions.clear()
+
+
+def test_a_block_of_nothing_but_half_a_sample_opens_no_file():
+    """An empty recording with a path in the status reads as a recording that is
+    working, which is the one thing the status must never say."""
+    s = _hls(record=True)
+    s._record(_pcm(1)[:1])
+    assert s._wav is None and s.status()["recording"] == ""
+    live._sessions.clear()
+
+
+def test_the_recording_default_follows_the_source():
+    """Unasked, a pushed session records and a pulled one does not: a meeting exists
+    nowhere but in the file, while a broadcast is somebody else's to keep. Asked,
+    either answer holds for either source."""
+    assert _hls().record is False
+    assert live.LiveSession("", None, "ko", "local-m2m100", source="mic").record is True
+    assert live.LiveSession("", None, "ko", "local-m2m100", source="tab").record is True
+    assert _hls(record=True).record is True
+    assert live.LiveSession("", None, "ko", "local-m2m100", source="mic",
+                            record=False).record is False
+
+
+def test_resume_carries_the_recording_flag_back(monkeypatch):
+    """A resumed session records if the session it continues did.
+
+    The flag has to be read back off the stored status; a resume that forgets it
+    would go on transcribing with the recording silently stopped, which is the
+    failure the recording exists to prevent. A record saved before the flag existed
+    has no key, and then the source decides -- the same rule as a fresh start.
+    """
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
+    base = {"state": "stopped", "stopped_by": "user", "url": "https://x/live",
+            "source": "hls", "source_lang": "ja", "viewer_lang": "ko",
+            "backend": "local-m2m100", "asr_backend": "tcpp-lite",
+            "media_base": 0.0, "audio_s": 5.0, "lines": 0}
+    store.save_session({**base, "id": "rec-1", "record": True}, "")
+    assert live.resume("rec-1")["resumed"]
+    assert live.get("rec-1").record is True
+    live._sessions.clear()
+
+    store.save_session({**base, "id": "rec-2", "record": False}, "")
+    assert live.resume("rec-2")["resumed"]
+    assert live.get("rec-2").record is False
+    live._sessions.clear()
+
+    store.save_session({**base, "id": "rec-3"}, "")            # stored before the flag
+    assert live.resume("rec-3")["resumed"]
+    assert live.get("rec-3").record is False                   # hls, so the source says no
+    live._sessions.clear()

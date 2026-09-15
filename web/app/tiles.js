@@ -390,6 +390,7 @@ function liveStartArgs(lang) {
     lang, viewer_lang: $("viewer-lang").value, backend: state.backend,
     asr: state.asr, refine: state.refine, genre: currentGenre(),
     profile: document.querySelector('#add-form select[name="profile"]').value,
+    ...recordArg(),
   };
 }
 

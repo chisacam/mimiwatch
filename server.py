@@ -703,6 +703,7 @@ class Handler(BaseHTTPRequestHandler):
             asr_backend_id=body.get("asr") or config.active("asr"),
             refine=bool(body.get("refine", True)),
             record=bool(body.get("record")),
+            record_video=bool(body.get("record_video")),
             genre=body.get("genre")))
 
     def post_live_capture(self, body):
@@ -717,6 +718,7 @@ class Handler(BaseHTTPRequestHandler):
             asr_backend_id=body.get("asr") or config.active("asr"),
             refine=bool(body.get("refine", True)),
             record=bool(body.get("record")),
+            record_video=bool(body.get("record_video")),
             genre=body.get("genre"),
             source="tab",
             title=(body.get("title") or "").strip() or "Tab audio"))
@@ -740,6 +742,7 @@ class Handler(BaseHTTPRequestHandler):
             asr_backend_id=body.get("asr") or config.active("asr"),
             refine=bool(body.get("refine", True)),
             record=bool(body.get("record")),
+            record_video=bool(body.get("record_video")),
             genre=body.get("genre"),
             source="mic",
             title=(body.get("title") or "").strip() or "Microphone"))
@@ -757,6 +760,7 @@ class Handler(BaseHTTPRequestHandler):
                     asr_backend_id=body.get("asr") or config.active("asr"),
                     refine=bool(body.get("refine", True)),
                     record=bool(body.get("record")),
+                    record_video=bool(body.get("record_video")),
                     genre=body.get("genre"))
 
     def post_multiview(self, body):

@@ -1030,3 +1030,109 @@ def test_resume_carries_the_recording_flag_back(monkeypatch):
     assert live.resume("rec-3")["resumed"]
     assert live.get("rec-3").record is False                   # no key, so not asked
     live._sessions.clear()
+
+
+# ---- Saving the video of a broadcast the server pulls ----------------------------
+# A second ffmpeg, given a muxed URL of its own and copying it to disk. None of it
+# is spawned here: `video_plan` exists as a seam so the argv can be read without
+# running it, the same way `burn.plan` can be.
+
+def test_video_plan_copies_the_picture_and_re_encodes_only_the_sound():
+    """The picture must never go through an encoder.
+
+    Re-encoding it would put the whole of a GPU-less machine's CPU behind
+    something it is already paying for once in transcription; what this feature
+    costs is disk. The audio is the exception and has to be, because HLS hands
+    over ADTS AAC that mp4 will not take -- `video_plan`'s docstring has why the
+    bitstream filter is not the answer.
+    """
+    cmd = live.video_plan("https://example.invalid/muxed.m3u8", "/tmp/out.mp4")
+    assert cmd[cmd.index("-c:v") + 1] == "copy"
+    assert cmd[cmd.index("-c:a") + 1] == "aac"
+    assert "-vn" not in cmd and "libx264" not in cmd
+    assert cmd[-1] == "/tmp/out.mp4"
+    assert cmd[cmd.index("-i") + 1] == "https://example.invalid/muxed.m3u8"
+
+
+def test_video_plan_writes_a_fragmented_mp4():
+    """A killed process must still leave a file that plays.
+
+    A plain mp4 writes its index when the process ends, so `kill -9` -- how a
+    program people close ends most of the time -- would leave nothing a player
+    opens. Fragmented, the index is written along the way and a file cut off in
+    the middle plays up to its last complete fragment.
+    """
+    cmd = live.video_plan("https://example.invalid/muxed.m3u8", "/tmp/out.mp4")
+    flags = cmd[cmd.index("-movflags") + 1]
+    for f in ("frag_keyframe", "empty_moov", "default_base_moof"):
+        assert f in flags
+
+
+def test_the_next_video_part_is_numbered_beside_the_first():
+    """The signed URL expires, so one broadcast can leave several files. They are
+    numbered rather than stamped afresh, so they sort together and read in order
+    -- `burn.out_path_for` numbers a re-burn the same way."""
+    d = live.paths.recordings_dir()
+    os.makedirs(d, exist_ok=True)
+    first = live.video_part_path("20260915-120000-abc")
+    assert first == os.path.join(d, "20260915-120000-abc.mp4")
+    open(first, "wb").close()
+    second = live.video_part_path("20260915-120000-abc")
+    assert second == os.path.join(d, "20260915-120000-abc (2).mp4")
+    open(second, "wb").close()
+    assert live.video_part_path("20260915-120000-abc") == \
+        os.path.join(d, "20260915-120000-abc (3).mp4")
+
+
+def test_a_session_not_asked_for_video_starts_no_recorder(monkeypatch):
+    """Off is the default and off spawns nothing -- no ffmpeg, and not even the
+    yt-dlp call that would resolve a URL for it."""
+    monkeypatch.setattr(live, "resolve_video",
+                        lambda url: pytest.fail("resolve_video was called"))
+    for s in (_hls(), live.LiveSession("https://example.invalid/live", "ja", "ko",
+                                       "local-m2m100", record_video=False)):
+        s._tr = None
+        assert s.record_video is False
+        s._start_video()
+        assert s._vid_thread is None
+        assert s.status()["recording_video"] == ""
+        assert s.status()["recording_video_bytes"] == 0
+
+
+def test_a_pushed_source_has_no_video_to_save():
+    """The extension and the capture page upload sound and nothing else, so the
+    flag is dropped rather than carried as a promise the session cannot keep. The
+    page hides the box for those sources; this is the other half of it."""
+    for src in ("tab", "mic"):
+        s = live.LiveSession("", None, "ko", "local-m2m100", source=src, title="t",
+                             record_video=True)
+        assert s.record_video is False
+        assert s.status()["record_video"] is False
+    assert live.LiveSession("https://example.invalid/live", "ja", "ko",
+                            "local-m2m100", record_video=True).record_video is True
+
+
+def test_resume_carries_the_video_flag_back(monkeypatch):
+    """A resume that forgets the flag would go on transcribing with the recording
+    quietly stopped -- the audio flag needed exactly this line, and so does this
+    one. A session stored before the flag existed has no key, which reads as not
+    asked."""
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
+    base = {"state": "stopped", "stopped_by": "user", "url": "https://x/live",
+            "source": "hls", "source_lang": "ja", "viewer_lang": "ko",
+            "backend": "local-m2m100", "asr_backend": "tcpp-lite",
+            "media_base": 0.0, "audio_s": 5.0, "lines": 0}
+    store.save_session({**base, "id": "vid-1", "record_video": True}, "")
+    assert live.resume("vid-1")["resumed"]
+    assert live.get("vid-1").record_video is True
+    live._sessions.clear()
+
+    store.save_session({**base, "id": "vid-2", "record_video": False}, "")
+    assert live.resume("vid-2")["resumed"]
+    assert live.get("vid-2").record_video is False
+    live._sessions.clear()
+
+    store.save_session({**base, "id": "vid-3"}, "")            # stored before the flag
+    assert live.resume("vid-3")["resumed"]
+    assert live.get("vid-3").record_video is False
+    live._sessions.clear()

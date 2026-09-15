@@ -135,6 +135,19 @@ when the box was ticked, unticking it did nothing at all. A box that can only be
 ticked is not a setting, and a recording nobody asked for is the wrong thing to
 leave on disk.
 
+**Save the video as well** — copies the broadcast itself to
+`data/recordings/<date>-<session id>.mp4`, alongside the audio. The picture is
+copied as it arrives and only the sound is re-encoded, so what it costs is disk
+and not CPU. It applies to a stream the server fetches and to nothing else: a microphone or tab session uploads sound
+and has no picture to save, so the box is hidden for those sources. Off unless
+ticked, the same as the audio.
+
+There is no MB an hour to quote for it. The audio figure is arithmetic off a
+sample format that never changes; a video rendition has no fixed anything —
+whichever one the site hands over decides the size — so the honest instruction
+is to watch the directory the first time. *Saving a stream the server fetches*
+below has the rest of it.
+
 ### Screen controls
 
 | | |
@@ -1106,6 +1119,55 @@ it started. One broadcast that was resumed once leaves two WAVs side by side.
 after one, so nothing else on the page would look any different; the status line
 turns amber and says *saving the audio stopped* instead.
 
+### Saving the video too
+
+Tick **Save the video as well** and the picture is kept beside the sound, as
+`data/recordings/<date>-<session id>.mp4`. Four things are worth knowing before
+leaving it running overnight.
+
+**It is a second process, not a second output.** The recorder is an ffmpeg of
+its own, given a muxed rendition of its own. The transcription pipeline
+deliberately resolves an *audio-only* rendition, so putting video through that
+one would mean fetching pixels only to throw them away again — and the two would
+then reconnect together, where as it stands either can die without touching the
+other. The subtitles come out exactly as they would with the box unticked.
+
+**The picture is copied; the sound is re-encoded.** `-c:v copy -c:a aac`, and
+the audio half is not a free choice. HLS delivers MPEG-TS segments whose AAC
+arrives as ADTS frames, which mp4 will not accept: a straight `-c copy` of a
+real HLS stream dies immediately with *Malformed AAC bitstream detected* and
+leaves an unplayable stub. The usual answer to that, `-bsf:a aac_adtstoasc`,
+fixes the one shape and breaks the rest — it refuses to start at all on Opus,
+and on a CMAF stream whose AAC is already in ASC form it drops every audio
+packet while still exiting successfully, which is a file that looks right and
+has no sound. Re-encoding the audio handles every shape with one command, and it
+is the cheap half: half a minute of 4 Mbps video remuxed this way cost 0.17 s of
+CPU against 0.03 s for a pure copy. The expensive half is still a byte copy.
+
+**A long broadcast leaves several files.** The URL the site hands out is signed
+and expires within the day, so the recorder's ffmpeg ends while the broadcast
+goes on. It resolves again and opens the next part beside the first —
+`… (2).mp4`, `… (3).mp4` — because a copy cannot be resumed into the middle of a
+file the way audio frames can be appended to one. Five starts that die
+immediately and it gives up and says so; a part that ran for half a minute
+resets that count. A **Resume** opens its own set of parts under its own
+timestamp, the same way it opens a second WAV.
+
+**A file cut off still plays.** It is written as fragmented mp4
+(`+frag_keyframe+empty_moov+default_base_moof`), so the index goes down as the
+file grows instead of at the end. A mimiwatch that is killed rather than
+stopped — which is how a program people close ends most of the time — leaves a
+file that plays up to its last complete fragment, losing at most one keyframe
+interval, with nothing to repair afterwards. The WAV beside it is the opposite
+case, and needs the repair described above.
+
+**A failure costs nothing else.** If the rendition cannot be resolved, or ffmpeg
+cannot be started, or it dies for good, the reason goes on the status line the
+way a failed WAV does (*saving the video stopped*) and the session carries on
+transcribing, translating and writing its audio. Multiview runs up to four
+sessions, so four video recorders can run at once — four muxed streams being
+pulled and written, on top of the four audio ones.
+
 ### What the microphone path does not do
 
 - **No device picker.** The system default input is used. Choose another one in
@@ -1189,7 +1251,7 @@ lsof -ti:8900 | xargs kill
 |---|---|
 | `backends.json` | Engine settings (not committed to git). `MIMIWATCH_CONFIG` can point at another file |
 | `data/mimiwatch.db` | Jobs, sessions and **all the subtitles** (VOD and live). `MIMIWATCH_DATA_DIR` can move the location |
-| `data/recordings/` | The WAV a session wrote, when **Save the audio** was ticked — never otherwise, whatever the source. About 115 MB an hour (16 kHz × 2 bytes = 32 KB/s). Never deleted automatically — it is the one artifact that cannot be made again |
+| `data/recordings/` | The WAV a session wrote, when **Save the audio** was ticked — never otherwise, whatever the source. About 115 MB an hour (16 kHz × 2 bytes = 32 KB/s). And the mp4 of a stream the server fetched, when **Save the video as well** was ticked, in numbered parts and at whatever size the rendition comes to. Never deleted automatically — they are the one artifact that cannot be made again |
 | `data/legacy/` | `<video id>.json` left behind by old versions. Nobody reads them |
 | `~/.local/share/mimiwatch/models` | Models (`%LOCALAPPDATA%\mimiwatch\models` on Windows) |
 | `ext/` | The browser extension (loaded unpacked) |

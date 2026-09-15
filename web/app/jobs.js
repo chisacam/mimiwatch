@@ -226,6 +226,14 @@ function setAddSource(v) {
   // the recording afterwards, which the hint says.
   document.querySelector('#add-form input[name="speakers"]')
     .closest("label").hidden = pushed;
+  // Saving the video only means anything for a stream the server fetches. A
+  // pushed session uploads sound and has no picture at all, so a box offering
+  // to keep one would promise a file that can never appear; a local file is
+  // already on disk, which is where the video came from. The server drops the
+  // flag for those sources too (live.LiveSession) -- this is the half of that
+  // the user can see.
+  $("record-video-field").hidden = pushed || file;
+  $("record-video-hint").hidden = pushed || file;
   syncSpeakerOptions();
 }
 

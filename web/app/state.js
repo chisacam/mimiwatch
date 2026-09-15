@@ -33,7 +33,8 @@ const state = {
   // subtitle size scale.
   fsBaseHeight: 0, cuePx: 0,
   cuePos: null,        // { x, y } as ratios. restore() fills it -- see DEFAULT_CUE_POS
-  backend: "local-gemma", asr: "tcpp-best", refine: true, record: false,
+  backend: "local-gemma", asr: "tcpp-best", refine: true,
+  record: false, recordVideo: false,
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   models: null,        // the answer from /api/models. Model and tool list and state (engines.js)
   live: null,          // { id, es, store } while a broadcast is running (store: MimiCues)
@@ -204,7 +205,8 @@ function persist() {
     backend: state.backend,
     profile: (document.querySelector('#add-form select[name="profile"]') || {}).value,
     genre: (document.querySelector('#add-form select[name="genre"]') || {}).value,
-    asr: state.asr, refine: state.refine, record: state.record,
+    asr: state.asr, refine: state.refine,
+    record: state.record, recordVideo: state.recordVideo,
     mvLayout: state.mvLayout,
   });
 }

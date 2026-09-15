@@ -306,6 +306,104 @@ def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
                        + hint + " [" + " / ".join(why) + "]")
 
 
+# How many times the video recorder starts over before it gives up. The muxed
+# URL it is handed is signed and expires, so its ffmpeg ending while the
+# broadcast goes on is the normal case rather than a fault -- but a URL that
+# dies the instant it is opened would otherwise put yt-dlp in a loop with
+# nothing to stop it. The audio side is bounded the same way
+# (HLS_RECONNECT_TRIES).
+VIDEO_RECONNECT_TRIES = 5
+
+# A part that ran this long counts as a recording that worked, so the retry
+# count starts over -- the same rule `_read_until_end` applies when sound
+# arrives.
+VIDEO_PART_OK_S = 30.0
+
+
+def resolve_video(url: str) -> str:
+    """A rendition with the picture still in it, for the video recorder.
+
+    Deliberately not `resolve_audio`: that one asks for an audio-only rendition
+    on purpose, and going through it would mean fetching pixels only to throw
+    them away again with `-vn`. `best` is yt-dlp's name for the best single file
+    that already carries both streams, so `-g` prints exactly one URL and there
+    is nothing to mux here.
+
+    What comes back is signed and expires within the day, which is why it is
+    resolved when a part is about to be opened and never stored -- the same rule
+    the play URL already has (`live.play_url`).
+    """
+    try:
+        out = subprocess.run(stream.ytdlp_args("-f", "best", "-g", url=url),
+                             capture_output=True, text=True,
+                             timeout=stream.YTDLP_TIMEOUT_S,
+                             **stream.child_io(stderr=False))
+    except TimeoutExpired:
+        raise RuntimeError("yt-dlp gave no answer within "
+                           f"{stream.YTDLP_TIMEOUT_S:.0f} s")
+    lines = out.stdout.strip().splitlines()
+    if out.returncode != 0 or not lines:
+        why = (out.stderr or "").strip().splitlines()
+        # Carry what yt-dlp said, for the same reason resolve_audio does: "could
+        # not resolve" on its own does not say whether an update, a login or a
+        # different address is what is missing.
+        raise RuntimeError("yt-dlp found no rendition with the picture in it"
+                           + (f": {why[-1]}" if why else ""))
+    return lines[0]
+
+
+def video_plan(src: str, out: str) -> list[str]:
+    """The ffmpeg command that writes a broadcast's video down, as a list. A test
+    can read it without running it.
+
+    **The picture is copied and only the sound is re-encoded**, which is not the
+    obvious `-c copy` and was not a free choice. HLS delivers MPEG-TS segments,
+    where AAC arrives as ADTS frames, and mp4 will not take those: a straight
+    copy of a real HLS stream dies on the spot with *Malformed AAC bitstream
+    detected* and leaves an unplayable stub. The usual answer, `-bsf:a
+    aac_adtstoasc`, fixes that one shape and breaks the others -- it refuses to
+    start at all on Opus, and on a CMAF stream whose AAC is already in ASC form
+    it drops every audio packet while still exiting 0, which is a file that
+    looks right and has no sound. Re-encoding the audio takes all of them with
+    one fixed command, and it is the cheap half: on this machine 30 s of 4 Mbps
+    video remuxed this way cost 0.17 s of CPU against 0.03 s for a pure copy,
+    so the expensive half is still a byte copy and the bill is disk, not CPU.
+
+    The `-movflags` are the same worry `_close_recording` has about the WAV,
+    answered at the format level. A plain mp4 writes its index (the moov atom)
+    when the process ends, so a mimiwatch that is killed rather than stopped --
+    which is how a program people close ends most of the time -- would leave a
+    file no player opens at all. Killed 5 s in, a plain mp4 came back *moov atom
+    not found* and a fragmented one played its 5 s: the index goes down as the
+    file grows, so a file cut off in the middle loses at most the fragment being
+    written and needs no repair.
+    """
+    return [
+        stream.ffmpeg_cmd(), "-loglevel", "error", "-nostdin", "-y",
+        "-i", src,
+        "-c:v", "copy", "-c:a", "aac",
+        "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+        "-f", "mp4", out,
+    ]
+
+
+def video_part_path(stem: str) -> str:
+    """The next unused part file of one session's video recording.
+
+    A signed URL expires and its ffmpeg ends where the audio side would
+    reconnect, so one long broadcast leaves several files. They are numbered
+    rather than stamped afresh, so they sort together and read in order --
+    `burn.out_path_for` numbers a re-burn the same way.
+    """
+    d = paths.recordings_dir()
+    p = os.path.join(d, f"{stem}.mp4")
+    n = 2
+    while os.path.exists(p):
+        p = os.path.join(d, f"{stem} ({n}).mp4")
+        n += 1
+    return p
+
+
 def ytdlp_version() -> str:
     """The installed yt-dlp's version. An empty string if it cannot be asked."""
     try:
@@ -468,7 +566,8 @@ class LiveSession:
                  backend_id: str, profile: str = "broadcast",
                  asr_backend_id: str = "", refine: bool = True,
                  genre: str | None = None, source: str = "hls",
-                 title: str = "", record: bool = False):
+                 title: str = "", record: bool = False,
+                 record_video: bool = False):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         # Where the sound comes from. "hls" means the server resolves the address
@@ -530,6 +629,25 @@ class LiveSession:
         # (16000 Hz x 2 bytes = 32 KB/s, so 115 MB an hour), and multiview runs
         # up to MULTIVIEW_MAX of them at once.
         self.record = bool(record)
+        # Whether the picture is written down as well, and only for a broadcast
+        # the server fetches. A pushed session has no picture to write: the
+        # extension and the capture page upload sound and nothing else, so the
+        # flag is dropped here rather than carried as a promise the session
+        # cannot keep, and the box is hidden for those sources on the page.
+        # Off unless asked, like the audio, and for a stronger reason -- the
+        # audio can state 115 MB an hour because the sample format is fixed,
+        # while a video rendition has no such figure at all: whichever one the
+        # site hands over decides it.
+        self.record_video = bool(record_video) and not self.pushed
+        # Set when the recorder opens its first part; see _record_video. The
+        # stem is fixed for the session so the parts sort together, and
+        # `_vid_parts` is every file it has opened, in order.
+        self._vproc: subprocess.Popen | None = None
+        self._vid_thread: threading.Thread | None = None
+        self._vid_stem = ""
+        self._vid_path = ""
+        self._vid_parts: list[str] = []
+        self._vid_error = ""
         prof = PROFILES.get(profile, PROFILES["broadcast"])
         self.profile = profile if profile in PROFILES else "broadcast"
         self.max_speech = prof["max_speech"]
@@ -706,6 +824,10 @@ class LiveSession:
                 "recording": self._wav_path,
                 "recording_s": round(self._wav_s, 1),
                 "recording_error": self._wav_error,
+                "record_video": self.record_video,
+                "recording_video": self._vid_path,
+                "recording_video_bytes": self._video_bytes(),
+                "recording_video_error": self._vid_error,
                 # Separate from where transcription reached (media_base+audio_s):
                 # where the reading side received to. On a session with no focus the
                 # former stands still while the latter keeps going. Resume uses the latter.
@@ -1055,6 +1177,142 @@ class LiveSession:
         except Exception as exc:
             self._wav_error = self._wav_error or str(exc)
 
+    # ---- the session's own video ------------------------------------------
+    #
+    # Entirely apart from transcription, and on purpose. The read loop's ffmpeg
+    # resolves an *audio-only* rendition (`resolve_audio`), so putting video
+    # through it would mean fetching pixels only to drop them again -- and a
+    # recorder sharing that pipe would make every reconnect of one a reconnect
+    # of the other. This is a second ffmpeg, given its own muxed URL, copying
+    # bytes to disk while the first one is still feeding the VAD.
+
+    def _start_video(self) -> None:
+        """Stand the video recorder up, if this session was asked for one."""
+        if not self.record_video or self._vid_thread is not None:
+            return
+        self._vid_stem = f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id}"
+        self._vid_thread = threading.Thread(target=self._record_video,
+                                            name=f"vid-{self.id}", daemon=True)
+        self._vid_thread.start()
+
+    def _record_video(self) -> None:
+        """Copy the broadcast to disk for as long as the session runs. Runs on
+        its own thread.
+
+        Why the recorder has to start over at all: the URL `resolve_video`
+        hands out is signed and expires, so ffmpeg ends while the broadcast is
+        still going -- the same event the read loop answers by reattaching. It
+        is answered here by resolving again and opening the **next part**
+        beside the first (`... (2).mp4`), because a copy cannot be resumed into
+        the middle of an existing file the way audio frames can be appended. A
+        long broadcast therefore leaves several files, which both guides say.
+
+        A failure never costs anything else. The same policy `_record` has for
+        the WAV: the reason is written down once in `_vid_error` for the status
+        to carry, the thread leaves, and the subtitles, the translations and
+        the WAV carry on as though nothing had been asked for.
+        """
+        tries = 0
+        while not self._stop.is_set():
+            try:
+                src = resolve_video(self.url)
+                os.makedirs(paths.recordings_dir(), exist_ok=True)
+                out = video_part_path(self._vid_stem)
+                proc = subprocess.Popen(video_plan(src, out), **stream.child_io())
+            except Exception as exc:
+                self._video_failed(exc)
+                return
+            self._vproc = proc
+            self._vid_path = out
+            self._vid_parts.append(out)
+            print(f"[live] session {self.id} recording video to {out}", flush=True)
+            began = time.time()
+            try:
+                proc.wait()
+            except Exception:
+                pass
+            self._reap_video()
+            lasted = time.time() - began
+            # A broadcast that is over is not a failure to report. The read loop
+            # writes `stopped_by` before the session is torn down, so a recorder
+            # that finds it set has nothing left to attach to and says nothing.
+            if self._stop.is_set() or self.stopped_by:
+                break
+            tries = 0 if lasted >= VIDEO_PART_OK_S else tries + 1
+            if tries > VIDEO_RECONNECT_TRIES:
+                self._video_failed(RuntimeError(
+                    f"it stopped and {VIDEO_RECONNECT_TRIES} attempts to start it "
+                    "again did not last"))
+                return
+            # Straight on when the part that just ended had been running, a
+            # growing wait when they are dying immediately.
+            if self._stop.wait(min(3.0 * tries, 15.0)):
+                break
+        if self._vid_parts:
+            print(f"[live] session {self.id} recorded video to "
+                  f"{len(self._vid_parts)} file(s), "
+                  f"{self._video_bytes() / 1e6:.0f} MB", flush=True)
+
+    def _video_bytes(self) -> int:
+        """How much the video recorder has written, over every part.
+
+        Asked of the filesystem rather than counted, because ffmpeg owns the
+        writing and not a byte of it passes through this process. A part that
+        is not there counts as nothing -- a status must not raise over a file.
+        """
+        total = 0
+        for p in self._vid_parts:
+            try:
+                total += os.path.getsize(p)
+            except OSError:
+                pass
+        return total
+
+    def _video_failed(self, exc: BaseException) -> None:
+        """Record why the video recording stopped, once, and let the rest run on.
+
+        Reported, never swallowed, for the reason `_record` gives: a recording
+        that stopped with nobody told is the failure recording exists to
+        prevent. The status is the only place a user would look, so that is
+        where it goes.
+        """
+        self._vid_error = str(exc) or exc.__class__.__name__
+        print(f"[live] session {self.id} video recording failed, the session "
+              f"continues: {self._vid_error}", file=sys.stderr, flush=True)
+        self._reap_video()
+
+    def _reap_video(self, timeout: float = 5.0) -> None:
+        """Wait on the video ffmpeg so it is not left `<defunct>`, the same way
+        `_reap_ff` does for the reading one.
+
+        Longer than that one's two seconds because this process has a file to
+        finish: asked to stop, ffmpeg writes the fragment it is holding before
+        it goes.
+        """
+        p, self._vproc = self._vproc, None
+        if p is None:
+            return
+        try:
+            p.wait(timeout=timeout)
+        except Exception:
+            pass
+
+    def _stop_video(self) -> None:
+        """Ask the video ffmpeg to finish, on the session's way out.
+
+        terminate() and not kill(): on SIGTERM ffmpeg closes the fragment it is
+        writing and leaves. A killed one still leaves a playable file -- that is
+        what the `-movflags` in `video_plan` are for -- but the last few seconds
+        are worth the moment it takes to ask.
+        """
+        p = self._vproc
+        if p is None:
+            return
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
     def stop(self):
         self.stopped_by = self.stopped_by or "user"
         self._stop.set()
@@ -1063,6 +1321,10 @@ class LiveSession:
         ff = self._ff
         if ff:
             ff.terminate()
+        # The video recorder is a process of its own, so it has to be asked
+        # separately. Left alone it would go on writing to a file belonging to
+        # a session that is over.
+        self._stop_video()
         # A pushed session has no reading thread, so nobody puts ("end",) in.
         # The transcribing side is waiting on the ring, so it is woken here
         # directly.
@@ -1190,6 +1452,11 @@ class LiveSession:
             except Exception:
                 pass
             self._reap_ff()
+        # terminate rather than kill, so the mp4 gets its closing fragment, and
+        # then waited on -- a video ffmpeg left behind is a process a user sees
+        # in ps long after the session has gone.
+        self._stop_video()
+        self._reap_video()
 
     def _reap_ff(self, timeout: float = 2.0):
         """Reap the ffmpeg that ended (or was just killed).
@@ -1245,6 +1512,7 @@ class LiveSession:
         has nothing to do here because `feed()` plays the reading role."""
         if self.pushed:
             return
+        self._start_video()
         self._spawn_ffmpeg(src, start_index)
         self._rx = threading.Thread(target=self._read_loop, name=f"rx-{self.id}",
                                     daemon=True)
@@ -1710,10 +1978,11 @@ def _new_session(url: str, lang: str | None, viewer_lang: str, backend_id: str,
                  profile: str, asr_backend_id: str, refine: bool, genre: str | None,
                  source: str, title: str, group: str = "",
                  focused: bool = True,
-                 record: bool = False) -> LiveSession:
+                 record: bool = False, record_video: bool = False) -> LiveSession:
     s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile,
                     asr_backend_id=asr_backend_id, refine=refine, genre=genre,
-                    source=source, title=title, record=record)
+                    source=source, title=title, record=record,
+                    record_video=record_video)
     s.group = group
     if not focused:
         # It is born a standby session. set_focus() sends the status out and it is
@@ -1734,12 +2003,13 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
           profile: str = "broadcast", asr_backend_id: str = "",
           refine: bool = True, genre: str | None = None,
           source: str = "hls", title: str = "",
-          record: bool = False) -> dict:
+          record: bool = False, record_video: bool = False) -> dict:
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
     _evict_outside("")
     s = _new_session(url, lang, viewer_lang, backend_id, profile, asr_backend_id,
-                     refine, genre, source, title, record=record)
+                     refine, genre, source, title, record=record,
+                     record_video=record_video)
     return {"id": s.id, "source": s.source}
 
 
@@ -1822,7 +2092,8 @@ def _source_ok(src: dict) -> str:
 
 
 def _member_from(src: dict, gid: str, lang, viewer_lang, backend_id, profile,
-                 asr_backend_id, refine, genre, record=False) -> LiveSession | dict:
+                 asr_backend_id, refine, genre, record=False,
+                 record_video=False) -> LiveSession | dict:
     """One source as a member of the bundle. A session already receiving (`session`)
     is folded in; otherwise a new standby session is made."""
     sid = src.get("session")
@@ -1841,14 +2112,15 @@ def _member_from(src: dict, gid: str, lang, viewer_lang, backend_id, profile,
     return _new_session((src.get("url") or "").strip(), lang, viewer_lang, backend_id,
                         profile, asr_backend_id, refine, genre,
                         source="tab" if tab else "hls", title=src.get("title") or "",
-                        group=gid, focused=False, record=record)
+                        group=gid, focused=False, record=record,
+                        record_video=record_video)
 
 
 def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
                     backend_id: str, profile: str = "broadcast",
                     asr_backend_id: str = "", refine: bool = True,
                     genre: str | None = None, record: bool = False,
-                    focus: str | None = None) -> dict:
+                    record_video: bool = False, focus: str | None = None) -> dict:
     """Make a bundle. Each item of `sources` is either `{"session": id}` (fold in what
     is being watched now) or `{"url": ...}` / `{"source": "tab", "title": ...}` (a new
     standby session). Focus goes to the session `focus` points at, or to the first
@@ -1868,7 +2140,7 @@ def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
     members: list[LiveSession] = []
     for src in sources:
         m = _member_from(src, g.id, lang, viewer_lang, backend_id, profile,
-                         asr_backend_id, refine, genre, record)
+                         asr_backend_id, refine, genre, record, record_video)
         if isinstance(m, dict):
             # There is no session to fold in. The standby sessions just made are
             # rolled back and the bundle deleted too.
@@ -1909,7 +2181,8 @@ def multiview_focus(gid: str, sid: str) -> dict:
 def multiview_add(gid: str, src: dict, lang: str | None, viewer_lang: str,
                   backend_id: str, profile: str = "broadcast",
                   asr_backend_id: str = "", refine: bool = True,
-                  genre: str | None = None, record: bool = False) -> dict:
+                  genre: str | None = None, record: bool = False,
+                  record_video: bool = False) -> dict:
     g = _groups.get(gid)
     if g is None:
         return {"error": "no such group"}
@@ -1919,7 +2192,7 @@ def multiview_add(gid: str, src: dict, lang: str | None, viewer_lang: str,
     if why:
         return {"error": why}
     m = _member_from(src, g.id, lang, viewer_lang, backend_id, profile,
-                     asr_backend_id, refine, genre, record)
+                     asr_backend_id, refine, genre, record, record_video)
     if isinstance(m, dict):
         return m
     if m.id not in g.members:
@@ -2379,7 +2652,12 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
                     # WAV -- the name carries a timestamp, so the two sit side
                     # by side, and one broadcast that was resumed once leaves
                     # two files.
-                    record=bool(st.get("record")))
+                    record=bool(st.get("record")),
+                    # And the same for the picture, for the same reason: a
+                    # resume that drops this one would go on transcribing with
+                    # the recording quietly stopped. A session stored before the
+                    # flag existed has no key, which reads as not asked.
+                    record_video=bool(st.get("record_video")))
     s.id = session_id
     s.title = st.get("title") or ""
     s.title_by_user = bool(st.get("title_by_user"))

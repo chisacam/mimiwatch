@@ -31,6 +31,8 @@ function applyBackends(cfg) {
   document.querySelector('#add-form input[name="refine"]').checked = state.refine;
   if (p0.record != null) state.record = !!p0.record;
   document.querySelector('#add-form input[name="record"]').checked = state.record;
+  if (p0.recordVideo != null) state.recordVideo = !!p0.recordVideo;
+  document.querySelector('#add-form input[name="record_video"]').checked = state.recordVideo;
   renderAsrPicker();
   booted = true;      // from here on state agrees with the config, so it is safe to save
   const ids = cfg.backends.map(b => b.id);

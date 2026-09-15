@@ -35,6 +35,19 @@ select{
 .status{font-family:var(--mono); font-size:.74rem; color:var(--dim)}
 .status b{color:var(--accent); font-weight:600}
 .status.warn b{color:var(--warn)}
+/* The two saving switches, inside the status line that reports what they are
+   doing. Sized off the line rather than off .seg: they sit between runs of
+   0.74rem mono text, and a button of the ordinary size would push the line's
+   height around every time a session started or stopped. */
+.rec-toggle{
+  font-family:inherit; font-size:.72rem; line-height:1;
+  background:transparent; color:var(--dim);
+  border:1px solid var(--line); border-radius:6px;
+  padding:.15rem .4rem; margin-right:.3rem; cursor:pointer;
+}
+.rec-toggle:hover{color:var(--text)}
+.rec-toggle.on{background:var(--accent); border-color:var(--accent); color:#04211b; font-weight:700}
+.rec-toggle:disabled{opacity:.5; cursor:default}
 
 /* The restart notice gets a slot of its own, apart from the status line. Written
    into the same slot, the status updates that arrive with every subtitle line

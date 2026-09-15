@@ -1033,14 +1033,16 @@ def test_resume_carries_the_recording_flag_back(monkeypatch):
 
 
 # ---- Saving the video of a broadcast the server pulls ----------------------------
-# The broadcast is fetched once and fanned out: one ffmpeg, one input, the sound
-# down the pipe to the VAD and the picture into an mp4. Nothing is spawned here --
+# The broadcast is fetched once and fanned out: one ffmpeg, the sound down the pipe
+# to the VAD and the picture into an mp4. How many inputs that takes is the site's
+# answer, not ours -- a YouTube live broadcast has no single file with both streams
+# in it, so the picture comes in as a second input. Nothing is spawned here --
 # `read_plan` is the seam the argv can be read across without an ffmpeg anywhere
 # near it, the same way `burn.plan` can be read.
 
-def _plan(monkeypatch, src, start_index, out=""):
+def _plan(monkeypatch, src, start_index, out="", video_src=""):
     monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
-    return live.read_plan(src, start_index, out)
+    return live.read_plan(src, start_index, out, video_src)
 
 
 def test_not_saving_the_video_leaves_the_reading_command_as_it_was(monkeypatch):
@@ -1055,12 +1057,46 @@ def test_not_saving_the_video_leaves_the_reading_command_as_it_was(monkeypatch):
     ]
 
 
-def test_saving_the_video_adds_an_output_rather_than_a_second_fetch(monkeypatch):
-    """One input, two outputs. The pcm output is what it was, and the mp4 comes
-    out of the same read -- a second ffmpeg with a muxed URL of its own would
-    fetch the broadcast twice, which is the stream's bandwidth twice over and two
-    sets of segment requests for one broadcast."""
-    cmd = _plan(monkeypatch, "https://example.invalid/muxed.m3u8", -2, "/tmp/out.mp4")
+def test_saving_the_video_adds_an_input_rather_than_a_second_fetch(monkeypatch):
+    """Two inputs, two outputs, one process -- and the sound is the rendition
+    transcription would have read anyway.
+
+    A YouTube live broadcast has no single file with both streams in it (the
+    measurement is in `resolve_video`), so `-f best` failed every time and the
+    feature never worked there. The picture comes in as its own input instead,
+    and because the sound is still the audio-only rendition, **the transcription
+    side does not change at all when the box is ticked**: the same samples reach
+    the VAD and the same WAV is written. A second ffmpeg pulling the picture
+    would have fetched the broadcast twice over instead.
+    """
+    cmd = _plan(monkeypatch, "https://example.invalid/audio.m3u8", -2, "/tmp/out.mp4",
+                "https://example.invalid/video.m3u8")
+    assert cmd == [
+        "ffmpeg", "-loglevel", "error", "-nostdin", "-y",
+        "-live_start_index", "-2", "-i", "https://example.invalid/video.m3u8",
+        "-live_start_index", "-2", "-i", "https://example.invalid/audio.m3u8",
+        "-map", "1:a:0",
+        "-vn", "-ac", "1", "-ar", str(live.SAMPLE_RATE), "-f", "s16le", "-",
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac",
+        "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+        "-f", "mp4", "/tmp/out.mp4",
+    ]
+    assert cmd.count("-i") == 2
+    # The sound ffmpeg transcribes from is the audio address, whichever input it
+    # sits on -- that is the whole of what "an added input, not a changed one"
+    # means, and it is the line that would break if the two were ever swapped.
+    assert cmd[cmd.index("-map") - 1] == "https://example.invalid/audio.m3u8"
+
+
+def test_one_muxed_address_is_still_one_input(monkeypatch):
+    """A site that hands back a single file with both streams in it -- every
+    format of a live chzzk channel is that shape, and none of them is audio-only
+    -- must still work, and with one input rather than the same address opened
+    twice. There the sound does come out of the muxed rendition, as it always
+    did."""
+    cmd = _plan(monkeypatch, "https://example.invalid/muxed.m3u8", -2, "/tmp/out.mp4",
+                "https://example.invalid/muxed.m3u8")
     assert cmd == [
         "ffmpeg", "-loglevel", "error", "-nostdin", "-y",
         "-live_start_index", "-2", "-i", "https://example.invalid/muxed.m3u8",
@@ -1089,6 +1125,12 @@ def test_each_output_names_the_stream_it_wants(monkeypatch):
     assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"] == \
         ["0:a:0", "0:v:0", "0:a:0"]
     assert "0:a" not in cmd and "0:v" not in cmd
+    # With two inputs the maps name the input as well, and the picture is input 0
+    # so that the mp4's video map reads the same in both shapes.
+    two = _plan(monkeypatch, "https://example.invalid/audio.m3u8", -2, "/tmp/out.mp4",
+                "https://example.invalid/video.m3u8")
+    assert [two[i + 1] for i, a in enumerate(two) if a == "-map"] == \
+        ["1:a:0", "0:v:0", "1:a:0"]
 
 
 def test_the_picture_is_copied_and_only_the_sound_re_encoded(monkeypatch):
@@ -1129,13 +1171,13 @@ def test_the_next_video_part_is_numbered_beside_the_first():
     way."""
     d = live.paths.recordings_dir()
     os.makedirs(d, exist_ok=True)
-    first = live.video_part_path("20260915-120000-abc")
+    first = live.part_path("20260915-120000-abc")
     assert first == os.path.join(d, "20260915-120000-abc.mp4")
     open(first, "wb").close()
-    second = live.video_part_path("20260915-120000-abc")
+    second = live.part_path("20260915-120000-abc")
     assert second == os.path.join(d, "20260915-120000-abc (2).mp4")
     open(second, "wb").close()
-    assert live.video_part_path("20260915-120000-abc") == \
+    assert live.part_path("20260915-120000-abc") == \
         os.path.join(d, "20260915-120000-abc (3).mp4")
 
 
@@ -1166,17 +1208,77 @@ def test_a_pushed_source_has_no_video_to_save():
                             "local-m2m100", record_video=True).record_video is True
 
 
-def test_a_muxed_rendition_that_cannot_be_resolved_costs_only_the_video(session,
-                                                                       monkeypatch):
+def test_resolve_video_hands_back_the_picture_and_the_sound(monkeypatch):
+    """Two addresses, because on a live YouTube broadcast there is no one file
+    with both streams in it.
+
+    `-g` prints the selected formats in the order the selector named them, so
+    the picture is the first line and the sound the second (measured against a
+    live broadcast: line 0 was itag 270, line 1 itag 234). The media time is
+    read off the *audio* manifest -- that is the playlist the transcription
+    input reads, and every timing behaviour around it was measured there.
+    """
+    monkeypatch.setattr(live.subprocess, "run",
+                        _probe("http://x/video.m3u8\nhttp://x/audio.m3u8\n"))
+    monkeypatch.setattr(live, "manifest_info", lambda u: {"read": u})
+    assert live.resolve_video("https://example.invalid/live") == \
+        ("http://x/video.m3u8", "http://x/audio.m3u8", {"read": "http://x/audio.m3u8"})
+
+
+def test_one_address_back_stands_in_for_both(monkeypatch):
+    """A site whose formats all carry both streams answers the pair selector
+    with a single file, and that is a working answer rather than a failure --
+    every format of a live chzzk channel is that shape (measured: 10 formats,
+    not one of them audio-only). The same address for both is what `read_plan`
+    reads as one input."""
+    monkeypatch.setattr(live.subprocess, "run", _probe("http://x/muxed.m3u8\n"))
+    monkeypatch.setattr(live, "manifest_info", lambda u: {})
+    video, audio, _ = live.resolve_video("https://example.invalid/live")
+    assert video == audio == "http://x/muxed.m3u8"
+
+
+def test_the_picture_is_resolved_beside_the_sound_not_instead_of_it(session,
+                                                                    monkeypatch):
+    """What the session does with the two addresses, end to end: the sound is
+    what `_resolve_hls` returns and therefore what transcription reads, the
+    picture is kept for the argv, and `_spawn_ffmpeg` puts them together.
+
+    The old code resolved one address for both and handed it to transcription,
+    so ticking the box changed the rendition the VAD heard. It does not any
+    more, and this is the line that says so.
+    """
+    s = session
+    s.record_video = True
+    monkeypatch.setattr(live.subprocess, "run", _probe(LIVE_META))
+    monkeypatch.setattr(live, "resolve_video",
+                        lambda url: ("http://x/video.m3u8", "http://x/audio.m3u8", {}))
+    monkeypatch.setattr(live, "resolve_audio",
+                        lambda url, youtube=True: pytest.fail("resolved the sound twice"))
+    src, idx = s._resolve_hls()
+    assert src == "http://x/audio.m3u8" and s._vid_src == "http://x/video.m3u8"
+
+    monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
+    cmds = []
+    monkeypatch.setattr(live.subprocess, "Popen",
+                        lambda cmd, **kw: cmds.append(cmd) or _FakeFF(b""))
+    s._spawn_ffmpeg(src, idx)
+    assert cmds[-1] == live.read_plan("http://x/audio.m3u8", -2, s._vid_path,
+                                      "http://x/video.m3u8")
+    assert cmds[-1].count("-i") == 2
+
+
+def test_a_video_rendition_that_cannot_be_resolved_costs_only_the_video(session,
+                                                                        monkeypatch):
     """Losing the subtitles because the picture was unavailable is the wrong
     trade.
 
     `resolve_video` failing where `resolve_audio` would have worked is a
     plausible thing for a site to do -- a rendition behind a login, a format list
-    that came back without a muxed entry -- and the session goes on with the
-    audio-only rendition it would have resolved anyway. Once it has given up, it
-    stays given up: retrying every reconnect would spend a yt-dlp call per break
-    on something that has already been answered.
+    that came back with nothing playable in it -- and the session goes on with
+    the audio-only rendition it would have resolved anyway, with no second input
+    left behind in the argv. Once it has given up, it stays given up: retrying
+    every reconnect would spend a yt-dlp call per break on something that has
+    already been answered.
     """
     s = session
     s.record_video = True
@@ -1193,7 +1295,7 @@ def test_a_muxed_rendition_that_cannot_be_resolved_costs_only_the_video(session,
     assert s.state != "error" and s.error is None
     assert "no rendition with the picture" in s.status()["recording_video_error"]
     assert s._saving_video() is False
-    assert s._next_video_part() == ""
+    assert s._next_video_part() == "" and s._vid_src == ""
 
 
 def test_parts_that_die_at_once_drop_the_video_and_not_the_subtitles(
@@ -1220,7 +1322,7 @@ def test_parts_that_die_at_once_drop_the_video_and_not_the_subtitles(
         cmds.append(cmd)
         if cmd[-1].endswith(".mp4"):
             # ffmpeg makes its output file as it starts, and that is what
-            # `video_part_path` reads to find the next free number.
+            # `part_path` reads to find the next free number.
             open(cmd[-1], "wb").close()
         return fake_ffmpeg(1)          # one chunk, then the pipe closes at once
     monkeypatch.setattr(live.subprocess, "Popen", fake_popen)
@@ -1337,7 +1439,7 @@ def test_a_recordings_directory_that_cannot_be_made_costs_only_the_video(monkeyp
 
 def test_a_part_ffmpeg_never_opened_is_not_counted_twice(monkeypatch):
     """ffmpeg creates its output file as it starts, so an input it cannot open
-    leaves no file at all -- and `video_part_path` reads the filesystem, so the
+    leaves no file at all -- and `part_path` reads the filesystem, so the
     next part is handed back the same name.
 
     Reusing it is right: there is nothing there to overwrite. Listing it twice
@@ -1381,4 +1483,377 @@ def test_resume_carries_the_video_flag_back(monkeypatch):
     store.save_session({**base, "id": "vid-3"}, "")            # stored before the flag
     assert live.resume("vid-3")["resumed"]
     assert live.get("vid-3").record_video is False
+    live._sessions.clear()
+
+
+# ---- Switching the saving on a session that is already running ------------------
+# Both flags used to be settled in __init__ and never move again, which put the
+# decision at the one moment a broadcast makes it hardest: before it has started.
+# The two halves of the switch cost very different things, and that difference is
+# what these pin.
+
+def _registered(s: live.LiveSession) -> live.LiveSession:
+    """Put a session in the registry, which is where `set_record` looks."""
+    live._sessions[s.id] = s
+    return s
+
+
+class _Terminates(_FakeFF):
+    """An ffmpeg that writes nothing down its pipe and writes down being asked to end."""
+
+    def __init__(self):
+        super().__init__(b"")
+        self.terminated = 0
+
+    def terminate(self):
+        self.terminated += 1
+
+
+def test_the_audio_switch_opens_and_closes_the_file_with_nothing_interrupted():
+    """Saving the audio is switched on the bytes that are already flowing.
+
+    `_record` is handed blocks the reading side has already read, so turning it
+    on opens a WAV on the next one and turning it off closes the one that is
+    open. No ffmpeg is involved and nothing is resolved again -- the process
+    reading the broadcast must not be touched at all, because there is nothing
+    about it that the answer changes.
+    """
+    s = _registered(_hls())
+    s._ff = _Terminates()
+    assert live.set_record(s.id, record=True) == {
+        "record": True, "record_video": False, "reconnect": False}
+    s._record(_pcm(1600))
+    first = s._wav_path
+    assert first and s.status()["recording"] == first
+
+    assert live.set_record(s.id, record=False)["record"] is False
+    s._record(_pcm(1600))                    # arrives after the switch: not in the file
+    with wave.open(first, "rb") as w:
+        assert w.getnframes() == 1600
+    # The process reading the broadcast was never touched, in either direction.
+    assert s._ff.terminated == 0 and s._respawn is False
+
+    # And on again: a second file, not a continuation of the first. `recording_s`
+    # is the length of the file `recording` names, so both start over.
+    live.set_record(s.id, record=True)
+    assert s.status()["recording"] == "" and s.status()["recording_s"] == 0
+    s._record(_pcm(800))
+    assert s._wav_path != first
+    s._close_recording()
+    with wave.open(s._wav_path, "rb") as w:
+        assert w.getnframes() == 800
+
+
+def test_the_video_switch_asks_for_the_reading_ffmpeg_to_be_stood_up_again():
+    """Saving the video cannot be switched on a running process.
+
+    The ffmpeg now reading was given a rendition and an output list chosen for
+    the answer that held when it started -- audio-only with one output, or muxed
+    with two -- and neither can be changed under it. So the switch ends it and
+    lets the reading thread stand the next one up, which is the only code that
+    knows how to find the place again. It is taken at once rather than left for
+    the next natural break: a broadcast can run for hours without one.
+    """
+    s = _registered(_hls())
+    s._ff = _Terminates()
+    res = live.set_record(s.id, record_video=True)
+    assert res == {"record": False, "record_video": True, "reconnect": True}
+    assert s._respawn is True and s._ff.terminated == 1
+    assert s._saving_video() is True
+
+    # Off is a respawn too: the process now running is the muxed one with two
+    # outputs, and it goes on writing the mp4 until it is replaced.
+    s._respawn = False
+    assert live.set_record(s.id, record_video=False)["reconnect"] is True
+    assert s._respawn is True and s._ff.terminated == 2
+
+    # Asking for what is already true changes nothing and breaks nothing.
+    s._respawn = False
+    assert live.set_record(s.id, record_video=False)["reconnect"] is False
+    assert s._respawn is False and s._ff.terminated == 2
+
+
+def test_a_requested_break_does_not_spend_a_reconnect_attempt(monkeypatch):
+    """`HLS_RECONNECT_TRIES` is there to notice reception that will not come
+    back, and a process we ended ourselves says nothing about that.
+
+    The session here has already used every attempt it has. A break that
+    happened to it gives up on the spot; the same break, asked for, starts the
+    count over and reattaches.
+    """
+    monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
+    monkeypatch.setattr(live.subprocess, "Popen", lambda cmd, **kw: _FakeFF(b""))
+
+    def one_reattach(s):
+        """Run the read loop with every attempt already spent. A playlist comes
+        back for the first reattach and the broadcast is over after it, so the
+        loop ends either way -- what differs is whether it reattaches at all."""
+        asked = []
+        s._ff = _FakeFF(b"")
+
+        def resolve(reconnect=False):
+            asked.append(reconnect)
+            return ("src", -2) if len(asked) == 1 else (None, None)
+        s._resolve_hls = resolve
+        s._stop.wait = lambda t: False
+        s._read_until_end(live.CHUNK * 2, attempt=live.HLS_RECONNECT_TRIES)
+
+    lost = _hls()
+    one_reattach(lost)
+    assert lost.stopped_by == "stream" and lost.state == "error"
+
+    asked = _hls()
+    asked._respawn = True
+    one_reattach(asked)
+    assert asked.stopped_by == "ended" and asked.state != "error"
+    assert asked._respawn is False           # read once and cleared
+
+
+def test_a_requested_break_does_not_count_against_the_video_part_budget(monkeypatch):
+    """`VIDEO_RECONNECT_TRIES` is there to notice an mp4 output that keeps
+    failing, and a part cut short because the user pressed the switch is not one.
+
+    Left uncounted it would be: this session is one bad part away from giving up
+    on the video, and the part now open was started a moment ago.
+    """
+    monkeypatch.setattr(live.stream, "ffmpeg_cmd", lambda: "ffmpeg")
+    monkeypatch.setattr(live.subprocess, "Popen", lambda cmd, **kw: _FakeFF(b""))
+    s = _registered(_hls())
+    s.record_video = True
+    s._ff = _Terminates()
+    s._vid_bad = live.VIDEO_RECONNECT_TRIES - 1
+    s._vid_began = time.time()                       # a part opened a moment ago
+    assert live.set_record(s.id, record_video=False)["reconnect"] is True
+    s._spawn_ffmpeg("src", -2)                       # where a part is judged
+    assert s._vid_bad == live.VIDEO_RECONNECT_TRIES - 1
+    assert s._vid_error == "" and s.status()["recording_video_error"] == ""
+
+
+def test_turning_the_video_on_again_is_a_genuine_retry():
+    """Giving up on the video is permanent for the session, and that is what
+    makes the switch worth having.
+
+    One `resolve_video` that came back wrong at four in the morning, or five bad
+    parts in a row, and an overnight broadcast saves nothing for the rest of its
+    run however long that is. `_vid_error` is what makes it stick, so asking for
+    the video again clears it -- asking is exactly the request that should mean
+    "try once more".
+    """
+    s = _registered(_hls())
+    s.record_video = True
+    s._ff = _Terminates()
+    s._video_failed(RuntimeError("yt-dlp found no rendition with the picture in it"))
+    assert s._saving_video() is False
+
+    assert live.set_record(s.id, record_video=False)["record_video"] is False
+    res = live.set_record(s.id, record_video=True)
+    assert res["record_video"] is True and res["reconnect"] is True
+    assert s._vid_error == "" and s._vid_bad == 0 and s._saving_video() is True
+    assert s.status()["recording_video_error"] == ""
+
+
+def test_a_pushed_session_switches_its_audio_and_has_no_video_to_switch():
+    """A microphone or tab session uploads sound and nothing else, so
+    `record_video` is dropped there the same way `__init__` drops it. The audio
+    half is the half that matters for that source and it has to keep working.
+    """
+    s = _registered(live.LiveSession("", None, "ko", "local-m2m100", source="mic",
+                                     title="m"))
+    s._tr = None
+    assert live.set_record(s.id, record=True)["record"] is True
+    assert s.feed(_pcm(live.CHUNK * 2))["ok"]
+    assert s.status()["recording"] and s.status()["recording_s"] > 0
+
+    res = live.set_record(s.id, record_video=True)
+    assert res["record_video"] is False and res["reconnect"] is False
+    assert s.record_video is False and s.status()["record_video"] is False
+    s.stop()
+
+
+def test_a_switch_is_answered_and_a_mistake_is_not_swallowed():
+    """A session that is not there, and a request that asks for nothing."""
+    assert live.set_record("no-such-session", record=True)["error"] == "no such session"
+    s = _registered(_hls())
+    assert "required" in live.set_record(s.id)["error"]
+    assert s.record is False and s.record_video is False
+
+
+def test_a_switch_survives_a_restart(monkeypatch):
+    """The flags ride in `status()`, so `_persist` puts them in SQLite and
+    `resume` reads them back -- a session switched at midnight and resumed at
+    two has to come back switched. Nothing was written for this; what the test
+    is for is that nothing has to be.
+    """
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
+    s = _registered(_hls())
+    s._ff = _Terminates()
+    live.set_record(s.id, record=True, record_video=True)
+    st = store.session(s.id)
+    assert st["record"] is True and st["record_video"] is True
+
+    store.save_session({**st, "state": "stopped", "stopped_by": "user"}, "")
+    live._sessions.clear()
+    assert live.resume(s.id)["resumed"]
+    back = live.get(s.id)
+    assert back.record is True and back.record_video is True
+
+
+# ---- One broadcast, one WAV ------------------------------------------------
+# The Python-side writer exists so that the file survives everything the ffmpeg
+# under it does not: it is written across reconnects, and only a stop or the
+# unticked box finishes it. What these pin is the one place that rule was broken
+# -- not by a reconnect, which never touched the file, but by the stop racing
+# ffmpeg's last block. Found against a live YouTube broadcast on 2026-09-15: two
+# good recordings and, beside them, a WAV of 0 bytes.
+
+def _wavs() -> list[str]:
+    d = live.paths.recordings_dir()
+    return sorted(f for f in (os.listdir(d) if os.path.isdir(d) else [])
+                  if f.endswith(".wav"))
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_a_reconnect_of_either_kind_leaves_the_open_wav_alone(requested):
+    """One broadcast, one file, however many ffmpegs it took to receive it.
+
+    A break that happened to the session and one it asked for itself -- the
+    video switch, which cannot be made under a running process -- go down the
+    same path, and neither may touch the WAV. That is the whole reason the
+    recorder is written in Python instead of as a second ffmpeg output. If it
+    were broken here, every long broadcast that reconnected would have been
+    splitting its recording into a file per ffmpeg.
+    """
+    s = _registered(_hls(record=True))
+    first, second = _pcm(live.CHUNK), _pcm(live.CHUNK)
+    s._ff = _FakeFF(first)
+    if requested:
+        s.record_video = True
+        assert live.set_record(s.id, record_video=False)["reconnect"] is True
+        assert s._respawn is True
+    s._spawn_ffmpeg = lambda src, start_index: setattr(s, "_ff", _FakeFF(second))
+    resolves = []
+
+    def resolve(reconnect=False):
+        resolves.append(reconnect)
+        return ("src", -2) if len(resolves) == 1 else (None, None)
+    s._resolve_hls = resolve
+    s._stop.wait = lambda t: False
+    s._read_loop()
+
+    assert resolves == [True, True]        # one reattach, then the broadcast ended
+    assert _wavs() == [os.path.basename(s._wav_path)]
+    with wave.open(s._wav_path, "rb") as w:
+        assert w.readframes(w.getnframes()) == first + second
+    live._sessions.clear()
+
+
+class _HoldsTheLastBlock(_FakeStdout):
+    """ffmpeg's pipe with its last block still in it when the stop lands.
+
+    A real one does this by itself: `stop` terminates ffmpeg, and ffmpeg hands
+    over what it was holding before it goes -- later still when it is also
+    writing an mp4, because it flushes the last fragment first. Here the read
+    waits until the stop has been all the way through.
+    """
+
+    def __init__(self, data: bytes):
+        super().__init__(data)
+        self.at_the_tail = threading.Event()
+        self.stopped = threading.Event()
+
+    def read(self, n: int) -> bytes:
+        if 0 < self.pos < len(self.data):
+            self.at_the_tail.set()
+            self.stopped.wait(5.0)
+        return super().read(n)
+
+
+def test_the_block_ffmpeg_was_holding_at_the_stop_opens_no_second_wav():
+    """The stray empty recording, and the reason there was one.
+
+    `stop` used to close the WAV from the API thread. ffmpeg's last block --
+    under one VAD chunk, and the one the transcriber cannot take -- arrived
+    after that, found no open file and `record` still ticked, and opened one of
+    its own: a new timestamp, and nothing left alive to close it. `wave` writes
+    its header into a buffered file, so what was left on disk was 0 bytes, in
+    the one directory mimiwatch never deletes from. The recording itself lost
+    nothing, which is why it went unnoticed; an empty file in there reads as a
+    recording that failed.
+
+    The closing belongs to the thread that does the writing, so the block lands
+    in the file it was always meant to land in and the count of files is one.
+    """
+    s = _registered(_hls(record=True))
+    data = _pcm(live.CHUNK + 160)          # one whole block, then a short one
+    ff = _FakeFF(b"")
+    ff.stdout = _HoldsTheLastBlock(data)
+    s._ff = ff
+    s._resolve_hls = lambda reconnect=False: (None, None)
+    s._stop.wait = lambda t: False
+    s._rx = threading.Thread(target=s._read_loop, name=f"rx-{s.id}", daemon=True)
+    s._rx.start()
+    assert ff.stdout.at_the_tail.wait(5.0)
+    s.stop()                               # the user's stop, mid-block
+    ff.stdout.stopped.set()
+    s._rx.join(5.0)
+    assert not s._rx.is_alive()
+
+    assert _wavs() == [os.path.basename(s._wav_path)]
+    with wave.open(s._wav_path, "rb") as w:
+        # And the tail is in it: it is audio that exists nowhere else, which is
+        # what `_read_until_end` records it ahead of the transcriber for.
+        assert w.readframes(w.getnframes()) == data
+    assert s.status()["recording_error"] == ""
+    live._sessions.clear()
+
+
+def test_unticking_the_audio_box_is_what_closes_the_file():
+    """The other half of the rule: a reconnect never closes the WAV, and the box
+    always does -- while the session goes on receiving, with no break anywhere.
+
+    The file has to be complete the moment the box comes off, because what
+    follows it is a session that is still running and still writing nothing.
+    """
+    s = _registered(_hls(record=True))
+    kept, dropped = _pcm(live.CHUNK), _pcm(live.CHUNK)
+    s._ff = _FakeFF(kept)
+    s._resolve_hls = lambda reconnect=False: (None, None)
+    s._stop.wait = lambda t: False
+    s._read_until_end(live.CHUNK * 2, attempt=0)      # reads `kept`, then ends
+    path = s._wav_path
+    assert live.set_record(s.id, record=False)["record"] is False
+    with wave.open(path, "rb") as w:                  # closed, and complete
+        assert w.readframes(w.getnframes()) == kept
+    s._record(dropped)                                # after the switch: nowhere
+    assert _wavs() == [os.path.basename(path)]
+    assert s._wav is None
+    live._sessions.clear()
+
+
+def test_a_recorder_that_never_got_a_sample_leaves_nothing_behind(monkeypatch):
+    """A WAV that was opened and never written to is taken away, not left.
+
+    The only way to reach it is a write that failed on the very first block --
+    a full disk, a volume that went read-only -- and `wave` writes a 44-byte
+    header on close whatever happened. A 44-byte file in the recordings
+    directory is a recording that failed wearing the clothes of one that
+    worked, and nothing in there is ever deleted automatically, so it would sit
+    there. The status stops naming it too.
+    """
+    real_open = live.wave.open
+
+    def full_disk(path, mode):
+        w = real_open(path, mode)
+        w.writeframes = lambda b: (_ for _ in ()).throw(OSError("no space left"))
+        return w
+    monkeypatch.setattr(live.wave, "open", full_disk)
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m",
+                         record=True)
+    s._tr = None
+    assert s.feed(_pcm(live.CHUNK))["ok"]             # the subtitles carry on
+    assert "no space left" in s.status()["recording_error"]
+    assert s.status()["recording"] == "" and s.status()["recording_s"] == 0
+    assert _wavs() == []
+    s.stop()
+    assert _wavs() == []
     live._sessions.clear()

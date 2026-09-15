@@ -117,6 +117,41 @@ MW_I18N.add({
     en: "Re-transcribe",
     ko: "다시 전사",
   },
+  "live.record.audio": {
+    en: "save the audio",
+    ko: "소리 저장",
+  },
+  "live.record.audioHint": {
+    en: "Whether this session is writing the sound down. Switching it takes "
+      + "effect on the next block that arrives — nothing is interrupted, and "
+      + "turning it on again opens a second file rather than continuing the first.",
+    ko: "이 세션이 소리를 파일로 쓰는 중인지입니다. 바꾸면 다음에 들어오는 "
+      + "덩어리부터 적용됩니다. 끊기는 것은 없고, 다시 켜면 앞 파일을 잇지 않고 "
+      + "새 파일을 엽니다.",
+  },
+  "live.record.switchFailed": {
+    en: "Could not switch the saving: {error}",
+    ko: "저장을 바꾸지 못했습니다: {error}",
+  },
+  "live.record.video": {
+    en: "save the video",
+    ko: "영상 저장",
+  },
+  "live.record.videoHint": {
+    en: "Whether the picture is being written down too. Switching it fetches "
+      + "the broadcast again, so reception stops for a few seconds — only a "
+      + "stream the server fetches has a picture to save.",
+    ko: "그림도 함께 쓰는 중인지입니다. 바꾸면 방송을 다시 받아 오므로 수신이 "
+      + "몇 초 멈춥니다. 저장할 그림이 있는 것은 서버가 받아 오는 방송뿐입니다.",
+  },
+  "live.record.videoSwitching": {
+    en: "Switching the video saving — the broadcast is being fetched again, "
+      + "which takes a few seconds. The rewind window normally fills that gap "
+      + "back in; any seconds it cannot are written into the subtitles.",
+    ko: "영상 저장을 바꾸는 중입니다. 방송을 다시 받아 오느라 몇 초 걸립니다. "
+      + "그 사이는 되감기 구간이 대개 메워 주고, 메우지 못한 만큼은 자막에 "
+      + "적힙니다.",
+  },
   "live.row.stopped": {
     en: "subtitles stopped",
     ko: "자막 중단",

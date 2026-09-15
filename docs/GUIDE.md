@@ -142,14 +142,21 @@ the WAV and the mp4 together. The picture is copied as it arrives and only the
 sound is re-encoded, so what it costs is disk and not CPU. It applies to a
 stream the server fetches and to nothing else: a microphone or tab session
 uploads sound and has no picture to save, so the box is hidden for those
-sources. Off unless ticked, the same as the audio — and unticked, nothing about
-reception changes at all.
+sources. Off unless ticked, the same as the audio — and whether it is ticked or
+not, nothing about reception changes: the sound is read from the same
+audio-only rendition either way.
 
 There is no MB an hour to quote for it. The audio figure is arithmetic off a
 sample format that never changes; a video rendition has no fixed anything —
 whichever one the site hands over decides the size — so the honest instruction
 is to watch the directory the first time. *Saving a stream the server fetches*
 below has the rest of it.
+
+**Neither answer is final.** Both boxes appear again as switches on the status
+line of a session that is receiving, so a broadcast that turns out to be worth
+keeping can be saved from the middle without being stopped and started again.
+What that costs — nothing for the audio, a reconnect of a few seconds for the
+video — is in *Switching the saving while the broadcast runs* below.
 
 ### Screen controls
 
@@ -1096,7 +1103,10 @@ transcript.
 
 If writing the file fails — a full disk, a directory that cannot be created —
 the session says so in its status and **keeps transcribing**. Losing the
-recording must not also lose the subtitles already on screen.
+recording must not also lose the subtitles already on screen. A write that
+failed on the very first block leaves no file behind at all: an empty recording
+in the one directory nothing is ever deleted from would go on reading as a
+recording that failed long after the reason had left the screen.
 
 ### Saving a stream the server fetches
 
@@ -1107,12 +1117,15 @@ that file differ from a microphone one.
 **It is contiguous audio, not a clock.** Reception breaks, and the session
 reattaches by standing ffmpeg back up, so one session can span several ffmpeg
 processes — which is why the file is written on the Python side rather than as a
-second ffmpeg output: it stays one file across all of them. What never arrived
-is simply not in it. The gap is closed up rather than padded with silence, so
-the recording runs *shorter* than the broadcast by however much was missed, and
-the subtitles are where that is written down (`⋯ about N s went unreceived ⋯`).
-Padding it back out to real time is a change that would have to be measured
-first, and nothing has measured it.
+second ffmpeg output: it stays one file across all of them. The stop and the box
+coming off are the only two things that close it — a reattach never does,
+whether reception dropped or you asked for one by switching the video, and the
+block ffmpeg is holding when you stop goes into the file it belongs to. What
+never arrived is simply not in it. The gap is closed up rather than padded with
+silence, so the recording runs *shorter* than the broadcast by however much was
+missed, and the subtitles are where that is written down (`⋯ about N s went
+unreceived ⋯`). Padding it back out to real time is a change that would have to
+be measured first, and nothing has measured it.
 
 **Resuming writes a second file.** **Resume** continues the same session — the
 same id, the same subtitles — but it opens a new recording, named for the time
@@ -1125,22 +1138,33 @@ turns amber and says *saving the audio stopped* instead.
 ### Saving the video too
 
 Tick **Save the video as well** and the picture is kept beside the sound, as
-`data/recordings/<date>-<session id>.mp4`. Five things are worth knowing before
+`data/recordings/<date>-<session id>.mp4`. Six things are worth knowing before
 leaving it running overnight.
 
 **The broadcast is fetched once and fanned out.** With the box ticked, the
-rendition mimiwatch reads is the muxed one, and that one read feeds three
-things: the subtitles, the WAV if that box is ticked too, and the mp4. Two of
-them are outputs of the ffmpeg itself — the sound on a pipe and the broadcast
-into the file; the WAV is written in Python off that same pipe, which is how it
-stays one contiguous file across reconnects. A second process pulling a muxed
-copy of its own was the other way to build it, and it costs the stream's
-bandwidth twice and two sets of segment requests for one broadcast. With the box
-unticked nothing about reception changes at all: the audio-only rendition, the
-same command, the same subtitles. Multiview runs up to four
-sessions, so four mp4s can be growing at once — but they are the four reads that
-were happening anyway, now carrying their pixels through to disk instead of
-dropping them.
+picture becomes a second *input* on the ffmpeg that was already running, and
+that one process feeds three things: the subtitles, the WAV if that box is
+ticked too, and the mp4. Two of them are its own outputs — the sound on a pipe
+and the broadcast into the file; the WAV is written in Python off that same
+pipe, which is how it stays one contiguous file across reconnects. A second
+process pulling a copy of its own was the other way to build it, and it costs
+the stream's bandwidth twice and two sets of segment requests for one
+broadcast.
+
+**The picture is an added input, not a changed one.** The sound ffmpeg
+transcribes from is the same audio-only rendition it reads with the box
+unticked, so ticking it changes nothing the VAD hears and nothing the WAV keeps
+— the same samples, the same subtitles. It has to work this way on YouTube,
+where a live broadcast has no single file with both streams in it at all: the
+eight formats an extraction returns are six video-only and two audio-only, and
+asking for one pre-muxed file fails outright (*Requested format is not
+available*), which is what saving the video used to do there every time. Sites
+that do serve one file with both in it — every format of a live chzzk channel is
+that shape, and none of them is audio-only — come back as a single address, and
+there it is one input again and the sound is taken out of the picture's
+rendition as before. Multiview runs up to four sessions, so four mp4s can be
+growing at once — but they are the four reads that were happening anyway, now
+carrying their pixels through to disk instead of dropping them.
 
 **The cost of one read is that the outputs share a fate.** An mp4 that cannot be
 written — a full disk, a volume that went read-only — ends the process feeding the
@@ -1151,8 +1175,8 @@ itself, and it is bounded. Five parts in a row that ended within half a minute o
 starting and **the video is given up on for the rest of the session** — the
 status line turns amber and says *saving the video stopped*, with the reason, and
 everything after that resolves audio-only and goes on with the subtitles. If the
-muxed rendition cannot be resolved at all, the session falls back to the
-audio-only one at once and says so in the same place. Losing the subtitles
+picture cannot be resolved at all, the session falls back to the audio-only
+rendition at once and says so in the same place. Losing the subtitles
 because the picture was unavailable is the wrong trade.
 
 **The picture is copied; the sound is re-encoded.** `-c:v copy -c:a aac`, and
@@ -1182,6 +1206,49 @@ stopped — which is how a program people close ends most of the time — leaves
 file that plays up to its last complete fragment, losing at most one keyframe
 interval, with nothing to repair afterwards. The WAV beside it is the opposite
 case, and needs the repair described above.
+
+### Switching the saving while the broadcast runs
+
+A session that is receiving carries the two boxes again, as switches on its
+status line. The add form is asked before the broadcast has started, and for a
+broadcast that is the hardest moment to answer the question: what makes one
+worth keeping usually happens once it is under way.
+
+**Switching the audio costs nothing at all.** The bytes are already flowing past
+the writer, so turning it on opens a WAV on the next block that arrives and
+turning it off closes the one that is open. Nothing is interrupted, nothing is
+resolved again, and not a sample goes missing on either side of the switch.
+Turning it on again opens a *second* file rather than continuing the first, the
+same way **Resume** does.
+
+**Switching the video costs a reconnect.** The ffmpeg now reading the broadcast
+was given the inputs and outputs the answer that held when it started called
+for — the sound alone with one output, or the picture as a second input with
+two — and neither of those can be changed under a running process. So the switch
+ends it and stands the next one up straight away, rather than waiting for a
+break that a broadcast can run for hours without. Measured on one machine
+against a live YouTube broadcast, resolving the addresses again took `yt-dlp -j`
+1.6–2.1 s plus one `yt-dlp -g` 1.7–2.0 s — **3.5–4.2 seconds**, with the respawn
+and the first segment after that. Another machine and another network will
+differ; read it as *a few seconds*, not as a figure.
+
+**The transcription normally survives it.** A break that falls inside the DVR
+window is picked back up where it stopped, so what the viewer sees is the
+subtitles falling behind for a moment and catching up. Where the window cannot
+be read, those seconds are genuinely lost — and the subtitles say so in wording
+of their own, `⋯ about N s went unreceived while the saving was switched ⋯`,
+which is deliberately not what a break that happened by itself says. A break you
+asked for is not counted against either of the counts that watch for something
+failing over and over, the reattach count or the one that gives up on the video.
+
+**Asking for the video again is a genuine retry.** Giving up on it is permanent
+for the session, so one rendition that could not be resolved at four in the
+morning, or five parts in a row that died on the spot, means an overnight
+broadcast saves no picture for the rest of its run however long that is.
+Switching the video off and on clears that and tries again.
+
+A microphone or tab session has one switch rather than two, for the same reason
+its add form has one box: sound is uploaded and there is no picture to save.
 
 ### What the microphone path does not do
 

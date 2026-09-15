@@ -1228,10 +1228,14 @@ class LiveSession:
         (HLS_RECONNECT_TRIES), so one hls session can span several ffmpeg
         processes -- writing one continuous file across all of them is why the
         recorder lives here in Python rather than as a second ffmpeg output.
-        Audio that never arrived is simply absent: the gap is closed up, not
-        padded with silence, so the file is contiguous audio and comes out
-        shorter than the broadcast by `gap_s`. Padding it out is a change worth
-        measuring before making, and nothing has measured it.
+        **A reconnect of either kind leaves the open file alone**: one that
+        happened to the session, and one it asked for itself because the saving
+        of the video was switched (`_request_respawn`). Only a stop, or the
+        audio box being unticked, closes it. Audio that never arrived is simply
+        absent: the gap is closed up, not padded with silence, so the file is
+        contiguous audio and comes out shorter than the broadcast by `gap_s`.
+        Padding it out is a change worth measuring before making, and nothing
+        has measured it.
 
         Why a session writes its own audio down: hayamimi, the tool this
         pipeline was ported from, kept none. A 2026-09-11 meeting recorded with
@@ -1270,6 +1274,25 @@ class LiveSession:
                 if not self.record:
                     return
                 if self._wav is None:
+                    if self._stop.is_set():
+                        # And the same again for a session that is ending, which
+                        # is where a stray empty WAV came from. `stop` closes the
+                        # recording; ffmpeg only then hands over the block it was
+                        # holding, and with the picture being saved it hands it
+                        # over later still, because it writes the mp4's last
+                        # fragment before it goes. That block found `_wav` None
+                        # and opened a file of its own -- a fresh timestamp, and
+                        # nothing left alive to close it, so 0 bytes on disk,
+                        # `wave` having written its header into a buffered file
+                        # that was never flushed. Measured against a live
+                        # YouTube broadcast on 2026-09-15: two good recordings
+                        # and one empty WAV stamped at the moment of the stop.
+                        # Nothing is lost by returning here -- the reading
+                        # thread closes the file itself now (`_read_loop`), so
+                        # the last block reaches the open WAV before that
+                        # happens, and this runs only for a block that arrives
+                        # after the recording is already finished.
+                        return
                     os.makedirs(paths.recordings_dir(), exist_ok=True)
                     self._wav_path = part_path(
                         f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id}", ".wav")
@@ -1292,10 +1315,16 @@ class LiveSession:
             self._close_recording()
 
     def _close_recording(self) -> None:
-        """Finish the WAV. Safe to call more than once, on a session that never
-        recorded anything, and from a thread other than the one writing --
-        `set_record` closes it from the API thread while the reading thread is
-        still handing blocks to `_record`, which is what `_wav_lock` is for.
+        """Finish the WAV, and take it away again if nothing was ever written to
+        it. Safe to call more than once, on a session that never recorded
+        anything, and from a thread other than the one writing -- `set_record`
+        closes it from the API thread while the reading thread is still handing
+        blocks to `_record`, which is what `_wav_lock` is for.
+
+        Who calls it: whoever ends the reading. For a session the server pulls
+        that is the reading thread on its way out (`_read_loop`), for a pushed
+        one it is `stop`, and either way it is also the unticked box and a write
+        that failed.
 
         A WAV carries its length in the header, which `wave` writes on close.
         A process that is killed rather than stopped therefore leaves the
@@ -1312,12 +1341,29 @@ class LiveSession:
             w, self._wav = self._wav, None
             if w is None:
                 return
+            empty = not w.getnframes()
             try:
                 w.close()
-                print(f"[live] session {self.id} recorded {self._wav_s:.0f}s "
-                      f"to {self._wav_path}", flush=True)
             except Exception as exc:
                 self._wav_error = self._wav_error or str(exc)
+            if empty:
+                # A writer that was opened and never written to is taken away
+                # rather than left as a 44-byte header. The only way to reach
+                # here is a write that failed on the first block, and a file
+                # that size sitting in the recordings directory reads as a
+                # recording that failed -- in the one directory nothing is ever
+                # deleted from automatically, so it would read that way for as
+                # long as the user kept it. The status stops naming it too: a
+                # path pointing at a file that is not there is worse than no
+                # path at all.
+                try:
+                    os.remove(self._wav_path)
+                except OSError:
+                    pass
+                self._wav_path = ""
+                return
+            print(f"[live] session {self.id} recorded {self._wav_s:.0f}s "
+                  f"to {self._wav_path}", flush=True)
 
     # ---- the session's own video ------------------------------------------
     #
@@ -1510,10 +1556,19 @@ class LiveSession:
                 self._ring.push(("audio", self._recv_s, pad))
             self._ended = True
             self._ring.push(("end",))
-        # Closed after the ring is woken: a WAV gets its length field written
-        # only on close, and doing that first would put a file operation
-        # between the user's stop and the screen reacting to it.
-        self._close_recording()
+        # Closed here only when nothing else will. A session the server pulls
+        # has a reading thread, and that thread closes the WAV as it ends
+        # (`_read_loop`) -- after ffmpeg has handed over the block it was
+        # holding when it was terminated. Closing it from this thread instead
+        # put that block on the wrong side of the close, and it opened a second
+        # WAV that stayed at 0 bytes. A pushed session's reading is feed(), on
+        # the caller's thread, and there is nothing else to finish the file.
+        # After the ring is woken either way: a WAV gets its length field
+        # written only on close, and doing that first would put a file
+        # operation between the user's stop and the screen reacting to it.
+        rx = self._rx
+        if rx is None or not rx.is_alive():
+            self._close_recording()
 
     # ---- tab audio intake -------------------------------------------------
     def feed(self, raw: bytes) -> dict:
@@ -1767,6 +1822,14 @@ class LiveSession:
         finally:
             self._ended = True
             self._ring.push(("end",))
+            # The thread that writes the file is the thread that finishes it,
+            # and this is the only point where no block can still be on its way
+            # in. `stop` closing it from the API thread left ffmpeg's last block
+            # to arrive afterwards and open a second file nothing would ever
+            # close. It also covers the ending `stop` is not involved in at all:
+            # a broadcast that finished by itself used to leave the WAV open,
+            # with its length field unwritten until the session was collected.
+            self._close_recording()
 
     def _read_until_end(self, need: int, attempt: int):
         while not self._stop.is_set():

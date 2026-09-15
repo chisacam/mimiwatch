@@ -1103,7 +1103,10 @@ transcript.
 
 If writing the file fails — a full disk, a directory that cannot be created —
 the session says so in its status and **keeps transcribing**. Losing the
-recording must not also lose the subtitles already on screen.
+recording must not also lose the subtitles already on screen. A write that
+failed on the very first block leaves no file behind at all: an empty recording
+in the one directory nothing is ever deleted from would go on reading as a
+recording that failed long after the reason had left the screen.
 
 ### Saving a stream the server fetches
 
@@ -1114,12 +1117,15 @@ that file differ from a microphone one.
 **It is contiguous audio, not a clock.** Reception breaks, and the session
 reattaches by standing ffmpeg back up, so one session can span several ffmpeg
 processes — which is why the file is written on the Python side rather than as a
-second ffmpeg output: it stays one file across all of them. What never arrived
-is simply not in it. The gap is closed up rather than padded with silence, so
-the recording runs *shorter* than the broadcast by however much was missed, and
-the subtitles are where that is written down (`⋯ about N s went unreceived ⋯`).
-Padding it back out to real time is a change that would have to be measured
-first, and nothing has measured it.
+second ffmpeg output: it stays one file across all of them. The stop and the box
+coming off are the only two things that close it — a reattach never does,
+whether reception dropped or you asked for one by switching the video, and the
+block ffmpeg is holding when you stop goes into the file it belongs to. What
+never arrived is simply not in it. The gap is closed up rather than padded with
+silence, so the recording runs *shorter* than the broadcast by however much was
+missed, and the subtitles are where that is written down (`⋯ about N s went
+unreceived ⋯`). Padding it back out to real time is a change that would have to
+be measured first, and nothing has measured it.
 
 **Resuming writes a second file.** **Resume** continues the same session — the
 same id, the same subtitles — but it opens a new recording, named for the time

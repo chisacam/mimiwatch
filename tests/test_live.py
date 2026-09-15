@@ -1696,3 +1696,164 @@ def test_a_switch_survives_a_restart(monkeypatch):
     assert live.resume(s.id)["resumed"]
     back = live.get(s.id)
     assert back.record is True and back.record_video is True
+
+
+# ---- One broadcast, one WAV ------------------------------------------------
+# The Python-side writer exists so that the file survives everything the ffmpeg
+# under it does not: it is written across reconnects, and only a stop or the
+# unticked box finishes it. What these pin is the one place that rule was broken
+# -- not by a reconnect, which never touched the file, but by the stop racing
+# ffmpeg's last block. Found against a live YouTube broadcast on 2026-09-15: two
+# good recordings and, beside them, a WAV of 0 bytes.
+
+def _wavs() -> list[str]:
+    d = live.paths.recordings_dir()
+    return sorted(f for f in (os.listdir(d) if os.path.isdir(d) else [])
+                  if f.endswith(".wav"))
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_a_reconnect_of_either_kind_leaves_the_open_wav_alone(requested):
+    """One broadcast, one file, however many ffmpegs it took to receive it.
+
+    A break that happened to the session and one it asked for itself -- the
+    video switch, which cannot be made under a running process -- go down the
+    same path, and neither may touch the WAV. That is the whole reason the
+    recorder is written in Python instead of as a second ffmpeg output. If it
+    were broken here, every long broadcast that reconnected would have been
+    splitting its recording into a file per ffmpeg.
+    """
+    s = _registered(_hls(record=True))
+    first, second = _pcm(live.CHUNK), _pcm(live.CHUNK)
+    s._ff = _FakeFF(first)
+    if requested:
+        s.record_video = True
+        assert live.set_record(s.id, record_video=False)["reconnect"] is True
+        assert s._respawn is True
+    s._spawn_ffmpeg = lambda src, start_index: setattr(s, "_ff", _FakeFF(second))
+    resolves = []
+
+    def resolve(reconnect=False):
+        resolves.append(reconnect)
+        return ("src", -2) if len(resolves) == 1 else (None, None)
+    s._resolve_hls = resolve
+    s._stop.wait = lambda t: False
+    s._read_loop()
+
+    assert resolves == [True, True]        # one reattach, then the broadcast ended
+    assert _wavs() == [os.path.basename(s._wav_path)]
+    with wave.open(s._wav_path, "rb") as w:
+        assert w.readframes(w.getnframes()) == first + second
+    live._sessions.clear()
+
+
+class _HoldsTheLastBlock(_FakeStdout):
+    """ffmpeg's pipe with its last block still in it when the stop lands.
+
+    A real one does this by itself: `stop` terminates ffmpeg, and ffmpeg hands
+    over what it was holding before it goes -- later still when it is also
+    writing an mp4, because it flushes the last fragment first. Here the read
+    waits until the stop has been all the way through.
+    """
+
+    def __init__(self, data: bytes):
+        super().__init__(data)
+        self.at_the_tail = threading.Event()
+        self.stopped = threading.Event()
+
+    def read(self, n: int) -> bytes:
+        if 0 < self.pos < len(self.data):
+            self.at_the_tail.set()
+            self.stopped.wait(5.0)
+        return super().read(n)
+
+
+def test_the_block_ffmpeg_was_holding_at_the_stop_opens_no_second_wav():
+    """The stray empty recording, and the reason there was one.
+
+    `stop` used to close the WAV from the API thread. ffmpeg's last block --
+    under one VAD chunk, and the one the transcriber cannot take -- arrived
+    after that, found no open file and `record` still ticked, and opened one of
+    its own: a new timestamp, and nothing left alive to close it. `wave` writes
+    its header into a buffered file, so what was left on disk was 0 bytes, in
+    the one directory mimiwatch never deletes from. The recording itself lost
+    nothing, which is why it went unnoticed; an empty file in there reads as a
+    recording that failed.
+
+    The closing belongs to the thread that does the writing, so the block lands
+    in the file it was always meant to land in and the count of files is one.
+    """
+    s = _registered(_hls(record=True))
+    data = _pcm(live.CHUNK + 160)          # one whole block, then a short one
+    ff = _FakeFF(b"")
+    ff.stdout = _HoldsTheLastBlock(data)
+    s._ff = ff
+    s._resolve_hls = lambda reconnect=False: (None, None)
+    s._stop.wait = lambda t: False
+    s._rx = threading.Thread(target=s._read_loop, name=f"rx-{s.id}", daemon=True)
+    s._rx.start()
+    assert ff.stdout.at_the_tail.wait(5.0)
+    s.stop()                               # the user's stop, mid-block
+    ff.stdout.stopped.set()
+    s._rx.join(5.0)
+    assert not s._rx.is_alive()
+
+    assert _wavs() == [os.path.basename(s._wav_path)]
+    with wave.open(s._wav_path, "rb") as w:
+        # And the tail is in it: it is audio that exists nowhere else, which is
+        # what `_read_until_end` records it ahead of the transcriber for.
+        assert w.readframes(w.getnframes()) == data
+    assert s.status()["recording_error"] == ""
+    live._sessions.clear()
+
+
+def test_unticking_the_audio_box_is_what_closes_the_file():
+    """The other half of the rule: a reconnect never closes the WAV, and the box
+    always does -- while the session goes on receiving, with no break anywhere.
+
+    The file has to be complete the moment the box comes off, because what
+    follows it is a session that is still running and still writing nothing.
+    """
+    s = _registered(_hls(record=True))
+    kept, dropped = _pcm(live.CHUNK), _pcm(live.CHUNK)
+    s._ff = _FakeFF(kept)
+    s._resolve_hls = lambda reconnect=False: (None, None)
+    s._stop.wait = lambda t: False
+    s._read_until_end(live.CHUNK * 2, attempt=0)      # reads `kept`, then ends
+    path = s._wav_path
+    assert live.set_record(s.id, record=False)["record"] is False
+    with wave.open(path, "rb") as w:                  # closed, and complete
+        assert w.readframes(w.getnframes()) == kept
+    s._record(dropped)                                # after the switch: nowhere
+    assert _wavs() == [os.path.basename(path)]
+    assert s._wav is None
+    live._sessions.clear()
+
+
+def test_a_recorder_that_never_got_a_sample_leaves_nothing_behind(monkeypatch):
+    """A WAV that was opened and never written to is taken away, not left.
+
+    The only way to reach it is a write that failed on the very first block --
+    a full disk, a volume that went read-only -- and `wave` writes a 44-byte
+    header on close whatever happened. A 44-byte file in the recordings
+    directory is a recording that failed wearing the clothes of one that
+    worked, and nothing in there is ever deleted automatically, so it would sit
+    there. The status stops naming it too.
+    """
+    real_open = live.wave.open
+
+    def full_disk(path, mode):
+        w = real_open(path, mode)
+        w.writeframes = lambda b: (_ for _ in ()).throw(OSError("no space left"))
+        return w
+    monkeypatch.setattr(live.wave, "open", full_disk)
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m",
+                         record=True)
+    s._tr = None
+    assert s.feed(_pcm(live.CHUNK))["ok"]             # the subtitles carry on
+    assert "no space left" in s.status()["recording_error"]
+    assert s.status()["recording"] == "" and s.status()["recording_s"] == 0
+    assert _wavs() == []
+    s.stop()
+    assert _wavs() == []
+    live._sessions.clear()

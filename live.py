@@ -468,7 +468,7 @@ class LiveSession:
                  backend_id: str, profile: str = "broadcast",
                  asr_backend_id: str = "", refine: bool = True,
                  genre: str | None = None, source: str = "hls",
-                 title: str = ""):
+                 title: str = "", record: bool | None = None):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         # Where the sound comes from. "hls" means the server resolves the address
@@ -482,11 +482,22 @@ class LiveSession:
         # adding a third value to those equality checks would have turned each
         # one silently false for a mic session, which is the entire ingest path.
         self.source = source if source in ("tab", "mic") else "hls"
-        # Set on the first feed(); see _record().
+        # Set on the first recorded block; see _record().
         self._wav: wave.Wave_write | None = None
         self._wav_path = ""
         self._wav_error = ""
         self._wav_s = 0.0
+        # Half a frame carried over from the last block. `_record` takes blocks
+        # of any length now -- ffmpeg's last read before it ends is whatever was
+        # left in the pipe -- so a block can stop half way through a 16-bit
+        # sample. Writing that half straight through is not itself a corruption:
+        # `wave` concatenates the bytes and the file reads back byte for byte.
+        # What it does is leave every write after it a fraction of a frame out,
+        # so `_wav_s` (the `recording_s` in the status) and the writer's frame
+        # count stop being counts of whole samples. The half leads the next
+        # block instead. feed() never produces one -- the browser uploads whole
+        # int16 arrays -- so the pushed path pays nothing for this.
+        self._wav_odd = b""
         # What feed() could not cut into whole VAD chunks last time. Carried,
         # not dropped -- see feed().
         self._feed_tail = b""
@@ -508,6 +519,14 @@ class LiveSession:
         # cutting short and sending out at once can be easier to follow, so it is
         # left switchable.
         self.refine = refine
+        # Whether this session writes its own audio down (see _record). Left
+        # unset, the source decides. A pushed session records because the
+        # recording is why it was started -- a meeting exists nowhere else. A
+        # broadcast pulled over hls does not, unless it is asked for: the
+        # sample format alone makes seven hours about 800 MB (16000 Hz x
+        # 2 bytes = 32 KB/s, so 115 MB an hour), and multiview runs up to
+        # MULTIVIEW_MAX of them at once.
+        self.record = self.pushed if record is None else bool(record)
         prof = PROFILES.get(profile, PROFILES["broadcast"])
         self.profile = profile if profile in PROFILES else "broadcast"
         self.max_speech = prof["max_speech"]
@@ -680,12 +699,13 @@ class LiveSession:
                 "genre": self.genre,
                 "window_s": round(self.window_s, 1),
                 "audio_s": round(self.audio_s, 1),
-                # Separate from where transcription reached (media_base+audio_s):
-                # where the reading side received to. On a session with no focus the
-                # former stands still while the latter keeps going. Resume uses the latter.
+                "record": self.record,
                 "recording": self._wav_path,
                 "recording_s": round(self._wav_s, 1),
                 "recording_error": self._wav_error,
+                # Separate from where transcription reached (media_base+audio_s):
+                # where the reading side received to. On a session with no focus the
+                # former stands still while the latter keeps going. Resume uses the latter.
                 "recv_s": round(self._recv_s, 1),
                 "recv_t": round(self._recv_base + self._recv_s, 2),
                 "ring_s": round(self._ring.seconds(), 1),
@@ -943,10 +963,20 @@ class LiveSession:
     # ---- the session's own audio ------------------------------------------
 
     def _record(self, raw: bytes) -> None:
-        """Append uploaded PCM to this session's WAV file, opening it on the
-        first block.
+        """Append one block of PCM to this session's WAV file, opening it on the
+        first block that arrives.
 
-        Why a pushed session writes its own audio down: hayamimi, the tool this
+        Both ingest paths call it: feed() for a session the browser pushes,
+        the read loop for one ffmpeg pulls. ffmpeg is respawned on reconnect
+        (HLS_RECONNECT_TRIES), so one hls session can span several ffmpeg
+        processes -- writing one continuous file across all of them is why the
+        recorder lives here in Python rather than as a second ffmpeg output.
+        Audio that never arrived is simply absent: the gap is closed up, not
+        padded with silence, so the file is contiguous audio and comes out
+        shorter than the broadcast by `gap_s`. Padding it out is a change worth
+        measuring before making, and nothing has measured it.
+
+        Why a session writes its own audio down: hayamimi, the tool this
         pipeline was ported from, kept none. A 2026-09-11 meeting recorded with
         it was transcribed once, at whatever quality the CPU-only Korean model
         reached that afternoon, and both passes garbled the same stretches --
@@ -962,7 +992,17 @@ class LiveSession:
         write error closes the recorder, is recorded once in `_wav_error` for
         the status to carry, and the same bytes go on to the transcriber.
         """
-        if self._wav_error or not raw:
+        if not self.record or self._wav_error or not raw:
+            return
+        # Whole frames only, with the half sample leading the next block -- see
+        # `_wav_odd`. Nothing is dropped and nothing is written twice; a block
+        # that is nothing but that half opens no file at all, because half a
+        # sample is not audio and an empty recording with a path in the status
+        # reads as a recording that is working.
+        buf = self._wav_odd + raw
+        cut = len(buf) - (len(buf) % 2)
+        self._wav_odd, buf = buf[cut:], buf[:cut]
+        if not buf:
             return
         try:
             if self._wav is None:
@@ -976,8 +1016,8 @@ class LiveSession:
                 self._wav = w
                 print(f"[live] session {self.id} recording to {self._wav_path}",
                       flush=True)
-            self._wav.writeframes(raw)
-            self._wav_s += len(raw) / 2 / SAMPLE_RATE
+            self._wav.writeframes(buf)
+            self._wav_s += len(buf) / 2 / SAMPLE_RATE
         except Exception as exc:
             # Reported, never swallowed: a recording that stopped without
             # anyone being told is the failure this whole feature exists to
@@ -996,6 +1036,11 @@ class LiveSession:
         length field short; the samples are all on disk and ffmpeg recovers
         them by scanning (`ffmpeg -i short.wav out.wav`), which is why the path
         is published in the status even while the session is running.
+
+        A byte still waiting in `_wav_odd` is dropped rather than padded out to
+        a frame. It is half of one sample at 16 kHz -- 31 microseconds -- and
+        inventing the other half of it would put a value into the archive that
+        no microphone produced.
         """
         w, self._wav = self._wav, None
         if w is None:
@@ -1249,6 +1294,14 @@ class LiveSession:
             assert self._ff and self._ff.stdout
             while not self._stop.is_set():
                 raw = self._ff.stdout.read(need)
+                # The file gets what the reader saw; the transcriber gets only
+                # whole VAD chunks. The last read before ffmpeg ends is
+                # commonly short, and the break below drops it because it
+                # cannot be cut into a chunk -- but it is still audio that
+                # exists nowhere else, so it is written down first. The two
+                # therefore differ by up to 0.1 s per ffmpeg process, and a
+                # session that reconnected five times has five of those.
+                self._record(raw)
                 if not raw or len(raw) < need:
                     break
                 samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
@@ -1653,10 +1706,11 @@ def _evict_outside(keep_group: str):
 def _new_session(url: str, lang: str | None, viewer_lang: str, backend_id: str,
                  profile: str, asr_backend_id: str, refine: bool, genre: str | None,
                  source: str, title: str, group: str = "",
-                 focused: bool = True) -> LiveSession:
+                 focused: bool = True,
+                 record: bool | None = None) -> LiveSession:
     s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile,
                     asr_backend_id=asr_backend_id, refine=refine, genre=genre,
-                    source=source, title=title)
+                    source=source, title=title, record=record)
     s.group = group
     if not focused:
         # It is born a standby session. set_focus() sends the status out and it is
@@ -1676,12 +1730,17 @@ def _new_session(url: str, lang: str | None, viewer_lang: str, backend_id: str,
 def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
           profile: str = "broadcast", asr_backend_id: str = "",
           refine: bool = True, genre: str | None = None,
-          source: str = "hls", title: str = "") -> dict:
+          source: str = "hls", title: str = "",
+          record: bool | None = None) -> dict:
+    # `record` is three-state on the way in and only becomes a bool in the
+    # session. None is "the source decides" -- a caller that leaves the field
+    # out of its JSON must not turn recording off on the pushed sources, where
+    # it is the reason the session exists.
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
     _evict_outside("")
     s = _new_session(url, lang, viewer_lang, backend_id, profile, asr_backend_id,
-                     refine, genre, source, title)
+                     refine, genre, source, title, record=record)
     return {"id": s.id, "source": s.source}
 
 
@@ -1764,7 +1823,7 @@ def _source_ok(src: dict) -> str:
 
 
 def _member_from(src: dict, gid: str, lang, viewer_lang, backend_id, profile,
-                 asr_backend_id, refine, genre) -> LiveSession | dict:
+                 asr_backend_id, refine, genre, record=None) -> LiveSession | dict:
     """One source as a member of the bundle. A session already receiving (`session`)
     is folded in; otherwise a new standby session is made."""
     sid = src.get("session")
@@ -1783,13 +1842,14 @@ def _member_from(src: dict, gid: str, lang, viewer_lang, backend_id, profile,
     return _new_session((src.get("url") or "").strip(), lang, viewer_lang, backend_id,
                         profile, asr_backend_id, refine, genre,
                         source="tab" if tab else "hls", title=src.get("title") or "",
-                        group=gid, focused=False)
+                        group=gid, focused=False, record=record)
 
 
 def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
                     backend_id: str, profile: str = "broadcast",
                     asr_backend_id: str = "", refine: bool = True,
-                    genre: str | None = None, focus: str | None = None) -> dict:
+                    genre: str | None = None, record: bool | None = None,
+                    focus: str | None = None) -> dict:
     """Make a bundle. Each item of `sources` is either `{"session": id}` (fold in what
     is being watched now) or `{"url": ...}` / `{"source": "tab", "title": ...}` (a new
     standby session). Focus goes to the session `focus` points at, or to the first
@@ -1809,7 +1869,7 @@ def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
     members: list[LiveSession] = []
     for src in sources:
         m = _member_from(src, g.id, lang, viewer_lang, backend_id, profile,
-                         asr_backend_id, refine, genre)
+                         asr_backend_id, refine, genre, record)
         if isinstance(m, dict):
             # There is no session to fold in. The standby sessions just made are
             # rolled back and the bundle deleted too.
@@ -1850,7 +1910,7 @@ def multiview_focus(gid: str, sid: str) -> dict:
 def multiview_add(gid: str, src: dict, lang: str | None, viewer_lang: str,
                   backend_id: str, profile: str = "broadcast",
                   asr_backend_id: str = "", refine: bool = True,
-                  genre: str | None = None) -> dict:
+                  genre: str | None = None, record: bool | None = None) -> dict:
     g = _groups.get(gid)
     if g is None:
         return {"error": "no such group"}
@@ -1860,7 +1920,7 @@ def multiview_add(gid: str, src: dict, lang: str | None, viewer_lang: str,
     if why:
         return {"error": why}
     m = _member_from(src, g.id, lang, viewer_lang, backend_id, profile,
-                     asr_backend_id, refine, genre)
+                     asr_backend_id, refine, genre, record)
     if isinstance(m, dict):
         return m
     if m.id not in g.members:
@@ -2309,7 +2369,18 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
                     profile=st.get("profile") or "broadcast",
                     asr_backend_id=asr_id,
                     refine=bool(st.get("refine")), genre=st.get("genre"),
-                    source="tab" if tab else "hls")
+                    source="tab" if tab else "hls",
+                    # Not bool(): the key is missing on a session stored before
+                    # the flag existed, and None there means "the source
+                    # decides", which restores what such a session did. Passing
+                    # it through at all is the point -- a gate the resume path
+                    # forgets is how a setting silently stops applying, and the
+                    # session would go on transcribing with nobody told that it
+                    # had stopped recording. The resumed session opens a
+                    # **second** WAV: the name carries a timestamp, so the two
+                    # sit side by side, and one broadcast that was resumed once
+                    # leaves two files.
+                    record=st.get("record"))
     s.id = session_id
     s.title = st.get("title") or ""
     s.title_by_user = bool(st.get("title_by_user"))

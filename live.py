@@ -468,7 +468,7 @@ class LiveSession:
                  backend_id: str, profile: str = "broadcast",
                  asr_backend_id: str = "", refine: bool = True,
                  genre: str | None = None, source: str = "hls",
-                 title: str = "", record: bool | None = None):
+                 title: str = "", record: bool = False):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         # Where the sound comes from. "hls" means the server resolves the address
@@ -519,14 +519,17 @@ class LiveSession:
         # cutting short and sending out at once can be easier to follow, so it is
         # left switchable.
         self.refine = refine
-        # Whether this session writes its own audio down (see _record). Left
-        # unset, the source decides. A pushed session records because the
-        # recording is why it was started -- a meeting exists nowhere else. A
-        # broadcast pulled over hls does not, unless it is asked for: the
-        # sample format alone makes seven hours about 800 MB (16000 Hz x
-        # 2 bytes = 32 KB/s, so 115 MB an hour), and multiview runs up to
-        # MULTIVIEW_MAX of them at once.
-        self.record = self.pushed if record is None else bool(record)
+        # Whether this session writes its own audio down (see _record). Off
+        # for every source alike unless it is asked for. It used to default to
+        # on for the pushed sources, on the reasoning that a meeting is started
+        # in order to be recorded -- but the page sent the field only when the
+        # box was ticked, so an unticked box left that default standing and a
+        # microphone session recorded whatever the user chose, with no way to
+        # stop it. A box that can only be ticked is not a setting, and the cost
+        # is real: the sample format alone makes seven hours about 800 MB
+        # (16000 Hz x 2 bytes = 32 KB/s, so 115 MB an hour), and multiview runs
+        # up to MULTIVIEW_MAX of them at once.
+        self.record = bool(record)
         prof = PROFILES.get(profile, PROFILES["broadcast"])
         self.profile = profile if profile in PROFILES else "broadcast"
         self.max_speech = prof["max_speech"]
@@ -1707,7 +1710,7 @@ def _new_session(url: str, lang: str | None, viewer_lang: str, backend_id: str,
                  profile: str, asr_backend_id: str, refine: bool, genre: str | None,
                  source: str, title: str, group: str = "",
                  focused: bool = True,
-                 record: bool | None = None) -> LiveSession:
+                 record: bool = False) -> LiveSession:
     s = LiveSession(url, lang, viewer_lang, backend_id, profile=profile,
                     asr_backend_id=asr_backend_id, refine=refine, genre=genre,
                     source=source, title=title, record=record)
@@ -1731,11 +1734,7 @@ def start(url: str, lang: str | None, viewer_lang: str, backend_id: str,
           profile: str = "broadcast", asr_backend_id: str = "",
           refine: bool = True, genre: str | None = None,
           source: str = "hls", title: str = "",
-          record: bool | None = None) -> dict:
-    # `record` is three-state on the way in and only becomes a bool in the
-    # session. None is "the source decides" -- a caller that leaves the field
-    # out of its JSON must not turn recording off on the pushed sources, where
-    # it is the reason the session exists.
+          record: bool = False) -> dict:
     # One viewer watches one broadcast. Leaving the previous session running
     # would keep a second copy of every model resident for nothing.
     _evict_outside("")
@@ -1823,7 +1822,7 @@ def _source_ok(src: dict) -> str:
 
 
 def _member_from(src: dict, gid: str, lang, viewer_lang, backend_id, profile,
-                 asr_backend_id, refine, genre, record=None) -> LiveSession | dict:
+                 asr_backend_id, refine, genre, record=False) -> LiveSession | dict:
     """One source as a member of the bundle. A session already receiving (`session`)
     is folded in; otherwise a new standby session is made."""
     sid = src.get("session")
@@ -1848,7 +1847,7 @@ def _member_from(src: dict, gid: str, lang, viewer_lang, backend_id, profile,
 def multiview_start(sources: list[dict], lang: str | None, viewer_lang: str,
                     backend_id: str, profile: str = "broadcast",
                     asr_backend_id: str = "", refine: bool = True,
-                    genre: str | None = None, record: bool | None = None,
+                    genre: str | None = None, record: bool = False,
                     focus: str | None = None) -> dict:
     """Make a bundle. Each item of `sources` is either `{"session": id}` (fold in what
     is being watched now) or `{"url": ...}` / `{"source": "tab", "title": ...}` (a new
@@ -1910,7 +1909,7 @@ def multiview_focus(gid: str, sid: str) -> dict:
 def multiview_add(gid: str, src: dict, lang: str | None, viewer_lang: str,
                   backend_id: str, profile: str = "broadcast",
                   asr_backend_id: str = "", refine: bool = True,
-                  genre: str | None = None, record: bool | None = None) -> dict:
+                  genre: str | None = None, record: bool = False) -> dict:
     g = _groups.get(gid)
     if g is None:
         return {"error": "no such group"}
@@ -2370,17 +2369,17 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
                     asr_backend_id=asr_id,
                     refine=bool(st.get("refine")), genre=st.get("genre"),
                     source="tab" if tab else "hls",
-                    # Not bool(): the key is missing on a session stored before
-                    # the flag existed, and None there means "the source
-                    # decides", which restores what such a session did. Passing
-                    # it through at all is the point -- a gate the resume path
-                    # forgets is how a setting silently stops applying, and the
-                    # session would go on transcribing with nobody told that it
-                    # had stopped recording. The resumed session opens a
-                    # **second** WAV: the name carries a timestamp, so the two
-                    # sit side by side, and one broadcast that was resumed once
-                    # leaves two files.
-                    record=st.get("record"))
+                    # Passing it through at all is the point -- a gate the
+                    # resume path forgets is how a setting silently stops
+                    # applying, and the session would go on transcribing with
+                    # nobody told that it had stopped recording. A session
+                    # stored before the flag existed has no key, and off is the
+                    # right reading of that: it is what an unticked box means
+                    # everywhere else. The resumed session opens a **second**
+                    # WAV -- the name carries a timestamp, so the two sit side
+                    # by side, and one broadcast that was resumed once leaves
+                    # two files.
+                    record=bool(st.get("record")))
     s.id = session_id
     s.title = st.get("title") or ""
     s.title_by_user = bool(st.get("title_by_user"))

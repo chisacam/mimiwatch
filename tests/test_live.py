@@ -812,10 +812,11 @@ def test_mic_session_is_pushed_and_records_every_sample():
     """A mic session takes uploaded audio like a tab one, and writes it down.
 
     The recordings directory is a tmpdir already: conftest's `isolated` fixture
-    redirects it for every test, because a session records as soon as it is fed
-    and not only when the test is about recording.
+    redirects it for every test, because a session asked to record does so as
+    soon as it is fed and not only when the test is about recording.
     """
-    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m")
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m",
+                         record=True)
     s._tr = None
     assert s.pushed and s.source == "mic"
     blocks = [_pcm(live.CHUNK * 2 + 500), _pcm(live.CHUNK - 500), _pcm(777)]
@@ -838,7 +839,8 @@ def test_recording_failure_leaves_the_transcription_running(monkeypatch):
     told is the failure this feature exists to prevent, moved one level down.
     """
     monkeypatch.setattr(live.wave, "open", lambda *a, **k: (_ for _ in ()).throw(OSError("no space left")))
-    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m")
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m",
+                         record=True)
     s._tr = None
     r = s.feed(_pcm(live.CHUNK * 2))
     assert r["ok"] and abs(r["queued_s"] - 0.2) < 1e-9      # audio still queued
@@ -889,7 +891,7 @@ class _FakeFF:
         pass
 
 
-def _hls(record=None) -> live.LiveSession:
+def _hls(record: bool = False) -> live.LiveSession:
     s = live.LiveSession("https://example.invalid/live", "ja", "ko", "local-m2m100",
                          record=record)
     s._tr = None
@@ -928,9 +930,9 @@ def test_an_hls_session_records_the_tail_the_transcriber_has_to_drop():
 
 
 def test_an_hls_session_not_asked_to_record_writes_nothing():
-    """The default for a pulled broadcast is off, and off means no file at all --
-    not an empty one. Seven hours is about 800 MB (16000 Hz x 2 bytes = 32 KB/s),
-    and multiview runs up to four of them at once."""
+    """Unasked is off, and off means no file at all -- not an empty one. Seven
+    hours is about 800 MB (16000 Hz x 2 bytes = 32 KB/s), and multiview runs up to
+    four of them at once."""
     s = _hls()
     assert s.record is False
     assert _read(s, _pcm(live.CHUNK * 2)) == "SSN"
@@ -969,16 +971,35 @@ def test_a_block_of_nothing_but_half_a_sample_opens_no_file():
     live._sessions.clear()
 
 
-def test_the_recording_default_follows_the_source():
-    """Unasked, a pushed session records and a pulled one does not: a meeting exists
-    nowhere but in the file, while a broadcast is somebody else's to keep. Asked,
-    either answer holds for either source."""
+def test_nothing_is_recorded_unless_it_is_asked_for():
+    """Off for every source alike, and being asked is the only way on.
+
+    The pushed sources used to default to on, and the page sent the field only
+    when the box was ticked -- so an unticked box left that default standing and
+    a microphone session recorded with no way to stop it. Saving the audio is a
+    choice the user makes, which means it has to be one they can unmake.
+    """
     assert _hls().record is False
-    assert live.LiveSession("", None, "ko", "local-m2m100", source="mic").record is True
-    assert live.LiveSession("", None, "ko", "local-m2m100", source="tab").record is True
+    assert live.LiveSession("", None, "ko", "local-m2m100", source="mic").record is False
+    assert live.LiveSession("", None, "ko", "local-m2m100", source="tab").record is False
     assert _hls(record=True).record is True
     assert live.LiveSession("", None, "ko", "local-m2m100", source="mic",
-                            record=False).record is False
+                            record=True).record is True
+
+
+def test_a_pushed_session_not_asked_to_record_writes_nothing():
+    """The one the old default made unstoppable. Fed a full VAD chunk and stopped,
+    a microphone session that was not asked to record leaves no file -- not an
+    empty one, and not one the user has to go and delete."""
+    s = live.LiveSession("", None, "ko", "local-m2m100", source="mic", title="m",
+                         record=False)
+    s._tr = None
+    assert s.feed(_pcm(live.CHUNK * 2))["ok"]
+    s.stop()
+    assert s.status()["recording"] == "" and s._wav is None
+    d = live.paths.recordings_dir()
+    assert not os.path.isdir(d) or os.listdir(d) == []
+    live._sessions.clear()
 
 
 def test_resume_carries_the_recording_flag_back(monkeypatch):
@@ -987,7 +1008,8 @@ def test_resume_carries_the_recording_flag_back(monkeypatch):
     The flag has to be read back off the stored status; a resume that forgets it
     would go on transcribing with the recording silently stopped, which is the
     failure the recording exists to prevent. A record saved before the flag existed
-    has no key, and then the source decides -- the same rule as a fresh start.
+    has no key, and off is the right reading of that -- the same rule as a fresh
+    start, where an unticked box is what a missing field means.
     """
     monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
     base = {"state": "stopped", "stopped_by": "user", "url": "https://x/live",
@@ -1006,5 +1028,5 @@ def test_resume_carries_the_recording_flag_back(monkeypatch):
 
     store.save_session({**base, "id": "rec-3"}, "")            # stored before the flag
     assert live.resume("rec-3")["resumed"]
-    assert live.get("rec-3").record is False                   # hls, so the source says no
+    assert live.get("rec-3").record is False                   # no key, so not asked
     live._sessions.clear()

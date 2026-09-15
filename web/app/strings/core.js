@@ -80,8 +80,8 @@ MW_I18N.add({
     ko: "소리를 파일로 저장"
   },
   "add.record.hint": {
-    en: "Writes what the session receives to data/recordings as a WAV, so a better engine — or speaker labels, which only the VOD side has — can be run over it afterwards. The samples are 16 kHz mono 16-bit, so 16000 × 2 = 32 KB a second: about 115 MB an hour, and nothing deletes it for you. A microphone or tab session saves its audio whether or not this is ticked; ticking it adds the saving to a stream the server fetches itself.",
-    ko: "세션이 받은 소리를 data/recordings에 WAV로 씁니다. 나중에 더 나은 엔진으로, 또는 녹화본 쪽에만 있는 화자 구분을 붙여 다시 전사할 수 있습니다. 표본이 16kHz 모노 16비트라 16000×2=초당 32KB, 곧 한 시간에 115MB쯤이고 저절로 지워지지 않습니다. 마이크·탭 세션은 이 칸과 무관하게 소리를 저장하고, 이 칸은 서버가 직접 받아 오는 방송에 저장을 붙입니다."
+    en: "Writes what the session receives to data/recordings as a WAV, so a better engine — or speaker labels, which only the VOD side has — can be run over it afterwards. Nothing is kept unless this is ticked, whatever the source. The samples are 16 kHz mono 16-bit, so 16000 × 2 = 32 KB a second: about 115 MB an hour, and nothing deletes it for you.",
+    ko: "세션이 받은 소리를 data/recordings에 WAV로 씁니다. 나중에 더 나은 엔진으로, 또는 녹화본 쪽에만 있는 화자 구분을 붙여 다시 전사할 수 있습니다. 어떤 소스든 이 칸을 켜지 않으면 아무것도 남지 않습니다. 표본이 16kHz 모노 16비트라 16000×2=초당 32KB, 곧 한 시간에 115MB쯤이고 저절로 지워지지 않습니다."
   },
   "add.refine": {
     en: "Polish with refined lines",

@@ -122,16 +122,18 @@ sending each sentence out immediately is easier to follow. The default is on.
 **Save the audio** — writes what the session receives to
 `data/recordings/<date>-<session id>.wav`, so a better transcriber, or speaker
 labels, can be run over it afterwards. *Meetings and seminars* below is what
-that is for. The default is off for a stream the server fetches, and the cost is
-arithmetic rather than a measurement: the samples are 16 kHz mono 16-bit, so
-16000 × 2 = 32 KB a second — about 115 MB an hour, and roughly 800 MB for a
-seven-hour broadcast, of which multiview can run four at once. Nothing deletes
-them for you.
+that is for. The cost is arithmetic rather than a measurement: the samples are
+16 kHz mono 16-bit, so 16000 × 2 = 32 KB a second — about 115 MB an hour, and
+roughly 800 MB for a seven-hour broadcast, of which multiview can run four at
+once. Nothing deletes them for you.
 
-A microphone or tab session saves its audio whether or not the box is ticked.
-There the recording is the reason the session was started and the sound exists
-nowhere else, so leaving the box alone does not switch that off: the box adds
-the saving to a stream the server fetches itself.
+**Nothing is kept unless the box is ticked**, whatever the source — a
+microphone, another tab, or a stream the server fetches. It used to be on by
+itself for the microphone and tab sources, on the reasoning that a meeting is
+started in order to be recorded, and because the page only ever sent the field
+when the box was ticked, unticking it did nothing at all. A box that can only be
+ticked is not a setting, and a recording nobody asked for is the wrong thing to
+leave on disk.
 
 ### Screen controls
 
@@ -1039,9 +1041,15 @@ mimiwatch page keeps them — building those too would make two sets.
 ## Meetings and seminars (the machine's own microphone)
 
 Pick **"This machine's microphone"** as the source in **⊕ Add**, give the room a
-name, and start. The browser asks for microphone permission, and from then on
-two things happen at once: subtitles scroll as a live preview, and **the audio
-is written to `data/recordings/<date>-<session id>.wav`**.
+name, **tick Save the audio**, and start. The browser asks for microphone
+permission, and from then on two things happen at once: subtitles scroll as a
+live preview, and **the audio is written to
+`data/recordings/<date>-<session id>.wav`**.
+
+The box is what makes that second thing happen, and it is unticked when the form
+opens. A microphone session with the box left alone transcribes and keeps
+nothing — which for a meeting is the one outcome worth avoiding, so it is the
+step to check before the room starts talking.
 
 **The recording is the point, not the preview.** Speaker labels are a VOD-side
 feature, so a live session cannot say who spoke — and in a meeting that is most
@@ -1181,7 +1189,7 @@ lsof -ti:8900 | xargs kill
 |---|---|
 | `backends.json` | Engine settings (not committed to git). `MIMIWATCH_CONFIG` can point at another file |
 | `data/mimiwatch.db` | Jobs, sessions and **all the subtitles** (VOD and live). `MIMIWATCH_DATA_DIR` can move the location |
-| `data/recordings/` | The WAV a session wrote — always for a microphone or tab session, and for a stream the server fetches when **Save the audio** is ticked. About 115 MB an hour (16 kHz × 2 bytes = 32 KB/s). Never deleted automatically — it is the one artifact that cannot be made again |
+| `data/recordings/` | The WAV a session wrote, when **Save the audio** was ticked — never otherwise, whatever the source. About 115 MB an hour (16 kHz × 2 bytes = 32 KB/s). Never deleted automatically — it is the one artifact that cannot be made again |
 | `data/legacy/` | `<video id>.json` left behind by old versions. Nobody reads them |
 | `~/.local/share/mimiwatch/models` | Models (`%LOCALAPPDATA%\mimiwatch\models` on Windows) |
 | `ext/` | The browser extension (loaded unpacked) |

@@ -227,6 +227,10 @@ MW_I18N.add({
     en: "Subtitles",
     ko: "자막"
   },
+  "dialog.close": {
+    en: "Close",
+    ko: "닫기"
+  },
   "dialog.cancel": {
     en: "Cancel",
     ko: "취소"
@@ -291,6 +295,10 @@ MW_I18N.add({
     en: "Burn into video",
     ko: "영상에 번인"
   },
+  "export.burn.disabled.tip": {
+    en: "Burn-in requires a local video file. Streamed VODs cannot be burned.",
+    ko: "번인에는 로컬 비디오 파일이 필요합니다. 스트리밍 VOD는 번인할 수 없습니다.",
+  },
   "export.fmt": {
     en: "Format",
     ko: "형식"
@@ -339,6 +347,18 @@ MW_I18N.add({
     en: "Stop",
     ko: "중단"
   },
+  "live.menu.title": {
+    en: "Live session actions",
+    ko: "라이브 세션 작업"
+  },
+  "live.clearCues": {
+    en: "Clear subtitles",
+    ko: "자막 지우기"
+  },
+  "live.clearCues.confirm": {
+    en: "Clear all subtitles for this live session? The session will keep running.",
+    ko: "이 라이브 세션의 모든 자막을 지울까요? 세션은 계속 실행됩니다."
+  },
   "header.manage": {
     en: "Manage ▾",
     ko: "관리 ▾"
@@ -366,6 +386,10 @@ MW_I18N.add({
   "header.rename": {
     en: "✎ Name",
     ko: "✎ 이름"
+  },
+  "header.renamed.title": {
+    en: "This name was given here, not taken from the stream",
+    ko: "방송에서 가져온 이름이 아니라 여기서 붙인 이름입니다"
   },
   "header.rename.title": {
     en: "Renames this session",

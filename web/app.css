@@ -5,6 +5,7 @@
   --text:#e8eaf0; --dim:#8d94a6;
   --accent:#5ee0c0;      /* caption green, legible on any frame */
   --warn:#f0b447;
+  --err:#e07a7a;      /* the red the .danger rules already use */
   --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 *{box-sizing:border-box}
@@ -76,6 +77,10 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 #now-title.empty{color:var(--dim); font-weight:400}
+/* Outside the title on purpose. #now-title clips with an ellipsis, so a mark
+   inside it is the first thing to go on a name long enough to be clipped --
+   which is the case where "this name is one I gave" has to stay readable. */
+.now-renamed{flex:none; font-size:.8rem; color:var(--accent); cursor:default}
 /* Inherits the title's slot exactly. A different size makes the bar lurch while
    the name is being edited, and in a narrow window even rewraps it. */
 .title-edit{
@@ -213,6 +218,12 @@ main.library-hidden .library{opacity:0; pointer-events:none}
 .tile-bar{pointer-events:auto; cursor:grab}
 .tile-cover{cursor:grab}
 .video-row{cursor:grab}
+
+/* Key hint for multiview focus (1-4) */
+.tile-key-hint{
+  flex:none; font-size:.7rem; color:var(--accent); opacity:.7;
+  font-family:var(--mono);
+}
 
 /* Layouts. In 1+2 / 1+3 the focused tile takes the big area and the rest flow
  * into the empty cells -- moving the focus changes only .focused, the DOM stays
@@ -496,6 +507,11 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
   margin-left:.4rem; font-size:.68rem; font-weight:600;
   color:var(--warn); opacity:.85; white-space:nowrap;
 }
+/* Auto-detect did not settle on a source language -- nothing to translate from. */
+.tr-missing-lang{
+  margin-left:.4rem; font-size:.68rem; font-weight:600;
+  color:var(--err); opacity:.9; white-space:nowrap;
+}
 .line.on{background:#16221f; border-left-color:var(--accent)}
 .line .t{font-family:var(--mono); font-size:.68rem; color:var(--dim); padding-top:.15rem}
 .line .tx{font-size:.86rem; line-height:1.5}
@@ -568,6 +584,25 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   border-radius:6px; padding:.45rem 1rem; font-size:.82rem; cursor:pointer; font-family:inherit;
 }
 #add-form button.primary,#export-form button.primary{background:var(--accent); border-color:var(--accent); color:#04211b; font-weight:700}
+#add-form button:disabled,#export-form button:disabled{
+  opacity:.5; cursor:not-allowed;
+}
+/* The word-pick button is placed in JS, over the selection it belongs to, so
+   all it needs here is to be out of the flow and above the panel. */
+#glossary-pick{
+  position:fixed; z-index:60; padding:.25rem .6rem; font-size:.72rem;
+  background:var(--accent); border-color:var(--accent); color:#04211b;
+  font-weight:700; box-shadow:0 .4rem .9rem rgba(0,0,0,.45);
+}
+#glossary-pick:hover{background:var(--accent); color:#04211b}
+#glossary-term-dialog{background:var(--panel); color:var(--text); border:1px solid var(--line);
+  border-radius:12px; padding:0; max-width:420px; width:92vw}
+#glossary-term-dialog::backdrop{background:rgba(4,6,10,.7)}
+.settings-form .hint{margin:0; font-size:.74rem; line-height:1.6; color:var(--dim)}
+#glossary-term-channel{font-family:var(--mono); font-size:.7rem}
+#glossary-term-note{color:var(--warn)}
+#glossary-term-result{color:var(--accent)}
+#glossary-term-error{color:var(--err)}
 #add-dialog{background:var(--panel); color:var(--text); border:1px solid var(--line);
   border-radius:12px; padding:0; max-width:480px; width:92vw}
 #add-dialog::backdrop{background:rgba(4,6,10,.7)}
@@ -601,6 +636,27 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   font-family:inherit;
 }
 .live-badge button:hover{background:#3a1a17; color:#fff}
+
+/* The live menu. It carries .menu, so it is `fixed` for the reason written
+   out above that rule -- absolute, the header's overflow:hidden clips it --
+   and live.js already hands it viewport coordinates. Only the size differs:
+   two short rows do not need the settings menu's 16rem. */
+#live-menu{width:auto; min-width:10rem; padding:.3rem; gap:.1rem}
+/* border-radius as well as border: without it the 100px pill from
+   `.live-badge button` wins and full-width rows come out as lozenges. */
+#live-menu button{
+  display:block; width:100%; text-align:left; padding:.45rem .6rem;
+  background:transparent; border:none; border-radius:6px; color:var(--text);
+  font-size:.8rem; cursor:pointer; font-family:inherit;
+}
+#live-menu button:hover{background:var(--line); color:var(--text)}
+/* Stopping is the destructive one, so it keeps the badge's red. The ⋮ that
+   only opens the menu does not -- `:not(.on)` so .seg.on still owns the
+   open state, which an id selector would otherwise take from it. */
+#live-menu #live-stop{color:#e8a09b}
+#live-menu #live-stop:hover{background:#3a1a17; color:#fff}
+#live-menu-btn:not(.on){border-color:var(--line); color:var(--dim); border-radius:6px}
+#live-menu-btn:not(.on):hover{background:transparent; color:var(--text)}
 .line.pending .tx{opacity:.65}
 .line.pending .t::after{content:"…"; color:var(--accent)}
 
@@ -623,7 +679,11 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
   border-radius:12px; padding:0; max-width:560px; width:94vw;
 }
 #settings-dialog::backdrop{background:rgba(4,6,10,.72)}
-#settings-body,#engine-form{display:flex; flex-direction:column; gap:1rem; padding:1.3rem}
+/* Every screen inside the settings dialog, not one of them. These rules used
+   to name #engine-form alone, so the model form, the glossary form and the
+   token field came out as browser defaults -- white boxes in Arial on a dark
+   panel. A form added later has only to carry the class. */
+#settings-body,.settings-form{display:flex; flex-direction:column; gap:1rem; padding:1.3rem}
 .dlg-head{display:flex; align-items:center; justify-content:space-between}
 .dlg-head h3{margin:0; font-size:1rem}
 .engine-group{display:flex; flex-direction:column; gap:.5rem}
@@ -651,19 +711,34 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 .engine-row button.danger{border-color:#5a2b2b; color:#e07a7a}
 .engine-row button.danger:hover{background:#2a1616}
 .engine-row.locked button.danger{opacity:.35; cursor:not-allowed}
-#engine-form label{display:flex; flex-direction:column; gap:.25rem; font-size:.76rem; color:var(--dim)}
-#engine-form input{
+#settings-body label,.settings-form label{
+  display:flex; flex-direction:column; gap:.25rem; font-size:.76rem; color:var(--dim);
+}
+/* textarea and select as well as input -- the glossary's term list is a
+   textarea, and it was the only white box left after the inputs were fixed. */
+#settings-body input,#settings-body select,#settings-body textarea,
+.settings-form input,.settings-form select,.settings-form textarea{
   background:#0d1017; color:var(--text); border:1px solid var(--line);
   border-radius:6px; padding:.45rem .6rem; font-size:.85rem; font-family:inherit;
 }
-#engine-form small{color:var(--dim); font-size:.7rem; line-height:1.5}
-#engine-form .row{display:flex; gap:.5rem}
-#engine-form .grow{flex:1}
-#engine-form button.primary{
+.settings-form textarea{resize:vertical; min-height:6rem; line-height:1.6}
+#settings-body input:focus-visible,.settings-form input:focus-visible,
+.settings-form textarea:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+#settings-body small,.settings-form small{color:var(--dim); font-size:.7rem; line-height:1.5}
+#settings-body .row,.settings-form .row{display:flex; gap:.5rem}
+#settings-body .grow,.settings-form .grow{flex:1}
+.settings-form button.primary{
   background:var(--accent); border:1px solid var(--accent); color:#04211b;
   font-weight:700; border-radius:6px; padding:.45rem 1.1rem; font-size:.82rem;
   cursor:pointer; font-family:inherit;
 }
+/* The buttons beside it (Back, Delete) carry .seg, which is styled up in the
+   toolbar block; only .danger needs saying again here. */
+.settings-form button.seg.danger{border-color:#5a2b2b; color:#e07a7a}
+.settings-form button.seg.danger:hover{background:#2a1616}
+#cookies-error{color:var(--err)}
+#update-token-state{color:var(--dim)}
+#update-token-state.saved{color:var(--accent)}
 /* Back when the transcription and translation pickers stood side by side in the
  * header, their widths had to be pinned -- a long engine name pushed the header
  * out. Now they stand vertically inside the "Manage" menu, where that

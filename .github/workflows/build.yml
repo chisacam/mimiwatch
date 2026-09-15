@@ -71,6 +71,17 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      # The wheel build.sh keeps, so the llama-cpp-python source build happens
+      # once rather than every release. Caching pip's own download directory was
+      # tried first and is worse than useless here: upstream's wheel is damaged
+      # at the source, so that cache would have preserved the broken file.
+      - name: Keep the llama-cpp-python wheel between runs (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: .wheels
+          key: llama-wheel-${{ runner.os }}-py3.12-${{ hashFiles('requirements.txt') }}
+          restore-keys: llama-wheel-${{ runner.os }}-py3.12-
       - name: Build the bundle (macOS)
         if: runner.os == 'macOS'
         run: |

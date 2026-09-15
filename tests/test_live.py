@@ -510,15 +510,36 @@ def test_multiview_groups_sessions_and_moves_focus(monkeypatch):
 def test_site_of_tells_the_embed_apart():
     yt = {"extractor_key": "Youtube", "webpage_url_domain": "youtube.com", "id": "abc123XYZ_-",
           "channel_id": "UCx"}
-    assert live.site_of(yt) == {"site": "youtube", "video_id": "abc123XYZ_-", "channel": "UCx"}
+    assert live.site_of(yt) == {"site": "youtube", "video_id": "abc123XYZ_-",
+                                "channel": "UCx", "play_url": ""}
     tw = {"extractor_key": "TwitchStream", "webpage_url_domain": "twitch.tv", "id": "40500071752",
           "uploader_id": "Monstercat", "display_id": "monstercat"}
-    assert live.site_of(tw) == {"site": "twitch", "video_id": "40500071752", "channel": "monstercat"}
+    assert live.site_of(tw) == {"site": "twitch", "video_id": "40500071752",
+                                "channel": "monstercat", "play_url": ""}
     # Even with empty metadata, the login name is salvaged from the URL
     assert live.site_of({}, "https://www.twitch.tv/Shroud?x=1")["channel"] == "shroud"
+    # chzzk has no embed, so it is the one site that carries a manifest for the
+    # page to play. The channel is the hex id, the shape a glossary is keyed by.
+    cz = {"extractor_key": "CHZZKLive", "webpage_url_domain": "chzzk.naver.com",
+          "id": "c0d9", "channel_id": "c0d9",
+          "formats": [{"format_id": "hls-3", "protocol": "m3u8_native", "height": 720,
+                       "url": "https://cdn.example/720.m3u8"},
+                      {"format_id": "hls-ll-4", "protocol": "m3u8_native", "height": 1080,
+                       "url": "https://cdn.example/1080-ll.m3u8"},
+                      {"format_id": "hls-4", "protocol": "m3u8_native", "height": 1080,
+                       "url": "https://cdn.example/1080.m3u8"}]}
+    assert live.site_of(cz) == {"site": "chzzk", "video_id": "c0d9", "channel": "c0d9",
+                                "play_url": "https://cdn.example/1080.m3u8"}
+    # The tallest plain rendition, not the low-latency one beside it: hls.js is
+    # fussier about partial segments than about an ordinary playlist.
+    assert live.play_url_of(cz) == "https://cdn.example/1080.m3u8"
+    assert live.play_url_of({"formats": [{"format_id": "hls-ll-4", "protocol": "m3u8_native",
+                                          "height": 1080, "url": "https://cdn.example/ll.m3u8"}]}) \
+        == "https://cdn.example/ll.m3u8"
+    assert live.play_url_of({}) == ""
     gen = {"extractor_key": "Generic", "webpage_url_domain": "cdn.example", "id": "master"}
     assert live.site_of(gen, "https://cdn.example/live/master.m3u8") == {
-        "site": "other", "video_id": "master", "channel": ""}
+        "site": "other", "video_id": "master", "channel": "", "play_url": ""}
     assert live.looks_like_m3u8("https://cdn.example/a/b.m3u8?tok=1")
     assert not live.looks_like_m3u8("https://www.youtube.com/watch?v=x")
 
@@ -654,6 +675,107 @@ def test_resume_carries_the_rename(monkeypatch):
     s = live.get("title-1")
     assert (s.title, s.title_by_user) == ("the name I typed", True)
     live._sessions.clear()
+
+
+def test_auto_detect_language_gets_translated(session):
+    """A live session with lang=None (auto-detect) should get translations.
+
+    The ASR returns detected language in result.language. The cue should carry
+    that language so _translate() can find src != tgt and translate.
+    """
+    s = session
+    s.lang = None  # auto-detect
+    s.viewer_lang = "ko"
+
+    # The pairs land in `calls` from translate(), not from should_translate():
+    # recording the question rather than the answer proves the translator was
+    # asked, which is not what this test is named after.
+    calls = []
+    class MockTranslator:
+        name = "mock"
+        def should_translate(self, text, src, tgt):
+            return src != tgt and src != ""
+        def translate(self, text, src, tgt, context=None):
+            calls.append((text, src, tgt))
+            return "T:" + text
+    s._tr = MockTranslator()
+
+    # Simulate ASR returning detected language
+    s.publish_line("final", "こんにちは", "ja", "")
+    s.audio_s = 2.0
+    s.publish_line("final", "元気ですか", "ja", "")
+
+    # Wait for translations
+    import time
+    deadline = time.time() + 2.0
+    while time.time() < deadline and len(calls) < 2:
+        time.sleep(0.01)
+
+    assert len(calls) == 2
+    for text, src, tgt in calls:
+        assert src == "ja"
+        assert tgt == "ko"
+        assert text in ("こんにちは", "元気ですか")
+    # And the translations actually reached the screen.
+    assert [t for _, t in _translations(s)] == ["T:こんにちは", "T:元気ですか"]
+
+
+def test_clear_cues_keeps_the_id_space(session):
+    """Clearing empties the record but does not hand the same ids out again.
+
+    The event log still holds the cleared lines under the ids they were given,
+    and a client that reconnects with `Last-Event-ID` replays them. Restarting
+    `_seq` at zero would put the replayed lines and the new ones under one id
+    each.
+    """
+    s = session
+    live._sessions[s.id] = s
+    try:
+        for n in range(3):
+            s.audio_s = n * 1.0
+            s.publish_line("final", f"line {n}", "ja", "")
+        assert len(store.cues(s.id)) == 3
+        seq_before = s._seq
+
+        assert live.clear_cues(s.id) == {"ok": True, "cleared": True}
+
+        assert store.cues(s.id) == []
+        assert list(s._recent) == [] and s._text_of == {}
+        assert (s.lines, s.translated) == (0, 0)
+        assert s._seq == seq_before          # not reset
+        assert any(e.get("type") == "clear" for e in s.emitted)
+
+        # The next line comes after the cleared ones, not on top of them.
+        s.publish_line("final", "after", "ja", "")
+        assert store.cues(s.id)[0]["id"] > seq_before
+    finally:
+        live._sessions.clear()
+
+
+def test_clear_cues_on_a_session_that_is_gone(isolated):
+    assert live.clear_cues("nope") == {"error": "no such live session"}
+
+
+def test_a_resumed_clock_never_starts_before_where_it_stopped():
+    """The playlist's clock is not always one that survives a break.
+
+    chzzk gives no broadcast start time worth the name, so `media_base_from`
+    clamps to 0 every time it is asked. A session resumed on that would number
+    its lines from zero again and, since the panel sorts by time, wedge them in
+    among the lines already there instead of after them.
+    """
+    # A first reception keeps whatever the playlist said, whatever that is.
+    assert live.continue_base(0.0, 0.0) == 0.0
+    assert live.continue_base(931.0, 0.0) == 931.0
+    # A resume where the playlist has no usable clock (chzzk) continues from the
+    # session's own record instead.
+    assert live.continue_base(0.0, 264.1) == 264.1
+    # A resume where it does (YouTube: PDT minus the broadcast start keeps
+    # counting across the break) keeps the playlist's, which is the more accurate
+    # of the two and is already past where it stopped.
+    assert live.continue_base(931.0, 264.1) == 931.0
+    # And it is never dragged backwards by a stale record.
+    assert live.continue_base(931.0, 2000.0) == 2000.0
 
 
 # ---- The session's own audio: carrying the tail and writing the WAV --------------

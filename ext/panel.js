@@ -17,10 +17,18 @@
   const ID = "mimiwatch-panel";
   // YouTube's right-hand column. On live it holds the chat, otherwise the
   // related videos.
-  const findColumn = () => document.querySelector("#secondary-inner") ||
-                           document.querySelector("#secondary");
-  const findChat = () => document.querySelector("ytd-live-chat-frame#chat") ||
-                         document.querySelector("#chat");
+  // Which column and which chat is the site table's business (ytid.js). A site
+  // that names neither has no place to put the log, and mount() says so rather
+  // than guessing at a container and hiding something the reader wanted.
+  const siteHere = () => MimiYtId.siteOf(location.href);
+  const findColumn = () => {
+    const s = siteHere();
+    return s && s.column ? document.querySelector(s.column) : null;
+  };
+  const findChat = () => {
+    const s = siteHere();
+    return s && s.chat ? document.querySelector(s.chat) : null;
+  };
 
   /* A small helper. createElement + className + textContent in one line. */
   function el(tag, cls, text) {

@@ -53,6 +53,18 @@ MW_I18N.add({
     en: "Videos and streams of this channel match the key. A name a person typed keys as manual:name.",
     ko: "이 채널의 영상과 방송이 키로 맞습니다. 사람이 입력한 이름은 manual:이름 으로 키가 됩니다.",
   },
+  "settings.glossary.form.current": {
+    en: "Use the one open",
+    ko: "지금 보는 채널",
+  },
+  "settings.glossary.form.current.title": {
+    en: "Fills in the key of {name}, the one the lookup uses",
+    ko: "{name}의 키를 채웁니다 — 조회가 실제로 쓰는 그 키입니다",
+  },
+  "settings.glossary.form.current.none": {
+    en: "Nothing with a channel is open. A raw m3u8 has no channel to key by.",
+    ko: "채널이 있는 것이 열려 있지 않습니다. m3u8 주소는 키로 삼을 채널이 없습니다.",
+  },
   "settings.glossary.form.terms": {
     en: "Terms — one per line",
     ko: "시어 — 한 줄에 하나씩",
@@ -152,6 +164,42 @@ MW_I18N.add({
   },
 
   /* engines.js -- engines, models & tools, first-time setup, cookies, shutdown */
+  "engines.cookies.env": {
+    en: "The MIMIWATCH_YTDLP_COOKIES environment variable is set, and yt-dlp uses that file instead of anything below.",
+    ko: "MIMIWATCH_YTDLP_COOKIES 환경 변수가 설정되어 있어, yt-dlp는 아래의 것 대신 그 파일을 씁니다.",
+  },
+  "engines.cookies.site.none": {
+    en: "not signed in",
+    ko: "로그인 없음",
+  },
+  "engines.cookies.site.present": {
+    en: "{n} cookies · {when}",
+    ko: "쿠키 {n}개 · {when}",
+  },
+  "settings.cookies.save": {
+    en: "Save",
+    ko: "저장",
+  },
+  "settings.cookies.site.youtube": {
+    en: "YouTube",
+    ko: "YouTube",
+  },
+  "settings.cookies.site.chzzk": {
+    en: "CHZZK",
+    ko: "치지직",
+  },
+  "settings.cookies.chzzk.paste": {
+    en: "CHZZK cookies",
+    ko: "치지직 쿠키",
+  },
+  "settings.cookies.chzzk.placeholder": {
+    en: ".naver.com\tTRUE\t/\tTRUE\t1800000000\tNID_AUT\t…",
+    ko: ".naver.com\tTRUE\t/\tTRUE\t1800000000\tNID_AUT\t…",
+  },
+  "settings.cookies.chzzk.hint": {
+    en: "Pasted, not read from the browser: the login belongs to Naver, not to chzzk, so the extension would need the run of naver.com to fetch it. Export a cookies.txt in Netscape format while signed in to chzzk and paste it here. It is kept apart from the YouTube ones, so neither overwrites the other.",
+    ko: "브라우저에서 읽지 않고 붙여 넣는 방식입니다 — 로그인이 치지직이 아니라 네이버의 것이라, 확장이 가져오려면 naver.com 전체 권한이 필요하기 때문입니다. 치지직에 로그인한 상태에서 Netscape 형식 cookies.txt를 내보내 여기에 붙여 넣으십시오. 유튜브 쿠키와 따로 보관되어 서로를 덮어쓰지 않습니다.",
+  },
   "engines.cookies.delete.confirm": {
     en: "Delete the YouTube login cookies held on the server? A stream being received goes on without them from its next reconnect.",
     ko: "서버에 있는 유튜브 로그인 쿠키를 지울까요? 받는 중인 방송은 다음 재접속부터 쿠키 없이 갑니다.",
@@ -672,6 +720,14 @@ MW_I18N.add({
   },
   "update.token.hint": {
     en: "Kept in this browser and sent to api.github.com only. The MIMIWATCH_GITHUB_TOKEN environment variable works the same and also covers the automatic once-a-day check.",
-    ko: "이 브라우저에만 두고 api.github.com으로만 보내습니다. MIMIWATCH_GITHUB_TOKEN 환경 변수도 동일하며, 하루 한 번의 자동 검사까지 함께 커버합니다.",
+    ko: "이 브라우저에만 두고 api.github.com으로만 보냅니다. MIMIWATCH_GITHUB_TOKEN 환경 변수도 동일하며, 하루 한 번의 자동 검사까지 함께 커버합니다.",
+  },
+  "update.token.saved": {
+    en: "Saved in this browser as you type",
+    ko: "입력하는 대로 이 브라우저에 저장됩니다",
+  },
+  "update.token.none": {
+    en: "Empty — the check runs without a token",
+    ko: "비어 있습니다 — 토큰 없이 검사합니다",
   },
 });

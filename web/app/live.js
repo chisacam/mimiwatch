@@ -212,7 +212,8 @@ async function startLive(url, lang, probe) {
     viewer_lang: $("viewer-lang").value, translated: false,
     backends_done: [state.backend], live: true,
   });
-  t.src = srcOf({ site: probe.site, video_id: probe.id, channel: probe.channel, url });
+  t.src = srcOf({ site: probe.site, video_id: probe.id, channel: probe.channel,
+                  play_url: probe.play_url, url });
   showTileInPanels(t);
   addLiveToPicker(probe, res.id);
   await attachLive(t);
@@ -257,12 +258,37 @@ async function openSessionInTile(tile, st) {
     lastStatus: running ? null : { ...st, type: "status" },
   }, {
     id: st.video_id || "", title: st.title || st.url,
+    title_by_user: !!st.title_by_user,
     source_lang: st.source_lang || "", viewer_lang: st.viewer_lang,
     translated: false, backends_done: [st.backend], live: true,
   });
-  tile.src = srcOf(st);
+  tile.src = await seatable(st);
   tile.title = st.title || st.url || "";
   updateTileBar(tile);
+}
+
+/* What to seat in the tile for this session.
+ *
+ * A site with no embed (chzzk) is played from its own manifest, and that URL
+ * carries a token that expires, so it is not kept with the session -- a stored
+ * one would reach the player as an address that answers 403. A session the
+ * server has just come back to, or one that has been sitting stopped, therefore
+ * arrives without one and `srcOf` has nothing to give. Asking for a fresh one
+ * costs a yt-dlp call on the server and happens only here, seating a tile.
+ *
+ * Tab audio is skipped: the picture is the user's own tab and there is nothing
+ * to resolve. */
+async function seatable(st) {
+  let src = srcOf(st);
+  if (src.site !== "none" || st.source === "tab" || !st.url) return src;
+  try {
+    const res = await (await fetch("/api/live/playurl", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: st.id }),
+    })).json();
+    if (res && res.url) { st.play_url = res.url; src = srcOf(st); }
+  } catch (_) { /* no picture; the tile is left empty rather than showing another */ }
+  return src;
 }
 
 /* Puts a session and a document into a tile. On the focused tile, the screen's globals (state.live and the rest) go with it. */
@@ -309,7 +335,8 @@ function showTileInPanels(tile) {
   $("live-badge").hidden = !isLiveReceiving();
   // Tab audio has no video to line up against, so the offset means nothing either.
   $("offset-wrap").style.display = !live ? "" : (isPushedSource(live.source) ? "none" : "flex");
-  setNowTitle(tile.doc ? tile.doc.title : null);
+  setNowTitle(tile.doc ? tile.doc.title : null,
+              !!(tile.doc && tile.doc.title_by_user));
   hideLiveNotice();
   if (live) renderLiveStatus(tile);
   else updateLangStatus();
@@ -319,11 +346,15 @@ function showTileInPanels(tile) {
 
 async function attachLive(tile) {
   const live = tile.live;
-  // A session with no video (m3u8, tab audio) skips the player below, so the
-  // notice box left behind by whatever was watched before is cleared here.
+  // The notice box left behind by whatever was watched before is cleared here.
   clearPlayerError(tile);
   const src = tile.src || { site: "none" };
-  if (src.site !== "none") await mountTile(tile, src, { muted: tile !== focusedTile() });
+  // Seated even when there is nothing to seat. Skipping the call left the tile
+  // holding whatever was in it before, so opening a chzzk broadcast the server
+  // had no manifest for showed the last YouTube player watched, still playing.
+  // mountTile takes the old one out and puts the do-nothing adapter in, which is
+  // what a session with no picture of its own (tab audio) wanted all along.
+  await mountTile(tile, src, { muted: tile !== focusedTile() });
   const es = new EventSource(`/api/live/events/${live.id}`);
   live.es = es;
   es.onmessage = (ev) => {
@@ -340,6 +371,9 @@ async function attachLive(tile) {
     // window are watching the same session, so an edit in one has to reach the
     // other.
     else if (m.type === "drop") dropCue(m.id, tile);
+    // The subtitles were thrown away on the server. Every screen keeps its own
+    // copy of the list, so each has to be told.
+    else if (m.type === "clear") clearCues(tile);
   };
   es.onerror = () => {
     // For a finished session the server sends the whole backlog and then closes
@@ -473,6 +507,7 @@ function onLiveStatus(m, tile = focusedTile()) {
   live.lastStatus = m;
   if (m.asr_backend) live.asr = m.asr_backend;
   if (m.backend) live.backend = m.backend;
+  if (tile.doc) tile.doc.title_by_user = !!m.title_by_user;
   // Follows a change of name. Editing it with "✎ Name" makes the server send
   // the state again, so what was edited in the main window reaches the script
   // window by the same path.
@@ -480,7 +515,7 @@ function onLiveStatus(m, tile = focusedTile()) {
       && !document.querySelector(".title-edit")) {
     tile.doc.title = m.title;
     tile.title = m.title;
-    if (tile === focusedTile()) setNowTitle(m.title);
+    if (tile === focusedTile()) setNowTitle(m.title, !!m.title_by_user);
   }
   if (m.state === "error" || m.state === "stopped") {
     // stopLive() used to be called here. It empties state.live, and two things
@@ -575,6 +610,31 @@ function detachLive() {
   syncRenameButton();
   $("live-badge").hidden = true;
   $("offset-wrap").style.display = "";
+}
+
+function toggleLiveMenu(open) {
+  const menu = $("live-menu"), btn = $("live-menu-btn");
+  menu.hidden = !open;
+  btn.classList.toggle("on", open);
+  btn.setAttribute("aria-expanded", String(!!open));
+  if (!open) return;
+  const r = btn.getBoundingClientRect();
+  menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  menu.style.left = "auto";
+  menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+}
+
+async function clearLiveCues() {
+  const live = state.live;
+  if (!live) return;
+  toggleLiveMenu(false);
+  if (!confirm(t("live.clearCues.confirm"))) return;
+  const res = await fetch("/api/cue/clear", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session: live.id }),
+  }).then(r => r.json());
+  if (res.error) { alert(res.error); return; }
+  // The session will broadcast its cleared state via the bus
 }
 
 function stopLive() {

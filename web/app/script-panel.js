@@ -41,6 +41,10 @@ function scriptRow(c, i) {
     // default behaviour such as text selection, not the click event that
     // follows.
     if (state.scriptMode === "tr") return;
+    // Dragging across a line to pick a word out of it ends in a click on that
+    // line. Seeking then throws the playhead somewhere nobody asked for, and
+    // on a live stream that is the one move that cannot be taken back.
+    if (hasSelectionIn(row)) return;
     if (state.player) { state.player.seekTo(cueStart(c), true); state.player.playVideo(); }
   });
   // Picking in translation mode. This hangs on pointerdown rather than click
@@ -89,7 +93,26 @@ function refreshScriptRow(row, c) {
     }
     body.appendChild(tr);
   }
-  row.classList.toggle("pending", c.kind === "final" && !trText);
+  // A line without a translation is in one of three states, and only one of them
+  // is "waiting". It can have no source language to translate from; it can be in
+  // the language being read, so there is nothing to translate; or the translation
+  // really is on its way. The ellipsis belongs to the third alone.
+  //
+  // The second is not an edge case. A Korean stream read in Korean produces it on
+  // every single line -- `should_translate` answers no when src == tgt, nothing is
+  // ever stored, and the whole transcript sat marked as still coming in.
+  const viewerLang = (state.doc && state.doc.viewer_lang) || "";
+  const sameLang = !!c.lang && !!viewerLang && c.lang === viewerLang;
+  const missingLang = c.kind !== "note" && !c.lang && !trText;
+  row.classList.toggle("pending",
+                       c.kind === "final" && !trText && !missingLang && !sameLang);
+  if (missingLang) {
+    const warn = document.createElement("b");
+    warn.className = "tr-missing-lang";
+    warn.title = t("panel.row.missingLang.title");
+    warn.textContent = t("panel.row.missingLang");
+    tx.appendChild(warn);
+  }
   // The edit button. It is laid over the row and the CSS shows it on hover
   // only. It is attached anew on every redraw -- it closes over c, so leaving
   // the old one behind opens the editor on the value from before the edit
@@ -406,6 +429,18 @@ function dropCue(id, tile = focusedTile()) {
   renderCue();
 }
 
+/* The whole list thrown away while the session goes on. The same shape as
+ * dropCue, one line at a time turned into all of them at once. */
+function clearCues(tile = focusedTile()) {
+  const live = tile && tile.live;
+  if (live) live.store.reset();
+  else state.cues.length = 0;
+  if (tile !== focusedTile()) return;    // another tile's subtitle log is not on screen
+  buildScript();
+  state.idx = -1;
+  renderCue();
+}
+
 /* On a live stream, "Follow" chases the **bottom**, not any particular row.
  *
  * It used to call scrollIntoView({block:"end"}) on each new row. But a row keeps
@@ -428,12 +463,18 @@ function pinScriptToBottom() {
 }
 
 function markScript(i) {
-  // Nothing is marked while the stream is being received. It is always the last
-  // row then, and the script is already pinned to the bottom.
-  if (isLiveDoc() && isLiveReceiving()) return;
   const box = $("script");
   box.querySelectorAll(".line.on").forEach(el => el.classList.remove("on"));
   if (i < 0) return;
+
+  // For live receiving, the overlay always shows the most recent cue (last in array).
+  // We still highlight it so the user sees which line is current.
+  // But we don't scroll to center -- pinScriptToBottom handles scrolling for live.
+  const isLiveReceivingNow = isLiveDoc() && isLiveReceiving();
+  if (isLiveReceivingNow) {
+    i = state.cues.length - 1;
+  }
+
   // A row is found by cue id, not by position (data-i). The moment one row is
   // deleted, every position after it is off by one -- that is the bug where
   // following kept pointing at the row beside the right one after a line was
@@ -443,7 +484,10 @@ function markScript(i) {
   const el = c.id != null ? rowOf(c.id) : box.querySelector(`.line[data-i="${i}"]`);
   if (!el) return;
   el.classList.add("on");
-  if (state.follow) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  // For live receiving, pinScriptToBottom handles scrolling; don't fight it.
+  if (state.follow && !isLiveReceivingNow) {
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 }
 
 /* Script mode.
@@ -662,4 +706,144 @@ function setScriptView(v) {
     b.classList.toggle("on", b.dataset.sview === v));
   const p = loadPrefs(); savePrefs({ ...p, scriptView: v });
   pinScriptToBottom();
+}
+
+/* ---------- picking a word into the channel glossary ----------
+ *
+ * The glossary is a per-channel list of source → target terms written into the
+ * translation prompt (docs/GLOSSARY.md). Putting a word into it used to mean
+ * opening Manage, finding the channel among the others and typing the pair into
+ * a textarea -- by which time the line that prompted it has scrolled away. This
+ * is the same list, reached from the word on screen.
+ *
+ * Read mode only. `tr` mode takes pointerdown for picking rows and stops
+ * selection on purpose, and `edit` mode puts the line in an input of its own. */
+
+function hasSelectionIn(el) {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) return false;
+  return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
+}
+
+/* Which channel the term would be filed under, and what to call it on screen.
+ * A live tile knows its own channel; a recording carries the key the job wrote
+ * (jobs.py). Neither means there is nowhere to put a term, which the dialog
+ * says rather than filing it somewhere arbitrary. */
+function glossaryChannel() {
+  const tile = focusedTile();
+  if (tile && tile.live && tile.live.channelKey) {
+    return { key: tile.live.channelKey,
+             name: (tile.doc && tile.doc.title) || tile.live.channelKey };
+  }
+  if (state.doc && state.doc.channel_key) {
+    return { key: state.doc.channel_key,
+             name: state.doc.channel_name || state.doc.title || state.doc.channel_key };
+  }
+  return null;
+}
+
+/* M2M-100 has nowhere to put a prompt, so the glossary reaches it nowhere
+ * (translate.build). It is the default translator, so saying nothing here would
+ * make this a button that quietly does nothing for most people. */
+function glossaryTranslator() {
+  const tile = focusedTile();
+  const id = (tile && tile.live && tile.live.backend) || state.backend;
+  const b = (state.backends || []).find(x => x.id === id);
+  return { name: (b && (b.label || b.id)) || id || "",
+           takesGlossary: !!b && (b.backend === "gemma" || b.backend === "openai") };
+}
+
+function scriptSelection() {
+  if (state.scriptMode !== "read") return null;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const text = sel.toString().trim();
+  if (!text) return null;
+  const n = sel.anchorNode;
+  const el = n && (n.nodeType === 1 ? n : n.parentElement);
+  const holder = el && el.closest && el.closest(".line .tx, .line .tr");
+  if (!holder || !$("script").contains(holder)) return null;
+  return { text, side: holder.classList.contains("tr") ? "tr" : "tx",
+           rect: sel.getRangeAt(0).getBoundingClientRect() };
+}
+
+function hideGlossaryPick() { $("glossary-pick").hidden = true; }
+
+function syncGlossaryPick() {
+  const sel = scriptSelection();
+  const btn = $("glossary-pick");
+  if (!sel) { btn.hidden = true; return; }
+  // Following scrolls the panel out from under a selection that is still
+  // there. Dropping the button then meant dragging the word a second time,
+  // so it is moved with the line instead -- and let go only once the line it
+  // belongs to has left the panel, where it would otherwise float over
+  // whatever the toolbar or the player put underneath.
+  const box = $("script").getBoundingClientRect();
+  if (sel.rect.bottom < box.top || sel.rect.top > box.bottom) {
+    btn.hidden = true;
+    return;
+  }
+  btn.hidden = false;
+  // Placed after it is shown: a hidden button measures 0 and would sit in the
+  // corner. Kept inside the window on both axes -- a selection at the bottom of
+  // a long script is the normal case, not the edge one.
+  const r = btn.getBoundingClientRect();
+  const left = Math.min(Math.max(4, sel.rect.left), window.innerWidth - r.width - 4);
+  const above = sel.rect.top - r.height - 6;
+  btn.style.left = `${Math.round(left)}px`;
+  btn.style.top = `${Math.round(above > 4 ? above : sel.rect.bottom + 6)}px`;
+}
+
+function openGlossaryTerm() {
+  const sel = scriptSelection();
+  if (!sel) return;
+  hideGlossaryPick();
+  const f = $("glossary-term-form");
+  // Which half was picked decides which half is filled in. Dragging over the
+  // source gives the term; dragging over the translation gives the answer that
+  // was wrong, and the source is what has to be typed.
+  f.from.value = sel.side === "tx" ? sel.text : "";
+  f.to.value = sel.side === "tr" ? sel.text : "";
+  const ch = glossaryChannel();
+  f.dataset.channelKey = ch ? ch.key : "";
+  f.dataset.channelName = ch ? ch.name : "";
+  $("glossary-term-channel").textContent = ch
+    ? t("panel.glossary.channel", { name: ch.name, key: ch.key })
+    : t("panel.glossary.noChannel");
+  const tr = glossaryTranslator();
+  const note = $("glossary-term-note");
+  note.hidden = tr.takesGlossary;
+  if (!tr.takesGlossary) note.textContent = t("panel.glossary.noPrompt", { name: tr.name });
+  $("glossary-term-result").hidden = true;
+  $("glossary-term-error").hidden = true;
+  f.querySelector('button[type="submit"]').disabled = !ch;
+  $("glossary-term-dialog").showModal();
+  (f.from.value ? f.to : f.from).focus();
+}
+
+async function saveGlossaryTerm(e) {
+  e.preventDefault();
+  const f = $("glossary-term-form");
+  const term = { from: f.from.value.trim(), to: f.to.value.trim() };
+  const err = $("glossary-term-error");
+  if (!f.dataset.channelKey || !term.from || !term.to) return;
+  const res = await (await fetch("/api/glossaries/term", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channel_key: f.dataset.channelKey,
+                           name: f.dataset.channelName, ...term }),
+  })).json();
+  if (res.error) { err.textContent = res.error; err.hidden = false; return; }
+  err.hidden = true;
+  // `applied` is the sessions the server rebuilt the translator for. Saying
+  // "from the next line" when nothing was running would be a promise about
+  // something that is not happening.
+  const result = $("glossary-term-result");
+  result.textContent = t((res.applied || []).length
+    ? "panel.glossary.added" : "panel.glossary.addedLater", term);
+  result.hidden = false;
+  // The dialog stays open: terms come in handfuls, and reopening it per word
+  // would mean finding the next word with the dialog in the way.
+  f.from.value = ""; f.to.value = "";
+  f.from.focus();
+  if (typeof loadGlossaries === "function") loadGlossaries();
 }

@@ -4,6 +4,7 @@ No model is loaded -- every endpoint knocked on is a config, listing or refusal
 path. The store and the config are put in a temporary directory through
 MIMIWATCH_DATA_DIR / MIMIWATCH_CONFIG.
 """
+import contextlib
 import importlib.util
 import json
 import os
@@ -21,6 +22,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_CONFIG = None
 SERVER_HOME = None
+SERVER_DATA = None
 
 
 def _stub_dir(tmp) -> str:
@@ -72,9 +74,10 @@ def server(tmp_path_factory):
     # The server process's config file. conftest redirects this process's config to a
     # different temporary file, so to see what the server saved that file has to be read
     # directly.
-    global SERVER_CONFIG, SERVER_HOME
+    global SERVER_CONFIG, SERVER_HOME, SERVER_DATA
     SERVER_CONFIG = tmp / "backends.json"
     SERVER_HOME = tmp / "home"
+    SERVER_DATA = tmp / "data"
     env = {**os.environ, "MIMIWATCH_DATA_DIR": str(tmp / "data"),
            "MIMIWATCH_CONFIG": str(tmp / "backends.json"),
            "MIMIWATCH_HOME": str(tmp / "home"),
@@ -182,34 +185,67 @@ def test_viewer_lang_roundtrip(server):
 
 
 def test_pushed_cookies_are_stored_privately_and_used(server):
-    """Cookies handed over by the extension: stored 0600, never in a response, added to the yt-dlp arguments, gone once deleted."""
+    """Login cookies: stored 0600 per site, never in a response, joined into the file
+    yt-dlp is given, and one site's are neither overwritten nor deleted by the other's."""
     base, _ = server
     s, b = req(base, "/api/cookies")
-    assert s == 200 and json.loads(b)["present"] is False
+    assert s == 200 and json.loads(b)["sites"]["youtube"]["present"] is False
     assert req(base, "/api/cookies/youtube", body={"cookies": "no tabs here"})[0] == 400
-    txt = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsecret-value\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PSID\tsecret2\n"
-    s, b = req(base, "/api/cookies/youtube", body={"cookies": txt})
+    yt = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsecret-value\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PSID\tsecret2\n"
+    s, b = req(base, "/api/cookies/youtube", body={"cookies": yt})
     st = json.loads(b)
-    assert s == 200 and st["present"] and st["count"] == 2 and "secret" not in b.decode()
+    assert s == 200 and st["sites"]["youtube"]["count"] == 2 and "secret" not in b.decode()
     import paths
     path = os.path.join(SERVER_HOME, "cookies", "youtube.txt")
     assert os.path.exists(path)
     if os.name != "nt":
         assert oct(os.stat(path).st_mode & 0o777) == "0o600"
     assert "secret-value" in open(path, encoding="utf-8").read()
-    # Whether it lands in the server process's yt-dlp arguments is checked directly by pointing stream at the same HOME.
+
+    # The second site does not land on the first. While there was one file, this
+    # is exactly what handing over chzzk's cookies did to YouTube's.
+    cz = ".naver.com\tTRUE\t/\tTRUE\t0\tNID_AUT\tnaver-secret\n"
+    s, b = req(base, "/api/cookies/chzzk", body={"cookies": cz})
+    st = json.loads(b)
+    assert s == 200 and st["sites"]["chzzk"]["count"] == 1
+    assert st["sites"]["youtube"]["count"] == 2
+    assert "naver-secret" not in b.decode()
+    cz_path = os.path.join(SERVER_HOME, "cookies", "chzzk.txt")
+    assert os.path.exists(cz_path) and os.path.exists(path)
+
+    # What yt-dlp is handed is the join of the two, not either one of them.
     import stream
     stream.reset_tool_cache()
     os.environ["MIMIWATCH_HOME"] = str(SERVER_HOME)
     try:
         assert paths.cookies_path() == path
+        assert paths.cookies_path("chzzk") == cz_path
         args = stream._cookie_args()
-        assert args[:1] == ["--cookies"] and args[1] == path
+        assert args[:1] == ["--cookies"] and args[1] == paths.cookies_merged_path()
+        joined = open(args[1], encoding="utf-8").read()
+        assert "secret-value" in joined and "naver-secret" in joined
     finally:
         del os.environ["MIMIWATCH_HOME"]
         stream.reset_tool_cache()
+
+    # Deleting one site leaves the other, and the join loses the deleted one.
+    s, b = req(base, "/api/cookies/delete", body={"site": "chzzk"})
+    st = json.loads(b)
+    assert st["sites"]["chzzk"]["present"] is False
+    assert st["sites"]["youtube"]["present"] is True
+    assert not os.path.exists(cz_path) and os.path.exists(path)
+    os.environ["MIMIWATCH_HOME"] = str(SERVER_HOME)
+    try:
+        stream.reset_tool_cache()
+        joined = open(stream._cookie_args()[1], encoding="utf-8").read()
+        assert "naver-secret" not in joined and "secret-value" in joined
+    finally:
+        del os.environ["MIMIWATCH_HOME"]
+        stream.reset_tool_cache()
+
+    # With no site named, everything goes.
     s, b = req(base, "/api/cookies/delete", body={})
-    assert json.loads(b)["present"] is False and not os.path.exists(path)
+    assert json.loads(b)["sites"]["youtube"]["present"] is False and not os.path.exists(path)
 
 
 def test_static_and_index(server):
@@ -416,3 +452,117 @@ def test_watcher_routes(server):
     assert s == 200 and json.loads(b)["watchers"] == []
     s, _ = req(base, "/api/watchers/delete", body={"url": "https://nope"})
     assert s == 404
+
+
+@contextlib.contextmanager
+def _doc_in_server_store(vid: str, meta: dict):
+    """Put one video doc into the **server process's** store, and take it out again.
+
+    A doc is made by transcription and by nothing else, and transcription loads a
+    model, so no route puts one there for a test. The store is SQLite in WAL mode
+    and the server is another process, which is the case WAL was turned on for:
+    the row goes in from here and the server reads it on the next request. It is
+    removed again so that the listing tests around it still see an empty library.
+    """
+    import sqlite3
+    path = str(SERVER_DATA / "mimiwatch.db")
+
+    def write(sql, args):
+        db = sqlite3.connect(path, timeout=10)
+        try:
+            db.execute(sql, args)
+            db.commit()
+        finally:
+            db.close()
+
+    write("INSERT OR REPLACE INTO docs (id, updated, doc) VALUES (?, ?, ?)",
+          (vid, time.time(), json.dumps(meta, ensure_ascii=False)))
+    try:
+        yield
+    finally:
+        write("DELETE FROM docs WHERE id = ?", (vid,))
+
+
+def test_videos_carry_the_site_and_the_thumbnail(server):
+    """The library tile needs both -- the site picks the player, and the thumbnail is the picture.
+
+    yt-dlp's `-j` never carried a chzzk thumbnail, so when the listing dropped
+    these two fields a recording came back as a blank tile with no site on it.
+    """
+    base, _ = server
+    vid = "chzzk-15186552"
+    meta = {"id": vid, "title": "7시간 방송 다시보기", "duration": 25234,
+            "uploader": "채널 이름", "url": "https://chzzk.naver.com/video/15186552",
+            "site": "chzzk", "channel": "abc123",
+            "thumbnail": "https://img.example/thumb.jpg"}
+    with _doc_in_server_store(vid, meta):
+        s, b = req(base, "/api/videos")
+        got = [v for v in json.loads(b) if v["id"] == vid]
+        assert s == 200 and len(got) == 1
+        assert got[0]["site"] == "chzzk"
+        assert got[0]["thumbnail"] == "https://img.example/thumb.jpg"
+        assert got[0]["url"] == meta["url"] and got[0]["cues"] == 0
+    assert json.loads(req(base, "/api/videos")[1]) == []
+
+
+def test_video_playurl_wants_a_chzzk_recording(server):
+    """Nothing else has a URL to hand back, and both refusals are decided before
+    any request would have gone out -- the address is read off the doc first."""
+    base, _ = server
+    s, b = req(base, "/api/video/playurl", body={"id": "no-such-video"})
+    assert s == 404 and json.loads(b)["error"]
+    assert req(base, "/api/video/playurl", body={})[0] == 404
+    with _doc_in_server_store("yt-abc", {"id": "yt-abc",
+                                         "url": "https://www.youtube.com/watch?v=abc"}):
+        s, b = req(base, "/api/video/playurl", body={"id": "yt-abc"})
+        assert s == 404 and "chzzk" in json.loads(b)["error"]
+
+
+def test_video_playurl_resolves_a_recording_when_it_is_asked(monkeypatch):
+    """The route's body, called in this process instead of over the socket.
+
+    The server above is a process of its own, so `chzzk.resolve` cannot be
+    monkeypatched over there and the only other way to answer this request
+    would be a real one to naver. The handler is a plain function of `self`
+    and a body, so it is called here with a stand-in for `self` that keeps
+    what would have been sent; the routing entry is asserted separately,
+    since going through the socket is what would otherwise have proved it.
+    """
+    import chzzk
+    import server as srv
+    import store
+
+    class Fake:
+        """Everything post_video_playurl touches on `self`."""
+
+        sent = None
+
+        def _json(self, obj, code=200):
+            self.sent = (code, obj)
+
+    vid = "chzzk-15186552"
+    store.save_doc(vid, {"id": vid, "url": "https://chzzk.naver.com/video/15186552"})
+    monkeypatch.setattr(chzzk, "resolve", lambda no, audio=False: {
+        "id": no, "play_url": f"https://cdn.example/{no}/1080.mp4?_lsu_sa_=t10",
+        "play_kind": "mp4"})
+    handler = srv.POST_ROUTES["/api/video/playurl"]
+    assert handler is srv.Handler.post_video_playurl
+
+    f = Fake()
+    handler(f, {"id": vid})
+    assert f.sent == (200, {"url": "https://cdn.example/15186552/1080.mp4?_lsu_sa_=t10",
+                            "kind": "mp4"})
+    # The id is a file name, so a path in it is cut down to the last part.
+    f = Fake()
+    handler(f, {"id": "../../" + vid})
+    assert f.sent[0] == 200
+
+    # What the site refused with is a 502 and not a 500: the request was fine,
+    # the answer came from somewhere else.
+    def refuse(no, audio=False):
+        raise chzzk.ChzzkError(f"chzzk gave no playable file for recording {no}")
+
+    monkeypatch.setattr(chzzk, "resolve", refuse)
+    f = Fake()
+    handler(f, {"id": vid})
+    assert f.sent[0] == 502 and "no playable file" in f.sent[1]["error"]

@@ -198,6 +198,7 @@ Keeping the server in Python is favourable for reusing hayamimi. Whether the fro
 | R1.1 YouTube address input and flow branching | ✅ | the server decides whether it is live and splits automatically |
 | R1.2 direct m3u8 input | ✅ | on-screen playback through hls.js too (2026-08-30) |
 | R1.5 Twitch live | ✅ | 2026-08-30. Official Embed JS, `parent=localhost\|127.0.0.1` |
+| chzzk live and recordings | ✅ | 2026-09-14. chzzk publishes no embed, so the page plays the manifest the server resolved. Recordings (`/video/<n>`) are resolved from chzzk's own endpoints, because yt-dlp cannot read many of their manifests (`chzzk.py`, `measurements/RESULTS.md` section 53) |
 | R1.6 multiview | ✅ | 2026-08-30. Reader thread + 30-second ring + focus episodes (`live.py`), tiles and adapters (`web/app/tiles.js`, `adapters.js`) |
 | R1.4 telling the user why it failed | ✅ | |
 | R2.1 hayamimi local transcription | ✅ | VOD at 38~88x |

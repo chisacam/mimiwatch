@@ -1469,3 +1469,73 @@ talk profile, VAD 0.3, the same path as the server
 
 **Conclusion: section 51's provisional mark is lifted.** On a broadcast sample
 too, refinement (with the re-split) makes the subtitles better.
+
+# A chzzk recording, without yt-dlp (2026-09-14)
+
+chzzk broadcasts had already shipped, and yt-dlp resolves those, so a recording
+(`chzzk.naver.com/video/<n>`) was expected to be the same address with a
+different path in it. It is not. Measured with yt-dlp 2026.08.19 and with
+master of the same day.
+
+## 53. yt-dlp cannot open the recordings we need, so they are resolved from chzzk's own endpoints
+
+Three recordings were sampled.
+
+| Recording | Shape | Length | yt-dlp |
+|---|---|---|---|
+| `5242545` | upload, `vodStatus` `ABR_HLS` | 68 s | opens it |
+| `15050677` | replay, `liveRewindPlaybackJson` | 1562 s | opens it (HLS) |
+| `15186552` | replay, `vodStatus` `ABR_HLS` | 25337 s | **`KeyError('sourceURL')`** |
+
+**The failure is structural, not a passing breakage.** `ABR_HLS` sends yt-dlp
+down the DASH path, and `yt_dlp/extractor/common.py` reads
+`initialization.attrib['sourceURL']` unconditionally. chzzk writes
+`<Initialization range="0-76870"/>` with no such attribute, so the whole
+extraction dies -- even though three usable progressive representations sit in
+the same manifest. Making that one read tolerant moves the failure one line on
+to `KeyError('media')`, because the `<SegmentURL>` entries are byte ranges too.
+Carrying that on yt-dlp's DASH side is real work, not a patch we can hold, and
+master had neither fix on the day. (The 68-second upload is `ABR_HLS` as well
+and yt-dlp opened it; what differs was not chased, because the route taken does
+not depend on it.) **The recording handed over to test with was exactly the
+shape yt-dlp cannot open**, which is what settles the question.
+
+So a recording is resolved from the two endpoints the web player itself uses
+(`chzzk.py`). What comes back is more than `-j` gave us: a real thumbnail and
+the channel id.
+
+**The address expires.** The rewind playlist is signed `hdntl=exp=<unix>`, 17
+hours out when measured, and the progressive file carries a `_lsu_sa_` token of
+its own. So it is never stored -- the page asks for one when it is about to
+play, the same rule the live side already had (`live.play_url`).
+
+**Nothing is proxied.** Both media hosts answer
+`access-control-allow-origin: *`, and the progressive file answers `206` with
+`accept-ranges: bytes`, so the browser plays either one directly.
+
+**The rewind is a recording to a player, not a live edge.** It is an HLS master
+of five renditions with `EXT-X-ENDLIST` present, and the `EXTINF` total is
+1562.2 s against the API's `duration` of 1562 -- so it seeks over its whole
+length.
+
+**Sound is identical in every rendition and video is not**, so transcription
+takes the cheapest one. On a seven-hour broadcast the 144p progressive file is
+565 MB against 26 GB for 1080p. ffmpeg seeks into that 565 MB file over HTTP
+and pulls 10 s of 16 kHz mono PCM from the one-hour mark in **2.3 s** -- the
+`moov` atom is at the front, so reaching the middle downloads nothing whole.
+
+**Fragments eight at a time (`-N 8`).** A rewind is an HLS playlist of
+two-second pieces, and fetching them one after another is round trips, not
+bandwidth.
+
+| Audio of | Fragments | Default | `-N 8` |
+|---|---|---|---|
+| a 26-minute chzzk rewind | 782 | 188.4 s | **5.6 s** |
+| a YouTube VOD (one audio file) | none | 3.8 s | 3.5 s |
+
+It costs nothing where there is nothing to spread, which is why it is passed
+for every download rather than for chzzk alone.
+
+**End to end on this branch**: `probe` answers in 0.2~0.3 s, and `fetch_audio`
+produced 68.1 s of audio for `5242545` and 1563.2 s for `15050677` (the API
+said 1562).

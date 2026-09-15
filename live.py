@@ -202,6 +202,27 @@ _TWITCH_LOGIN = re.compile(r"twitch\.tv/(?!videos/)([A-Za-z0-9_]+)", re.I)
 _M3U8 = re.compile(r"\.m3u8(\?|$)", re.I)
 
 
+def play_url_of(d: dict) -> str:
+    """The HLS the browser can play, out of a yt-dlp `-j` result.
+
+    Only for a site with no embed of its own. YouTube and Twitch are put on the
+    screen through their own players, so the picture never comes from here; chzzk
+    has no embed, and its manifests answer `access-control-allow-origin: *`
+    (measured), so the page can hold the same m3u8 the server is transcribing.
+
+    The plain rendition is preferred over the low-latency one: `hls-ll-*` is a
+    partial-segment stream, and hls.js is fussier about those than about the
+    ordinary playlist, which is the wrong thing to be adventurous about for a
+    picture that only has to stay in step with the subtitles.
+    """
+    fmts = [f for f in (d.get("formats") or [])
+            if f.get("url") and str(f.get("protocol") or "").startswith("m3u8")]
+    if not fmts:
+        return ""
+    plain = [f for f in fmts if "-ll-" not in str(f.get("format_id") or "")]
+    return max(plain or fmts, key=lambda f: f.get("height") or 0)["url"]
+
+
 def site_of(d: dict, url: str = "") -> dict:
     """Pick out of a yt-dlp `-j` result only what the UI needs for embedding.
 
@@ -210,22 +231,31 @@ def site_of(d: dict, url: str = "") -> dict:
     Twitch id is a numeric stream number, and putting it in the YouTube player shows
     nothing.
 
-      site     "youtube" | "twitch" | "other"
-      channel  the Twitch login name (the embed finds the channel by it). Empty elsewhere
+      site     "youtube" | "twitch" | "chzzk" | "other"
+      channel  the Twitch login name (the embed finds the channel by it), or the
+               channel id on YouTube and chzzk. Empty elsewhere
       video_id yt-dlp's id as it is (the video id on YouTube)
+      play_url the HLS for a site with no embed. Empty where the site has one
     """
     key = (d.get("extractor_key") or d.get("extractor") or "").lower()
     dom = (d.get("webpage_url_domain") or "").lower()
     vid = d.get("id") or ""
     if key.startswith("youtube") or "youtube" in dom or "youtu.be" in dom:
-        return {"site": "youtube", "video_id": vid, "channel": d.get("channel_id") or ""}
+        return {"site": "youtube", "video_id": vid,
+                "channel": d.get("channel_id") or "", "play_url": ""}
+    # chzzk has no embeddable player, so the page plays the manifest itself.
+    # The channel is the hex id, which is also the video id on a live address --
+    # the same shape YouTube has, and unlike Twitch, where it is a login name.
+    if key.startswith("chzzk") or "chzzk.naver.com" in dom:
+        return {"site": "chzzk", "video_id": vid,
+                "channel": d.get("channel_id") or "", "play_url": play_url_of(d)}
     if key.startswith("twitch") or "twitch" in dom or "twitch.tv/" in (url or "").lower():
         login = d.get("uploader_id") or d.get("display_id") or ""
         if not login:
             m = _TWITCH_LOGIN.search(url or "")
             login = m.group(1) if m else ""
-        return {"site": "twitch", "video_id": vid, "channel": login.lower()}
-    return {"site": "other", "video_id": vid, "channel": ""}
+        return {"site": "twitch", "video_id": vid, "channel": login.lower(), "play_url": ""}
+    return {"site": "other", "video_id": vid, "channel": "", "play_url": ""}
 
 
 def looks_like_m3u8(url: str) -> bool:
@@ -367,6 +397,26 @@ def media_base_from(pdt: str | None, release_ts: float | None,
     except Exception:
         return 0.0
     return max(0.0, (first - release_ts) + window_s)
+
+
+def continue_base(from_playlist: float, resume_from: float) -> float:
+    """Where a resumed session's media clock starts.
+
+    `media_base_from` needs the broadcast's start time, and not every site has
+    one to give. chzzk's `timestamp` is *later* than its own PROGRAM-DATE-TIME
+    (measured: 10:59:02Z against 05:53:17Z), so the subtraction goes negative and
+    clamps to 0 -- on the first reception and on every resume alike. The resumed
+    session then numbered its lines from zero again, and because the panel sorts
+    by time, they were wedged in among the lines already there rather than added
+    after them.
+
+    Where the playlist cannot say, the session's own record can. A resumed clock
+    never starts earlier than where that session left off. A first reception has
+    no `resume_from`, and keeps whatever the playlist said.
+    """
+    if not resume_from:
+        return from_playlist
+    return max(from_playlist, resume_from)
 
 
 # Which final lines a refined line absorbed must not be decided by whether the
@@ -543,8 +593,12 @@ class LiveSession:
         self._focus = threading.Event()
         self._focus.set()
         self.group = ""             # multiview bundle id. Empty means a session receiving alone
-        self.site = ""              # "youtube" | "twitch" | "other" (site_of). Picks the embed
-        self.channel = ""           # the Twitch login name
+        self.site = ""              # "youtube" | "twitch" | "chzzk" | "other" (site_of)
+        self.channel = ""           # the Twitch login name, or the channel id elsewhere
+        # Only for a site with no embed (chzzk). It carries a token that expires, so
+        # it is handed out on the one-shot paths and not on the per-line status --
+        # that one is published for every subtitle line and saved with each of them.
+        self.play_url = ""
         self._warm_persisted_s = 0.0   # the _recv_s at the last status write while on standby
         self._asr = None            # released on stop; see _release()
         # The recogniser object is let go when the session ends, but which engine
@@ -610,7 +664,7 @@ class LiveSession:
                 return None
             return [(seq, data) for seq, data in self._elog if seq > last]
 
-    def status(self) -> dict:
+    def status(self, detail: bool = False) -> dict:
         return {"id": self.id, "state": self.state, "error": self.error,
                 "title": self.title, "title_by_user": self.title_by_user,
                 "url": self.url, "video_id": self.video_id,
@@ -640,7 +694,9 @@ class LiveSession:
                 "channel_key": self.channel_key,
                 "glossary": self.glossary_name,
                 "elapsed": round(time.time() - self.started, 1),
-                "lines": self.lines, "translated": self.translated}
+                "lines": self.lines, "translated": self.translated,
+                # Asked for when a screen attaches, not on every line.
+                **({"play_url": self.play_url} if detail else {})}
 
     def _persist(self):
         st = self.status()
@@ -1329,7 +1385,9 @@ class LiveSession:
                 src, start_index = self._resolve_hls()
                 if src is None:
                     return      # _resolve_hls has already reported the error
-                self.media_base = self._recv_base   # no thread yet, so just copy it
+                # no thread yet, so just copy it
+                self._recv_base = continue_base(self._recv_base, self.resume_from)
+                self.media_base = self._recv_base
             else:
                 # Tab audio has neither a full playlist nor a broadcast time to
                 # line up with. The moment the user is listening to is 0 seconds
@@ -1394,6 +1452,7 @@ class LiveSession:
             self.video_id = d.get("id", "") or ""
             info = site_of(d, self.url)
             self.site, self.channel = info["site"], info["channel"]
+            self.play_url = info.get("play_url") or ""
             self._sync_glossary()
             # yt-dlp's generic extractor does not know whether a raw m3u8 is live
             # (is_live is None). The user entered it as live, so unknown counts as
@@ -1928,6 +1987,35 @@ def notify_drop(owner: str, cue_id: int):
         s.emit({"type": "drop", "id": int(cue_id)})
 
 
+def clear_cues(session_id: str) -> dict:
+    """Throw away a running session's subtitles without ending the session.
+
+    `_recent` and `_text_of` are owned by `_publish_locked`, so the clearing
+    happens under the same lock -- emptied from outside it, a line arriving at
+    the same moment lands in a record that is being swept out from under it.
+
+    `_seq` is deliberately **not** reset. The event log still holds the cleared
+    lines under the ids they were handed, and a client that reconnects with
+    `Last-Event-ID` replays them; handing the same ids out again would collide
+    the replayed lines with the new ones, under one id each.
+    """
+    s = get(session_id)
+    if s is None:
+        return {"error": "no such live session"}
+    store.replace_cues(s.id, [])
+    with s._pub_lock:
+        s._recent.clear()
+        s._text_of.clear()
+        s.lines = 0
+        s.translated = 0
+    # The screens hold their own copy of the list, so emptying the table is not
+    # enough -- without this the lines stay on the page until it is reloaded.
+    s.emit({"type": "clear"})
+    s.emit({"type": "status", **s.status()})
+    s._persist()
+    return {"ok": True, "cleared": True}
+
+
 def feed(session_id: str, raw: bytes) -> dict:
     """Put one block of tab audio the browser uploaded into the session."""
     s = get(session_id)
@@ -1996,7 +2084,7 @@ def get(session_id: str) -> LiveSession | None:
 def status_of(session_id: str) -> dict | None:
     s = get(session_id)
     if s is not None:
-        return s.status()
+        return s.status(detail=True)
     return store.session(session_id)
 
 
@@ -2012,7 +2100,7 @@ def recent(limit: int = 50) -> list[dict]:
     `?limit=`.
     """
     with _lock:
-        live_now = {sid: s.status() for sid, s in _sessions.items()}
+        live_now = {sid: s.status(detail=True) for sid, s in _sessions.items()}
     out = []
     for row in store.sessions(limit):
         out.append({**row, **live_now.get(row["id"], {})})
@@ -2087,6 +2175,70 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     s._tr = mw_translate.build(spec, s.genre, s._glossary_terms)
     s.backend_id = backend_id
     return {"backend": backend_id}
+
+
+def play_url(session_id: str) -> dict:
+    """A manifest the page can play for a session, resolved now.
+
+    It is not kept with the session, because it carries a token that expires;
+    a stored one would be handed to the player as a URL that answers 403. So a
+    screen that needs a picture asks for a fresh one, which costs a yt-dlp call
+    and only happens when a tile is actually being seated.
+
+    Only for a site with no embed of its own. YouTube and Twitch put themselves
+    on screen, and tab audio has no picture to find.
+    """
+    s = get(session_id)
+    url = s.url if s is not None else (store.session(session_id) or {}).get("url") or ""
+    if not url:
+        return {"error": "no such session"}
+    try:
+        out = subprocess.run(stream.ytdlp_args("-j", url=url),
+                             capture_output=True, text=True,
+                             timeout=stream.YTDLP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return {"error": "yt-dlp did not answer in time"}
+    if out.returncode != 0:
+        return {"error": (out.stderr or "").strip()[:200] or "could not resolve the address"}
+    try:
+        d = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return {"error": "could not read what yt-dlp said"}
+    found = play_url_of(d)
+    if not found:
+        return {"error": "that address has no manifest this page can play"}
+    if s is not None:
+        s.play_url = found
+    return {"url": found}
+
+
+def reload_glossary(channel_key: str) -> list[str]:
+    """Put a changed glossary into the sessions already running on that channel.
+
+    The terms are rendered into the prompt when the translator is built, so a
+    glossary saved mid-session used to wait for the next build -- a reconnect,
+    or an engine swap. A term picked off a subtitle is a request about the line
+    after this one, so the translator is rebuilt here, the same way set_backend
+    does it. Lines already published keep the translation they were given.
+
+    Returns the sessions it reached, so the screen can say whether the term is
+    in effect now or only from the next build.
+    """
+    if not (channel_key or "").strip():
+        return []
+    done = []
+    for s in list(_sessions.values()):
+        if s.channel_key != channel_key or s._tr is None:
+            continue
+        spec = config.find_backend(s.backend_id)
+        if spec is None:
+            # Building on a missing spec drops the session to M2M-100 without
+            # saying so. Leave the translator alone and do not claim it applied.
+            continue
+        s._sync_glossary()
+        s._tr = mw_translate.build(spec, s.genre, s._glossary_terms)
+        done.append(s.id)
+    return done
 
 
 def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",

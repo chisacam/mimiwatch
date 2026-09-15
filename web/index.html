@@ -3,6 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mimiwatch</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
 <body>
 
@@ -16,12 +17,25 @@
 
   <div class="now">
     <b id="now-title" data-i18n="header.now.empty"></b>
+    <!-- The mark for a name the viewer gave. A sibling of the title rather than
+         part of it: the title clips with an ellipsis, and a name long enough to
+         clip is the one whose provenance is worth showing. -->
+    <span id="now-renamed" class="now-renamed" hidden
+          data-i18n-attr="title:header.renamed.title">✎</span>
     <!-- Tab audio carries no title to take. Chrome puts an opaque identifier in
          the track label rather than the tab title (measured). So the name has
          to be fixable afterwards. -->
     <button id="rename-live" class="seg" hidden data-i18n="header.rename"
             data-i18n-attr="title:header.rename.title"></button>
-    <div id="live-badge" class="live-badge" hidden>● LIVE <button id="live-stop" data-i18n="header.live.stop"></button></div>
+    <div id="live-badge" class="live-badge" hidden>
+      <span>● LIVE</span>
+      <button id="live-menu-btn" class="seg" aria-haspopup="true" aria-expanded="false"
+              data-i18n-attr="title:live.menu.title">⋮</button>
+      <div id="live-menu" class="menu" hidden>
+        <button id="live-clear-cues" class="seg" data-i18n="live.clearCues"></button>
+        <button id="live-stop" class="seg" data-i18n="header.live.stop"></button>
+      </div>
+    </div>
   </div>
 
   <!-- Job status goes at the top. It used to float at the bottom right, where
@@ -139,6 +153,7 @@
             <div class="cue-src"></div>
           </div>
           <div class="tile-bar">
+            <span class="tile-key-hint" hidden></span>
             <span class="tile-site"></span>
             <span class="tile-title"></span>
             <span class="tile-state"></span>
@@ -473,12 +488,40 @@
       <p class="hint" data-i18n="settings.setup.hint"></p>
     </section>
 
+    <!-- Login cookies, one row per site. YouTube's are handed over by the
+         extension; chzzk's are pasted, because the login belongs to Naver and
+         reading it would mean giving the extension the run of naver.com. -->
     <section class="engine-group" id="cookies-group">
       <div class="group-head">
         <h4 data-i18n="settings.cookies.title"></h4>
-        <button id="cookies-delete" class="seg danger" hidden data-i18n="settings.cookies.delete"></button>
+      </div>
+      <p class="hint" id="cookies-env" hidden data-i18n="engines.cookies.env"></p>
+      <div class="engine-list">
+        <div class="engine-row">
+          <div class="name"><span data-i18n="settings.cookies.site.youtube"></span>
+            <span class="meta" id="cookies-youtube-state"></span></div>
+          <button id="cookies-youtube-delete" class="danger" hidden
+                  data-i18n="settings.cookies.delete"></button>
+        </div>
+        <div class="engine-row">
+          <div class="name"><span data-i18n="settings.cookies.site.chzzk"></span>
+            <span class="meta" id="cookies-chzzk-state"></span></div>
+          <button id="cookies-chzzk-delete" class="danger" hidden
+                  data-i18n="settings.cookies.delete"></button>
+        </div>
       </div>
       <p class="hint" id="cookies-hint" data-i18n="settings.cookies.hint"></p>
+      <label><span data-i18n="settings.cookies.chzzk.paste"></span>
+        <textarea id="cookies-chzzk-text" rows="4" spellcheck="false"
+                  data-i18n-attr="placeholder:settings.cookies.chzzk.placeholder"></textarea>
+        <small data-i18n="settings.cookies.chzzk.hint"></small>
+      </label>
+      <div class="row">
+        <span class="grow"></span>
+        <button type="button" id="cookies-chzzk-save" class="seg"
+                data-i18n="settings.cookies.save"></button>
+      </div>
+      <p class="hint" id="cookies-error" hidden></p>
     </section>
 
     <section class="engine-group" id="update-group">
@@ -490,6 +533,10 @@
       <label><span data-i18n="update.token"></span>
         <input id="update-token" type="password" autocomplete="off" spellcheck="false"
                data-i18n-attr="placeholder:update.token.ph">
+        <!-- It is written to this browser on every keystroke, which is fine and
+             was invisible: the field looked like something still waiting to be
+             submitted. This line is the receipt. -->
+        <small id="update-token-state"></small>
       </label>
       <p class="hint" data-i18n="update.token.hint"></p>
     </section>
@@ -517,7 +564,7 @@
        transcription it has to be a GGUF transcribe.cpp reads, for translation a
        chat model llama.cpp reads -- which only shows once it has been downloaded
        and first used. -->
-  <form id="model-form" hidden>
+  <form id="model-form" class="settings-form" hidden>
     <div class="dlg-head">
       <h3 data-i18n="model.title"></h3>
       <button type="button" id="model-form-back" class="seg" data-i18n="model.back"></button>
@@ -550,7 +597,7 @@
     </div>
   </form>
 
-  <form id="engine-form" hidden>
+  <form id="engine-form" class="settings-form" hidden>
     <div class="dlg-head">
       <h3 id="form-title" data-i18n="engine.title"></h3>
       <button type="button" id="form-back" class="seg" data-i18n="engine.back"></button>
@@ -576,13 +623,22 @@
 
   <!-- One channel's glossary: a name, the key it is looked up by, and the
        terms, one line each. docs/GLOSSARY.md. -->
-  <form id="glossary-form" hidden>
+  <form id="glossary-form" class="settings-form" hidden>
     <div class="dlg-head">
       <h3 id="glossary-form-title" data-i18n="settings.glossary.form.add"></h3>
       <button type="button" id="glossary-form-back" class="seg" data-i18n="settings.glossary.form.back"></button>
     </div>
     <label><span data-i18n="settings.glossary.form.name"></span> <input name="name" required data-i18n-attr="placeholder:settings.glossary.form.namePlaceholder"></label>
-    <label><span data-i18n="settings.glossary.form.key"></span> <input name="key" data-i18n-attr="placeholder:settings.glossary.form.keyPlaceholder">
+    <!-- The key is the whole game: a name typed here keys as manual:name, and a
+         live session never derives that shape, so such a glossary is never
+         looked up. The button fills in the key of whatever is open, which is
+         the one the lookup will actually use. -->
+    <label><span data-i18n="settings.glossary.form.key"></span>
+      <span class="row">
+        <input name="key" class="grow" data-i18n-attr="placeholder:settings.glossary.form.keyPlaceholder">
+        <button type="button" id="glossary-form-current" class="seg"
+                data-i18n="settings.glossary.form.current"></button>
+      </span>
       <small data-i18n="settings.glossary.form.keyHint"></small>
     </label>
     <label><span data-i18n="settings.glossary.form.terms"></span>
@@ -595,6 +651,40 @@
       <span class="grow"></span>
       <button type="button" id="glossary-form-delete" class="seg danger" data-i18n="settings.glossary.form.delete"></button>
       <button type="submit" class="primary" data-i18n="settings.glossary.form.save"></button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Picking a word out of a subtitle. The button follows the selection in the
+     script panel; the dialog is where the pair is finished. `position:fixed`,
+     so it sits at the top level rather than inside the panel that scrolls. -->
+<button id="glossary-pick" class="seg" hidden
+        data-i18n="panel.glossary.pick"></button>
+
+<dialog id="glossary-term-dialog">
+  <form id="glossary-term-form" class="settings-form">
+    <div class="dlg-head">
+      <h3 data-i18n="panel.glossary.title"></h3>
+    </div>
+    <p class="hint" id="glossary-term-channel"></p>
+    <label><span data-i18n="panel.glossary.from"></span>
+      <input name="from" required autocomplete="off" spellcheck="false">
+    </label>
+    <label><span data-i18n="panel.glossary.to"></span>
+      <input name="to" required autocomplete="off" spellcheck="false">
+    </label>
+    <!-- The light default translator has nowhere to put a prompt, so the
+         glossary reaches it nowhere. Saying so here is the difference between
+         a setting that waits for a better engine and one that silently does
+         nothing. -->
+    <p class="hint" id="glossary-term-note" hidden></p>
+    <p class="hint" id="glossary-term-result" hidden></p>
+    <p class="hint" id="glossary-term-error" hidden></p>
+    <div class="row">
+      <span class="grow"></span>
+      <button type="button" id="glossary-term-close" class="seg"
+              data-i18n="dialog.close"></button>
+      <button type="submit" class="primary" data-i18n="panel.glossary.save"></button>
     </div>
   </form>
 </dialog>

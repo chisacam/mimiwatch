@@ -15,14 +15,30 @@
   "use strict";
 
   const ID = "mimiwatch-overlay";
-  // YouTube swaps the screen out as it navigates (an SPA). The player element
-  // is created afresh on every video change, so it is not held on to but looked
-  // up each time.
-  const findPlayer = () =>
-    document.querySelector("#movie_player") ||
-    document.querySelector(".html5-video-player");
-  const findVideo = () => document.querySelector("video.html5-main-video") ||
-                          document.querySelector("video");
+  // Both sites swap the screen out as they navigate (they are SPAs), so the
+  // player element is made afresh on every video change and is looked up each
+  // time rather than held on to. Which selectors to look up is the site table's
+  // business (ytid.js), not this file's.
+  const siteHere = () => MimiYtId.siteOf(location.href);
+  const findPlayer = () => {
+    const s = siteHere();
+    return s ? document.querySelector(s.player) : null;
+  };
+  const findVideo = () => {
+    const s = siteHere();
+    const named = s && document.querySelector(s.video);
+    if (named) return named;
+    // The site changed its markup, or this is a page the table does not know.
+    // Not `querySelector("video")`: chzzk keeps an ad player in the document at
+    // 0x0, and the order between it and the real one is not fixed, so taking the
+    // first one is a coin toss that shows subtitles against a clock that never
+    // moves. The one with a picture is the one being watched.
+    let best = null;
+    document.querySelectorAll("video").forEach((v) => {
+      if (v.videoWidth > 0 && (!best || v.videoWidth > best.videoWidth)) best = v;
+    });
+    return best;
+  };
 
   const log = (...a) => console.log("[mimiwatch]", ...a);
 
@@ -199,6 +215,7 @@
     if (e.type === "cue") store.upsert(e);
     else if (e.type === "translation") store.translate(e.id, trKey, e.text);
     else if (e.type === "drop") store.drop(e.id);
+    else if (e.type === "clear") store.reset();
     else if (e.type === "status") {
       live = true;
       receiving = ["starting", "loading", "running"].includes(e.state);

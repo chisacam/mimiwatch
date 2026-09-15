@@ -102,6 +102,10 @@ function onSessionChanged(m) {
       tile.live.lastStatus = { ...(tile.live.lastStatus || {}), ...m };
     }
     updateTileBar(tile);
+    // If this is the focused tile, update the now-title with user-renamed flag
+    if (tile === focusedTile()) {
+      setNowTitle(m.title, m.title_by_user);
+    }
   }
   if (m.deleted) {
     if (row) row.remove();

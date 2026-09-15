@@ -25,13 +25,62 @@ say() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 say "Build virtual environment ($VENV)"
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
-# For macOS arm64 the maintainer's index has a Metal wheel (0.3.35, py3-none). Take
-# that first and skip the source build (cmake, 5-10 minutes). Without it the
-# requirements install below builds it from source.
+# llama-cpp-python on Apple Silicon. The source build takes minutes (cmake, all of
+# llama.cpp), so a wheel is worth having -- but the maintainer's prebuilt Metal
+# wheels cannot be relied on. 0.3.33, 0.3.34 and 0.3.35 each fail a CRC check, on a
+# different member every time, and two downloads of 0.3.35 come back byte for byte
+# identical: the published files are damaged, and no amount of retrying or caching
+# fixes a file that is wrong at the source. The v0.6.0 build spent 2m35s of its
+# 3m33s on the fallback while the log claimed there was no wheel at all.
+#
+# So: keep a wheel of our own. Look in the wheelhouse first, then upstream, and
+# only build one when neither gives something whole -- and keep that build, so the
+# next run does not repeat it. CI keeps the directory between runs; on a developer
+# machine it simply persists.
+#
+# Everything is checked before it is trusted, ours included. That check is the one
+# thing that would have found this in the first place.
+WHEELHOUSE="${MIMIWATCH_WHEELHOUSE:-$ROOT/.wheels}"
+
+whole() {
+  [ -f "$1" ] && python3 -c \
+    'import sys,zipfile; sys.exit(1 if zipfile.ZipFile(sys.argv[1]).testzip() else 0)' \
+    "$1" 2>/dev/null
+}
+# `|| true` is load-bearing. Under `set -euo pipefail` a command substitution
+# whose pipeline fails takes the script with it, and `ls` fails whenever the
+# wheelhouse is empty -- which is exactly the first run. That killed the macOS
+# job 17s in, one line after the heading it had just printed.
+newest_wheel() { ls -t "$WHEELHOUSE"/llama_cpp_python-*.whl 2>/dev/null | head -1 || true; }
+
 if [ "$(uname)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-  "$VENV/bin/pip" install -q --only-binary=:all: \
-    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal llama-cpp-python \
-    && echo "  llama-cpp-python: Metal wheel" || echo "  llama-cpp-python: no Metal wheel, building from source"
+  say "llama-cpp-python (Metal)"
+  mkdir -p "$WHEELHOUSE"
+  kept="$(newest_wheel)"
+  if whole "$kept"; then
+    "$VENV/bin/pip" install -q "$kept"
+    echo "  from the wheelhouse: $(basename "$kept")"
+  else
+    if [ -n "$kept" ]; then
+      echo "  the kept wheel is damaged, dropping it"
+      rm -f "$WHEELHOUSE"/llama_cpp_python-*.whl
+    fi
+    dl_log="$(mktemp)"
+    if "$VENV/bin/pip" download -q --only-binary=:all: --no-deps -d "$WHEELHOUSE" \
+         --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal \
+         llama-cpp-python >"$dl_log" 2>&1 && whole "$(newest_wheel)"; then
+      "$VENV/bin/pip" install -q "$(newest_wheel)"
+      echo "  from upstream: $(basename "$(newest_wheel)")"
+    else
+      rm -f "$WHEELHOUSE"/llama_cpp_python-*.whl
+      echo "  no whole wheel upstream; building one and keeping it. Why it was not usable:"
+      tail -6 "$dl_log" | sed 's/^/    /'
+      "$VENV/bin/pip" wheel -q --no-deps -w "$WHEELHOUSE" llama-cpp-python
+      "$VENV/bin/pip" install -q "$(newest_wheel)"
+      echo "  built and kept: $(basename "$(newest_wheel)")"
+    fi
+    rm -f "$dl_log"
+  fi
 fi
 "$VENV/bin/pip" install -q -r "$ROOT/requirements.txt" -r "$HERE/requirements-build.txt"
 "$VENV/bin/pip" install -q -U "yt-dlp[default]" transcribe-cpp

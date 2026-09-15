@@ -131,15 +131,39 @@ def main():
     # the popup's "server" field.
     check(any(h in ("http://localhost/*", "http://127.0.0.1/*") for h in hosts),
           f"the local server is reachable on any port ({hosts})")
-    # The YouTube host permission is needed for tabs.sendMessage -- activeTab
-    # only grants it at the moment the popup is clicked. Apart from those two,
-    # it must reach nowhere at all.
-    ALLOWED = ("http://localhost/", "http://127.0.0.1/", "https://www.youtube.com/")
+    # A site's host permission is needed for tabs.sendMessage -- activeTab only
+    # grants it at the moment the popup is clicked. Apart from the local server
+    # and the sites subtitles are laid on, it must reach nowhere at all.
+    SITES = ("https://www.youtube.com/", "https://chzzk.naver.com/")
+    ALLOWED = ("http://localhost/", "http://127.0.0.1/") + SITES
     stray = [h for h in hosts if not any(h.startswith(a) for a in ALLOWED)]
     check(not stray, f"nothing is opened outside the allowed hosts ({stray or 'none'})")
     matches = [x for cs in m.get("content_scripts", []) for x in cs.get("matches", [])]
-    check(matches and all("youtube.com" in x for x in matches),
-          f"it runs on YouTube only ({matches})")
+    check(matches and all(any(x.startswith(a) for a in SITES) for x in matches),
+          f"it runs only on the sites it lays subtitles on ({matches})")
+    # The manifest and the site table (ytid.js) have to name the same sites, and
+    # a site in one but not the other fails quietly: either the content script is
+    # injected into a page the table cannot identify, so the popup locks its own
+    # buttons with no reason given, or the table describes a player the script is
+    # never let near.
+    table = open(os.path.join(EXT, "ytid.js"), encoding="utf-8").read()
+    for site in SITES:
+        host = site.split("//", 1)[1].rstrip("/")
+        check(host in table, f"the site table knows {host}")
+    # A chzzk recording's id is spelled out twice -- the server builds it in
+    # transcribe_vod.probe_chzzk and the site table pulls the same string out of
+    # the address -- and the two are compared for equality, not merely used side
+    # by side: the popup hands the server's id to the content script, which
+    # measures it against the table's on every navigation. A prefix changed on
+    # one side only takes the overlay down the moment the page moves, with
+    # nothing on screen to say why. So the prefix is read off the server rather
+    # than written here, and the table has to carry the same one.
+    vodsrc = open(os.path.join(HERE, "transcribe_vod.py"), encoding="utf-8").read()
+    pre = re.search(r'"id":\s*"([a-z]+-)"\s*\+\s*no', vodsrc)
+    check(pre is not None, "the server prefixes a chzzk recording id (transcribe_vod)")
+    if pre:
+        check(f'"{pre.group(1)}"' in table,
+              f"the site table builds the same chzzk recording id ({pre.group(1)}<n>)")
     # tabCapture is used in stage 3. It need not be there yet, but note it if it is.
     print(f"  ----  permissions: {', '.join(m.get('permissions', [])) or '(none)'}")
 
@@ -175,6 +199,19 @@ def main():
             src = open(os.path.join(folder, name), encoding="utf-8").read()
             check(balanced(src), f"{os.path.relpath(os.path.join(folder, name), HERE)} has balanced brackets and quotes")
 
+    # Every adapter is discarded by having destroy() called on it, and every
+    # adapter's mount waits part way through. An adapter whose destroy does not
+    # say so leaves its own mount no way to find out, and the mount comes back
+    # from its wait and seats a player in a tile that has moved on -- which is
+    # how a resumed broadcast ended up with the last YouTube embed watched on
+    # top of it, seconds late. The rule is one line per adapter, so it is
+    # cheap to forget when the next adapter is written and cheap to check here.
+    adapters = open(os.path.join(WEB, "app", "adapters.js"), encoding="utf-8").read()
+    destroys = len(re.findall(r"^  a\.destroy = \(\) => \{", adapters, re.M))
+    marks = len(re.findall(r"^    a\.dead = true;", adapters, re.M))
+    check(destroys > 0 and marks == destroys,
+          f"every adapter's destroy marks it discarded ({marks} of {destroys})")
+
     print("\n[6] the transcript in the chat slot")
     if os.path.exists(os.path.join(EXT, "panel.js")):
         js = [x for cs in m.get("content_scripts", []) for x in cs.get("js", [])]
@@ -183,7 +220,13 @@ def main():
               "it is loaded before content.js (which uses MimiPanel)")
         pan = open(os.path.join(EXT, "panel.js"), encoding="utf-8").read()
         check("MimiPanel" in pan, "it exposes MimiPanel")
-        check("#secondary" in pan, "it finds YouTube's right-hand column")
+        # The column and the chat moved into the site table (ytid.js). What has
+        # to hold is still that the log knows where to go on a site that offers
+        # it, so the check follows it there instead of looking for a selector
+        # spelled out in this file.
+        check("MimiYtId.siteOf" in pan, "it takes its column from the site table")
+        table = open(os.path.join(EXT, "ytid.js"), encoding="utf-8").read()
+        check("#secondary" in table, "the table names YouTube's right-hand column")
         check("hidden.style.display" in pan or 'hidden.style.display = ""' in pan,
               "it puts the hidden chat back")
         css = open(os.path.join(EXT, "overlay.css"), encoding="utf-8").read()

@@ -70,6 +70,8 @@ reasoning.
 | 표본 / 절 | sample / section |
 | 문턱 / 손잡이 | threshold / knob |
 | 되쪼개기 | re-split |
+| 시어집 / 시어 | glossary / term |
+| 원어 → 번역 | source → target |
 | 테스트 | test |
 
 `measurements/RESULTS.md` is English too, with `RESULTS.ko.md` beside it. Its
@@ -140,6 +142,7 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 | `stream.py` | VAD → transcribe → refine loop (ported from hayamimi), yt-dlp cookie config |
 | `tcpp_asr.py` / `asr.py` | transcribe.cpp GGUF adapter; OpenAI-compatible remote ASR (VOD chunked, live per-utterance) |
 | `transcribe_vod.py` | VOD → timestamped cues; CLI calls `jobs.start_transcribe` (same path as the server) |
+| `chzzk.py` | chzzk recordings (`chzzk.naver.com/video/<n>`) resolved from chzzk's own endpoints instead of yt-dlp: metadata, a play URL that expires, the cheapest rendition for transcription |
 | `translate.py` | Translation backends behind one interface: local Gemma (default), M2M-100 (CT2, CPU), OpenAI-compatible; genre prompts |
 | `jobs.py` | Background VOD transcription and (re)translation; the single translate loop |
 | `store.py` | SQLite (`data/mimiwatch.db`): jobs/sessions as JSON blobs, cues as a real table; one locked connection |
@@ -171,6 +174,19 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 - Default engines are the light CPU pair (SenseVoice Small + M2M-100); the
   quality pair (whisper-large-v3-turbo + Gemma 4) is opt-in. Do not flip the
   default; the reasoning is in `measurements/RESULTS.md` §33–34.
+- Models load on first use and nothing is pre-warmed, and that is settled, not
+  an oversight. Which engines are the default is per-user, and which of them a
+  given start actually needs is not known until something is opened -- a thread
+  that loads them at startup spends that cost on someone who came to look at
+  the library. It was added and taken out again (`de388fd`); do not re-propose
+  it as an obvious win.
+- The channel glossary goes into the translation prompt and is not marked on
+  screen, also settled. Underlining the terms in the finished translation was
+  tried and removed (`837de5d`): a substring match over the output cannot tell
+  "the model used the term" from "it ignored it" or "it inflected it past
+  recognition", so it marks the one case that needs no marking and stays quiet
+  about the two that do. The wanted direction is the opposite one -- picking a
+  word out of a subtitle on screen and putting it *into* the glossary.
 - Live cues carry only a start time; VOD cues carry ranges. Export invents live
   end times (next cue, max 6 s, min 0.8 s).
 - Refined live lines replace finals under the same cue id. Cue arrays are
@@ -184,5 +200,12 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
   leaves sessions as "중단됨", which is a different state from user stop.
 - yt-dlp lives in `.venv` (system copies go stale and silently return no
   formats). YouTube VODs and cookie-based access need a JS runtime (deno).
+- chzzk recordings are resolved by `chzzk.py`, not by yt-dlp. yt-dlp walks
+  chzzk's DASH manifest and dies on it (`KeyError('sourceURL')`; making that
+  read tolerant only moves the failure one line on), and the recording the
+  owner tests with is exactly that shape. What comes back is signed and expires
+  within the day, so it is resolved when something is about to play and never
+  stored -- the same rule the live side already has (`live.play_url`).
+  `measurements/RESULTS.md` §53.
 - Windows GPU path is Vulkan for every vendor; see `docs/WINDOWS.md` before
   proposing CUDA/ROCm builds.

@@ -31,11 +31,22 @@ function openExport() {
     ? t("export.what.live", { title: tgt.title, n })
     : t("export.what", { title: tgt.title, n });
   syncExportHint();
+
   // Burn-in needs the video file itself. A local file is the only source
   // that has one -- a streamed VOD is transcribed from audio, and the video
   // was never downloaded.
-  $("export-burn").hidden = !(state.doc && state.doc.source === "file"
-    && state.doc.media_path && !state.live);
+  const canBurn = state.doc && state.doc.source === "file"
+    && state.doc.media_path && !state.live;
+  const burnBtn = $("export-burn");
+  if (canBurn) {
+    burnBtn.hidden = false;
+    burnBtn.disabled = false;
+    burnBtn.title = "";
+  } else {
+    burnBtn.hidden = false;
+    burnBtn.disabled = true;
+    burnBtn.title = t("export.burn.disabled.tip");
+  }
   $("export-dialog").showModal();
 }
 

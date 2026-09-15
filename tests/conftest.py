@@ -29,6 +29,13 @@ sys.path.insert(0, ROOT)
 _STUBBED: set[str] = set()
 
 
+def _dies(name):
+    """A stand-in that imports and dies if it is ever really called."""
+    def boom(*a, **k):
+        raise RuntimeError(f"tests do not load models: sherpa_onnx.{name}")
+    return boom
+
+
 def _stub_native():
     try:
         import transcribe_cpp  # noqa: F401
@@ -55,7 +62,18 @@ def _stub_native():
     try:
         import sherpa_onnx  # noqa: F401
     except ImportError:
-        sys.modules["sherpa_onnx"] = types.ModuleType("sherpa_onnx")
+        so = types.ModuleType("sherpa_onnx")
+        # The names the code reaches for have to be **there**, not just the
+        # module: a test installs its own fake with monkeypatch.setattr, and
+        # that raises AttributeError on a name the module does not have. A
+        # bare module passed the import and then failed every speaker test on
+        # the setattr, which reads as "speaker labelling is broken" when what
+        # is missing is the stub. They raise if anything really calls them,
+        # the same way the transcription stub above does.
+        for _name in ("SpeakerEmbeddingExtractor", "SpeakerEmbeddingExtractorConfig",
+                      "VoiceActivityDetector", "VadModelConfig", "SileroVadModelConfig"):
+            setattr(so, _name, _dies(_name))
+        sys.modules["sherpa_onnx"] = so
         _STUBBED.add("sherpa_onnx")
 
 
@@ -69,7 +87,19 @@ _stub_native()
 # side the same content is written out **as files** and handed over on
 # PYTHONPATH. Only the missing ones are written, so on a machine where the
 # runtimes are installed the real ones are used as before.
-_SHERPA_STUB = '"""A fake for tests. Only the name has to exist -- every use site is inside a function."""\n'
+_SHERPA_STUB = '''"""A fake for tests. It imports, and dies if anything actually calls it."""
+
+
+def _dies(name):
+    def boom(*a, **k):
+        raise RuntimeError("tests do not load models: sherpa_onnx." + name)
+    return boom
+
+
+for _name in ("SpeakerEmbeddingExtractor", "SpeakerEmbeddingExtractorConfig",
+              "VoiceActivityDetector", "VadModelConfig", "SileroVadModelConfig"):
+    globals()[_name] = _dies(_name)
+'''
 
 _TCPP_STUB = '''"""A fake transcription runtime for tests. It imports, and dies if anything actually calls it."""
 from .errors import OutputTruncated, UnsupportedRequest   # noqa: F401
@@ -140,10 +170,22 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_db", None)
     monkeypatch.setattr(jobs, "DATA", str(data))
     monkeypatch.setattr(config, "CONFIG", str(tmp_path / "backends.json"))
+    # store.DATA is read at import, so it is set above; burn.py asks paths for
+    # the directory at the moment it makes its scratch folder, and that went to
+    # the real data/ -- on this machine it left folders there, and on a checkout
+    # without one (CI) it was a FileNotFoundError three tests in a row.
+    monkeypatch.setenv("MIMIWATCH_DATA_DIR", str(data))
     store.init()
     models.clear()
     live._sessions.clear()
     yield tmp_path
+    # A job thread outlives the test that started it. `wait_job` returns when the
+    # state turns, and `_note` writes the job to SQLite *after* that, so closing
+    # the connection here raced the thread's last save -- on CI that landed inside
+    # sqlite3 and took the interpreter down with it (segfault in store._write,
+    # run 34806619729). `jobs.wait_idle` is what the server's own shutdown waits
+    # on, for exactly this reason, and it returns at once when nothing is running.
+    jobs.wait_idle(5.0)
     if store._db is not None:
         store._db.close()
         store._db = None

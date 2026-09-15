@@ -1,0 +1,22 @@
+<!-- mimiwatch's mark. 미미 is 耳: the tool listens, and what it leaves behind is
+     subtitles, so the drawing is a screen with ears and two caption bars.
+
+     This file is the master. packaging/make-icons.sh renders everything else from
+     it (the .icns, the .ico, the extension PNGs), so a change here is made once.
+     It is also the page's favicon, served straight out of web/.
+
+     Rectangles, ellipses and a radius, and nothing else: fine bezier work is the
+     first thing to disappear at 16px, which is the size that decides an icon. The
+     bars are 7 units on a 64 grid with a 5 unit gap for the same reason. The
+     colours are the app's own accent and the ink it puts on top of it (web/app.css).
+
+     Note for whoever edits this: XML forbids a double hyphen inside a comment, so
+     the repository's usual dash cannot be used in this one file. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"
+     role="img" aria-label="mimiwatch">
+  <ellipse cx="20" cy="15" rx="7.5" ry="9.5" fill="#5ee0c0" transform="rotate(-16 20 15)"/>
+  <ellipse cx="44" cy="15" rx="7.5" ry="9.5" fill="#5ee0c0" transform="rotate(16 44 15)"/>
+  <rect x="7" y="18" width="50" height="36" rx="11" fill="#5ee0c0"/>
+  <rect x="15" y="27" width="22" height="7" rx="3.5" fill="#04211b"/>
+  <rect x="15" y="39" width="34" height="7" rx="3.5" fill="#04211b"/>
+</svg>

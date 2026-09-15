@@ -46,6 +46,29 @@ function loadScriptOnce(url, isReady) {
 
 let _hostSeq = 0;
 
+/* Every adapter is thrown away by having `destroy` called on it, and every
+ * adapter's `mount` waits part way through -- on the YouTube API, on hls.js, on
+ * Twitch's embed script, on the player's own "ready". Those two met badly.
+ *
+ * `mountTile` takes the old adapter out and empties the element before seating
+ * the next one, but neither reaches into a mount that is already running: it
+ * came back from its wait and carried on, appending into the element it was
+ * handed when it started. So resuming a broadcast showed the picture correctly
+ * and then, seconds later, the YouTube embed of whatever had been watched
+ * before appeared on top of it -- built after the tile had been re-seated, by a
+ * mount that had no way of knowing. `whenApiReady` alone gives that up to ten
+ * seconds to happen in, which is why it arrived so late.
+ *
+ * Reproduced with nothing racing: destroy() during a mount still left an iframe
+ * in the host and a `player` that nothing could ever close, because destroy had
+ * already run. The hls adapter did the quiet version of it -- a fresh Hls
+ * attached to a detached <video>, pulling fragments with no owner.
+ *
+ * So `dead` is set the moment an adapter is discarded, and every mount gives up
+ * at the first thing it does after each wait. An adapter with nothing to wait
+ * on (media) carries the flag anyway: the next await added to it would bring
+ * the whole fault back, silently. */
+
 /* What to play, and from which site. Session status (/api/live/status), a
  * probe result, a multiview member -- put any of them in and the same answer
  * comes out. The server does tell us site, but on a new session it can be
@@ -62,6 +85,10 @@ function srcOf(x) {
     const channel = (x.channel || (tw ? tw[1] : "")).toLowerCase();
     return channel ? { site: "twitch", channel } : { site: "none" };
   }
+  // chzzk publishes no embed, so the page plays the manifest the server
+  // resolved (live.play_url_of). Its CDN answers `access-control-allow-origin:
+  // *`, which is what makes that possible at all.
+  if (x.site === "chzzk") return x.play_url ? { site: "hls", url: x.play_url } : { site: "none" };
   if (/\.m3u8(\?|$)/i.test(url)) return { site: "hls", url };
   return { site: "none" };
 }
@@ -121,10 +148,11 @@ function noneAdapter() {
  * without sound. The focused tile is built with no such argument, as before,
  * and the user presses play. */
 function ytAdapter() {
-  const a = { kind: "youtube", ready: false, live: false, player: null };
+  const a = { kind: "youtube", ready: false, live: false, player: null, dead: false };
   a.mount = async (host, src, opts = {}) => {
     a.live = !!opts.live;
     await whenApiReady();
+    if (a.dead) return;          // the tile was re-seated while the API loaded
     if (!(window.YT && window.YT.Player)) {
       throw new Error(t("adapter.youtube.apiFailed"));
     }
@@ -171,6 +199,18 @@ function ytAdapter() {
       // keeps whoever waits on the mount from standing there forever.
       setTimeout(settle, 15000);
     });
+    // Discarded while this player was being built. destroy() has already run,
+    // so it went past an `a.player` that was not there yet and nothing else
+    // will ever close this one -- it has to close itself, and take the element
+    // it was given with it. The watch below is not started either: an interval
+    // hung on an adapter nobody holds runs until the page is closed.
+    if (a.dead) {
+      try { if (a.player) a.player.destroy(); } catch (_) { /* an iframe already gone */ }
+      a.player = null;
+      a.ready = false;
+      if (el.isConnected) el.remove();
+      return;
+    }
     // The buffering watch. After a tile was closed or the tiles were moved
     // around in multiview, a live player left behind could get caught
     // buffering and spin forever (reproduced by deleting one of two embeds of
@@ -284,6 +324,7 @@ function ytAdapter() {
     if (m) a.player.mute(); else a.player.unMute();
   };
   a.destroy = () => {
+    a.dead = true;
     if (a._watch) { clearInterval(a._watch); a._watch = null; }
     try { if (a.player) a.player.destroy(); } catch (_) { /* an iframe already gone */ }
     a.player = null;
@@ -303,7 +344,7 @@ function ytAdapter() {
  * the subtitle log on the right piles up as usual. That is what the notice
  * says. */
 function hlsAdapter() {
-  const a = { kind: "hls", ready: false, live: false, video: null, hls: null };
+  const a = { kind: "hls", ready: false, live: false, video: null, hls: null, dead: false };
   a.mount = async (host, src, opts = {}) => {
     a.live = !!opts.live;
     const v = document.createElement("video");
@@ -320,17 +361,33 @@ function hlsAdapter() {
                          : t("adapter.hls.openFailed"));
       }
     };
-    if (v.canPlayType("application/vnd.apple.mpegurl")) {
+    // hls.js first, native second, and not the other way round. Chrome answers
+    // `canPlayType("application/vnd.apple.mpegurl")` with "maybe" -- truthy, and a
+    // lie: it sets the src, the manifest is fetched, and readyState sits at 0 for
+    // ever with no error to show for it (measured on a chzzk stream). Only Safari
+    // plays HLS from a src, and hls.js is fine there too, so asking the library
+    // whether it can work is the question that has a true answer.
+    let hlsJs = null;
+    try {
+      await loadScriptOnce("/static/vendor/hls.min.js", () => !!window.Hls);
+      hlsJs = window.Hls && Hls.isSupported() ? window.Hls : null;
+    } catch (err) {
+      // No library and no native playback is the end of the road; with native
+      // playback it is only a detour.
+      if (!v.canPlayType("application/vnd.apple.mpegurl")) { fail(err.message); return; }
+    }
+    // Re-seated while the library loaded. destroy() has already taken the
+    // <video> out, so going on would build an Hls onto a detached element and
+    // leave it pulling fragments with nothing left to destroy it.
+    if (a.dead) { v.remove(); return; }
+    if (!hlsJs) {
+      if (!v.canPlayType("application/vnd.apple.mpegurl")) {
+        fail(t("adapter.hls.reason.noMse"));
+        return;
+      }
       v.src = src.url;
       v.addEventListener("error", () => fail(t("adapter.hls.reason.native")), { once: true });
     } else {
-      try {
-        await loadScriptOnce("/static/vendor/hls.min.js", () => !!window.Hls);
-      } catch (err) {
-        fail(err.message);
-        return;
-      }
-      if (!(window.Hls && Hls.isSupported())) { fail(t("adapter.hls.reason.noMse")); return; }
       a.hls = new Hls({ lowLatencyMode: true, enableWorker: true });
       a.hls.on(Hls.Events.ERROR, (_e, data) => {
         if (data && data.fatal) fail(data.details || data.type);
@@ -353,6 +410,7 @@ function hlsAdapter() {
   a.playVideo = () => { if (a.video) a.video.play().catch(() => {}); };
   a.setMuted = (m) => { if (a.video) a.video.muted = !!m; };
   a.destroy = () => {
+    a.dead = true;
     try { if (a.hls) a.hls.destroy(); } catch (_) { /* already closed */ }
     a.hls = null;
     if (a.video) { a.video.pause(); a.video.removeAttribute("src"); a.video.remove(); }
@@ -373,11 +431,13 @@ function hlsAdapter() {
  * makes the subtitles disappear. If it cannot be taken off, the guard in
  * onFullscreenChange puts things back. */
 function twitchAdapter() {
-  const a = { kind: "twitch", ready: false, live: false, player: null, obs: null };
+  const a = { kind: "twitch", ready: false, live: false, player: null, obs: null, dead: false };
   a.mount = async (host, src, opts = {}) => {
     a.live = !!opts.live;
     await loadScriptOnce("https://player.twitch.tv/js/embed/v1.js",
                          () => !!(window.Twitch && window.Twitch.Player));
+    // The longest wait of the four -- this script comes from Twitch, not from us.
+    if (a.dead) return;
     if (!(window.Twitch && window.Twitch.Player)) {
       throw new Error(t("adapter.twitch.loadFailed"));
     }
@@ -409,6 +469,15 @@ function twitchAdapter() {
       });
       setTimeout(settle, 15000);
     });
+    // As in the YouTube adapter: destroy() ran before there was a player or an
+    // observer to take out, so this mount closes its own.
+    if (a.dead) {
+      if (a.obs) { a.obs.disconnect(); a.obs = null; }
+      try { if (a.player && a.player.destroy) a.player.destroy(); } catch (_) { /* already gone */ }
+      a.player = null;
+      a.ready = false;
+      if (el.isConnected) el.remove();
+    }
   };
   a.getCurrentTime = () => (a.player && a.ready ? (a.player.getCurrentTime() || 0) : 0);
   a.seekTo = (t) => {
@@ -418,6 +487,7 @@ function twitchAdapter() {
   a.playVideo = () => { if (a.player && a.ready) a.player.play(); };
   a.setMuted = (m) => { if (a.player && a.ready) a.player.setMuted(!!m); };
   a.destroy = () => {
+    a.dead = true;
     if (a.obs) a.obs.disconnect();
     a.obs = null;
     try { if (a.player && a.player.destroy) a.player.destroy(); } catch (_) { /* already gone */ }
@@ -435,7 +505,7 @@ function twitchAdapter() {
  * sits on top of it, so that black box is if anything exactly where the
  * subtitles belong. */
 function mediaAdapter() {
-  const a = { kind: "media", ready: false, live: false, video: null };
+  const a = { kind: "media", ready: false, live: false, video: null, dead: false };
   a.mount = async (host, src, opts = {}) => {
     const v = document.createElement("video");
     v.playsInline = true;
@@ -463,6 +533,7 @@ function mediaAdapter() {
   a.playVideo = () => { if (a.video) a.video.play().catch(() => {}); };
   a.setMuted = (m) => { if (a.video) a.video.muted = !!m; };
   a.destroy = () => {
+    a.dead = true;            // nothing here waits, so there is no guard to pair it with -- yet
     if (a.video) { a.video.pause(); a.video.removeAttribute("src"); a.video.remove(); }
     a.video = null;
     a.ready = false;

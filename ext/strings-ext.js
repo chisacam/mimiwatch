@@ -76,9 +76,9 @@ MW_I18N.add({
     en: "Not a session being transcribed.",
     ko: "받아 적는 중인 세션이 아닙니다.",
   },
-  "popup.errNotYouTube": {
-    en: "Open this on a YouTube tab to lay subtitles on it.",
-    ko: "유튜브 탭에서 열어야 자막을 얹을 수 있습니다.",
+  "popup.errNotSupportedSite": {
+    en: "Open this on a YouTube or CHZZK tab to lay subtitles on it.",
+    ko: "유튜브나 치지직 탭에서 열어야 자막을 얹을 수 있습니다.",
   },
   "popup.errResume": {
     en: "Could not resume it",

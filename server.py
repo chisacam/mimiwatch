@@ -26,6 +26,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import bus
+import chzzk
 import config
 import export
 import jobs
@@ -161,7 +162,8 @@ class Handler(BaseHTTPRequestHandler):
             items.append({k: d.get(k) for k in
                           ("id", "title", "duration", "uploader", "source_lang",
                            "viewer_lang", "translated", "audio_seconds",
-                           "backends_done", "url", "source")} |
+                           "backends_done", "url", "source", "site",
+                           "thumbnail")} |
                          {"cues": store.cue_count(vid)})
         self._json(items)
 
@@ -332,31 +334,36 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(exc)[:200]}, 400)
         self._json({"path": dest, "name": os.path.basename(dest)})
 
-    # ---- YouTube cookies -----------------------------------------------------
-    # The extension reads the browser's login cookies and hands them over (only
-    # when the user presses it each time). It is the only way to take a
-    # members-only stream in "by address". Because they are the keys to an
-    # account: the file is 0600, the contents are written down nowhere, only
-    # present/absent and the time they arrived show on the screen, and they can
-    # be deleted at any time.
+    # ---- login cookies -------------------------------------------------------
+    # Cookies are the only way to take a stream the account can see and the world
+    # cannot: a members-only YouTube stream, an age-gated or subscriber-only chzzk
+    # one. YouTube's come from the extension, which reads them from the browser
+    # when the user presses the button. chzzk's are pasted in, because the
+    # extension cannot read them -- the login is Naver's, not chzzk's, and giving
+    # the extension the run of naver.com to fetch it is a bigger ask than exporting
+    # a file once.
+    #
+    # One file per site (paths.cookies_path). They are the keys to an account, so
+    # every file is 0600, the contents are never sent back out -- only whether they
+    # are there, how many and when -- and either site can be deleted on its own.
 
     def get_cookies(self):
         self._json(_cookies_status())
 
-    def post_cookies_youtube(self, body):
+    def _take_cookies(self, site: str, body: dict):
         text = body.get("cookies")
         if not isinstance(text, str) or "\t" not in text:
             return self._json({"error": "Cookie text in Netscape format is required"}, 400)
         lines = [ln for ln in text.splitlines() if _is_cookie_line(ln)]
         if not lines:
-            return self._json({"error": "The cookies are empty -- are you logged in to YouTube?"},
+            return self._json({"error": f"No cookie lines found -- are you logged in to {site}?"},
                               400)
-        path = paths.cookies_path()
+        path = paths.cookies_path(site)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("# Netscape HTTP Cookie File\n"
-                    "# YouTube login cookies handed over by the mimiwatch extension.\n"
+                    f"# {site} login cookies, kept by mimiwatch.\n"
                     "# They are the key to the account.\n")
             f.write(text if text.endswith("\n") else text + "\n")
         os.replace(path + ".tmp", path)
@@ -365,13 +372,29 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass                        # Windows has no modes
         stream.reset_tool_cache()       # --cookies goes on from the next yt-dlp call
-        print(f"[cookies] took in {len(lines)} YouTube cookies", file=sys.stderr, flush=True)
+        print(f"[cookies] took in {len(lines)} {site} cookies", file=sys.stderr, flush=True)
         self._json(_cookies_status())
 
+    def post_cookies_youtube(self, body):
+        self._take_cookies("youtube", body)
+
+    def post_cookies_chzzk(self, body):
+        self._take_cookies("chzzk", body)
+
     def post_cookies_delete(self, body):
-        path = paths.cookies_path()
+        # A site of its own, or everything when none is named. Deleting one used
+        # to take the other with it, there being only one file.
+        site = (body.get("site") or "").strip()
+        sites = [site] if site in COOKIE_SITES else list(COOKIE_SITES)
+        for s in sites:
+            try:
+                os.remove(paths.cookies_path(s))
+            except FileNotFoundError:
+                pass
+        # The join is rebuilt from what is left; without this the deleted site
+        # would keep travelling inside it.
         try:
-            os.remove(path)
+            os.remove(paths.cookies_merged_path())
         except FileNotFoundError:
             pass
         stream.reset_tool_cache()
@@ -623,6 +646,20 @@ class Handler(BaseHTTPRequestHandler):
             except vod.VodError as exc:
                 return self._json({"error": str(exc)}, 400)
             return self._json({**meta, "site": "file", "channel": ""})
+        # A chzzk recording does not go through yt-dlp either, and for a harder
+        # reason than a local file: for many of them yt-dlp cannot open the
+        # manifest at all (chzzk.py carries the measurement). Answering from
+        # chzzk's own endpoints also gets the thumbnail, which `-j` never had.
+        no = chzzk.video_no(url)
+        if no:
+            try:
+                meta = vod.probe_chzzk(no, url)
+            except vod.VodError as exc:
+                return self._json({"error": str(exc)}, 400)
+            # No `play_url`: it expires within the day, and nothing plays a
+            # recording until it has been transcribed. The page asks for one
+            # then, through /api/video/playurl.
+            return self._json({**meta, "video_id": meta["id"], "play_url": ""})
         try:
             out = sp.run(stream.ytdlp_args("-j", url=url),
                          capture_output=True, text=True,
@@ -815,6 +852,38 @@ class Handler(BaseHTTPRequestHandler):
         live.notify_drop(owner, int(cue_id))
         self._json({"ok": True, "deleted": int(cue_id)})
 
+    def post_cue_clear(self, body):
+        sid = (body.get("session") or "").strip()
+        if not sid:
+            return self._json({"error": "session is required"}, 400)
+        res = live.clear_cues(sid)
+        self._json(res, 404 if res.get("error") else 200)
+
+    def post_live_playurl(self, body):
+        """A manifest for a session whose site has no embed. Resolved when asked
+        rather than stored: the URL carries a token that expires."""
+        res = live.play_url((body.get("id") or "").strip())
+        self._json(res, 400 if res.get("error") else 200)
+
+    def post_video_playurl(self, body):
+        """Something playable for a finished recording, made a moment ago.
+
+        The same rule as the live side: a chzzk URL is signed and expires
+        within the day, so it is never stored on the doc and never handed back
+        from one. `kind` says which player to seat -- "hls" for the rewind of a
+        broadcast, "mp4" for a file served whole.
+        """
+        vid = os.path.basename((body.get("id") or "").strip())
+        doc = store.doc(vid) or {}
+        no = chzzk.video_no(doc.get("url") or "")
+        if not no:
+            return self._json({"error": "not a chzzk recording"}, 404)
+        try:
+            d = chzzk.resolve(no)
+        except chzzk.ChzzkError as exc:
+            return self._json({"error": str(exc)}, 502)
+        self._json({"url": d["play_url"], "kind": d["play_kind"]})
+
     def post_live_title(self, body):
         self._json(live.set_title(body.get("id", ""), body.get("title", "")))
 
@@ -941,6 +1010,25 @@ class Handler(BaseHTTPRequestHandler):
                      "reason": "saved" if out is not None else "deleted"})
         self._json(out if out is not None
                    else {"channel_key": body.get("channel_key") or ""})
+
+    def post_glossary_term(self, body):
+        """One term, added from a subtitle on screen. The editor's own save
+        replaces the whole list; this one merges into it."""
+        key = (body.get("channel_key") or "").strip()
+        term_from = (body.get("from") or "").strip()
+        term_to = (body.get("to") or "").strip()
+        if not key:
+            return self._json({"error": "channel_key is required"}, 400)
+        if not term_from or not term_to:
+            return self._json({"error": "both from and to are required"}, 400)
+        out = store.add_glossary_term(key, body.get("name") or "", term_from, term_to)
+        if out is None:
+            return self._json({"error": "the term could not be saved"}, 400)
+        # Sessions already running on this channel pick it up now; the answer
+        # says which, so the screen does not promise more than happened.
+        applied = live.reload_glossary(key)
+        bus.publish({"type": "glossary", "id": key, "reason": "saved"})
+        self._json({**out, "applied": applied})
 
     def post_transcribe(self, body):
         url = (body.get("url") or "").strip()
@@ -1115,6 +1203,7 @@ POST_ROUTES = {
     "/api/live/capture": Handler.post_live_capture,
     "/api/live/mic": Handler.post_live_mic,
     "/api/live/title": Handler.post_live_title,
+    "/api/live/playurl": Handler.post_live_playurl,
     "/api/live/backend": Handler.post_live_backend,
     "/api/live/asr": Handler.post_live_asr,
     "/api/live/stop": Handler.post_live_stop,
@@ -1131,7 +1220,9 @@ POST_ROUTES = {
     "/api/cue": Handler.post_cue,
     "/api/cue/add": Handler.post_cue_add,
     "/api/cue/delete": Handler.post_cue_delete,
+    "/api/cue/clear": Handler.post_cue_clear,
     "/api/video/delete": Handler.post_video_delete,
+    "/api/video/playurl": Handler.post_video_playurl,
     "/api/backends": Handler.post_backends,
     "/api/backends/delete": Handler.post_backends_delete,
     "/api/asr-backends": Handler.post_asr_backends,
@@ -1144,11 +1235,13 @@ POST_ROUTES = {
     "/api/models/add": Handler.post_models_add,
     "/api/setup": Handler.post_setup,
     "/api/cookies/youtube": Handler.post_cookies_youtube,
+    "/api/cookies/chzzk": Handler.post_cookies_chzzk,
     "/api/cookies/delete": Handler.post_cookies_delete,
     "/api/update/check": Handler.post_update_check,
     "/api/update/download": Handler.post_update_download,
     "/api/update/apply": Handler.post_update_apply,
     "/api/glossaries": Handler.post_glossaries,
+    "/api/glossaries/term": Handler.post_glossary_term,
     "/api/burn": Handler.post_burn,
     "/api/watchers": Handler.post_watcher,
     "/api/watchers/toggle": Handler.post_watcher_toggle,
@@ -1208,19 +1301,30 @@ def _is_cookie_line(ln: str) -> bool:
     return bool(ln) and (not ln.startswith("#") or ln.startswith("#HttpOnly_"))
 
 
+# The sites cookies can be kept for. A closed set: the name becomes a filename,
+# and it is never taken from a URL.
+COOKIE_SITES = ("youtube", "chzzk")
+
+
 def _cookies_status() -> dict:
-    """Whether the cookie file is there and when it arrived. The contents are
+    """Which sites have cookies, how many and when they arrived. The contents are
     never sent out."""
-    path = paths.cookies_path()
     env = (os.environ.get("MIMIWATCH_YTDLP_COOKIES") or "").strip()
-    if not os.path.isfile(path):
-        return {"present": False, "env": bool(env)}
-    try:
-        with open(path, encoding="utf-8") as f:
-            n = sum(1 for ln in f if _is_cookie_line(ln))
-    except OSError:
-        n = 0
-    return {"present": True, "count": n, "updated": os.path.getmtime(path), "env": bool(env)}
+    sites = {}
+    for site in COOKIE_SITES:
+        path = paths.cookies_path(site)
+        if not os.path.isfile(path):
+            sites[site] = {"present": False}
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                n = sum(1 for ln in f if _is_cookie_line(ln))
+        except OSError:
+            n = 0
+        sites[site] = {"present": True, "count": n, "updated": os.path.getmtime(path)}
+    # The environment variable wins over all of them (stream.cookie_args), so the
+    # screen says so rather than showing a file that is not being used.
+    return {"env": bool(env), "sites": sites}
 
 
 # Stopping serve_forever() needs the server object, but the handler is a class

@@ -135,7 +135,9 @@ function bind() {
   $("settings-close").addEventListener("click", () => $("settings-dialog").close());
   $("shutdown").addEventListener("click", shutdownServer);
   $("quit").addEventListener("click", shutdownServer);
-  $("cookies-delete").addEventListener("click", deleteCookies);
+  $("cookies-youtube-delete").addEventListener("click", () => deleteCookies("youtube"));
+  $("cookies-chzzk-delete").addEventListener("click", () => deleteCookies("chzzk"));
+  $("cookies-chzzk-save").addEventListener("click", saveChzzkCookies);
   $("form-back").addEventListener("click", showEngineList);
   $("engine-form").addEventListener("submit", saveEngine);
   // Models and tools. A background thread on the server does the downloading and the progress arrives over the bus.
@@ -195,7 +197,34 @@ function bind() {
   $("add-form").addEventListener("submit", submitAdd);
   document.querySelector('#add-form select[name="source"]')
     .addEventListener("change", e => setAddSource(e.target.value));
+  $("live-menu-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleLiveMenu($("live-menu").hidden);
+  });
+  // Picking a word out of a subtitle into the channel glossary. mouseup, not
+  // selectionchange: that fires on every character of the drag and would walk
+  // the button along under the pointer. The deferral lets the selection settle
+  // before it is measured.
+  document.addEventListener("mouseup", () => setTimeout(syncGlossaryPick, 0));
+  // Pressing anywhere else collapses the selection, so the button goes with it
+  // -- except on the button itself, where preventDefault keeps the selection
+  // alive long enough for the click to read it.
+  document.addEventListener("mousedown", (e) => {
+    if (e.target.id !== "glossary-pick") hideGlossaryPick();
+  });
+  $("glossary-pick").addEventListener("mousedown", (e) => e.preventDefault());
+  $("glossary-pick").addEventListener("click", openGlossaryTerm);
+  // Moved, not hidden: the selection survives the scroll, so the button that
+  // belongs to it should too.
+  $("script").addEventListener("scroll", syncGlossaryPick);
+  $("glossary-term-form").addEventListener("submit", saveGlossaryTerm);
+  $("glossary-term-close").addEventListener("click",
+    () => $("glossary-term-dialog").close());
+  $("live-clear-cues").addEventListener("click", clearLiveCues);
   $("live-stop").addEventListener("click", stopLive);
+  // Close live menu on outside click
+  document.addEventListener("click", () => toggleLiveMenu(false));
+  $("live-menu").addEventListener("click", (e) => e.stopPropagation());
   // Watching is a full-screen activity; reaching for the mouse to reclaim
   // width breaks it, so the toggle also answers to a key.
   document.addEventListener("keydown", (e) => {

@@ -135,9 +135,22 @@ async function applyUpdate() {
   const tokenEl = $("update-token");
   if (tokenEl) {
     try { tokenEl.value = localStorage.getItem(TOKEN_KEY) || ""; } catch (_) { /* private window */ }
+    // It is kept on every keystroke and always was. What was missing is the
+    // saying so: a field that looks like a form field with no button beside it
+    // reads as something still waiting to be submitted.
+    const state = $("update-token-state");
+    const saidSaved = () => {
+      if (!state) return;
+      const has = !!tokenEl.value.trim();
+      state.textContent = t(has ? "update.token.saved" : "update.token.none");
+      state.classList.toggle("saved", has);
+    };
     tokenEl.addEventListener("input", () => {
       try { localStorage.setItem(TOKEN_KEY, tokenEl.value); } catch (_) { /* private window */ }
+      saidSaved();
     });
+    saidSaved();
+    MW_I18N.onChange(saidSaved);
   }
   // The strip and the Update section are drawn from one answer and then sit
   // there, sometimes for days, so a language change redraws them from the

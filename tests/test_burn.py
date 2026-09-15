@@ -163,6 +163,11 @@ _FILTERS = ("filters\n" "------\n"
 
 
 def test_subtitles_ok_reads_the_filter_list(monkeypatch):
+    # Both halves have to be faked. subtitles_ok() looks the executable up
+    # inside the same try as the run, so on a machine with no ffmpeg the
+    # lookup raised and it answered False before the faked run was reached.
+    monkeypatch.setattr(stream, "ffmpeg_cmd", lambda: "/usr/bin/ffmpeg")
+
     class R:
         stdout = _FILTERS
 

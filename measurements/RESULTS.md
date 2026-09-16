@@ -1539,3 +1539,60 @@ for every download rather than for chzzk alone.
 **End to end on this branch**: `probe` answers in 0.2~0.3 s, and `fetch_audio`
 produced 68.1 s of audio for `5242545` and 1563.2 s for `15050677` (the API
 said 1562).
+
+## 54. What one document pass costs, and whether the prompt fits
+
+The document view (`outline.py`) runs a whole generation every minute or two on
+the engine that is also translating the subtitles. Both of the numbers that
+decide whether that is bearable were missing: **every Gemma measurement in this
+file is over one subtitle line with at most three lines of context** (sections
+20, 28, 29), and this prompt is two orders of magnitude bigger.
+
+Sample: `9zlrjY2Upxo`, a 30-minute Korean conference talk ("Datadog을 활용한 AWS
+서버리스 Observability"), 235 speech lines, 14,400 characters, already
+transcribed. Engine: Gemma 4 E4B q4_0 in process, `device: auto`, 4 threads,
+`n_ctx` 2048 — the shipped defaults. `bench/outline_cost.py`.
+
+| | |
+|---|---|
+| Window | 928 chars → **17 passes** for 30 minutes, one per **1.6 min** of talk |
+| Per pass | median **3.6 s**, min 0.8 s, max 5.3 s |
+| Whole talk | **61 s** of engine time · 21 sections |
+| Prompt | 1,533 ~ 2,161 chars |
+
+**The prompt fits, with more room than the sizing assumes.** `window_chars`
+counts a character as a token, which it documents as deliberately wrong in the
+safe direction. Measured against the model's own tokenizer, a worst-case prompt
+— a full window plus a full open section, all Korean — is **2,205 chars →
+1,051 tokens, 0.48 tokens per character**. After reserving 420 tokens for the
+answer that leaves **577 tokens spare in 2048**. So the window is conservative
+by about two times on this sample.
+
+**It is left conservative anyway.** One language on one model is not enough to
+widen a budget whose failure mode is silent truncation, and Japanese and Chinese
+were not measured. The number is recorded here so that raising it later is a
+decision with evidence under it rather than a guess.
+
+**The cost that matters is not the 3.6 s, it is whose 3.6 s it is.**
+`LocalGemma.generate` takes the same lock as `LocalGemma.translate` — llama.cpp's
+context does not survive concurrent calls — so a pass is 3.6 seconds in which
+no subtitle is translated. Against the 0.18 s median of section 20 that is about
+twenty lines' worth of translation queued behind one pass, and requirement N2
+asks for 3 seconds end to end. Nothing is lost (the queue drains afterwards) but
+lines do land late, once every minute or two.
+
+That is the reason the document is **off until it is asked for**, and the
+reason `OUTLINE_GAP_S` is 75 seconds rather than something brisker. It is also
+the one thing a remote engine is straightforwardly better at: an
+OpenAI-compatible endpoint holds no lock here, so the pass costs the subtitles
+nothing at all.
+
+**The binding gate is the window, not the timer.** At 1.6 min of talk per pass
+the 75-second floor almost never fires on a talk; it is there for a sparse room
+where 75 seconds of wall clock hold two sentences.
+
+**One thing the prompt does not enforce.** It asks for at most one new section
+per pass, and four of the seventeen passes opened two. 21 sections for 30
+minutes is a heading every 1.4 minutes, which is finer than a document wants.
+Not chased here: the split is legible and the fix is prompt wording, not a
+knob with a measurement behind it.

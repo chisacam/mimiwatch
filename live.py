@@ -38,6 +38,7 @@ import numpy as np
 
 import bus
 import config
+import outline as mw_outline
 import paths
 import store
 import stream
@@ -675,6 +676,20 @@ COVER_EXACT_BELOW = 4
 # the same group.
 COVER_GAP = 2
 
+# ---- the document view (outline.py) ---------------------------------------
+#
+# How often the outliner wakes to look at what has piled up. Not how often it
+# writes -- that is the two rules below.
+OUTLINE_TICK_S = 5.0
+# Below this much new speech there is nothing worth a pass. A minute of near
+# silence would otherwise spend a whole generation on one line and rewrite the
+# open section into something no better.
+OUTLINE_MIN_CHARS = 220
+# And even with enough speech, no more often than this. The pass shares its
+# lock with live translation on the local engine, so every pass is a subtitle
+# waiting; the cadence is what keeps that rare.
+OUTLINE_GAP_S = 75.0
+
 
 def _covers(final_text: str, refined: str) -> bool:
     """Does this refined line contain this final line."""
@@ -754,6 +769,23 @@ class LiveSession:
         self.lang = lang
         self.viewer_lang = viewer_lang
         self.backend_id = backend_id
+        # Whether this session's translation engine can also write prose. It
+        # rides on the backend, so it is settled here and again on a mid-session
+        # swap rather than asked for on every status line.
+        #
+        # Guarded, because this is the first thing the constructor does that
+        # reaches the settings file, and reading that file can also write one
+        # -- the first run copies the example, which means making a directory.
+        # A session that could not be made at all because that failed would
+        # lose the subtitles over a feature that is off by default; not knowing
+        # costs a greyed-out button and nothing else.
+        try:
+            self.can_outline = mw_translate.can_write(
+                config.find_backend(backend_id))
+        except Exception as exc:
+            print(f"[live] could not read the engine settings: {exc}",
+                  file=sys.stderr)
+            self.can_outline = False
         self.asr_backend_id = asr_backend_id
         # The profile (content type) decides how many seconds an utterance is cut
         # at; the genre decides what vocabulary that utterance is translated into.
@@ -875,6 +907,26 @@ class LiveSession:
         # at once, one's `remove` tangles with the other's `del [:-40]` and either
         # raises ValueError or absorbs the wrong line.
         self._pub_lock = threading.RLock()
+        # ---- the document view ----
+        # Off unless a screen asks for it. It is a whole generation every
+        # minute or two on an engine that shares its lock with the subtitles,
+        # so nobody pays for it who has not opened the document. What is
+        # already written survives a restart (it is in `outlines`); what is
+        # running does not, for the same reason a session does not resume
+        # itself.
+        self._ol: dict = mw_outline.empty()
+        # cue id -> (media time, text), waiting to go into a pass.
+        self._ol_pending: dict[int, tuple[float, str]] = {}
+        # The highest cue id already written into the document. A refined line
+        # older than this is not put back in: the document is written forward
+        # and the section it would belong to is finished (see outline.py).
+        self._ol_folded = 0
+        self._ol_on = False
+        self._ol_last = 0.0
+        self._ol_error = ""
+        self._ol_writer = None
+        self._ol_wake = threading.Event()
+        self._ol_thread: threading.Thread | None = None
         self._ff: subprocess.Popen | None = None
         # Set when this session wants the ffmpeg it is reading stood up again
         # -- saving the video was switched, so the argv and the rendition have
@@ -1027,6 +1079,12 @@ class LiveSession:
                 "glossary": self.glossary_name,
                 "elapsed": round(time.time() - self.started, 1),
                 "lines": self.lines, "translated": self.translated,
+                # The document view. `can_outline` rides on the translation
+                # engine, so the screen can grey the button out with a reason
+                # instead of letting it fail when pressed.
+                "outline": self._ol_on, "can_outline": self.can_outline,
+                "outline_error": self._ol_error,
+                "outline_sections": len(self._ol.get("sections") or []),
                 # Asked for when a screen attaches, not on every line.
                 **({"play_url": self.play_url} if detail else {})}
 
@@ -1058,6 +1116,11 @@ class LiveSession:
             del self._recent[:-40]
             self._text_of[cue["id"]] = text
             self._trim_text_of()
+            # A "note" is the server talking, not the speaker -- the gap
+            # notice, the reattach notice. It is kept out of the document for
+            # the same reason it is kept out of translation.
+            if kind == "final":
+                self._ol_feed(cue)
             store.save_cue(self.id, cue)
             self.emit(cue)
             # The line count is part of the status, so the status is written along
@@ -1116,7 +1179,12 @@ class LiveSession:
             for c in covered:
                 self._recent.remove(c)
                 self._text_of[c["id"]] = None      # absorbed. Dropped from the translation queue
+                self._ol_pending.pop(c["id"], None)
             self._text_of[cue["id"]] = text
+            # The refined text is the better one, so it goes in instead of the
+            # finals it absorbed -- unless those lines are already written into
+            # the document, which `_ol_feed` is what decides.
+            self._ol_feed(cue)
             # A line a refined line absorbed disappears from the screen, so it is
             # deleted from storage too. Only the one line whose id was inherited is
             # kept, and that slot is overwritten with the refined line.
@@ -1229,6 +1297,230 @@ class LiveSession:
         store.save_translation(self.id, cue["id"], self.backend_id, out)
         self.emit({"type": "translation", "id": cue["id"],
                    "kind": cue["kind"], "text": out})
+
+    # ---- the document view ------------------------------------------------
+    #
+    # What the subtitles cannot answer is "what has this been about". The
+    # document is built by outline.py; everything here is about when to run a
+    # pass and how not to let it get in the subtitles' way.
+    #
+    # The pass never runs on the publishing path. A generation takes seconds,
+    # the publishing path holds `_pub_lock`, and the receiving thread is behind
+    # that lock -- a pass run there would stall transcription itself. So a
+    # finished line only drops its text into `_ol_pending` and the thread below
+    # decides when to spend the engine.
+
+    def _ol_feed(self, cue: dict):
+        if not self._ol_on or cue["id"] <= self._ol_folded:
+            return
+        self._ol_pending[cue["id"]] = (cue.get("t", 0.0), cue["text"])
+        self._ol_wake.set()
+
+    def _ol_payload(self) -> dict:
+        # The document is spread first and the three live fields written over
+        # it, not the other way round. Every document carries an `error` of its
+        # own (outline.empty and outline.advance both set one), so with the
+        # spread last it overwrote `_ol_error` on every single emit -- a failed
+        # pass set the error, said so in the log, and then told the screen there
+        # was no error at all. The screen showed a document that had quietly
+        # stopped growing, which is the one thing _ol_pass is written to avoid.
+        return {"type": "outline", **self._ol,
+                "running": self._ol_on,
+                "can_outline": self.can_outline,
+                "error": self._ol_error}
+
+    def _ol_emit(self):
+        self.emit(self._ol_payload())
+
+    def outline_set(self, on: bool) -> dict:
+        """Turn the document on or off for this session."""
+        if on and not self.can_outline:
+            # Asked again rather than trusted. The constructor settles this
+            # once and has to survive a settings file it could not read, so it
+            # records False there -- and that False would otherwise outlive the
+            # reason for it and tell the user their engine cannot write when
+            # what really happened was one unreadable file. This runs on a
+            # button press, not on the publishing path, so a second read costs
+            # nothing that matters.
+            self.can_outline = mw_translate.can_write(
+                config.find_backend(self.backend_id))
+        if on and not self.can_outline:
+            return {"error": "backend-cannot-write", "backend": self.backend_id}
+        if on == self._ol_on:
+            return self._ol_payload()
+        self._ol_on = on
+        if not on:
+            self._ol_wake.set()          # let the thread notice and withdraw
+            self._ol_emit()
+            return self._ol_payload()
+        self._ol_error = ""
+        if not self._ol.get("sections"):
+            # A document written before a restart, or before this session was
+            # closed and reopened. Picking it up rather than starting over is
+            # the whole point of storing it.
+            saved = store.outline(self.id)
+            if saved:
+                self._ol = saved
+                self._ol_folded = int(saved.get("folded", 0) or 0)
+        self._ol_catch_up()
+        if self._ol_thread is None or not self._ol_thread.is_alive():
+            self._ol_thread = threading.Thread(
+                target=self._ol_loop, daemon=True, name=f"outline-{self.id}")
+            self._ol_thread.start()
+        self._ol_emit()
+        return self._ol_payload()
+
+    def _ol_catch_up(self):
+        """Take in everything said before the document was opened.
+
+        Someone who turns the document on half an hour into a talk wants the
+        half hour, not the remainder. The lines are all in storage, so they go
+        into the queue and the passes chew through them back to back -- the
+        same code path as live, only without the waiting.
+
+        A session that already has a document catches up too. `_ol_folded` is
+        the bookmark that stops the talk being written twice -- everything at
+        or below it is in the document already.
+        """
+        for c in store.cues(self.id):
+            if c.get("kind") == "note" or c["id"] <= self._ol_folded:
+                continue
+            text = (c.get("text") or "").strip()
+            if text:
+                self._ol_pending[c["id"]] = (c.get("t", 0.0), text)
+        self._ol_wake.set()
+
+    def _ol_loop(self):
+        while self._ol_on and not self._stop.is_set():
+            self._ol_wake.wait(OUTLINE_TICK_S)
+            self._ol_wake.clear()
+            if not self._ol_on or self._stop.is_set():
+                break
+            try:
+                if self._ol_due():
+                    self._ol_pass()
+            except Exception:
+                # One bad pass does not end the document. The same rule the
+                # refinement thread and the watcher poller follow.
+                traceback.print_exc()
+
+    def _ol_due(self) -> bool:
+        if not self._ol_pending:
+            return False
+        chars = sum(len(t) for _, t in self._ol_pending.values())
+        if chars >= self._ol_window_chars():
+            # A full window is waiting. Catching up on a talk already in
+            # progress lands here every pass, which is what makes it catch up
+            # rather than trickle.
+            return True
+        return (chars >= OUTLINE_MIN_CHARS
+                and time.time() - self._ol_last >= OUTLINE_GAP_S)
+
+    def _ol_window_chars(self) -> int:
+        w = self._ol_ensure_writer()
+        return mw_outline.window_chars(w) if w else mw_outline.MIN_WINDOW_CHARS
+
+    def _ol_ensure_writer(self):
+        if self._ol_writer is None:
+            spec = config.find_backend(self.backend_id)
+            self._ol_writer = mw_translate.build_writer(spec)
+        return self._ol_writer
+
+    def _ol_take(self) -> tuple[str, float, int, int]:
+        """The next window: the oldest pending lines up to the budget.
+
+        Returns the joined text, the media time it starts at, how many lines it
+        holds and the highest cue id in it. They are taken out of `_pending`
+        here rather than after the pass -- a line that arrives while the engine
+        is working belongs to the next window, and leaving them in would put
+        the same speech through twice.
+        """
+        budget = self._ol_window_chars()
+        parts: list[str] = []
+        used = 0
+        at, top, n = 0.0, 0, 0
+        for cue_id in sorted(self._ol_pending):
+            t, text = self._ol_pending[cue_id]
+            if parts and used + len(text) + 1 > budget:
+                break
+            if not parts:
+                at = t
+            parts.append(text)
+            used += len(text) + 1
+            top, n = cue_id, n + 1
+            del self._ol_pending[cue_id]
+        return "\n".join(parts), at, n, top
+
+    def _ol_pass(self):
+        writer = self._ol_ensure_writer()
+        if writer is None:
+            # The engine was swapped for one that cannot write. Say so once
+            # and stop rather than raise on every tick.
+            self._ol_error = "backend-cannot-write"
+            self._ol_on = False
+            self._ol_emit()
+            return
+        # What the window is about to take, kept so a failed pass can give it
+        # back. `_ol_take` empties the queue before the engine is called, which
+        # is right while passes succeed -- a line arriving mid-generation
+        # belongs to the next window, not this one -- but it meant a single
+        # failed endpoint dropped that speech out of the document entirely,
+        # with no way back short of switching the document off and on again.
+        held = dict(self._ol_pending)
+        window, at, n, top = self._ol_take()
+        if not window.strip():
+            return
+        started = time.time()
+        try:
+            self._ol = mw_outline.advance(self._ol, window, self.viewer_lang,
+                                          writer, self._glossary_terms,
+                                          at=at, lines=n)
+            self._ol_error = ""
+        except Exception as exc:
+            # There is no source text to fall back on the way a translation
+            # has, so the document that was already there stays, and the
+            # failure is said out loud rather than left as a document that
+            # quietly stopped growing.
+            print(f"[outline] pass failed: {exc}", file=sys.stderr)
+            # Back into the queue, so the next pass tries the same speech
+            # again. `setdefault` rather than a plain update: a refined line
+            # may have improved one of these while the engine was working, and
+            # the newer text is the one to keep.
+            for cue_id, item in held.items():
+                self._ol_pending.setdefault(cue_id, item)
+            self._ol_error = str(exc)[:200]
+            self._ol_last = time.time()
+            self._ol_emit()
+            return
+        self._ol_folded = max(self._ol_folded, top)
+        self._ol["folded"] = self._ol_folded
+        self._ol_last = time.time()
+        print(f"[outline] {self.id} · {n} lines · {len(window)} chars · "
+              f"{self._ol_last - started:.1f}s", file=sys.stderr, flush=True)
+        store.save_outline(self.id, self._ol)
+        self._ol_emit()
+
+    def _ol_flush(self, max_passes: int = 1):
+        """The last pass, when the session stops.
+
+        Without it the speech since the previous pass is in the subtitles and
+        nowhere in the document -- which on a talk is the conclusion, the part
+        a document most needs.
+
+        Bounded, because this runs on the closing path and the server's
+        shutdown waits behind it. One pass covers what a cadence of
+        OUTLINE_GAP_S can have left over; a session stopped in the middle of
+        catching up loses the rest of the catch-up, and reopening the document
+        picks it up again from the bookmark.
+        """
+        for _ in range(max_passes):
+            if not self._ol_on or not self._ol_pending:
+                return
+            try:
+                self._ol_pass()
+            except Exception:
+                traceback.print_exc()
+                return
 
     # ---- pipeline ---------------------------------------------------------
     def start(self):
@@ -1749,6 +2041,13 @@ class LiveSession:
         removed that problem at the root, and this stays as the place where
         the references are cut.
         """
+        # The document's last pass runs before the flag below, because that
+        # flag is what the outline thread withdraws on. The speech since the
+        # previous pass is the end of the talk, and it would otherwise be in
+        # the subtitles and nowhere in the document.
+        self._ol_flush()
+        self._ol_on = False
+        self._ol_wake.set()
         # The reading thread may be waiting for room in the ring. The transcribing
         # side is gone, so that wait has to end too -- this flag is that loop's
         # exit condition.
@@ -2905,6 +3204,23 @@ def backlog(session_id: str) -> list[dict]:
         if text:
             events.append({"type": "translation", "id": c["id"],
                            "kind": c["kind"], "text": text})
+    # The document last. A reload has to end up with what the page had before
+    # it, and the document is one frame rather than one per section, so it
+    # costs nothing to replay whether or not the screen asks for it.
+    doc = store.outline(session_id)
+    if doc:
+        s = get(session_id)
+        # The document first and the live fields over it, the ordering
+        # `_ol_payload` explains. The error is the one exception to "the live
+        # value wins": a running session's `_ol_error` is the current one, but
+        # with no session left to ask, what the document itself carries (a
+        # rebuild that failed writes the reason in there) is all there is.
+        events.append({"type": "outline", **doc,
+                       "running": bool(s and s._ol_on),
+                       "can_outline": bool(s.can_outline) if s
+                       else mw_translate.can_write(
+                           config.find_backend(backend)),
+                       **({"error": s._ol_error} if s else {})})
     return events
 
 
@@ -2941,7 +3257,43 @@ def set_backend(session_id: str, backend_id: str) -> dict:
     s._sync_glossary()
     s._tr = mw_translate.build(spec, s.genre, s._glossary_terms)
     s.backend_id = backend_id
+    # The document is written by the same engine, so a swap decides it too. A
+    # session that had the document open and was moved onto M2M-100 stops
+    # writing at the next pass and says why (`_ol_pass`); the document written
+    # so far stays where it is.
+    s.can_outline = mw_translate.can_write(spec)
+    s._ol_writer = None
     return {"backend": backend_id}
+
+
+def outline_set(session_id: str, on: bool) -> dict:
+    """Turn the document view on or off for a live session."""
+    s = get(session_id)
+    if not s:
+        return {"error": "no such session"}
+    return s.outline_set(bool(on))
+
+
+def outline_of(owner: str) -> dict:
+    """The document for a session or a recording.
+
+    One lookup for both, because the document is filed under the same id a
+    subtitle is. A session still running answers from memory -- it may have
+    written a pass that is not in storage yet at the moment a screen asks.
+    """
+    s = get(owner)
+    if s is not None:
+        return s._ol_payload()
+    # Not running, so there is no session to ask which engine it was started
+    # on. The engine chosen now is what a rebuild would use, so that is what
+    # the screen is told about.
+    can = mw_translate.can_write(config.find_backend(config.active("tr")))
+    # The stored document's own `error` stands. There is no session here whose
+    # `_ol_error` could be the better answer, and a rebuild that gave up
+    # (jobs.start_outline) wrote its reason into the document precisely so that
+    # it would still be there to read afterwards.
+    stored = store.outline(owner) or mw_outline.empty()
+    return {"type": "outline", **stored, "running": False, "can_outline": can}
 
 
 def play_url(session_id: str) -> dict:

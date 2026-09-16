@@ -342,6 +342,16 @@ function showTileInPanels(tile) {
   if (live) renderLiveStatus(tile);
   else updateLangStatus();
   syncMvControls();
+  // The document belongs to the transcript, not to the screen. Moving the
+  // focus to another tile has to drop the one on screen and ask for that
+  // tile's -- otherwise one talk's document stands over another's video, and
+  // it looks like a document rather than like a mistake.
+  state.outline = null;
+  syncDocViewButton();
+  if (state.docView) {
+    renderDocView();
+    loadOutline(outlineOwner());
+  }
   pinScriptToBottom();
 }
 
@@ -371,6 +381,7 @@ async function attachLive(tile) {
     // A line was deleted in another window. The main window and the script
     // window are watching the same session, so an edit in one has to reach the
     // other.
+    else if (m.type === "outline") onOutlineEvent(m, tile);
     else if (m.type === "drop") dropCue(m.id, tile);
     // The subtitles were thrown away on the server. Every screen keeps its own
     // copy of the list, so each has to be told.

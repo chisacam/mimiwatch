@@ -86,6 +86,11 @@ CREATE TABLE IF NOT EXISTS docs (
   updated  REAL NOT NULL,
   doc      TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS outlines (
+  owner    TEXT PRIMARY KEY,
+  updated  REAL NOT NULL,
+  doc      TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS glossaries (
   channel_key TEXT PRIMARY KEY,
   name        TEXT NOT NULL,
@@ -240,6 +245,7 @@ def delete_session(session_id: str) -> bool:
         db.execute("DELETE FROM cues WHERE owner = ?", (session_id,))
         _fts_sync(db, session_id)
         cur = db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        db.execute("DELETE FROM outlines WHERE owner = ?", (session_id,))
         db.commit()
         return cur.rowcount > 0
 
@@ -621,6 +627,36 @@ def delete_cue(owner: str, cue_id: int) -> bool:
         return cur.rowcount > 0
 
 
+# ---- The document view -----------------------------------------------------
+#
+# `owner` is the same id a subtitle carries, so a live session and a recording
+# are stored the same way and one lookup serves both. It is a blob for the same
+# reason the session record is: nothing queries inside it, it becomes the HTTP
+# response as it stands, and outline.py is free to add a field to a section
+# without a migration here.
+#
+# It is a table of its own rather than a field on the session record because
+# the two are written at completely different rates. The session record is
+# rewritten on every single subtitle (live._persist); the document is rewritten
+# once a minute or two. Sharing a row would mean either writing the whole
+# document out hundreds of times over, or reading it back and merging it on
+# every line.
+
+def save_outline(owner: str, doc: dict):
+    _write("INSERT OR REPLACE INTO outlines (owner, updated, doc) "
+           "VALUES (?, ?, ?)",
+           (owner, time.time(), json.dumps(doc, ensure_ascii=False)))
+
+
+def outline(owner: str) -> dict | None:
+    rows = _rows("SELECT doc FROM outlines WHERE owner = ?", (owner,))
+    return json.loads(rows[0]["doc"]) if rows else None
+
+
+def delete_outline(owner: str):
+    _write("DELETE FROM outlines WHERE owner = ?", (owner,))
+
+
 # ---- VOD -------------------------------------------------------------------
 #
 # It used to be one `data/<video id>.json` file holding the metadata and the
@@ -652,6 +688,7 @@ def delete_doc(video_id: str):
         db.execute("DELETE FROM cues WHERE owner = ?", (video_id,))
         _fts_sync(db, video_id)
         db.execute("DELETE FROM docs WHERE id = ?", (video_id,))
+        db.execute("DELETE FROM outlines WHERE owner = ?", (video_id,))
         db.commit()
 
 

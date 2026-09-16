@@ -1281,6 +1281,76 @@ its add form has one box: sound is uploaded and there is no picture to save.
   field short, because that field is written on close. Every sample is on disk
   and `ffmpeg -i short.wav fixed.wav` rewrites the header.
 
+## The document view
+
+The subtitles answer "what is being said now" and the script panel answers "what
+was said, in order". Neither answers "what has this been about", which at a
+seminar is the only question anyone actually has at the end.
+
+**Document** in the control row lays a document over the video area: headings
+with a few lines under each, growing as the talk goes. The player underneath is
+not paused — at a talk the sound is the point and the slide on screen is not, so
+the speaker keeps talking while you read. A microphone session has nothing
+underneath to begin with.
+
+It is offered wherever there is a transcript: a microphone session, a stream, a
+recording. Where it earns its place is a talk, so the toggle sits next to the
+fullscreen button rather than in a menu.
+
+### It is written forward, not rewritten
+
+A pass sees the section it is currently writing and the speech that has arrived
+since the last one. Everything above that is already fixed.
+
+The alternative — hand the whole transcript over each time and take a fresh
+summary — was rejected before it was built. The cost grows with the square of
+the session on an engine that is also translating the subtitles, and a paragraph
+rewritten from scratch every ninety seconds cannot be read while it is being
+written. So the section at the bottom is the only one that moves, and it is
+marked while it does.
+
+A heading's timestamp leads back to the speech it came from: press it on a
+recording and the player goes there. It is accurate to a minute or two, not to
+the line. A pass is handed a block of speech and may decide a new subject
+started somewhere inside it, but not where — the model is not asked, because an
+answer to that would be invented.
+
+### It runs only when you ask for it
+
+One pass is a whole generation on the engine that is also translating the
+subtitles, so a session nobody has opened the document on pays nothing. On a
+live session, press **Start writing** once and it keeps up from there; the
+speech from before you asked is read in first, so opening the document half an
+hour into a talk gets the half hour rather than the remainder.
+
+A recording is finished, so there is no cadence to hide the cost behind: it runs
+as a job over the whole transcript at once, and **Write the document** starts it.
+
+The passes are spaced deliberately. Nothing is written until about a minute of
+speech has come in, and no more often than about once a minute after that.
+
+### It needs an engine that can write
+
+M2M-100, the light default, renders one sentence in another language and does
+nothing else. Handed a summary prompt it answers with that prompt translated —
+no error, no empty result, just a wrong answer that reads like a right one. So
+the document simply does not run on it, and says so where the document would be.
+
+Pick Gemma or an OpenAI-compatible engine in **⚙ Engines** to write one. The
+channel's glossary goes into the pass as well: those are the proper nouns of the
+talk, and they are exactly the words a transcript gets wrong.
+
+### Keeping it
+
+**Save as Markdown** writes the document out with its timestamps. The document
+is stored with the transcript, so it is still there after a restart and after
+the tab is closed, and deleting the session or the recording deletes it too.
+
+**What the document is written from is the live preview**, with everything that
+implies (see *Meetings and seminars* above). For a meeting the fuller record is
+still the WAV re-transcribed afterwards with speakers on — and the document can
+be written again over that transcript, which is the better one.
+
 ## Known limits
 
 **Aligning live subtitles with the video is manual.** Match them with the offset

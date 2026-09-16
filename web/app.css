@@ -552,6 +552,61 @@ body.script-only .script-tools{max-width:56rem; margin-inline:auto; width:100%}
 .player-error a{ color:var(--text); text-decoration:none }
 .player-error br{ display:none }
 
+/* ---------- the document view (outline.js) ----------
+   Laid over the tiles rather than put in their place: the player keeps
+   running underneath, and on a talk that is what is wanted. z-index clears
+   .tile-drop (5) so the document is not covered while something is dragged
+   over the page, and stays under #fs-controls. */
+.doc-view{
+  position:absolute; inset:0; z-index:6;
+  display:flex; flex-direction:column;
+  background:var(--ink); color:var(--text);
+}
+.doc-head{
+  flex:none; display:flex; align-items:center; gap:.5rem;
+  padding:.5rem .8rem; border-bottom:1px solid var(--line); background:var(--panel);
+  font-size:.82rem;
+}
+.doc-head .spacer{flex:1}
+.doc-meta{font-family:var(--mono); font-size:.72rem; color:var(--dim)}
+.doc-dl{text-decoration:none}
+.doc-body{
+  flex:1; min-height:0; overflow-y:auto; padding:1.1rem 1.4rem 2rem;
+  /* A document is read, not scanned like a subtitle. Wider line height and a
+     measure that stops short of the full width, which at four tiles wide is
+     already narrow enough. */
+  line-height:1.7; max-width:62rem;
+}
+.doc-sec{margin:0 0 1.5rem}
+.doc-sec h3{
+  display:flex; align-items:baseline; gap:.5rem;
+  margin:0 0 .45rem; font-size:1rem; font-weight:700; letter-spacing:-.01em;
+}
+.doc-at{
+  flex:none; font-family:var(--mono); font-size:.68rem; color:var(--dim);
+  background:none; border:none; padding:0; cursor:pointer;
+}
+.doc-at:disabled{cursor:default}
+.doc-at:not(:disabled):hover{color:var(--accent)}
+.doc-sec ul{margin:0; padding-left:1.1rem}
+.doc-sec li{margin:.2rem 0; font-size:.88rem}
+/* The section still being written. The mark is the only thing that separates
+   "the talk moved on" from "this is as far as the document has got". */
+.doc-sec.open h3{color:var(--accent)}
+.doc-writing{
+  display:inline-block; margin-top:.35rem;
+  font-size:.7rem; color:var(--accent); opacity:.8;
+}
+.doc-writing::before{content:"\25CF "; font-size:.6rem}
+.doc-notice{
+  display:flex; flex-direction:column; align-items:flex-start; gap:.5rem;
+  margin:1rem 0 0; padding:.9rem 1rem;
+  border:1px solid var(--line); border-radius:8px; background:var(--panel);
+  font-size:.82rem; color:var(--dim); line-height:1.6;
+}
+.doc-notice b{color:var(--text)}
+.doc-notice p{margin:0}
+
 /* ---------- re-translation job ---------- */
 /* Job status stands as one row inside the top bar. Floating at the bottom right,
  * neither the fact that transcription was running nor where the Stop button was

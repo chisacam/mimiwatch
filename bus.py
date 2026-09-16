@@ -21,6 +21,16 @@ kinds of content.
     {"type": "watchers"}
                         the watched list changed, or the probe changed a watcher's live
                         finding (live.py, the watchers section; the list is re-read)
+    {"type": "outline", "owner": <session or video id>, "job": <job id>,
+                        "sections": <n>, "lines": <n>, "folded": <cue id>,
+                        "updated": <time>, "error": ""}
+                        a rebuild wrote one more window of a document (jobs.start_outline).
+                        The counters only -- the document itself is re-read from
+                        /api/outline/<owner>, because this feed reaches every window and a
+                        document of 200 sections is not a notification. A document being
+                        written by a live session does not come this way; it goes out on
+                        that session's own stream (live._ol_emit), where the screen showing
+                        it is already listening.
 
 The receiving side refreshes only that part (`web/app/bus.js`). Session
 notifications arrive for every subtitle line, so the screen fixes just that row

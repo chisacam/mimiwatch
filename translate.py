@@ -267,11 +267,51 @@ def looks_broken(out: str, src_text: str) -> bool:
     return len(out) > max(40, len(src_text) * 6)
 
 
+class GenerationFailed(RuntimeError):
+    """A free-form generation could not be used.
+
+    Kept apart from TranslationFailed because the two are recovered from in
+    opposite ways. A failed translation falls back to the source text, which is
+    always a usable answer. A failed generation has no such fallback -- there is
+    no "source text" for a summary -- so the caller must leave what it already
+    had standing rather than replace it with something worse.
+    """
+
+
 class Translator:
     """Interface both backends implement."""
 
     name = "base"
     min_chars = DEFAULT_MIN_CHARS
+    # Whether this backend can be asked for text that is not a translation of
+    # its input. It is false here and true only on the two prompt backends.
+    #
+    # It exists because the failure without it is silent. M2M-100 takes any
+    # string and renders it in the target language, so handed "summarise the
+    # transcript below" it answers with that sentence in Korean -- no
+    # exception, no empty result, just a wrong answer that reads like a right
+    # one. The transcription side already learned this lesson and asks the
+    # engine once at session start what it can do (RESULTS section 51); this is
+    # the same gate on the translation side.
+    can_generate = False
+    # The context this engine has to fit a prompt into, in tokens. Zero means
+    # the caller need not size its prompt -- a remote endpoint's context is its
+    # own affair and costs this process no memory. It is published raw rather
+    # than as a character budget so that the arithmetic lives in one place
+    # (outline.window_chars) instead of the same number sitting in two files.
+    context_tokens = 0
+
+    def generate(self, prompt: str, max_tokens: int = 512) -> str:
+        """Answer the prompt. Not a translation -- nothing is rendered into
+        another language, and the answer is returned as the model wrote it.
+
+        `looks_broken` is deliberately not applied. It discards anything longer
+        than six times its input, which is the right rule for a subtitle line
+        and exactly the wrong one here: a summary of a transcript is shorter
+        than its input, so the ratio is meaningless, and every answer worth
+        having would be thrown away on a short one.
+        """
+        raise GenerationFailed(f"{self.name} cannot generate text")
 
     def translate(self, text: str, src: str, tgt: str,
                   context: list[str] | None = None) -> str:
@@ -370,6 +410,7 @@ class OpenAICompatible(Translator):
     """Any OpenAI-shaped /v1/chat/completions endpoint."""
 
     name = "openai-compatible"
+    can_generate = True
 
     # Moved into the genre table. The name stays -- it is better to be able
     # to read here what a backend that did not specify a prompt itself uses.
@@ -395,17 +436,18 @@ class OpenAICompatible(Translator):
         # one that knows neither ignores them.
         self.no_reasoning = no_reasoning
 
-    def translate(self, text: str, src: str, tgt: str,
-                  context: list[str] | None = None) -> str:
-        stripped = (text or "").strip()
-        if not stripped or src == tgt:
-            return text
+    def _ask(self, content: str, timeout: float | None = None,
+             max_tokens: int = 0) -> str:
+        """One round trip. Both callers below go through here so that a server
+        that honours only one of the two thinking-off spellings behaves the
+        same whichever of them asked."""
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": render_prompt(
-                self.prompt, src, tgt, stripped, context, self.glossary)}],
+            "messages": [{"role": "user", "content": content}],
             "temperature": 0.2,
         }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
         if self.no_reasoning:
             payload["reasoning_effort"] = "none"
             payload["chat_template_kwargs"] = {"enable_thinking": False}
@@ -414,21 +456,45 @@ class OpenAICompatible(Translator):
             f"{self.base_url}/v1/chat/completions", data=body,
             headers={"Content-Type": "application/json",
                      **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {})})
+        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
+            data = json.load(r)
+        msg = data["choices"][0]["message"]
+        out = (msg.get("content") or "").strip()
+        if not out and msg.get("reasoning_content"):
+            # The model spent its whole budget thinking and never
+            # answered; treat it as a failure so the fallback runs.
+            raise RuntimeError("model returned reasoning but no answer")
+        return out
+
+    def translate(self, text: str, src: str, tgt: str,
+                  context: list[str] | None = None) -> str:
+        stripped = (text or "").strip()
+        if not stripped or src == tgt:
+            return text
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                data = json.load(r)
-            msg = data["choices"][0]["message"]
-            out = (msg.get("content") or "").strip()
-            if not out and msg.get("reasoning_content"):
-                # The model spent its whole budget thinking and never
-                # answered; treat it as a failure so the fallback runs.
-                raise RuntimeError("model returned reasoning but no answer")
+            out = self._ask(render_prompt(self.prompt, src, tgt, stripped,
+                                          context, self.glossary))
             if looks_broken(out, stripped):
                 raise TranslationFailed(f"{self.model}: {out[:60]!r}")
             return out
         except Exception as exc:
             print(f"[translate] remote backend failed: {exc}", file=sys.stderr)
             raise
+
+    def generate(self, prompt: str, max_tokens: int = 512) -> str:
+        # A summary prompt carries a window of transcript rather than one
+        # subtitle line, so the wait is a different order of magnitude from
+        # translation's 0.2s median and the 30s default would cut it off. The
+        # answer is also asked for by length, which translation never does --
+        # left open, a talkative model writes until the context runs out.
+        try:
+            out = self._ask(prompt, timeout=max(self.timeout, 120.0),
+                            max_tokens=max_tokens)
+        except Exception as exc:
+            raise GenerationFailed(f"{self.model}: {exc}") from exc
+        if not out:
+            raise GenerationFailed(f"{self.model}: empty answer")
+        return out
 
 
 class _LlamaHolder:
@@ -474,6 +540,7 @@ class LocalGemma(Translator):
     """
 
     name = "local-gemma"
+    can_generate = True
 
     def __init__(self, model_path: str | None = None, n_ctx: int = 2048,
                  threads: int = 4, prompt: str | None = None,
@@ -504,6 +571,7 @@ class LocalGemma(Translator):
         self.glossary = glossary
         self.max_tokens = max_tokens
         self._n_ctx = n_ctx
+        self.context_tokens = n_ctx
         self._threads = threads
         # There is one copy of the model per process (models.py). The prompt
         # (the genre) belongs to this object while the model is shared, so
@@ -544,6 +612,33 @@ class LocalGemma(Translator):
             answer = answer.rsplit("</think>", 1)[-1].strip()
         if looks_broken(answer, stripped):
             raise TranslationFailed(f"Gemma: {answer[:60]!r}")
+        return answer
+
+    def generate(self, prompt: str, max_tokens: int = 512) -> str:
+        # The same resident model as translation, which is the point -- n_ctx
+        # is part of the key models.shared() files it under, so asking for a
+        # roomier context here would load a second 4.9 GB copy rather than
+        # reuse the one already in memory. The caller keeps the prompt inside
+        # the context instead (outline.py budgets it in characters).
+        #
+        # It also means this call and a subtitle's translation take the same
+        # lock: llama.cpp's context does not survive concurrent calls, so
+        # while a summary is being written the next subtitle's translation
+        # waits behind it.
+        llm = self._ensure()
+        models.touch(self._key)
+        try:
+            with self._lock:
+                out = llm.create_chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2, max_tokens=max_tokens)
+        except Exception as exc:
+            raise GenerationFailed(f"Gemma: {exc}") from exc
+        answer = (out["choices"][0]["message"].get("content") or "").strip()
+        if "</think>" in answer:
+            answer = answer.rsplit("</think>", 1)[-1].strip()
+        if not answer:
+            raise GenerationFailed("Gemma: empty answer")
         return answer
 
 
@@ -675,3 +770,51 @@ def build(spec: dict | None, genre: str | None = None,
     local = LocalM2M()
     local.min_chars = min_chars
     return local
+
+
+def can_write(spec: dict | None) -> bool:
+    """Whether `build_writer` would return an engine for this backend.
+
+    Answered from the spec alone so that a screen can ask before anything is
+    built -- `build_writer` on the local backend reaches models.shared() and
+    registers a holder, which is cheap but is not nothing to do on every
+    status line.
+    """
+    return (spec or {}).get("backend") in ("gemma", "openai")
+
+
+def build_writer(spec: dict | None) -> Translator | None:
+    """The same engine as `build`, for a caller that wants prose rather than a
+    translation. `None` means this backend cannot write any.
+
+    It is a second entry point rather than a flag on `build` because of what
+    `build` puts behind the two prompt backends. `WithFallback` drops to
+    M2M-100 after three consecutive failures and stays there for fifty calls,
+    which is the right behaviour for subtitles -- a rough translation beats a
+    blank line -- and the wrong one here, since M2M-100 answers a summary
+    prompt with that prompt rendered in the target language. No exception is
+    raised and nothing looks amiss; the document just quietly fills with
+    translated instructions. So the fallback is not built at all, and a backend
+    that cannot generate says so by returning None instead.
+
+    The engine is built from the same spec fields as `build`, which is what
+    keeps `models.shared` handing back the Gemma already resident rather than
+    loading a second copy.
+    """
+    spec = spec or {}
+    # No glossary is rendered onto the engine here. `glossary_block` writes the
+    # terms into a translation instruction ("keep these renderings"), which is
+    # not what a document wants said; outline.py puts the same terms in its own
+    # words instead.
+    if spec.get("backend") == "gemma":
+        device = (spec.get("device") or "auto").strip().lower()
+        return LocalGemma(spec.get("model_path"),
+                          n_ctx=int(spec.get("n_ctx", 2048)),
+                          threads=int(spec.get("threads")
+                                      or stream.default_threads(device)),
+                          device=device)
+    if spec.get("backend") == "openai":
+        return OpenAICompatible(spec["base_url"], spec["model"],
+                                spec.get("api_key", ""),
+                                no_reasoning=spec.get("no_reasoning", True))
+    return None

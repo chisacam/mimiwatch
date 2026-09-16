@@ -250,6 +250,11 @@ function bind() {
   document.querySelectorAll("[data-focus-tile]").forEach(b =>
     b.addEventListener("click", () => { const t = state.tiles[+b.dataset.focusTile]; if (t) setFocus(t); }));
   $("fullscreen").addEventListener("click", toggleFullscreen);
+  $("doc-view-toggle").addEventListener("click", toggleDocView);
+  document.querySelector("#doc-view .doc-close")
+    .addEventListener("click", () => setDocView(false));
+  document.querySelector("#doc-view .doc-stop")
+    .addEventListener("click", () => setOutlineRunning(false));
   $("fs-exit").addEventListener("click", toggleFullscreen);
   // The controls appear only while the mouse moves and go away shortly after.
   // Standing over the video for good, they get in the way of watching.

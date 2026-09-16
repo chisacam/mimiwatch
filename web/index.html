@@ -210,6 +210,22 @@
            very bottom, so it avoids both and sits at the right edge, halfway
            down. -->
       <div id="fs-hotzone" class="fs-hotzone" aria-hidden="true"></div>
+
+      <!-- The document view (outline.js). It covers the tiles rather than
+           replacing them: the player keeps running underneath, because on a
+           talk the sound is the point and the slide on screen is not. For a
+           microphone session there is nothing underneath at all. -->
+      <div id="doc-view" class="doc-view" hidden>
+        <div class="doc-head">
+          <b data-i18n="outline.head"></b>
+          <span class="doc-meta"></span>
+          <span class="spacer"></span>
+          <button class="seg doc-stop" hidden></button>
+          <a class="seg doc-dl" href="#" download hidden data-i18n="outline.download"></a>
+          <button class="seg doc-close" data-i18n="outline.close"></button>
+        </div>
+        <div class="doc-body"></div>
+      </div>
     </div>
 
     <div class="controls">
@@ -230,6 +246,8 @@
       <label class="slider" id="offset-wrap"><span data-i18n="controls.offset"></span> <input id="offset" type="range" min="-3" max="3" step="0.1" value="0"><b id="offset-val">0.0s</b></label>
       <button id="fullscreen" class="seg" data-i18n="controls.fullscreen"
               data-i18n-attr="title:controls.fullscreen.title"></button>
+      <button id="doc-view-toggle" class="seg" hidden data-i18n="outline.toggle"
+              data-i18n-attr="title:outline.toggle.title"></button>
       <!-- Multiview. "Add tile" is visible when the focus is live, the layout when
            there are two or more tiles. The focus moves by clicking a tile or with
            the 1~4 keys. -->
@@ -716,6 +734,7 @@
 <script src="/static/app/strings/player.js"></script>
 <script src="/static/app/strings/panel.js"></script>
 <script src="/static/app/strings/engines.js"></script>
+<script src="/static/app/strings/outline.js"></script>
 <script src="/static/overlay.js"></script>
 <script src="/static/cuestore.js"></script>
 <script src="/static/capture.js"></script>
@@ -731,6 +750,7 @@
 <script src="/static/app/engines.js"></script>
 <script src="/static/app/jobs.js"></script>
 <script src="/static/app/live.js"></script>
+<script src="/static/app/outline.js"></script>
 <script src="/static/app/capture.js"></script>
 <script src="/static/app/export.js"></script>
 <script src="/static/app/library.js"></script>

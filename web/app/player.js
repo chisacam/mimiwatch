@@ -73,6 +73,10 @@ async function loadVideo(id) {
   updateLangStatus();
   renderBackendPicker();
   syncGenreToDoc();
+  // A different recording means a different document (outline.js).
+  state.outline = null;
+  syncDocViewButton();
+  if (state.docView) { renderDocView(); loadOutline(id); }
   setNowTitle(doc.title);
   applyModeForDoc();
   clearPlayerError(t);

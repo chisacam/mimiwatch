@@ -2057,3 +2057,259 @@ def test_a_recorder_that_never_got_a_sample_leaves_nothing_behind(monkeypatch):
     s.stop()
     assert _wavs() == []
     live._sessions.clear()
+
+
+# ---- The document view ----------------------------------------------------
+# What reaches the document and when. The pass itself is outline.py's
+# (tests/test_outline.py); these are about the queue in front of it -- which
+# lines go into it, which are taken back out of it, and what one pass is
+# allowed to take. No engine is built: `_ol_ensure_writer` hands back
+# `_ol_writer` when there is one, so the fake below is put there directly and
+# `translate.build_writer` is never reached.
+
+class _OutlineWriter:
+    """A writer that answers from a fixed string.
+
+    `context_tokens` is what sizes the window (outline.window_chars): 0 is a
+    remote endpoint and buys the large fixed window, a small number lands on
+    the floor, which is the budget these tests can reason about.
+    """
+
+    name = "fake-writer"
+
+    def __init__(self, answer: str = "## 여는 말\n- 하나\n", context_tokens: int = 0):
+        self.answer, self.context_tokens = answer, context_tokens
+        self.prompts: list[str] = []
+
+    def generate(self, prompt, max_tokens=512):
+        self.prompts.append(prompt)
+        return self.answer
+
+
+def _doc_on(s, writer=None):
+    """Turn the document on without starting the pass thread.
+
+    `outline_set` would spawn it, and a thread deciding when to spend the
+    engine is exactly what a test of the queue must not have running beside it.
+    """
+    s._ol_on = True
+    s._ol_writer = writer or _OutlineWriter()
+    return s
+
+
+def test_a_session_with_the_document_off_queues_nothing(session):
+    s = session
+    s.publish_line("final", "こんにちは", "ja", "")
+    s.audio_s = 2.0
+    s.publish_line("refine", "こんにちは 元気ですか", "ja", "")
+    # Nobody who has not opened the document pays for it, not even the
+    # bookkeeping: a whole generation every minute or two shares its lock with
+    # the subtitles.
+    assert s._ol_pending == {} and s._ol_on is False
+
+
+def test_an_engine_that_cannot_write_refuses_to_open_the_document(session):
+    # The `session` fixture is on M2M-100, which answers a summary prompt with
+    # that prompt translated -- no exception, just a wrong answer that reads
+    # like a right one. The refusal is the guard.
+    s = session
+    assert s.can_outline is False
+    assert s.outline_set(True) == {"error": "backend-cannot-write",
+                                   "backend": "local-m2m100"}
+    assert s._ol_on is False
+
+
+def test_notes_are_kept_out_of_the_document(session):
+    s = _doc_on(session)
+    s.publish_line("note", "⋯ about 10 s went unreceived while the server was down ⋯",
+                   "ja", "")
+    s.audio_s = 1.0
+    s.publish_line("final", "こんにちは", "ja", "")
+    # A note is the server talking, not the speaker. Summarised, it becomes a
+    # heading about the server.
+    assert [t for _, t in s._ol_pending.values()] == ["こんにちは"]
+
+
+def test_a_refined_line_replaces_in_the_queue_the_finals_it_absorbed(session):
+    s = _doc_on(session)
+    s.publish_line("final", "こんにちは", "ja", "")
+    s.audio_s = 2.0
+    s.publish_line("final", "元気ですか", "ja", "")
+    assert sorted(s._ol_pending) == [1, 2]
+    s.audio_s = 4.0
+    s.publish_line("refine", "こんにちは 元気ですか", "ja", "")
+    # The refined text is the better one, and the two finals are the same
+    # speech -- left in, the window would carry it twice.
+    assert s._ol_pending == {1: (0.0, "こんにちは 元気ですか")}
+
+
+def test_a_refined_line_already_written_into_the_document_is_not_fed_back(session):
+    s = _doc_on(session)
+    s.publish_line("final", "こんにちは", "ja", "")
+    # A pass has been and gone: line 1 is in the document and the queue is empty.
+    s._ol_pending.clear()
+    s._ol_folded = 1
+    s.audio_s = 4.0
+    s.publish_line("refine", "こんにちは 元気ですか", "ja", "")
+    # The document is written forward -- the section that line belongs to is
+    # finished, so the better text changes the subtitle and not the document.
+    assert s._ol_pending == {}
+    assert [c["text"] for c in store.cues(s.id)] == ["こんにちは 元気ですか"]
+
+
+def test_the_window_takes_the_oldest_lines_up_to_the_budget(session):
+    # A writer with a tiny context lands on MIN_WINDOW_CHARS (600), so two
+    # 200-character lines fit and the third does not.
+    s = _doc_on(session, _OutlineWriter(context_tokens=128))
+    for n in range(4):
+        s.audio_s = n * 2.0
+        s.publish_line("final", f"{n}" + "あ" * 199, "ja", "")
+    window, at, lines, top = s._ol_take()
+    assert lines == 2 and top == 2
+    assert at == 0.0                       # the media time the window starts at
+    assert [line[0] for line in window.splitlines()] == ["0", "1"]
+    # Taken out here rather than after the pass: a line that arrives while the
+    # engine is working belongs to the next window, and leaving them in would
+    # put the same speech through twice.
+    assert sorted(s._ol_pending) == [3, 4]
+
+
+def test_opening_the_document_late_takes_in_what_was_already_said(session):
+    s = session
+    for n, (kind, text) in enumerate(
+            [("final", "一つ目"), ("final", "二つ目"),
+             ("note", "⋯ 中断 ⋯"), ("final", "三つ目")]):
+        s.audio_s = n * 2.0
+        s.publish_line(kind, text, "ja", "")
+    _doc_on(s)
+    # Someone who opens the document half an hour in wants the half hour. The
+    # lines are all in storage, so they go into the queue and the passes chew
+    # through them back to back.
+    s._ol_folded = 1                       # except the one already written in
+    s._ol_catch_up()
+    assert {i: t for i, (_, t) in s._ol_pending.items()} == {2: "二つ目", 4: "三つ目"}
+
+
+def test_reopening_the_document_carries_on_from_the_stored_bookmark():
+    # A document written before a restart. Picking it up rather than starting
+    # over is the whole point of storing it -- rewritten from line 1 the talk
+    # would be written twice.
+    s = live.LiveSession("https://example.invalid/live", "ja", "ko", "local-gemma")
+    s._tr = None
+    assert s.can_outline is True
+    store.save_outline(s.id, {"sections": [{"title": "여는 말", "bullets": ["하나"],
+                                            "t": 1.0}],
+                              "lines": 2, "chars": 40, "folded": 2, "error": ""})
+    for n, text in enumerate(["一つ目", "二つ目", "三つ目"]):
+        s.audio_s = n * 2.0
+        s.publish_line("final", text, "ja", "")
+    s._ol_writer = _OutlineWriter()
+    got = s.outline_set(True)
+    try:
+        assert got["running"] is True and got["can_outline"] is True
+        assert [sec["title"] for sec in got["sections"]] == ["여는 말"]
+        assert s._ol_folded == 2
+        assert sorted(s._ol_pending) == [3]
+    finally:
+        # The pass thread is waiting on the flag; take it down with the test.
+        s.outline_set(False)
+    assert s._ol_on is False
+
+
+def test_the_session_stopping_spends_one_last_pass(session):
+    # The speech since the previous pass is the end of the talk, which on a
+    # talk is the conclusion -- without this it is in the subtitles and nowhere
+    # in the document.
+    s = _doc_on(session, _OutlineWriter("## 맺음말\n- 마지막 한마디\n"))
+    s._ol_pending = {5: (10.0, "마지막 한마디를 하겠습니다")}
+    s._ol_flush()
+    assert [sec["title"] for sec in s._ol["sections"]] == ["맺음말"]
+    assert s._ol_folded == 5 and s._ol["folded"] == 5
+    # And it is stored, so a reopen carries on from line 5 rather than line 1.
+    assert store.outline(s.id)["folded"] == 5
+    assert s._ol_pending == {}
+
+
+def test_a_pass_that_failed_leaves_the_document_that_was_there(session):
+    class _Broken(_OutlineWriter):
+        def generate(self, prompt, max_tokens=512):
+            raise RuntimeError("the endpoint is down")
+
+    s = _doc_on(session, _Broken())
+    s._ol = {"sections": [{"title": "여는 말", "bullets": ["하나"], "t": 1.0}],
+             "lines": 2, "chars": 40, "folded": 2, "error": "", "updated": 0.0,
+             "engine": ""}
+    s._ol_folded = 2
+    s._ol_pending = {3: (10.0, "무슨 말을 했다")}
+    s._ol_pass()
+    # A summary has no source text to fall back on the way a translation does,
+    # so the last good document stands and the failure is said out loud.
+    assert [sec["title"] for sec in s._ol["sections"]] == ["여는 말"]
+    assert "the endpoint is down" in s._ol_error
+    # The bookmark does not move either, so turning the document off and on
+    # again puts that speech through a second time rather than losing it.
+    assert s._ol_folded == 2
+    assert [e["type"] for e in s.emitted if e.get("type") == "outline"] == ["outline"]
+
+
+def test_a_failed_pass_puts_the_speech_back_for_the_next_one(session):
+    """A window is emptied out of the queue before the engine is called, so a
+    pass that then fails used to drop that speech out of the document with no
+    way back short of switching the document off and on again.
+
+    One endpoint hiccup must not cost a minute of a talk, so a failed pass
+    gives the window back and the next one tries it again.
+    """
+    class _Flaky(_OutlineWriter):
+        def __init__(self):
+            super().__init__("## 여는 말\n- 하나\n")
+            self.fail = True
+
+        def generate(self, prompt, max_tokens=512):
+            if self.fail:
+                self.fail = False
+                raise RuntimeError("the endpoint is down")
+            return super().generate(prompt, max_tokens)
+
+    s = _doc_on(session, _Flaky())
+    s._ol_pending = {1: (0.0, "처음 한 말"), 2: (4.0, "그 다음에 한 말")}
+    s._ol_pass()                                   # fails
+    assert s._ol_pending == {1: (0.0, "처음 한 말"), 2: (4.0, "그 다음에 한 말")}
+    assert s._ol["sections"] == []
+    s._ol_pass()                                   # and the retry writes it
+    assert [sec["title"] for sec in s._ol["sections"]] == ["여는 말"]
+    assert s._ol_pending == {}
+    assert s._ol_folded == 2
+    assert s._ol_error == ""
+
+
+def test_a_refined_line_that_arrived_during_a_failed_pass_wins_the_retry(session):
+    """The queue is given back with `setdefault`, not overwritten. While the
+    engine was working, a refined line may have replaced one of those very
+    lines under the same id -- and the refined text is the better one, so
+    putting the old text back over it would undo the refinement inside the
+    document while the subtitle on screen kept the good line."""
+    class _Broken(_OutlineWriter):
+        def generate(self, prompt, max_tokens=512):
+            raise RuntimeError("the endpoint is down")
+
+    s = _doc_on(session, _Broken())
+    s._ol_pending = {1: (0.0, "무기도 풀제열이야")}
+    s._ol_pass()
+    # The refined line lands under the same id while the pass is failing.
+    s._ol_pending[1] = (0.0, "무기도 풀제일이야?")
+    s._ol_pass()
+    assert s._ol_pending == {1: (0.0, "무기도 풀제일이야?")}
+
+
+def test_a_failed_pass_tells_the_page_why(session):
+    class _Broken(_OutlineWriter):
+        def generate(self, prompt, max_tokens=512):
+            raise RuntimeError("the endpoint is down")
+
+    s = _doc_on(session, _Broken())
+    s._ol_pending = {3: (10.0, "무슨 말을 했다")}
+    s._ol_pass()
+    # A document that quietly stopped growing is worse than one that says why.
+    frame = [e for e in s.emitted if e.get("type") == "outline"][-1]
+    assert "the endpoint is down" in frame["error"]

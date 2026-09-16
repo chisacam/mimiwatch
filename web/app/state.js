@@ -38,6 +38,9 @@ const state = {
   backends: [], asrBackends: [], liveProfiles: [], jobId: null,
   models: null,        // the answer from /api/models. Model and tool list and state (engines.js)
   live: null,          // { id, es, store } while a broadcast is running (store: MimiCues)
+  // The document view (outline.js): whether it is laid over the player, and
+  // the document itself as the server last sent it.
+  docView: false, outline: null,
   // Multiview (tiles.js). tiles are the panes on screen, focus is the pane the
   // audio, subtitles and subtitle log follow, mv is the server's group
   // { id, focus, members }, mvLayout is the chosen layout name.
@@ -208,6 +211,7 @@ function persist() {
     asr: state.asr, refine: state.refine,
     record: state.record, recordVideo: state.recordVideo,
     mvLayout: state.mvLayout,
+    docView: state.docView,
   });
 }
 
@@ -242,6 +246,10 @@ function restore() {
   }
   setPanel(!!p.panelHidden);
   setLibrary(!!p.libraryHidden);
+  // Left open deliberately last time, so it opens again. The document itself
+  // is not saved here -- it is read back from the server, which is the copy
+  // that kept growing while this tab was shut.
+  setDocView(!!p.docView);
 }
 
 const esc = (t) => String(t).replace(/[&<>"]/g,

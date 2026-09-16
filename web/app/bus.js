@@ -67,6 +67,10 @@ function connectBus() {
     // The watched list changed, or the probe changed a watcher's live finding.
     // The list is short; it is re-read whole.
     else if (m.type === "watchers") refreshWatchList();
+    // A recording's document was written a window further on. It arrives here
+    // rather than on a session stream because the job that writes it belongs
+    // to no session -- the recording is finished.
+    else if (m.type === "outline") onOutlineJobEvent(m);
   };
   bus.onopen = () => {
     if (busWasDown) scheduleListRefresh(0);   // fill in what changed while it was down

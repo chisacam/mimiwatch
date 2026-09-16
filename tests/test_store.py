@@ -129,3 +129,35 @@ def test_fts_resync_repairs_a_drifted_table():
     assert store.search("needle") == []      # drifted
     store.init()                             # the start-up resync repairs it
     assert store.search("needle")
+
+
+# ---- The document view -----------------------------------------------------
+
+def test_outline_round_trip():
+    assert store.outline("s1") is None            # nothing written for it yet
+    doc = {"sections": [{"title": "여는 말", "bullets": ["하나"], "t": 12.0}],
+           "lines": 4, "chars": 90, "folded": 7, "engine": "local-gemma"}
+    store.save_outline("s1", doc)
+    assert store.outline("s1") == doc
+    # One row per owner -- a pass rewrites the document rather than appending one.
+    store.save_outline("s1", {**doc, "lines": 9})
+    assert store.outline("s1")["lines"] == 9
+    store.delete_outline("s1")
+    assert store.outline("s1") is None
+    store.delete_outline("s1")                    # deleting what is not there is not an error
+
+
+def test_deleting_a_session_takes_its_document_with_it():
+    # The document is filed under the same id a subtitle is, so leaving it
+    # behind would hand the next session with that id somebody else's notes.
+    store.save_session({"id": "s1", "state": "stopped"})
+    store.save_outline("s1", {"sections": [{"title": "A", "bullets": [], "t": 0}]})
+    assert store.delete_session("s1") is True
+    assert store.outline("s1") is None
+
+
+def test_deleting_a_recording_takes_its_document_with_it():
+    store.save_doc("v9", {"title": "Video B"})
+    store.save_outline("v9", {"sections": [{"title": "A", "bullets": [], "t": 0}]})
+    store.delete_doc("v9")
+    assert store.outline("v9") is None

@@ -32,6 +32,7 @@ import export
 import jobs
 import live
 import modelhub
+import outline
 import paths
 import store
 import stream
@@ -242,6 +243,29 @@ class Handler(BaseHTTPRequestHandler):
                         if c.isalnum() or c in "-_") or "mimiwatch"
         self._send(body, ctype, headers={
             "Content-Disposition": f"attachment; filename=\"{plain}.{fmt}\"; "
+                                   f"filename*=UTF-8''{quoted}"})
+
+    def get_outline(self, owner):
+        """The document for a session or a recording.
+
+        `?fmt=md` hands it over as a file instead. The document is the thing a
+        seminar was watched for, and a document that can only be read on the
+        page it was written on is a note nobody keeps.
+        """
+        owner = urllib.parse.unquote(owner)
+        doc = live.outline_of(owner)
+        if self._query().get("fmt") != "md":
+            return self._json(doc)
+        st = store.session(owner) or store.doc(owner) or {}
+        title = st.get("title") or owner
+        body = outline.to_markdown(doc, title).encode("utf-8")
+        # The same naming rule as get_export, and for the same reason: a
+        # session id is `live:xxx`, which Windows will not create.
+        plain = "".join(c for c in (owner or "mimiwatch")
+                        if c.isalnum() or c in "-_") or "mimiwatch"
+        quoted = urllib.parse.quote(f"{title}.md", safe="")
+        self._send(body, "text/markdown; charset=utf-8", headers={
+            "Content-Disposition": f"attachment; filename=\"{plain}.md\"; "
                                    f"filename*=UTF-8''{quoted}"})
 
     def get_models(self):
@@ -918,6 +942,29 @@ class Handler(BaseHTTPRequestHandler):
             record_video=None if record_video is None else bool(record_video))
         self._json(res, 404 if res.get("error") else 200)
 
+    def post_outline(self, body):
+        """Turn the document view on or off for a running session.
+
+        It is asked for rather than always on because a pass is a whole
+        generation on the engine the subtitles are also using. Nobody pays for
+        it who has not opened the document.
+        """
+        sid = (body.get("id") or "").strip()
+        if not sid:
+            return self._json({"error": "id is required"}, 400)
+        res = live.outline_set(sid, bool(body.get("on")))
+        self._json(res, 404 if res.get("error") == "no such session" else 200)
+
+    def post_outline_rebuild(self, body):
+        """Write the document for a recording, or for a session that has
+        finished. One pass per window over the subtitles already stored, as a
+        job, because there is no live cadence to hide the cost behind."""
+        owner = (body.get("id") or "").strip()
+        if not owner:
+            return self._json({"error": "id is required"}, 400)
+        res = jobs.start_outline(owner)
+        self._json(res, 400 if res.get("error") else 200)
+
     def post_live_stop(self, body):
         self._json(live.stop(body.get("id", "")))
 
@@ -1219,6 +1266,7 @@ GET_PREFIX = [
     ("/api/live/events/", Handler.get_events),
     ("/api/multiview/", Handler.get_multiview),
     ("/api/live/status/", Handler.get_live_status),
+    ("/api/outline/", Handler.get_outline),
     ("/api/job/", Handler.get_job),
     ("/api/media/", Handler.get_media),
     ("/static/", Handler.get_static),
@@ -1231,6 +1279,8 @@ POST_ROUTES = {
     "/api/live/start": Handler.post_live_start,
     "/api/live/capture": Handler.post_live_capture,
     "/api/live/mic": Handler.post_live_mic,
+    "/api/outline": Handler.post_outline,
+    "/api/outline/rebuild": Handler.post_outline_rebuild,
     "/api/live/title": Handler.post_live_title,
     "/api/live/playurl": Handler.post_live_playurl,
     "/api/live/backend": Handler.post_live_backend,

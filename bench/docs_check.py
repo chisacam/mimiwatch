@@ -41,7 +41,8 @@ FAIL = []
 # byte-identical copy of web/strings-ext.js (ext_check.py guards that), so the
 # page side alone is the ground.
 STRING_FILES = [os.path.join(HERE, "web", "app", "strings", n)
-                for n in ("core.js", "engines.js", "panel.js", "player.js")]
+                for n in ("core.js", "engines.js", "outline.js", "panel.js",
+                          "player.js")]
 STRING_FILES.append(os.path.join(HERE, "web", "strings-ext.js"))
 
 DOCS = [os.path.join(HERE, "README.md")] + sorted(glob.glob(os.path.join(HERE, "docs", "*.md")))
@@ -75,6 +76,10 @@ QUOTED = [
     ("popup.show", "Put back on page"),
     ("add.source", "Audio source"),
     ("add.source.tab", "Sound from another tab in this browser"),
+    ("outline.toggle", "Document"),
+    ("outline.start", "Start writing"),
+    ("outline.rebuild", "Write the document"),
+    ("outline.download", "Save as Markdown"),
     ("panel.tr.all", "All"),
     ("panel.tr.none", "None"),
 ]

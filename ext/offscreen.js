@@ -39,9 +39,13 @@ async function start(streamId, sessionId, base) {
   out = new Audio();
   out.srcObject = media;
   out.autoplay = true;
+  // Not fatal: only the listening path is lost, and the transcription path
+  // below starts anyway. So it goes as a code the service worker words (this
+  // page loads no string table), not as a captureError, which means the
+  // capture is dead.
   await out.play().catch((e) => {
-    chrome.runtime.sendMessage({ type: "captureError",
-      error: "Could not play the sound back: " + (e.message || e) });
+    chrome.runtime.sendMessage({ type: "captureNoPlayback", sessionId,
+      error: String(e.message || e) }).catch(() => {});
   });
 
   // Only the transcription side is 16kHz mono.
@@ -52,9 +56,19 @@ async function start(streamId, sessionId, base) {
       method: "POST", headers: { "Content-Type": "application/octet-stream" },
       body: buf,
     }).then((r) => r.json()),
-    onEnded: () => { chrome.runtime.sendMessage({ type: "captureEnded", sessionId }); stop(); },
-    onError: (msg) => { chrome.runtime.sendMessage({ type: "captureError", error: msg }); stop(); },
-    onDropped: (s) => chrome.runtime.sendMessage({ type: "captureSlow", dropped: s }),
+    // Each report names its session, so the service worker can tell a late one
+    // from a capture it has since replaced. The catch is for a worker that is
+    // not listening at that instant -- nothing here waits on the answer.
+    onEnded: () => {
+      chrome.runtime.sendMessage({ type: "captureEnded", sessionId }).catch(() => {});
+      stop();
+    },
+    onError: (msg) => {
+      chrome.runtime.sendMessage({ type: "captureError", sessionId, error: msg }).catch(() => {});
+      stop();
+    },
+    onDropped: (s) => chrome.runtime.sendMessage(
+      { type: "captureSlow", sessionId, dropped: s }).catch(() => {}),
   });
 }
 

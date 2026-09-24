@@ -1,4 +1,6 @@
 """The store: the rules of the cue table."""
+import json
+
 import store
 
 
@@ -129,6 +131,97 @@ def test_fts_resync_repairs_a_drifted_table():
     assert store.search("needle") == []      # drifted
     store.init()                             # the start-up resync repairs it
     assert store.search("needle")
+
+
+def _fts_matches_a_rebuild():
+    """The whole FTS table, row by row, equals what the start-up rebuild would
+    write from `cues` as it stands -- recomputed here, not read back from the
+    rebuild, and over every owner, so an orphan a delete left behind counts."""
+    with store._lock:
+        db = store._connect()
+        got = sorted(tuple(r) for r in db.execute(
+            "SELECT rowid, owner, cue_id, text, tr_text FROM cues_fts"))
+        want = sorted((r["rowid"], r["owner"], r["cue_id"], r["text"],
+                       " ".join(v for v in json.loads(r["tr"]).values() if v))
+                      for r in db.execute("SELECT rowid, * FROM cues"))
+        # The index itself agrees with the rows it holds.
+        db.execute("INSERT INTO cues_fts (cues_fts) VALUES ('integrity-check')")
+        db.commit()
+    assert got == want
+    return got
+
+
+def _two_owners():
+    # A bystander owner, so a write that touches the wrong owner's rows shows.
+    store.replace_cues("other", [{"start": 0, "text": "bystander", "translations": {"g": "구경꾼"}}])
+    for i in (1, 2, 3):
+        store.save_cue("s", {"id": i, "kind": "final", "t": i, "text": f"line{i} hello"})
+
+
+def test_fts_rows_follow_live_writes():
+    _two_owners()
+    _fts_matches_a_rebuild()
+    store.save_translation("s", 2, "g", "번역 둘")
+    store.save_translation("s", 2, "m", "second")
+    _fts_matches_a_rebuild()
+    # A refined line keeps its rowid and clears its translation.
+    store.save_cue("s", {"id": 2, "kind": "refine", "t": 2, "text": "refined zebra"})
+    rows = _fts_matches_a_rebuild()
+    assert [r for r in rows if r[1] == "s" and r[2] == 2][0][3:] == ("refined zebra", "")
+    store.drop_cues("s", [1, 3])
+    assert len(_fts_matches_a_rebuild()) == 2
+    assert store.search("zebra") and not store.search("line1")
+    assert store.search("bystander")
+
+
+def test_fts_rows_follow_edits_inserts_and_deletes():
+    _two_owners()
+    assert store.update_cue("s", 1, text="quokka")
+    _fts_matches_a_rebuild()
+    assert store.update_cue("s", 1, translations={"g": "쿼카"})
+    _fts_matches_a_rebuild()
+    assert store.update_cue("s", 1, start=9.0)          # timing only
+    _fts_matches_a_rebuild()
+    store.edit_cue("s", 2, text="wombat")
+    _fts_matches_a_rebuild()
+    store.edit_cue("s", 2, tr="웜뱃", backend="g")
+    _fts_matches_a_rebuild()
+    store.edit_cue("s", 2, start=5.0)
+    _fts_matches_a_rebuild()
+    new = store.insert_cue("s", 4.0, "platypus", tr="오리너구리")
+    _fts_matches_a_rebuild()
+    assert store.delete_cue("s", 3)
+    _fts_matches_a_rebuild()
+    assert store.search("quokka") and store.search("wombat") and store.search("platypus")
+    assert not store.search("line3")
+    assert new["id"] == 4
+
+
+def test_fts_rows_follow_whole_owner_writes():
+    _two_owners()
+    store.replace_cues("s", [{"start": 0, "text": "fresh one"}, {"start": 1, "text": "fresh two"}])
+    _fts_matches_a_rebuild()
+    assert not store.search("hello") and store.search("fresh")
+    store.save_session({"id": "s", "state": "stopped"})
+    assert store.delete_session("s")
+    _fts_matches_a_rebuild()
+    store.save_doc("other", {"title": "x"})
+    store.delete_doc("other")
+    assert _fts_matches_a_rebuild() == []
+
+
+def test_start_up_rebuild_repairs_a_stale_row():
+    # The case 2a03d93 reproduced: the cue changed and its FTS row did not, and
+    # the row counts still agree. Only the unconditional rebuild catches it.
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": "hello world"})
+    with store._lock:
+        db = store._connect()
+        db.execute("UPDATE cues SET text = 'zebra quokka' WHERE owner = 's'")
+        db.commit()
+    assert store.search("hello") and not store.search("zebra")    # stale
+    store.init()
+    assert store.search("zebra") and not store.search("hello")
+    _fts_matches_a_rebuild()
 
 
 # ---- The document view -----------------------------------------------------

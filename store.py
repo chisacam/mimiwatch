@@ -104,6 +104,15 @@ CREATE TABLE IF NOT EXISTS watchers (
   live    INTEGER NOT NULL DEFAULT 0,
   updated REAL NOT NULL
 );
+"""
+
+# The full-text table, defined here and nowhere else: the schema below appends
+# it, and every write into it goes through the `_fts_*` helpers at the bottom
+# of this file. Its rowid is the cue's rowid (see there). The tokenizer is the
+# FTS5 default. IF NOT EXISTS leaves an existing table as it is, so changing
+# this definition means dropping the table first -- the start-up rebuild
+# refills it either way.
+FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS cues_fts USING fts5(
   owner UNINDEXED,
   cue_id UNINDEXED,
@@ -111,6 +120,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS cues_fts USING fts5(
   tr_text
 );
 """
+SCHEMA += FTS_SCHEMA
 
 # Column names changed. A file made by an older version has `session` and `t`,
 # and IF NOT EXISTS leaves an existing table alone, so the move happens here.
@@ -242,8 +252,8 @@ def delete_session(session_id: str) -> bool:
     """
     with _lock:
         db = _connect()
+        _fts_drop(db, session_id)
         db.execute("DELETE FROM cues WHERE owner = ?", (session_id,))
-        _fts_sync(db, session_id)
         cur = db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         db.execute("DELETE FROM outlines WHERE owner = ?", (session_id,))
         db.commit()
@@ -346,8 +356,8 @@ def save_cue(session_id: str, cue: dict):
     sentence, so the earlier translation is a translation of a sentence that is
     already wrong. The new translation arrives separately, soon.
     """
-    # The insert and the FTS resync sit in one lock: the connection is a
-    # shared object (check_same_thread=False), and a resync running outside
+    # The insert and its FTS row sit in one lock: the connection is a
+    # shared object (check_same_thread=False), and an FTS write outside
     # the lock is a use the translation loop's locked write can land inside
     # -- the same two-handed use of one connection sqlite answers with a
     # "bad parameter" InterfaceError, which ended live sessions in the test
@@ -369,7 +379,7 @@ def save_cue(session_id: str, cue: dict):
                     float(cue.get("t") or 0), float(cue.get("end") or 0),
                     cue.get("text") or "",
                     cue.get("lang") or "", cue.get("speaker") or ""))
-        _fts_sync(db, session_id)
+        _fts_put(db, session_id, cue["id"])
         db.commit()
 
 
@@ -377,14 +387,14 @@ def drop_cues(session_id: str, cue_ids: list[int]):
     if not cue_ids:
         return
     marks = ",".join("?" * len(cue_ids))
-    # One lock around the delete and the resync, for the same reason as
+    # One lock around the delete and the un-indexing, for the same reason as
     # save_cue: the shared connection is not to be used from two places at
     # once, locked or not.
     with _lock:
         db = _connect()
+        _fts_drop(db, session_id, cue_ids)
         db.execute(f"DELETE FROM cues WHERE owner = ? AND cue_id IN ({marks})",
                    (session_id, *[int(i) for i in cue_ids]))
-        _fts_sync(db, session_id)
         db.commit()
 
 
@@ -410,7 +420,7 @@ def save_translation(session_id: str, cue_id: int, backend: str, text: str):
                    "WHERE owner = ? AND cue_id = ?",
                    (json.dumps(tr, ensure_ascii=False), ",".join(sorted(flags)),
                     session_id, int(cue_id)))
-        _fts_sync(db, session_id)
+        _fts_put(db, session_id, cue_id)
         db.commit()
 
 
@@ -449,6 +459,9 @@ def replace_cues(owner: str, rows: list[dict]):
     before has lost its meaning, as when a VOD transcription finishes."""
     with _lock:
         db = _connect()
+        # Every row is deleted and inserted again, so every rowid is new: the
+        # whole owner is re-indexed, which is what this call costs anyway.
+        _fts_drop(db, owner)
         db.execute("DELETE FROM cues WHERE owner = ?", (owner,))
         # `edited` is written along with the rest. While it was left out, the
         # paths through this function (translate everything after switching
@@ -465,7 +478,7 @@ def replace_cues(owner: str, rows: list[dict]):
               json.dumps(c.get("translations") or {}, ensure_ascii=False),
               c.get("edited") or "")
              for i, c in enumerate(rows)])
-        _fts_sync(db, owner)
+        _fts_fill(db, owner)
         db.commit()
 
 
@@ -492,11 +505,13 @@ def update_cue(owner: str, cue_id: int, **fields) -> bool:
         cur = db.execute(f"UPDATE cues SET {', '.join(sets)} "
                          "WHERE owner = ? AND cue_id = ?",
                          (*args, owner, int(cue_id)))
-        db.commit()
-        # Only fields the search reads are worth a resync. A timing fix
-        # (start/end) moves a line, it does not change what it says.
+        # Only fields the search reads are worth re-indexing. A timing fix
+        # (start/end) moves a line, it does not change what it says. It goes
+        # before the commit: after it, a process that died in between kept
+        # the new cue beside the old FTS row (2a03d93).
         if cur.rowcount > 0 and ("text" in cols or tr is not None):
-            _fts_sync(db, owner)
+            _fts_put(db, owner, cue_id)
+        db.commit()
         return cur.rowcount > 0
 
 
@@ -569,7 +584,7 @@ def edit_cue(owner: str, cue_id: int, *, text=None, tr=None, backend="",
                    "WHERE owner = ? AND cue_id = ?", (*args, owner, int(cue_id)))
         # cols here is the list of `col = ?` clauses, so the fields are written out.
         if "text = ?" in cols or "tr = ?" in cols:
-            _fts_sync(db, owner)
+            _fts_put(db, owner, cue_id)
         db.commit()
         got = db.execute("SELECT * FROM cues WHERE owner = ? AND cue_id = ?",
                          (owner, int(cue_id))).fetchone()
@@ -607,7 +622,7 @@ def insert_cue(owner: str, start: float, text: str, *, lang: str = "",
                    "speaker, tr, edited) VALUES (?,?,?,?,?,?,?,?,?,?)",
                    (owner, cue_id, "final", float(start), float(end or 0), text,
                     lang, "", json.dumps(trs, ensure_ascii=False), "tr" if tr else ""))
-        _fts_sync(db, owner)
+        _fts_put(db, owner, cue_id)
         db.commit()
         got = db.execute("SELECT * FROM cues WHERE owner = ? AND cue_id = ?",
                          (owner, cue_id)).fetchone()
@@ -620,9 +635,9 @@ def delete_cue(owner: str, cue_id: int) -> bool:
     identity."""
     with _lock:
         db = _connect()
+        _fts_drop(db, owner, [cue_id])
         cur = db.execute("DELETE FROM cues WHERE owner = ? AND cue_id = ?",
                          (owner, int(cue_id)))
-        _fts_sync(db, owner)
         db.commit()
         return cur.rowcount > 0
 
@@ -685,8 +700,8 @@ def doc_ids() -> list[str]:
 def delete_doc(video_id: str):
     with _lock:
         db = _connect()
+        _fts_drop(db, video_id)
         db.execute("DELETE FROM cues WHERE owner = ?", (video_id,))
-        _fts_sync(db, video_id)
         db.execute("DELETE FROM docs WHERE id = ?", (video_id,))
         db.execute("DELETE FROM outlines WHERE owner = ?", (video_id,))
         db.commit()
@@ -794,27 +809,80 @@ def add_glossary_term(channel_key: str, name: str,
 #
 # `cues_fts` is an ordinary FTS5 table, not an external-content one. An
 # external-content table trusts that the table it mirrors stays in step, and
-# keeping that promise row by row is more code than it is worth. Every cue
-# write path resyncs its owner's whole set instead: an owner's cues are at
-# most a few thousand rows, a rebuild is cheap, and a drifted table would
-# cost a wrong search answer. The `tr` column holds a JSON object keyed by
-# backend, so the translation side is flattened to one string with Python's
-# json, the same way the rest of this file treats the column.
+# FTS5 gives no way to check that it did. The `tr` column holds a JSON object
+# keyed by backend, so the translation side is flattened to one string with
+# Python's json, the same way the rest of this file treats the column.
+#
+# Every cue write used to resync its owner's whole set: delete every FTS row of
+# the owner, read every cue back, insert them all again -- inside `_lock`, and
+# on the live path inside `_publish_locked`, ahead of the cue going out. On a
+# copy of the real database one call cost 5.7 ms at 500 cues, 15.3 ms at 2,000
+# and 55-59 ms at 8,000, and a live line pays it on the final, again on its
+# translation and again on its refinement: 464 s of lock-held store time over
+# an 8,000-line broadcast, growing with the square of its length.
+#
+# So a write now touches only the rows it wrote, keyed by rowid, inside the
+# same transaction as the cue write -- 0.10 ms a row. `cues_fts.rowid` is
+# `cues.rowid`. `cues` has a composite primary key, so its rowid is the
+# implicit one: every UPDATE and `save_cue`'s ON CONFLICT DO UPDATE keep it, and
+# only an INSERT (insert_cue, replace_cues) makes a new one, which the same
+# call then indexes. Nothing in this program runs VACUUM, the one thing that may
+# renumber an implicit rowid; one run outside it is undone by the rebuild at
+# the next start (`_fts_resync`), which stays unconditional -- the incremental
+# start-up resync (014459d) was reverted in 2a03d93 because it left a stale
+# index stale for good.
+#
+# The FTS row is deleted before it is inserted: FTS5 refuses a duplicate
+# explicit rowid rather than replacing it.
 
-def _fts_sync(db: sqlite3.Connection, owner: str) -> None:
-    """Put one owner's cues back into the FTS table. The caller holds the lock.
+_FTS_INSERT = ("INSERT INTO cues_fts (rowid, owner, cue_id, text, tr_text) "
+               "VALUES (?,?,?,?,?)")
 
-    It does not commit: the write that triggered it commits, and a start-up
-    resync commits for all of them at once."""
-    db.execute("DELETE FROM cues_fts WHERE owner = ?", (owner,))
-    rows = db.execute(
-        "SELECT cue_id, text, tr FROM cues WHERE owner = ?",
-        (owner,)).fetchall()
-    db.executemany(
-        "INSERT INTO cues_fts (owner, cue_id, text, tr_text) VALUES (?,?,?,?)",
-        [(owner, r["cue_id"], r["text"] or "",
-          " ".join(str(v) for v in (json.loads(r["tr"] or "{}").values() or []) if v))
-         for r in rows])
+
+def _fts_text(tr: str) -> str:
+    """The translation side of an FTS row: every backend's text, one string."""
+    return " ".join(str(v) for v in (json.loads(tr or "{}").values() or []) if v)
+
+
+def _fts_row(r) -> tuple:
+    """The FTS row for one `cues` row (rowid, owner, cue_id, text, tr)."""
+    return (r["rowid"], r["owner"], r["cue_id"], r["text"] or "", _fts_text(r["tr"]))
+
+
+def _fts_put(db: sqlite3.Connection, owner: str, cue_id: int) -> None:
+    """Re-index one cue after it was inserted or changed. The caller holds the
+    lock and commits; this runs before that commit, so the cue and its FTS row
+    land together or not at all."""
+    r = db.execute("SELECT rowid, owner, cue_id, text, tr FROM cues "
+                   "WHERE owner = ? AND cue_id = ?", (owner, int(cue_id))).fetchone()
+    if r is None:
+        return
+    db.execute("DELETE FROM cues_fts WHERE rowid = ?", (r["rowid"],))
+    db.execute(_FTS_INSERT, _fts_row(r))
+
+
+def _fts_drop(db: sqlite3.Connection, owner: str,
+              cue_ids: list[int] | None = None) -> None:
+    """Un-index an owner's cues, or only `cue_ids` of them. It goes by the cue
+    rowids, so it has to run **before** the cues themselves are deleted."""
+    sql = ("DELETE FROM cues_fts WHERE rowid IN "
+           "(SELECT rowid FROM cues WHERE owner = ?")
+    args: list = [owner]
+    if cue_ids is not None:
+        sql += f" AND cue_id IN ({','.join('?' * len(cue_ids))})"
+        args += [int(i) for i in cue_ids]
+    db.execute(sql + ")", args)
+
+
+def _fts_fill(db: sqlite3.Connection, owner: str | None = None) -> None:
+    """Index every cue of `owner`, or every cue there is. The caller has
+    already removed what these rows would collide with."""
+    sql = "SELECT rowid, owner, cue_id, text, tr FROM cues"
+    args: tuple = ()
+    if owner is not None:
+        sql += " WHERE owner = ?"
+        args = (owner,)
+    db.executemany(_FTS_INSERT, [_fts_row(r) for r in db.execute(sql, args)])
 
 
 def _fts_resync(db: sqlite3.Connection) -> None:
@@ -823,11 +891,10 @@ def _fts_resync(db: sqlite3.Connection) -> None:
 
     It runs once at every start: the table a write cut short, or a version
     that did not know the table at all, left half stale cannot outlive one
-    restart. The cost is the size of the subtitle table, which is small."""
+    restart. It is also what moves an index written before rowids were shared
+    onto them. The cost is the size of the subtitle table, which is small."""
     db.execute("DELETE FROM cues_fts")
-    owners = [r["owner"] for r in db.execute("SELECT DISTINCT owner FROM cues")]
-    for owner in owners:
-        _fts_sync(db, owner)
+    _fts_fill(db)
     db.commit()
 
 

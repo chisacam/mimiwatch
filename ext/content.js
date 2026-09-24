@@ -70,6 +70,10 @@
   // The array is edited in place, so `cues` is grabbed once and used as it is.
   const store = MimiCues.create();
   const cues = store.cues;
+  // The lines that changed since the log was last drawn, as the store reported
+  // them, so the log touches only those. A reset of the store resets the log
+  // too (MimiPanel.reset), and a reset log draws every line on its next pass.
+  const pending = { changed: new Map(), removed: new Set() };
   let live = false, receiving = false;
   // Has the line to the server broken. True while the service worker is trying
   // to reattach. The popup's status line tells "no subtitle in the current
@@ -161,10 +165,14 @@
         });
         log("put the subtitle log where the chat was");
       }
-      MimiPanel.render(cues, { trKey });
+      MimiPanel.render(cues, { trKey, changed: pending.changed, removed: pending.removed });
     } else if (MimiPanel.mounted()) {
       MimiPanel.unmount();
     }
+    // With the log down, nothing is kept for it: the next mount draws every
+    // line anyway.
+    pending.changed.clear();
+    pending.removed.clear();
   }
 
   function apply() {
@@ -172,6 +180,14 @@
     // the `if (!ov) return` below, so with the overlay not yet (or no longer)
     // there, switching the checkbox off did not make the log go away.
     syncPanel();
+    fit();
+  }
+
+  /* The overlay's half of apply(), which is all a resize needs. Resizing
+   * used to run the whole of apply() on every resize event, unthrottled --
+   * dozens a second while a window edge is dragged -- and each one sent every
+   * line of the subtitle log through a render pass. */
+  function fit() {
     if (!ov) return;
     ov.setView({ mode: prefs.mode, showPrev: prefs.showPrev });
     // YouTube's full screen grows the player element itself. Scaling against
@@ -210,18 +226,23 @@
    * render loop (100ms) it would sweep hundreds of lines ten times a second,
    * and the log only changes when a new line arrives. */
   let panelDirty = false;
+  const touched = (c) => { if (c) { pending.changed.set(c.id, c); pending.removed.delete(c.id); } };
+  const gone = (id) => { pending.changed.delete(id); pending.removed.add(id); };
   setInterval(() => {
     if (!panelDirty) return;
     panelDirty = false;
-    if (prefs.panel) syncPanel();
+    syncPanel();
   }, 400);
 
   function onEvent(e) {
     panelDirty = true;
-    if (e.type === "cue") store.upsert(e);
-    else if (e.type === "translation") store.translate(e.id, trKey, e.text);
-    else if (e.type === "drop") store.drop(e.id);
-    else if (e.type === "clear") store.reset();
+    if (e.type === "cue") {
+      const r = store.upsert(e);
+      r.removed.forEach(gone);
+      touched(r.cue);
+    } else if (e.type === "translation") touched(store.translate(e.id, trKey, e.text));
+    else if (e.type === "drop") { if (store.drop(e.id)) gone(e.id); }
+    else if (e.type === "clear") { store.reset(); MimiPanel.reset(); }
     else if (e.type === "status") {
       // The server sent its whole backlog rather than what came after our id
       // (the id was too old, or the server restarted). That backlog does not
@@ -504,6 +525,13 @@
     if (mount()) startTick();
   }, 1500);
 
-  window.addEventListener("resize", () => { if (ov) apply(); });
-  document.addEventListener("fullscreenchange", () => { if (ov) apply(); });
+  // One fit per frame at most, however many resize events a frame brings.
+  let fitQueued = false;
+  const fitSoon = () => {
+    if (fitQueued || !ov) return;
+    fitQueued = true;
+    requestAnimationFrame(() => { fitQueued = false; fit(); });
+  };
+  window.addEventListener("resize", fitSoon);
+  document.addEventListener("fullscreenchange", fitSoon);
 })();

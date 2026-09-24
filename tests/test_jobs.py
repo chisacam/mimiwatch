@@ -188,3 +188,51 @@ def test_probe_failure_is_not_system_exit(monkeypatch):
         assert isinstance(exc, Exception) and not isinstance(exc, SystemExit)
     else:
         raise AssertionError("VodError should have been raised")
+
+
+def _outline_ready(monkeypatch):
+    """A recording with subtitles and an engine that says it can write -- and
+    no thread. `_spawn` is stubbed so the job stays `running` for as long as the
+    test needs, which is the window a second click lands in."""
+    _seed_video()
+    monkeypatch.setattr(jobs.mw_translate, "can_write", lambda spec: True)
+    monkeypatch.setattr(jobs, "_spawn", lambda *a, **k: None)
+
+
+def test_a_second_outline_rebuild_joins_the_one_running(monkeypatch):
+    _outline_ready(monkeypatch)
+    first = jobs.start_outline(VID)
+    again = jobs.start_outline(VID)
+    assert again["job"] == first["job"] and again.get("already") is True
+    running = [j for j in jobs._jobs.values()
+               if j.get("kind") == "outline" and j.get("owner") == VID
+               and j["state"] == "running"]
+    assert len(running) == 1
+    assert jobs.outline_job(VID)["id"] == first["job"]
+
+
+def test_a_finished_outline_rebuild_does_not_block_the_next(monkeypatch):
+    _outline_ready(monkeypatch)
+    first = jobs.start_outline(VID)
+    jobs._note(first["job"], state="done")
+    assert jobs.outline_job(VID) is None
+    second = jobs.start_outline(VID)
+    assert second["job"] != first["job"] and not second.get("already")
+
+
+def test_outline_rebuilds_for_different_owners_run_side_by_side(monkeypatch):
+    _outline_ready(monkeypatch)
+    store.save_doc("vid2", {"id": "vid2", "source_lang": "ja", "viewer_lang": "ko"})
+    store.replace_cues("vid2", [{"start": 0, "end": 1, "text": "z", "lang": "ja",
+                                 "translations": {}}])
+    a = jobs.start_outline(VID)
+    b = jobs.start_outline("vid2")
+    assert a["job"] != b["job"] and not b.get("already")
+
+
+def test_outline_rebuild_names_why_it_refused(monkeypatch):
+    monkeypatch.setattr(jobs, "_spawn", lambda *a, **k: None)
+    assert jobs.start_outline("nothing-here") == {"error": "no-subtitles"}
+    _seed_video()
+    monkeypatch.setattr(jobs.mw_translate, "can_write", lambda spec: False)
+    assert jobs.start_outline(VID)["error"] == "backend-cannot-write"

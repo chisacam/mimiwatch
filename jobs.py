@@ -540,11 +540,35 @@ def _publish_outline(owner: str, doc: dict, job_id: str = ""):
                  "error": doc.get("error") or ""})
 
 
+# Held across "is a rebuild already running for this owner" and the insert of
+# a new one (start_outline). `_lock` cannot be it: `_new_job` takes `_lock`
+# itself, and it is not re-entrant.
+_outline_start = threading.Lock()
+
+
+def outline_job(owner: str) -> dict | None:
+    """The rebuild running for this owner right now, if there is one.
+
+    The screen asks this through `/api/outline/<owner>` as well, so a page
+    opened while a rebuild is under way shows it running instead of offering
+    to start a second one.
+    """
+    owner = store.owner_of(owner)
+    with _lock:
+        for j in _jobs.values():
+            if (j.get("kind") == "outline" and j.get("owner") == owner
+                    and j.get("state") == "running"):
+                return dict(j)
+    return None
+
+
 def start_outline(owner: str) -> dict:
     """Write the document for a recording, or for a session that has finished.
 
     Answers `{"job": <id>}`, or `{"error": <reason>}` with one of three
     reasons: `no-subtitles`, `session-still-live` and `backend-cannot-write`.
+    While a rebuild for this owner is already running it answers that job's id
+    (with `"already": true`) instead of starting another.
     They are ids rather than sentences because the screen has to tell them
     apart to say anything useful about any of them, and the last one is
     already the id `live.outline_set` refuses with -- one string for what is
@@ -586,12 +610,25 @@ def start_outline(owner: str) -> dict:
     g = store.glossary(meta.get("channel_key") or "")
     terms = (g or {}).get("terms") or None
 
-    job_id = _new_job(kind="outline", value=owner, owner=owner,
-                      title=meta.get("title") or "",
-                      backend=(spec or {}).get("id") or "",
-                      glossary=(g["name"] if g else ""),
-                      glossary_terms=len(terms or []),
-                      total=len(rows), windows=0, sections=0)
+    # The scan and the insert are one step. The button used to stay enabled
+    # while a rebuild ran, so a double click started two jobs, and two jobs
+    # each start from `mw_outline.empty()` and save over one `outlines` row
+    # window by window -- the document on screen flipped between two half
+    # documents until the slower one finished. The server answers two requests
+    # on two threads, so a check outside this lock would let both through.
+    # A second request gets the job already running rather than an error: it
+    # asked for exactly what is already happening.
+    with _outline_start:
+        existing = outline_job(owner)
+        if existing is not None:
+            return {"job": existing["id"], "total": existing.get("total", 0),
+                    "already": True}
+        job_id = _new_job(kind="outline", value=owner, owner=owner,
+                          title=meta.get("title") or "",
+                          backend=(spec or {}).get("id") or "",
+                          glossary=(g["name"] if g else ""),
+                          glossary_terms=len(terms or []),
+                          total=len(rows), windows=0, sections=0)
 
     def run():
         try:

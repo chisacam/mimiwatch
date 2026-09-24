@@ -254,3 +254,106 @@ def test_deleting_a_recording_takes_its_document_with_it():
     store.save_outline("v9", {"sections": [{"title": "A", "bullets": [], "t": 0}]})
     store.delete_doc("v9")
     assert store.outline("v9") is None
+
+
+# ---- Search: trigram, and LIKE under three characters -------------------------
+
+def _search_corpus():
+    store.replace_cues("jp", [
+        {"start": 1, "text": "今日はみんなで配信を見ていきましょう", "translations": {"g": "오늘은 다 같이 방송을 봅시다"}},
+        {"start": 2, "text": "本当にありがとうございました", "translations": {"g": "Thank you so much"}},
+        {"start": 3, "text": "歌います", "translations": {"g": "노래합니다"}},
+        {"start": 4, "text": "100% 本気、under_score", "translations": {}},
+    ])
+
+
+def test_search_finds_japanese_inside_a_sentence():
+    # Under unicode61 the whole sentence was one token, so this found nothing.
+    _search_corpus()
+    got = store.search("ありがとう")
+    assert [r["start"] for r in got] == [2]
+    assert got[0]["snip"] == "本当に«ありがとう»ございました"
+
+
+def test_search_short_terms_go_to_like():
+    _search_corpus()
+    assert [r["start"] for r in store.search("配信")] == [1]      # 2 chars, Japanese
+    assert [r["start"] for r in store.search("歌")] == [3]        # 1 char
+    hit = store.search("방송")                                    # 2 chars, in the translation
+    assert [r["start"] for r in hit] == [1]
+    assert "«방송»" in hit[0]["snip_tr"] and "«" not in hit[0]["snip"]
+
+
+def test_search_korean_and_english_on_the_trigram_path():
+    _search_corpus()
+    assert [r["start"] for r in store.search("노래합니다")] == [3]
+    got = store.search("THANK")                                   # case-insensitive
+    assert [r["start"] for r in got] == [2] and got[0]["snip_tr"] == "«Thank» you so much"
+
+
+def test_search_mixed_query_ands_every_term():
+    # One term under three characters sends the whole query to LIKE, and the
+    # terms still stand in AND, source or translation.
+    _search_corpus()
+    got = store.search("みんなで 방송")
+    assert [r["start"] for r in got] == [1]
+    assert "«みんなで»" in got[0]["snip"] and "«방송»" in got[0]["snip_tr"]
+    assert store.search("ありがとう 歌") == []
+
+
+def test_search_escapes_like_wildcards():
+    _search_corpus()
+    assert [r["start"] for r in store.search("0%")] == [4]         # not "anything after 0"
+    assert [r["start"] for r in store.search("%")] == [4]
+    assert store.search("_") and [r["start"] for r in store.search("r_")] == [4]
+    assert store.search("\\") == [] and store.search('"') == []
+
+
+def test_snippet_cuts_long_lines_and_marks_every_term():
+    long = "あ" * 60 + "配信" + "い" * 60
+    s = store._snippet(long, ["配信"])
+    assert s.startswith("…") and s.endswith("…") and "«配信»" in s
+    assert len(s) <= store.SNIPPET_CHARS + 4
+    assert store._snippet("a b a", ["a"]) == "«a» b «a»"
+    assert store._snippet("no hit here", ["zzz"]) == "no hit here"
+
+
+def test_unicode61_table_is_migrated_at_start():
+    # A database made before the tokenizer changed: IF NOT EXISTS alone would
+    # keep its unicode61 table for good.
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": "本当にありがとうございました"})
+    with store._lock:
+        db = store._connect()
+        db.execute("DROP TABLE cues_fts")
+        db.execute("CREATE VIRTUAL TABLE cues_fts USING fts5("
+                   "owner UNINDEXED, cue_id UNINDEXED, text, tr_text)")
+        db.execute("INSERT INTO cues_fts (rowid, owner, cue_id, text, tr_text) "
+                   "SELECT rowid, owner, cue_id, text, '' FROM cues")
+        db.commit()
+    assert store.search("ありがとう") == []                      # the old tokenizer
+    _restart()
+    sql = store._connect().execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'cues_fts'").fetchone()[0]
+    assert "trigram" in sql
+    assert store.search("ありがとう")
+    _fts_matches_a_rebuild()
+    # Already migrated: a second start leaves the table alone.
+    assert store._fts_migrate(store._connect()) is False
+
+
+def test_a_database_without_the_fts_table_gets_one():
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": "ありがとう"})
+    with store._lock:
+        store._connect().execute("DROP TABLE cues_fts")
+        store._connect().commit()
+    _restart()
+    assert store.search("ありがとう")
+    _fts_matches_a_rebuild()
+
+
+def _restart():
+    """What a process start does: a new connection, then init()."""
+    with store._lock:
+        store._db.close()
+        store._db = None
+    store.init()

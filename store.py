@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -107,17 +108,26 @@ CREATE TABLE IF NOT EXISTS watchers (
 """
 
 # The full-text table, defined here and nowhere else: the schema below appends
-# it, and every write into it goes through the `_fts_*` helpers at the bottom
-# of this file. Its rowid is the cue's rowid (see there). The tokenizer is the
-# FTS5 default. IF NOT EXISTS leaves an existing table as it is, so changing
-# this definition means dropping the table first -- the start-up rebuild
-# refills it either way.
+# it, every write into it goes through the `_fts_*` helpers at the bottom of
+# this file, and `_fts_migrate` compares an existing table against this text.
+# Its rowid is the cue's rowid (see there).
+#
+# The tokenizer is trigram. With the default unicode61 a run of Japanese is one
+# token up to the next punctuation, so a word inside a sentence was not found:
+# on a copy of the real database (20,290 cues, 73% Japanese) `ありがとう` came
+# back for 34 of the 335 lines that contain it, `おはよう` for 0 of 11
+# (measurements/RESULTS.md section 55). Trigram matches any substring of three
+# characters or more; shorter terms go to LIKE in `search`. Its defaults are
+# kept: case-insensitive, and no diacritic folding -- folding (`remove_diacritics`)
+# leaves kana and hangul alone, so it would only help Latin text and would make
+# the index disagree with the LIKE path, which does not fold.
 FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS cues_fts USING fts5(
   owner UNINDEXED,
   cue_id UNINDEXED,
   text,
-  tr_text
+  tr_text,
+  tokenize='trigram'
 );
 """
 SCHEMA += FTS_SCHEMA
@@ -145,8 +155,11 @@ def _connect() -> sqlite3.Connection:
         _db.execute("PRAGMA synchronous=NORMAL")
         _db.execute("PRAGMA busy_timeout=5000")
         _migrate_columns(_db)
+        stale_fts = _fts_migrate(_db)
         _db.executescript(SCHEMA)
         _migrate_columns(_db)      # a freshly made table has nothing to move
+        if stale_fts:
+            _fts_fill(_db)         # init() rebuilds again; a caller without it is not left empty
         _db.commit()
     return _db
 
@@ -839,6 +852,28 @@ _FTS_INSERT = ("INSERT INTO cues_fts (rowid, owner, cue_id, text, tr_text) "
                "VALUES (?,?,?,?,?)")
 
 
+def _fts_ddl(sql: str) -> str:
+    """A CREATE statement as sqlite_master keeps it: IF NOT EXISTS dropped,
+    whitespace and the trailing semicolon ignored."""
+    return " ".join(sql.replace("IF NOT EXISTS ", "").split()).rstrip(";").strip()
+
+
+def _fts_migrate(db: sqlite3.Connection) -> bool:
+    """Drop `cues_fts` when it was made from a definition other than
+    FTS_SCHEMA, so SCHEMA makes it again. True when it did.
+
+    IF NOT EXISTS never changes a table that is there, so without this a
+    database made before the tokenizer changed would keep unicode61 for good
+    -- and every row in it is derived from `cues`, so nothing is lost by
+    dropping it: `_fts_resync` refills it at the same start."""
+    row = db.execute("SELECT sql FROM sqlite_master "
+                     "WHERE type = 'table' AND name = 'cues_fts'").fetchone()
+    if row is None or _fts_ddl(row[0]) == _fts_ddl(FTS_SCHEMA):
+        return False
+    db.execute("DROP TABLE cues_fts")
+    return True
+
+
 def _fts_text(tr: str) -> str:
     """The translation side of an FTS row: every backend's text, one string."""
     return " ".join(str(v) for v in (json.loads(tr or "{}").values() or []) if v)
@@ -898,27 +933,88 @@ def _fts_resync(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+# How much of a line a search result shows around the hit, in characters.
+# FTS5's snippet() counts tokens, and a trigram token is one character, so
+# the 8 it was given under unicode61 (8 words) would have been 8 characters;
+# it also dropped the mark on a phrase that straddled its window
+# ("everyone for" at 24 came back as «everyone»). Both paths build the
+# snippet here instead, the same way.
+SNIPPET_CHARS = 40
+
+
+def _snippet(text: str, terms: list[str]) -> str:
+    """`text` cut to about SNIPPET_CHARS around its first hit, every term in
+    that window marked «» and a cut end marked …, the conventions FTS5's
+    snippet() used. With no hit it is the head of the line, unmarked -- the
+    page takes the side that carries a mark."""
+    text = text or ""
+    pat = re.compile("|".join(re.escape(t) for t in
+                              sorted(set(terms), key=len, reverse=True)),
+                     re.IGNORECASE)
+    hit = pat.search(text)
+    lo = 0 if hit is None else max(0, hit.start() - SNIPPET_CHARS // 4)
+    hi = min(len(text), max(lo + SNIPPET_CHARS, hit.end() if hit else 0))
+    out, at = [], lo
+    for m in pat.finditer(text, lo, hi):
+        if m.end() > hi:
+            break
+        out += [text[at:m.start()], "«", m.group(), "»"]
+        at = m.end()
+    out.append(text[at:hi])
+    return ("…" if lo > 0 else "") + "".join(out) + ("…" if hi < len(text) else "")
+
+
+def _like(term: str) -> str:
+    """A LIKE pattern that matches `term` literally anywhere (ESCAPE '\\')."""
+    return "%" + re.sub(r"([\\%_])", r"\\\1", term) + "%"
+
+
 def search(q: str, limit: int = 50) -> list[dict]:
     """Full-text search over the subtitle source text and its translations.
 
     The query is free text, not FTS5 syntax: each whitespace-separated word
-    is quoted and the words stand in AND. A word that contains a quote is
-    doubled inside, the way a quoted FTS5 term says a literal quote, so
-    nothing the user types can break the statement."""
-    words = ['"' + w.replace('"', '""') + '"' for w in (q or "").split()]
-    if not words:
+    is one term and the terms stand in AND, each found in the source or in
+    the translation.
+
+    A trigram index cannot look up a term shorter than three characters, and
+    in Japanese and Korean those are ordinary words (`配信`, `歌`, `방송`), so
+    such a query is answered by LIKE instead. The rule is per query, not per
+    term: **if any term is shorter than three characters, the whole query goes
+    to LIKE**. Mixing the two would mean ANDing a ranked FTS answer with an
+    unranked scan, and a plain scan over every cue is about 2 ms anyway
+    (section 55). The LIKE answer has no rank, so it is ordered by the most
+    recently touched video or session first, then by time within it -- the
+    order the library list already uses.
+
+    On the MATCH path each term is quoted, a quote inside doubled, the way a
+    quoted FTS5 term says a literal quote; on the LIKE path `%`, `_` and `\\`
+    are escaped. Nothing the user types can break either statement."""
+    terms = (q or "").split()
+    if not terms:
         return []
     # The time and the text come back from the cues table: the FTS table holds
     # the words, the cues table holds the shape of the line.
-    rows = _rows(
-        "SELECT c.owner, c.cue_id, c.start, c.text, "
-        "snippet(cues_fts, 2, '«', '»', '…', 8) AS snip, "
-        "snippet(cues_fts, 3, '«', '»', '…', 8) AS snip_tr "
-        "FROM cues_fts JOIN cues c ON c.owner = cues_fts.owner "
-        " AND c.cue_id = cues_fts.cue_id "
-        "WHERE cues_fts MATCH ? ORDER BY rank LIMIT ?",
-        (" ".join(words), limit))
-    return [dict(r) for r in rows]
+    head = ("SELECT c.owner, c.cue_id, c.start, c.text, "
+            "f.text AS ftext, f.tr_text AS ftr "
+            "FROM cues_fts f JOIN cues c ON c.owner = f.owner "
+            " AND c.cue_id = f.cue_id ")
+    if all(len(t) >= 3 for t in terms):
+        rows = _rows(head + "WHERE cues_fts MATCH ? ORDER BY f.rank LIMIT ?",
+                     (" ".join('"' + t.replace('"', '""') + '"' for t in terms),
+                      limit))
+    else:
+        where = " AND ".join("(f.text LIKE ? ESCAPE '\\' "
+                             "OR f.tr_text LIKE ? ESCAPE '\\')" for _ in terms)
+        args = [p for t in terms for p in (_like(t),) * 2]
+        rows = _rows(head +
+                     "LEFT JOIN sessions s ON s.id = c.owner "
+                     "LEFT JOIN docs d ON d.id = c.owner "
+                     f"WHERE {where} "
+                     "ORDER BY COALESCE(s.updated, d.updated, 0) DESC, "
+                     " c.owner, c.start, c.cue_id LIMIT ?", (*args, limit))
+    return [{"owner": r["owner"], "cue_id": r["cue_id"], "start": r["start"],
+             "text": r["text"], "snip": _snippet(r["ftext"], terms),
+             "snip_tr": _snippet(r["ftr"], terms)} for r in rows]
 
 
 def owner_kind(owner: str) -> str:

@@ -1009,11 +1009,23 @@ class LiveSession:
         self._text_of: dict[int, str] = {}
 
     # ---- fan-out ----------------------------------------------------------
-    def subscribe(self) -> queue.Queue:
+    def subscribe(self) -> tuple[queue.Queue, int]:
+        """A queue for the events from now on, and the id of the last event
+        that went out before it.
+
+        The two are taken under the one lock `emit` numbers and fans out under,
+        so every event numbered at or below the id is one this queue will never
+        see, and every event above it is one it will. The SSE handler hands the
+        id to a client that was sent the whole backlog instead of a replay: it
+        used to go out with no id at all, so a stream that rotated with nothing
+        new in it came back without `Last-Event-ID` and received the entire
+        backlog again -- 8,000 cues, about 1.8 MB, every 4.5 minutes, on every
+        multiview tile that was not focused and through every long silence.
+        """
         q: queue.Queue = queue.Queue()
         with _lock:
             self._subs.append(q)
-        return q
+            return q, self._eseq
 
     def unsubscribe(self, q: queue.Queue):
         with _lock:

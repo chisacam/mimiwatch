@@ -75,6 +75,10 @@
   // to reattach. The popup's status line tells "no subtitle in the current
   // segment" from "server connection lost".
   let stalled = false;
+  // The id of the last server event folded in, for the session in
+  // `currentValue`. Handed to the service worker when the port is reattached,
+  // so the server resends only what came after it.
+  let lastId = null;
   let tickTimer = null;
   let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55,
                 pos: null, offset: 0, panel: false };
@@ -217,19 +221,33 @@
     else if (e.type === "drop") store.drop(e.id);
     else if (e.type === "clear") store.reset();
     else if (e.type === "status") {
+      // The server sent its whole backlog rather than what came after our id
+      // (the id was too old, or the server restarted). That backlog does not
+      // mention the lines dropped or cleared meanwhile, so what is held goes
+      // before it is folded in.
+      if (e.full && cues.length) { store.reset(); MimiPanel.reset(); }
       live = true;
       receiving = ["starting", "loading", "running"].includes(e.state);
 
     }
   }
 
-  function attach(value, videoId) {
+  /* `resume` is for a port Chrome cut under us: the subtitles held stay, and
+   * the server is asked for what came after `lastId`. It used to reset here
+   * every time, so the log blanked and lost its scroll every 5 minutes while
+   * the whole backlog came back one port message per event. Any other attach
+   * (a new pick, a new server address) starts from nothing. */
+  function attach(value, videoId, resume) {
+    const keep = !!resume && value === currentValue && lastId != null;
     currentValue = value;
-    store.reset(); live = false; receiving = false; stalled = false;
-    trKey = LIVE_KEY;
+    if (!keep) {
+      store.reset(); live = false; receiving = false; lastId = null;
+      trKey = LIVE_KEY;
+      MimiPanel.reset();
+    }
+    stalled = false;
     expectVideo = videoId || "";
     dismissAsk();
-    MimiPanel.reset();
     if (!mount()) {
       log("no player found. Pick it again on a video page.");
       return;
@@ -238,7 +256,11 @@
     if (port) { try { port.disconnect(); } catch (_) {} }
     port = chrome.runtime.connect({ name: "cues" });
     port.onMessage.addListener((m) => {
-      if (m.type === "event") { stalled = false; onEvent(m.data); }
+      if (m.type === "event") {
+        stalled = false;
+        if (m.id != null) lastId = String(m.id);
+        onEvent(m.data);
+      }
       else if (m.type === "stalled") stalled = true;
       else if (m.type === "ended") {
         // A finished session has the server send the whole backlog and close.
@@ -265,10 +287,12 @@
       // lifetime rule). If we are receiving it reattaches -- otherwise the
       // subtitles stop quietly and "server connection lost" does not even show.
       if (currentValue === value && receiving !== false) {
-        setTimeout(() => { if (!port && currentValue === value) attach(value, videoId); }, 1000);
+        setTimeout(() => {
+          if (!port && currentValue === value) attach(value, videoId, true);
+        }, 1000);
       }
     });
-    port.postMessage({ type: "attach", value });
+    port.postMessage({ type: "attach", value, lastId: keep ? lastId : null });
     startTick();
     // Called once more after the port is up. The apply() inside mount() runs
     // ahead of this line, and at that point there is no port yet, so the

@@ -373,7 +373,14 @@ async function attachLive(tile) {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
     if (m.type === "cue") onLiveCue(m, tile);
     else if (m.type === "translation") onLiveTranslation(m, tile);
-    else if (m.type === "status") onLiveStatus(m, tile);
+    else if (m.type === "status") {
+      // The whole backlog came where a resume was asked for (EventSource sent
+      // its Last-Event-ID, and it was too old or the server restarted). It
+      // does not mention the lines dropped or cleared meanwhile, so what the
+      // tile holds goes first -- kept, those lines stayed on screen for good.
+      if (m.full && live.store.size()) clearCues(tile);
+      onLiveStatus(m, tile);
+    }
     // The server closes the stream deliberately every 4.5 minutes (because of
     // the extension service worker's 5-minute rule). The onerror that follows
     // shortly is not a break, so "Live connection lost" is not raised.

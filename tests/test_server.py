@@ -596,3 +596,86 @@ def test_video_playurl_resolves_a_recording_when_it_is_asked(monkeypatch):
     f = Fake()
     handler(f, {"id": vid})
     assert f.sent[0] == 502 and "no playable file" in f.sent[1]["error"]
+
+
+def _sse_frames(handler_cls, sess, last_id=None):
+    """Runs the live SSE handler once in this process and splits what it wrote
+    into (id, event) frames. The rotation is set to zero outside, so the
+    handler sends its backlog or replay, says `rotate` and returns."""
+    import io
+
+    class Fake:
+        close_connection = False
+
+        def __init__(self):
+            self.headers = {"Last-Event-ID": last_id} if last_id else {}
+            self.wfile = io.BytesIO()
+
+        def send_response(self, code):
+            pass
+
+        def send_header(self, k, v):
+            pass
+
+        def end_headers(self):
+            pass
+
+    f = Fake()
+    handler_cls._sse(f, sess.id, sess)
+    frames = []
+    for chunk in f.wfile.getvalue().decode().split("\n\n"):
+        fid, data = None, None
+        for line in chunk.split("\n"):
+            if line.startswith("id: "):
+                fid = line[4:]
+            elif line.startswith("data: "):
+                data = json.loads(line[6:])
+        if data is not None:
+            frames.append((fid, data))
+    return frames
+
+
+def test_a_full_backlog_ends_on_an_id_a_reconnect_resumes_from(session, monkeypatch):
+    """The whole backlog used to go out with no id at all.
+
+    A stream that reached its rotation with nothing new said in it -- an
+    unfocused multiview tile, a long silence -- left the client holding no
+    `Last-Event-ID`, so the reconnect was sent the entire backlog again, every
+    4.5 minutes. The backlog now ends on the session's event number, and a
+    reconnect carrying it is sent only what came after.
+    """
+    import live
+    import server as srv
+
+    monkeypatch.setattr(srv, "SSE_ROTATE_S", 0)
+    s = session
+    live._sessions[s.id] = s
+    try:
+        for n in range(3):
+            s.audio_s = n * 1.0
+            s.publish_line("final", f"line {n}", "ja", "")
+
+        first = _sse_frames(srv.Handler, s)
+        body = [(i, e) for i, e in first if e["type"] != "rotate"]
+        assert body[0][1]["type"] == "status" and body[0][1]["full"] is True
+        assert [e["text"] for _, e in body if e["type"] == "cue"] == [
+            "line 0", "line 1", "line 2"]
+        # One id, on the last frame -- a client cut off halfway through then
+        # holds none and is sent the whole thing again, rather than resuming
+        # past lines it never received.
+        ids = [i for i, _ in body if i is not None]
+        assert len(ids) == 1 and body[-1][0] == ids[0]
+
+        # Nothing new: the reconnect is sent nothing but the rotation mark.
+        again = _sse_frames(srv.Handler, s, ids[0])
+        assert [e["type"] for _, e in again] == ["rotate"]
+
+        # Something new: only that, under ids past the one held.
+        s.audio_s = 4.0
+        s.publish_line("final", "line 3", "ja", "")
+        more = [(i, e) for i, e in _sse_frames(srv.Handler, s, ids[0])
+                if e["type"] != "rotate"]
+        assert [e.get("text") for _, e in more] == ["line 3"]
+        assert all(int(i) > int(ids[0]) for i, _ in more)
+    finally:
+        live._sessions.clear()

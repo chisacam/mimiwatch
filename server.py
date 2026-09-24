@@ -491,21 +491,35 @@ class Handler(BaseHTTPRequestHandler):
         in between, and a line arriving twice is harmless because the browser
         keys cues by id and updates in place.
 
-        **A client that reattaches gets only what it missed.** Every frame
-        that goes out carries an `id:`, and when the browser (EventSource) or
-        the extension arrives holding a `Last-Event-ID`, only what follows it
-        in the recent event record the session keeps is sent again. Previously
+        **A client that reattaches gets only what it missed.** Replayed and
+        live frames carry an `id:`, and when the browser (EventSource) or the
+        extension arrives holding a `Last-Event-ID`, only what follows it in
+        the recent event record the session keeps is sent again. Previously
         every disconnect resent two hours of backlog whole -- and the extension
         reattaches every 3 seconds whenever the server stalls for a moment, so
         it was on every one of those. Outside the record (disconnected too
         long, or the server restarted) everything is sent again.
+
+        **The whole backlog ends on an id too.** It used to carry none, so a
+        stream that reached its rotation with nothing new said in it -- an
+        unfocused multiview tile, a long silence -- left the client holding no
+        id, and the reconnect was sent the entire backlog again: 8,000 cues,
+        about 1.8 MB and 16 ms of json per rotation, measured. The id is the
+        event number `subscribe` read in the same breath as it subscribed,
+        and it goes on the **last** frame only: a client cut off halfway
+        through the backlog then holds no id from it and is sent the whole
+        thing again, where one on the first frame would have it resume past
+        lines it never received. The backlog's status frame says `full`, so a
+        client that asked to resume and was not granted it knows to throw away
+        what it holds -- a backlog does not mention the lines dropped or
+        cleared while it was away.
         """
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
-        q = sess.subscribe() if sess is not None else None
+        q, seq0 = sess.subscribe() if sess is not None else (None, None)
         try:
             last = self.headers.get("Last-Event-ID")
             replay = sess.replay_since(last) if (sess is not None and last) else None
@@ -518,9 +532,20 @@ class Handler(BaseHTTPRequestHandler):
                 # is the only chance to say "why it stopped", so it is shaped
                 # like the rest of the status notifications.
                 status = sess.status() if sess is not None else live.status_of(sid)
-                for event in [{"type": "status", **status}, *live.backlog(sid)]:
+                events = [{"type": "status", **status, "full": True},
+                          *live.backlog(sid)]
+                # Everything numbered up to seq0 is already in what the backlog
+                # reads after subscribing: cues, translations and the document
+                # are stored before they are emitted, and the status and the
+                # document's live fields are read off the session as they are
+                # now. What comes after seq0 arrives through the queue. A line
+                # in both is harmless -- clients key cues by id.
+                for n, event in enumerate(events):
+                    head = (f"id: {seq0}\n" if seq0 is not None
+                            and n == len(events) - 1 else "")
                     self.wfile.write(
-                        f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode())
+                        f"{head}data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        .encode())
             self.wfile.flush()
             if q is None:
                 # A finished session has sent everything it had to send. The

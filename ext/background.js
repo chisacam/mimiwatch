@@ -388,8 +388,8 @@ async function pump(url, onEvent, signal, cursor) {
       // worker's "5 minutes per request" rule). It leaves a mark saying this is
       // not the end, and the caller reattaches in a moment.
       if (ev && ev.type === "rotate") { if (cursor) cursor.rotated = true; continue; }
-      onEvent(ev);
       if (id && cursor) cursor.lastId = id;
+      onEvent(ev, id);
     }
   }
 }
@@ -434,12 +434,21 @@ chrome.runtime.onConnect.addListener((port) => {
     // reattaches quietly. The server resends what was missed (or, past the log,
     // every subtitle piled up) right after connecting, so no line drops out of
     // a reattach.
-    const cursor = { lastId: null, rotated: false };
+    //
+    // The cursor starts from the id the content script sends. It used to start
+    // empty on every attach, and the content script reattaches whenever Chrome
+    // cuts the port (about every 5 minutes), so each of those cost the whole
+    // backlog again, one port message per event, with the subtitle log blanked
+    // and its scroll lost. Each event goes on with its id so the content script
+    // has one to send.
+    const cursor = { lastId: msg.lastId ? String(msg.lastId) : null, rotated: false };
     while (!closed) {
       abort = new AbortController();
       try {
         await pump(`${b}/api/live/events/${encodeURIComponent(sid)}`,
-                   (e) => { if (!closed) port.postMessage({ type: "event", data: e }); },
+                   (e, id) => {
+                     if (!closed) port.postMessage({ type: "event", data: e, id });
+                   },
                    abort.signal, cursor);
         if (closed) return;
         if (cursor.rotated) { cursor.rotated = false; continue; }   // back with Last-Event-ID shortly

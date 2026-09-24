@@ -70,11 +70,19 @@
   // The array is edited in place, so `cues` is grabbed once and used as it is.
   const store = MimiCues.create();
   const cues = store.cues;
+  // The lines that changed since the log was last drawn, as the store reported
+  // them, so the log touches only those. A reset of the store resets the log
+  // too (MimiPanel.reset), and a reset log draws every line on its next pass.
+  const pending = { changed: new Map(), removed: new Set() };
   let live = false, receiving = false;
   // Has the line to the server broken. True while the service worker is trying
   // to reattach. The popup's status line tells "no subtitle in the current
   // segment" from "server connection lost".
   let stalled = false;
+  // The id of the last server event folded in, for the session in
+  // `currentValue`. Handed to the service worker when the port is reattached,
+  // so the server resends only what came after it.
+  let lastId = null;
   let tickTimer = null;
   let prefs = { mode: "both", showPrev: true, size: 30, dim: 0.55,
                 pos: null, offset: 0, panel: false };
@@ -157,10 +165,14 @@
         });
         log("put the subtitle log where the chat was");
       }
-      MimiPanel.render(cues, { trKey });
+      MimiPanel.render(cues, { trKey, changed: pending.changed, removed: pending.removed });
     } else if (MimiPanel.mounted()) {
       MimiPanel.unmount();
     }
+    // With the log down, nothing is kept for it: the next mount draws every
+    // line anyway.
+    pending.changed.clear();
+    pending.removed.clear();
   }
 
   function apply() {
@@ -168,6 +180,14 @@
     // the `if (!ov) return` below, so with the overlay not yet (or no longer)
     // there, switching the checkbox off did not make the log go away.
     syncPanel();
+    fit();
+  }
+
+  /* The overlay's half of apply(), which is all a resize needs. Resizing
+   * used to run the whole of apply() on every resize event, unthrottled --
+   * dozens a second while a window edge is dragged -- and each one sent every
+   * line of the subtitle log through a render pass. */
+  function fit() {
     if (!ov) return;
     ov.setView({ mode: prefs.mode, showPrev: prefs.showPrev });
     // YouTube's full screen grows the player element itself. Scaling against
@@ -185,7 +205,9 @@
   function startTick() {
     stopTick();
     tickTimer = setInterval(() => {
-      if (!ov) return;
+      // A hidden tab shows nothing, so it draws nothing. The first tick after
+      // it comes back draws what is current.
+      if (!ov || document.hidden) return;
       const v = findVideo();
       if (!v) return;
       ov.setData({ cues, backend: trKey, live, receiving, speakers: false });
@@ -204,32 +226,51 @@
    * render loop (100ms) it would sweep hundreds of lines ten times a second,
    * and the log only changes when a new line arrives. */
   let panelDirty = false;
+  const touched = (c) => { if (c) { pending.changed.set(c.id, c); pending.removed.delete(c.id); } };
+  const gone = (id) => { pending.changed.delete(id); pending.removed.add(id); };
   setInterval(() => {
     if (!panelDirty) return;
     panelDirty = false;
-    if (prefs.panel) syncPanel();
+    syncPanel();
   }, 400);
 
   function onEvent(e) {
     panelDirty = true;
-    if (e.type === "cue") store.upsert(e);
-    else if (e.type === "translation") store.translate(e.id, trKey, e.text);
-    else if (e.type === "drop") store.drop(e.id);
-    else if (e.type === "clear") store.reset();
+    if (e.type === "cue") {
+      const r = store.upsert(e);
+      r.removed.forEach(gone);
+      touched(r.cue);
+    } else if (e.type === "translation") touched(store.translate(e.id, trKey, e.text));
+    else if (e.type === "drop") { if (store.drop(e.id)) gone(e.id); }
+    else if (e.type === "clear") { store.reset(); MimiPanel.reset(); }
     else if (e.type === "status") {
+      // The server sent its whole backlog rather than what came after our id
+      // (the id was too old, or the server restarted). That backlog does not
+      // mention the lines dropped or cleared meanwhile, so what is held goes
+      // before it is folded in.
+      if (e.full && cues.length) { store.reset(); MimiPanel.reset(); }
       live = true;
       receiving = ["starting", "loading", "running"].includes(e.state);
 
     }
   }
 
-  function attach(value, videoId) {
+  /* `resume` is for a port Chrome cut under us: the subtitles held stay, and
+   * the server is asked for what came after `lastId`. It used to reset here
+   * every time, so the log blanked and lost its scroll every 5 minutes while
+   * the whole backlog came back one port message per event. Any other attach
+   * (a new pick, a new server address) starts from nothing. */
+  function attach(value, videoId, resume) {
+    const keep = !!resume && value === currentValue && lastId != null;
     currentValue = value;
-    store.reset(); live = false; receiving = false; stalled = false;
-    trKey = LIVE_KEY;
+    if (!keep) {
+      store.reset(); live = false; receiving = false; lastId = null;
+      trKey = LIVE_KEY;
+      MimiPanel.reset();
+    }
+    stalled = false;
     expectVideo = videoId || "";
     dismissAsk();
-    MimiPanel.reset();
     if (!mount()) {
       log("no player found. Pick it again on a video page.");
       return;
@@ -238,7 +279,11 @@
     if (port) { try { port.disconnect(); } catch (_) {} }
     port = chrome.runtime.connect({ name: "cues" });
     port.onMessage.addListener((m) => {
-      if (m.type === "event") { stalled = false; onEvent(m.data); }
+      if (m.type === "event") {
+        stalled = false;
+        if (m.id != null) lastId = String(m.id);
+        onEvent(m.data);
+      }
       else if (m.type === "stalled") stalled = true;
       else if (m.type === "ended") {
         // A finished session has the server send the whole backlog and close.
@@ -265,10 +310,12 @@
       // lifetime rule). If we are receiving it reattaches -- otherwise the
       // subtitles stop quietly and "server connection lost" does not even show.
       if (currentValue === value && receiving !== false) {
-        setTimeout(() => { if (!port && currentValue === value) attach(value, videoId); }, 1000);
+        setTimeout(() => {
+          if (!port && currentValue === value) attach(value, videoId, true);
+        }, 1000);
       }
     });
-    port.postMessage({ type: "attach", value });
+    port.postMessage({ type: "attach", value, lastId: keep ? lastId : null });
     startTick();
     // Called once more after the port is up. The apply() inside mount() runs
     // ahead of this line, and at that point there is no port yet, so the
@@ -481,6 +528,13 @@
     if (mount()) startTick();
   }, 1500);
 
-  window.addEventListener("resize", () => { if (ov) apply(); });
-  document.addEventListener("fullscreenchange", () => { if (ov) apply(); });
+  // One fit per frame at most, however many resize events a frame brings.
+  let fitQueued = false;
+  const fitSoon = () => {
+    if (fitQueued || !ov) return;
+    fitQueued = true;
+    requestAnimationFrame(() => { fitQueued = false; fit(); });
+  };
+  window.addEventListener("resize", fitSoon);
+  document.addEventListener("fullscreenchange", fitSoon);
 })();

@@ -43,7 +43,13 @@
   // language changes, and putting the panel back up then would throw the reading
   // position away entirely -- so they are held on to and only the text is swapped.
   let follLabel = null, shown = 0;
-  let rows = new Map();          // cue id → row element
+  // cue id → { row, t, tx, tr, time, text, trText, note, cue }. The row's
+  // three children and what was last written into them are held here, so a
+  // pass neither looks them up again nor reads the text back out of the page.
+  let rows = new Map();
+  // Set by reset() and on mount: the next render goes over every line instead
+  // of only the ones it is told changed.
+  let whole = true;
   let hidden = null;             // the chat we hid. Used to put it back.
   let onSeek = null;
   let follow = true;
@@ -70,6 +76,10 @@
     node.className = "mw-panel";
     head = document.createElement("div");
     head.className = "mw-panel-head";
+    // The count starts at 0 on screen, so the one remembered has to as well
+    // -- render() writes it only when it differs.
+    shown = 0;
+    whole = true;
     // It does not use innerHTML. YouTube has Trusted Types switched on
     // (`require-trusted-types-for 'script'`), and putting a string into
     // innerHTML on that document is refused. Whether a content script is exempt
@@ -128,6 +138,7 @@
     if (chat && chat.style.display === "none") chat.style.display = "";
     node = list = head = follLabel = null;
     rows = new Map();
+    whole = true;
   }
 
   /* The language has changed. Only our own strings in the heading are rewritten
@@ -153,52 +164,79 @@
   };
 
   function rowFor(c) {
-    let row = rows.get(c.id);
-    if (!row) {
-      row = document.createElement("div");
+    let r = rows.get(c.id);
+    if (!r) {
+      const row = document.createElement("div");
       row.className = "mw-line";
       const body = document.createElement("div");
-      body.append(el("div", "mw-tx"), el("div", "mw-tr"));
-      row.append(el("div", "mw-t"), body);
+      r = { row, t: el("div", "mw-t"), tx: el("div", "mw-tx"), tr: el("div", "mw-tr"),
+            time: null, text: null, trText: null, note: null, cue: c };
+      body.append(r.tx, r.tr);
+      row.append(r.t, body);
       // Press a line in the log and it goes to that point. Here the real <video>
       // can be grabbed, so it just works -- something the script panel on the
-      // mimiwatch page cannot do, having no video to attach to.
+      // mimiwatch page cannot do, having no video to attach to. The cue is read
+      // at the click, since a refined line can move the time under the same id.
       row.addEventListener("click", () => {
-        if (onSeek) onSeek((c.start != null ? c.start : c.t) || 0);
+        const x = r.cue;
+        if (onSeek) onSeek((x.start != null ? x.start : x.t) || 0);
       });
-      rows.set(c.id, row);
+      rows.set(c.id, r);
       list.appendChild(row);
     }
-    return row;
+    return r;
+  }
+
+  /* Writes one line, touching only what differs from what was written last. */
+  function paint(c, trKey) {
+    const r = rowFor(c);
+    r.cue = c;
+    const time = fmt((c.start != null ? c.start : c.t) || 0);
+    const trText = (c.translations && c.translations[trKey]) || "";
+    const note = c.kind === "note";
+    if (r.time !== time) r.t.textContent = r.time = time;
+    if (r.text !== c.text) r.tx.textContent = r.text = c.text;
+    if (r.trText !== trText) r.tr.textContent = r.trText = trText;
+    if (r.note !== note) { r.row.classList.toggle("mw-note", note); r.note = note; }
+  }
+
+  function unrow(id) {
+    const r = rows.get(id);
+    if (r) { r.row.remove(); rows.delete(id); }
   }
 
   /* Draws the subtitles. It does not redraw the lot but touches only the lines
    * that changed -- live brings a line every few seconds, and rebuilding
-   * hundreds of lines each time shakes the reading position. */
+   * hundreds of lines each time shakes the reading position.
+   *
+   * `opts.changed` (id → cue) and `opts.removed` (ids) are what the caller saw
+   * change since the last render. Every pass used to go over every line --
+   * three querySelector calls and three reads of the text back out of the page
+   * per line, then a layout read to pin the scroll -- every 400 ms while lines
+   * arrived and on every resize event, however few lines had changed. Given
+   * them, only those lines are touched; without them, or after a reset or a
+   * mount, every line is. */
   function render(cues, opts) {
     if (!node) return;
-    const trKey = (opts && opts.trKey) || "_";
-    const alive = new Set();
-    for (const c of cues) {
-      alive.add(c.id);
-      const row = rowFor(c);
-      const t = row.querySelector(".mw-t");
-      const tx = row.querySelector(".mw-tx");
-      const tr = row.querySelector(".mw-tr");
-      const time = fmt((c.start != null ? c.start : c.t) || 0);
-      const trText = (c.translations && c.translations[trKey]) || "";
-      if (t.textContent !== time) t.textContent = time;
-      if (tx.textContent !== c.text) tx.textContent = c.text;
-      if (tr.textContent !== trText) tr.textContent = trText;
-      row.classList.toggle("mw-note", c.kind === "note");
+    const o = opts || {};
+    const trKey = o.trKey || "_";
+    let touched = false;
+    if (whole || !o.changed) {
+      whole = false;
+      const alive = new Set();
+      for (const c of cues) { alive.add(c.id); paint(c, trKey); }
+      // Lines a refined line absorbed, and lines dropped.
+      for (const id of [...rows.keys()]) if (!alive.has(id)) unrow(id);
+      touched = true;
+    } else {
+      for (const id of o.removed || []) { if (rows.has(id)) { unrow(id); touched = true; } }
+      for (const c of o.changed.values()) { paint(c, trKey); touched = true; }
     }
-    // Lines a refined line absorbed, and lines dropped.
-    for (const [id, row] of rows) {
-      if (!alive.has(id)) { row.remove(); rows.delete(id); }
+    if (shown !== cues.length) {
+      shown = cues.length;
+      head.querySelector(".mw-count").textContent = t("extpanel.count", { n: shown });
     }
-    shown = cues.length;
-    head.querySelector(".mw-count").textContent = t("extpanel.count", { n: shown });
-    pin();
+    if (touched) pin();
   }
 
   root.MimiPanel = {
@@ -214,6 +252,7 @@
      * the screen out. */
     reset: () => {
       rows = new Map();
+      whole = true;
       if (list) list.textContent = "";
     },
   };

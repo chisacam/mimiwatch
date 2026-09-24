@@ -79,10 +79,23 @@ const isLiveReceiving = () => !!state.live
  * stream comes back as S1 for every line -- a label that decorates without
  * telling the reader anything. Hold the chips until a second speaker
  * actually appears, and show them from then on. */
+/* A recording's count is remembered against the cue array and its length.
+ * It used to be counted afresh on every call, and renderCue calls this ten
+ * times a second -- a Set built over every line of a six-hour recording that
+ * many times, for an answer that only changes when the list does. An edit that
+ * changes a speaker in place calls forgetSpeakers(). */
+let _spk = { cues: null, n: -1, many: false };
+
+function forgetSpeakers() { _spk = { cues: null, n: -1, many: false }; }
+
 function showSpeakers() {
-  const set = state.live ? state.live.speakers
-            : new Set(state.cues.map(c => c.speaker).filter(Boolean));
-  return !!set && set.size >= 2;
+  if (state.live) return !!state.live.speakers && state.live.speakers.size >= 2;
+  const cues = state.cues;
+  if (_spk.cues !== cues || _spk.n !== cues.length) {
+    _spk = { cues, n: cues.length,
+             many: new Set(cues.map(c => c.speaker).filter(Boolean)).size >= 2 };
+  }
+  return _spk.many;
 }
 
 const chipFor = (c) => (showSpeakers() && c && c.speaker) ? c.speaker : "";

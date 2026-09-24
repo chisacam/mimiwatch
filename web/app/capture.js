@@ -280,18 +280,40 @@ async function startMicCapture(title, lang) {
   }
 
   const probe = { id: "", title: name, is_live: true };
-  const t = soloTile();
-  bindLive(t, {
-    id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
-    url: "", lang, probe, asr: state.asr, backend: state.backend, source: "mic",
+  const tile = await showPushedSession(res.id, lang, probe, "mic");
+  await pipeCapture(media, res.id);
+  // Written in the player area, as the tab path does, and not in the top bar:
+  // aimScriptWindow below empties the bar when the window opens, and fills it
+  // with "press Pop out" when it could not.
+  playerError(MW_I18N.t("capture.notice.micRecording"), null, tile);
+  aimScriptWindow(pending, res.id);
+}
+
+/* The tail a pushed session (tab audio, microphone) takes onto the screen once
+ * the server has made it: bind it to the solo tile, show it in the panels, put
+ * it in the picker, and open its event stream.
+ *
+ * The microphone path was written as a copy of the tab path that stopped after
+ * bindLive. Without attachLive there was no EventSource, so the subtitle log
+ * stayed empty for the whole session and a script window claimed beforehand
+ * sat on "waiting"; the bus fallback does not step in either, because
+ * state.live is set. One helper for both is what keeps the copies from drifting
+ * apart again. */
+async function showPushedSession(sessionId, lang, probe, source) {
+  const tile = soloTile();
+  bindLive(tile, {
+    id: sessionId, store: MimiCues.create(), es: null, speakers: new Set(),
+    url: "", lang, probe, asr: state.asr, backend: state.backend, source,
   }, {
     id: probe.id, title: probe.title, source_lang: lang || "",
     viewer_lang: $("viewer-lang").value, translated: false,
     backends_done: [state.backend], live: true,
   });
-  t.src = { site: "none" };          // there is no video to attach
-  await pipeCapture(media, res.id);
-  showLiveNotice(MW_I18N.t("capture.notice.micRecording"));
+  tile.src = { site: "none" };       // there is no video to attach
+  showTileInPanels(tile);
+  addLiveToPicker(probe, sessionId);
+  await attachLive(tile);
+  return tile;
 }
 
 async function startTabCapture(title, lang) {
@@ -326,27 +348,12 @@ async function startTabCapture(title, lang) {
   }
 
   const probe = { id: "", title: name || MW_I18N.t("capture.tabAudio"), is_live: true };
-  const t = soloTile();
-  bindLive(t, {
-    id: res.id, store: MimiCues.create(), es: null, speakers: new Set(),
-    url: "", lang, probe, asr: state.asr, backend: state.backend, source: "tab",
-  }, {
-    id: probe.id, title: probe.title, source_lang: lang || "",
-    viewer_lang: $("viewer-lang").value, translated: false,
-    backends_done: [state.backend], live: true,
-  });
-  t.src = { site: "none" };          // there is no video to attach
-  showTileInPanels(t);
-  addLiveToPicker(probe, res.id);
-  await attachLive(t);
+  await showPushedSession(res.id, lang, probe, "tab");
   await pipeCapture(media, res.id);
   tabStageNotice(isTabSurface(media) ? "" :
     // A window or the whole screen is captured too if the sound comes with
     // it. There is no telling what will be mixed in, though, so this just
     // points out that such a choice was made.
-    //
-    // `const t` below shadows the lookup for this whole function body, so the
-    // long name is the one that works here.
     MW_I18N.t("capture.stage.windowShare"));
   aimScriptWindow(pending, res.id);
 }

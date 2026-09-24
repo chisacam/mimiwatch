@@ -2313,3 +2313,157 @@ def test_a_failed_pass_tells_the_page_why(session):
     # A document that quietly stopped growing is worse than one that says why.
     frame = [e for e in s.emitted if e.get("type") == "outline"][-1]
     assert "the endpoint is down" in frame["error"]
+
+
+class _GatedWriter(_OutlineWriter):
+    """A writer that holds each generation until the test lets it go.
+
+    What these tests are about is what happens *while* a pass is generating --
+    a refined line arriving, the session closing -- so the generation has to
+    stay open for exactly as long as the test needs, not for a guessed sleep.
+    Each answer carries the call number in its second heading, so a pass that
+    started from a stale document shows up as a missing section.
+    """
+
+    def __init__(self, fail: bool = False):
+        super().__init__()
+        self.entered = threading.Semaphore(0)
+        self.gate = threading.Event()
+        self.fail = fail
+
+    def generate(self, prompt, max_tokens=512):
+        self.prompts.append(prompt)
+        self.entered.release()
+        if not self.gate.wait(5):
+            raise TimeoutError("_GatedWriter: the test never let the generation go")
+        if self.fail:
+            raise RuntimeError("the endpoint is down")
+        return f"## 여는 말\n- 하나\n## 셋째 {len(self.prompts)}\n- 둘\n"
+
+
+def _pass_in_background(s, w):
+    """Start a pass on its own thread and return once it is generating."""
+    t = threading.Thread(target=s._ol_pass, daemon=True)
+    t.start()
+    assert w.entered.acquire(timeout=5), "the pass never reached the engine"
+    return t
+
+
+def test_a_refined_line_arriving_mid_pass_is_not_summarised_twice(session):
+    """The pass took lines 1 and 2 out of the queue, and while it generated
+    the refined line for them arrived. `_ol_folded` had not moved yet, so the
+    refined text went back into the queue; the pass then folded 1 and 2, and
+    the next window wrote the same speech into the document a second time."""
+    w = _GatedWriter()
+    s = _doc_on(session, w)
+    s.publish_line("final", "こんにちは", "ja", "")
+    s.audio_s = 2.0
+    s.publish_line("final", "元気ですか", "ja", "")
+    t = _pass_in_background(s, w)
+    s.audio_s = 4.0
+    s.publish_line("refine", "こんにちは 元気ですか", "ja", "")
+    assert s._ol_pending == {}             # held by the running pass instead
+    w.gate.set()
+    t.join(5)
+    assert s._ol_folded == 2
+    assert s._ol_pending == {} and s._ol_inflight == {}
+
+
+def test_a_failed_pass_gives_back_the_refined_line_not_the_finals_it_absorbed(session):
+    """The failure path used to restore a copy of the queue taken before the
+    window -- with `setdefault`, so the refined line that had arrived meanwhile
+    under id 1 stayed, and final 2, which that refined line absorbed, came
+    back beside it. The retry then carried the same speech twice."""
+    w = _GatedWriter(fail=True)
+    s = _doc_on(session, w)
+    s.publish_line("final", "こんにちは", "ja", "")
+    s.audio_s = 2.0
+    s.publish_line("final", "元気ですか", "ja", "")
+    t = _pass_in_background(s, w)
+    s.audio_s = 4.0
+    s.publish_line("refine", "こんにちは 元気ですか", "ja", "")
+    w.gate.set()
+    t.join(5)
+    assert "the endpoint is down" in s._ol_error
+    assert s._ol_folded == 0
+    assert s._ol_pending == {1: (0.0, "こんにちは 元気ですか")}
+
+
+def test_the_closing_pass_waits_for_the_running_one_instead_of_racing_it(session):
+    """`_release` runs its last pass on the `_run` thread while the outline
+    thread may be halfway through one. Both started from the same document,
+    the later assignment to `_ol` won, and the other window was gone from the
+    document while the bookmark moved past it anyway."""
+    w = _GatedWriter()
+    s = _doc_on(session, w)
+    s.publish_line("final", "一つ目", "ja", "")
+    t = _pass_in_background(s, w)
+    s.audio_s = 3.0
+    s.publish_line("final", "二つ目", "ja", "")
+    closing = threading.Thread(target=s._ol_flush, daemon=True)
+    closing.start()
+    closing.join(0.2)
+    # Queued behind the running pass, not generating beside it.
+    assert closing.is_alive() and len(w.prompts) == 1
+    w.gate.set()
+    t.join(5)
+    closing.join(5)
+    assert len(w.prompts) == 2
+    # The closing pass was written from the first pass's document.
+    assert "셋째 1" in w.prompts[1]
+    titles = [sec["title"] for sec in s._ol["sections"]]
+    assert titles == ["여는 말", "여는 말", "셋째 2"]
+    assert s._ol_folded == 2 and store.outline(s.id)["folded"] == 2
+
+
+def test_a_pass_that_finishes_after_the_close_keeps_nothing(session):
+    """The session is retired right after `_release`. A straggling pass that
+    saved after that would write over the document of a session resumed
+    under the same id."""
+    w = _GatedWriter()
+    s = _doc_on(session, w)
+    s.publish_line("final", "一つ目", "ja", "")
+    t = _pass_in_background(s, w)
+    s._ol_close()
+    w.gate.set()
+    t.join(5)
+    assert s._ol["sections"] == [] and s._ol_folded == 0
+    assert store.outline(s.id) is None
+    # And nothing starts after it either.
+    s._ol_pending = {2: (3.0, "二つ目")}
+    s._ol_pass()
+    assert len(w.prompts) == 1
+
+
+def test_the_window_skips_lines_already_in_the_document(session):
+    # The backstop behind `_ol_feed`: whatever reaches the queue at or below
+    # the bookmark is dropped, not summarised again.
+    s = _doc_on(session)
+    s._ol_folded = 2
+    s._ol_pending = {2: (0.0, "이미 쓴 말"), 3: (4.0, "새로 한 말")}
+    window, _, lines, top = s._ol_take()
+    assert window == "새로 한 말" and lines == 1 and top == 3
+    assert s._ol_pending == {}
+
+
+def test_a_refined_group_that_runs_past_the_window_loses_none_of_it(session):
+    """The pass took finals 1 and 2; final 3 arrived while it generated, and
+    then the refined line for the whole group, 1 to 3. Put in place of the
+    held text, it would be folded with the window -- line 3's words with it,
+    while the bookmark stopped at 2 and line 3 was already out of the queue.
+    That speech would be in no window at all."""
+    w = _GatedWriter()
+    s = _doc_on(session, w)
+    s.publish_line("final", "こんにちは", "ja", "")
+    s.audio_s = 1.0
+    s.publish_line("final", "元気ですか", "ja", "")
+    t = _pass_in_background(s, w)
+    s.audio_s = 2.0
+    s.publish_line("final", "今日は", "ja", "")
+    s.audio_s = 4.0
+    s.publish_line("refine", "こんにちは 元気ですか 今日は", "ja", "")
+    assert s.emitted[-1]["replaces"] == [1, 2, 3]
+    w.gate.set()
+    t.join(5)
+    assert s._ol_folded == 2
+    assert s._ol_pending == {3: (2.0, "今日は")}

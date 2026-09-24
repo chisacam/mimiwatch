@@ -689,6 +689,13 @@ OUTLINE_MIN_CHARS = 220
 # lock with live translation on the local engine, so every pass is a subtitle
 # waiting; the cadence is what keeps that rare.
 OUTLINE_GAP_S = 75.0
+# How long the closing pass waits for a pass the outline thread already has in
+# flight. Only one pass runs at a time (`_ol_pass_lock`), and the closing path
+# is what the server's shutdown waits behind, so the wait is bounded: past it the
+# last pass is skipped, the straggler's result is thrown away rather than saved
+# after the session is gone, and reopening the document picks the speech up
+# again from the stored bookmark.
+OUTLINE_CLOSE_WAIT_S = 60.0
 
 
 def _covers(final_text: str, refined: str) -> bool:
@@ -917,6 +924,29 @@ class LiveSession:
         self._ol: dict = mw_outline.empty()
         # cue id -> (media time, text), waiting to go into a pass.
         self._ol_pending: dict[int, tuple[float, str]] = {}
+        # The window the running pass took out of `_ol_pending`, same shape.
+        # Kept so a refined line for one of those ids lands here -- folded with
+        # the window if the pass succeeds, given back in its place if it fails
+        # -- instead of going into the queue and being summarised a second time
+        # by the next window.
+        self._ol_inflight: dict[int, tuple[float, str]] = {}
+        # Guards `_ol_pending`, `_ol_inflight`, `_ol_folded` and `_ol_closed`.
+        # Three threads touch the queue -- the publisher (under `_pub_lock`), the
+        # outline thread and the API thread catching up -- and with nothing
+        # between them a `sum` over the values could raise "dictionary changed
+        # size", or a `del` in `_ol_take` a KeyError outside the pass's `try`,
+        # dropping the window it had taken. Never held across a generation.
+        self._ol_lock = threading.Lock()
+        # Held for a whole pass, generation included. The closing pass runs on
+        # the `_run` thread while the outline thread may be halfway through
+        # one; both started from the same document, the later assignment to
+        # `_ol` won and the other window vanished while `_ol_folded` still
+        # moved past it.
+        self._ol_pass_lock = threading.Lock()
+        # Set by `_ol_close` on the way out. A pass that finishes after it
+        # keeps nothing -- `_retire` is next, and a save landing after that
+        # would write over whatever a resumed session under the same id has.
+        self._ol_closed = False
         # The highest cue id already written into the document. A refined line
         # older than this is not put back in: the document is written forward
         # and the section it would belong to is finished (see outline.py).
@@ -1179,12 +1209,11 @@ class LiveSession:
             for c in covered:
                 self._recent.remove(c)
                 self._text_of[c["id"]] = None      # absorbed. Dropped from the translation queue
-                self._ol_pending.pop(c["id"], None)
             self._text_of[cue["id"]] = text
             # The refined text is the better one, so it goes in instead of the
             # finals it absorbed -- unless those lines are already written into
             # the document, which `_ol_feed` is what decides.
-            self._ol_feed(cue)
+            self._ol_feed(cue, tuple(c["id"] for c in covered))
             # A line a refined line absorbed disappears from the screen, so it is
             # deleted from storage too. Only the one line whose id was inherited is
             # kept, and that slot is overwritten with the refined line.
@@ -1310,10 +1339,39 @@ class LiveSession:
     # finished line only drops its text into `_ol_pending` and the thread below
     # decides when to spend the engine.
 
-    def _ol_feed(self, cue: dict):
-        if not self._ol_on or cue["id"] <= self._ol_folded:
-            return
-        self._ol_pending[cue["id"]] = (cue.get("t", 0.0), cue["text"])
+    def _ol_feed(self, cue: dict, absorbed: tuple[int, ...] = ()):
+        """Queue a finished line; for a refined one, drop the finals it absorbed first.
+
+        A refined line for an id the running pass is holding replaces the held
+        text rather than going into the queue. It used to go into the queue,
+        because `_ol_folded` had not moved yet -- the pass then folded the old
+        text, the bookmark moved past the id, and the next window summarised
+        the same speech again from the refined text.
+        """
+        with self._ol_lock:
+            if cue["id"] in self._ol_inflight:
+                later = [i for i in absorbed if i != cue["id"]]
+                if any(i in self._ol_pending for i in later):
+                    # The group runs past the window: its head is in flight,
+                    # its tail arrived during the pass and is queued. Folding
+                    # the refined text with the window would take the tail's
+                    # words with it while the bookmark stops short of them --
+                    # that speech would be in no window at all. So everything
+                    # stays as it was: the head is written from its finals,
+                    # the tail goes into the next window as its own.
+                    return
+                # Taken out of the held window too, so a failed pass does not
+                # give back finals that now live inside the refined line.
+                for cue_id in later:
+                    self._ol_inflight.pop(cue_id, None)
+                self._ol_inflight[cue["id"]] = (cue.get("t", 0.0), cue["text"])
+                return
+            for cue_id in absorbed:
+                self._ol_pending.pop(cue_id, None)
+                self._ol_inflight.pop(cue_id, None)
+            if not self._ol_on or cue["id"] <= self._ol_folded:
+                return
+            self._ol_pending[cue["id"]] = (cue.get("t", 0.0), cue["text"])
         self._ol_wake.set()
 
     def _ol_payload(self) -> dict:
@@ -1360,8 +1418,9 @@ class LiveSession:
             # the whole point of storing it.
             saved = store.outline(self.id)
             if saved:
-                self._ol = saved
-                self._ol_folded = int(saved.get("folded", 0) or 0)
+                with self._ol_lock:
+                    self._ol = saved
+                    self._ol_folded = int(saved.get("folded", 0) or 0)
         self._ol_catch_up()
         if self._ol_thread is None or not self._ol_thread.is_alive():
             self._ol_thread = threading.Thread(
@@ -1382,12 +1441,15 @@ class LiveSession:
         the bookmark that stops the talk being written twice -- everything at
         or below it is in the document already.
         """
-        for c in store.cues(self.id):
-            if c.get("kind") == "note" or c["id"] <= self._ol_folded:
-                continue
-            text = (c.get("text") or "").strip()
-            if text:
-                self._ol_pending[c["id"]] = (c.get("t", 0.0), text)
+        cues = store.cues(self.id)
+        with self._ol_lock:
+            for c in cues:
+                if (c.get("kind") == "note" or c["id"] <= self._ol_folded
+                        or c["id"] in self._ol_inflight):
+                    continue
+                text = (c.get("text") or "").strip()
+                if text:
+                    self._ol_pending[c["id"]] = (c.get("t", 0.0), text)
         self._ol_wake.set()
 
     def _ol_loop(self):
@@ -1405,9 +1467,10 @@ class LiveSession:
                 traceback.print_exc()
 
     def _ol_due(self) -> bool:
-        if not self._ol_pending:
-            return False
-        chars = sum(len(t) for _, t in self._ol_pending.values())
+        with self._ol_lock:
+            if not self._ol_pending:
+                return False
+            chars = sum(len(t) for _, t in self._ol_pending.values())
         if chars >= self._ol_window_chars():
             # A full window is waiting. Catching up on a talk already in
             # progress lands here every pass, which is what makes it catch up
@@ -1433,25 +1496,52 @@ class LiveSession:
         holds and the highest cue id in it. They are taken out of `_pending`
         here rather than after the pass -- a line that arrives while the engine
         is working belongs to the next window, and leaving them in would put
-        the same speech through twice.
+        the same speech through twice. What is taken is recorded in
+        `_ol_inflight` until the pass ends (see `_ol_feed`).
         """
         budget = self._ol_window_chars()
         parts: list[str] = []
         used = 0
         at, top, n = 0.0, 0, 0
-        for cue_id in sorted(self._ol_pending):
-            t, text = self._ol_pending[cue_id]
-            if parts and used + len(text) + 1 > budget:
-                break
-            if not parts:
-                at = t
-            parts.append(text)
-            used += len(text) + 1
-            top, n = cue_id, n + 1
-            del self._ol_pending[cue_id]
+        with self._ol_lock:
+            for cue_id in sorted(self._ol_pending):
+                item = self._ol_pending[cue_id]
+                if cue_id <= self._ol_folded:
+                    # Already in the document. `_ol_feed` keeps these out, and
+                    # this is the backstop for whatever path gets past it --
+                    # a line written in twice reads as the talk repeating itself.
+                    del self._ol_pending[cue_id]
+                    continue
+                t, text = item
+                if parts and used + len(text) + 1 > budget:
+                    break
+                if not parts:
+                    at = t
+                parts.append(text)
+                used += len(text) + 1
+                top, n = cue_id, n + 1
+                del self._ol_pending[cue_id]
+                self._ol_inflight[cue_id] = item
         return "\n".join(parts), at, n, top
 
-    def _ol_pass(self):
+    def _ol_pass(self, wait: float = -1) -> bool:
+        """One pass: take a window, write it into the document.
+
+        Holds `_ol_pass_lock` throughout, so the closing pass and the outline
+        thread's pass never write from the same starting document. `wait` is
+        how long to queue behind a pass already running (-1: as long as it
+        takes); False means the lock was not had and nothing ran.
+        """
+        if not self._ol_pass_lock.acquire(timeout=wait):
+            return False
+        try:
+            if not self._ol_closed:
+                self._ol_pass_locked()
+            return True
+        finally:
+            self._ol_pass_lock.release()
+
+    def _ol_pass_locked(self):
         writer = self._ol_ensure_writer()
         if writer is None:
             # The engine was swapped for one that cannot write. Say so once
@@ -1460,45 +1550,63 @@ class LiveSession:
             self._ol_on = False
             self._ol_emit()
             return
-        # What the window is about to take, kept so a failed pass can give it
-        # back. `_ol_take` empties the queue before the engine is called, which
-        # is right while passes succeed -- a line arriving mid-generation
-        # belongs to the next window, not this one -- but it meant a single
-        # failed endpoint dropped that speech out of the document entirely,
-        # with no way back short of switching the document off and on again.
-        held = dict(self._ol_pending)
-        window, at, n, top = self._ol_take()
-        if not window.strip():
-            return
-        started = time.time()
+        # `_ol_take` empties the window out of the queue before the engine is
+        # called, which is right while passes succeed -- a line arriving
+        # mid-generation belongs to the next window, not this one -- but it
+        # meant a single failed endpoint dropped that speech out of the
+        # document entirely, with no way back short of switching the document
+        # off and on again. So the window is held in `_ol_inflight` and a
+        # failed pass gives it back.
         try:
-            self._ol = mw_outline.advance(self._ol, window, self.viewer_lang,
-                                          writer, self._glossary_terms,
-                                          at=at, lines=n)
-            self._ol_error = ""
-        except Exception as exc:
-            # There is no source text to fall back on the way a translation
-            # has, so the document that was already there stays, and the
-            # failure is said out loud rather than left as a document that
-            # quietly stopped growing.
-            print(f"[outline] pass failed: {exc}", file=sys.stderr)
-            # Back into the queue, so the next pass tries the same speech
-            # again. `setdefault` rather than a plain update: a refined line
-            # may have improved one of these while the engine was working, and
-            # the newer text is the one to keep.
-            for cue_id, item in held.items():
-                self._ol_pending.setdefault(cue_id, item)
-            self._ol_error = str(exc)[:200]
-            self._ol_last = time.time()
+            window, at, n, top = self._ol_take()
+            if not window.strip():
+                return
+            started = time.time()
+            try:
+                doc = mw_outline.advance(self._ol, window, self.viewer_lang,
+                                         writer, self._glossary_terms,
+                                         at=at, lines=n)
+            except Exception as exc:
+                # There is no source text to fall back on the way a translation
+                # has, so the document that was already there stays, and the
+                # failure is said out loud rather than left as a document that
+                # quietly stopped growing.
+                print(f"[outline] pass failed: {exc}", file=sys.stderr)
+                # The window goes back into the queue (the `finally` below), so
+                # the next pass tries the same speech again.
+                self._ol_error = str(exc)[:200]
+                self._ol_last = time.time()
+                self._ol_emit()
+                return
+            with self._ol_lock:
+                self._ol_inflight.clear()
+                if self._ol_closed:
+                    return
+                self._ol = doc
+                self._ol_error = ""
+                self._ol_folded = max(self._ol_folded, top)
+                self._ol["folded"] = self._ol_folded
+                self._ol_last = time.time()
+                # Inside the lock so `_ol_close` cannot land between the check
+                # above and the save -- after it the session is retired.
+                store.save_outline(self.id, self._ol)
+            print(f"[outline] {self.id} · {n} lines · {len(window)} chars · "
+                  f"{self._ol_last - started:.1f}s", file=sys.stderr, flush=True)
             self._ol_emit()
-            return
-        self._ol_folded = max(self._ol_folded, top)
-        self._ol["folded"] = self._ol_folded
-        self._ol_last = time.time()
-        print(f"[outline] {self.id} · {n} lines · {len(window)} chars · "
-              f"{self._ol_last - started:.1f}s", file=sys.stderr, flush=True)
-        store.save_outline(self.id, self._ol)
-        self._ol_emit()
+        finally:
+            # A window that was not written in goes back into the queue --
+            # after a failed generation, and after anything else that raised
+            # on the way. What goes back is `_ol_inflight` as it is now, not a
+            # copy taken before the window: a refined line that arrived during
+            # the pass has replaced its id's text there and taken out the
+            # finals it absorbed. Restoring the copy brought those finals back
+            # beside the refined line, the same speech twice. `setdefault`, so
+            # nothing queued since is overwritten. A pass that succeeded has
+            # emptied `_ol_inflight` already, so this gives back nothing.
+            with self._ol_lock:
+                for cue_id, item in self._ol_inflight.items():
+                    self._ol_pending.setdefault(cue_id, item)
+                self._ol_inflight.clear()
 
     def _ol_flush(self, max_passes: int = 1):
         """The last pass, when the session stops.
@@ -1514,13 +1622,28 @@ class LiveSession:
         picks it up again from the bookmark.
         """
         for _ in range(max_passes):
-            if not self._ol_on or not self._ol_pending:
-                return
+            with self._ol_lock:
+                if not self._ol_on or self._ol_closed or not self._ol_pending:
+                    return
             try:
-                self._ol_pass()
+                # Behind the outline thread's pass if one is running, not
+                # beside it -- and for no longer than OUTLINE_CLOSE_WAIT_S.
+                if not self._ol_pass(wait=OUTLINE_CLOSE_WAIT_S):
+                    print(f"[outline] {self.id}: a pass was still running "
+                          f"after {OUTLINE_CLOSE_WAIT_S:.0f}s, closing without "
+                          "the last one", file=sys.stderr, flush=True)
+                    return
             except Exception:
                 traceback.print_exc()
                 return
+
+    def _ol_close(self):
+        """The document is finished: no pass after this keeps what it wrote."""
+        with self._ol_lock:
+            self._ol_closed = True
+            self._ol_on = False
+            self._ol_inflight.clear()
+        self._ol_wake.set()
 
     # ---- pipeline ---------------------------------------------------------
     def start(self):
@@ -2046,8 +2169,7 @@ class LiveSession:
         # previous pass is the end of the talk, and it would otherwise be in
         # the subtitles and nowhere in the document.
         self._ol_flush()
-        self._ol_on = False
-        self._ol_wake.set()
+        self._ol_close()
         # The reading thread may be waiting for room in the ring. The transcribing
         # side is gone, so that wait has to end too -- this flag is that loop's
         # exit condition.

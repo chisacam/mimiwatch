@@ -1,4 +1,6 @@
 """The store: the rules of the cue table."""
+import json
+
 import store
 
 
@@ -131,6 +133,97 @@ def test_fts_resync_repairs_a_drifted_table():
     assert store.search("needle")
 
 
+def _fts_matches_a_rebuild():
+    """The whole FTS table, row by row, equals what the start-up rebuild would
+    write from `cues` as it stands -- recomputed here, not read back from the
+    rebuild, and over every owner, so an orphan a delete left behind counts."""
+    with store._lock:
+        db = store._connect()
+        got = sorted(tuple(r) for r in db.execute(
+            "SELECT rowid, owner, cue_id, text, tr_text FROM cues_fts"))
+        want = sorted((r["rowid"], r["owner"], r["cue_id"], r["text"],
+                       " ".join(v for v in json.loads(r["tr"]).values() if v))
+                      for r in db.execute("SELECT rowid, * FROM cues"))
+        # The index itself agrees with the rows it holds.
+        db.execute("INSERT INTO cues_fts (cues_fts) VALUES ('integrity-check')")
+        db.commit()
+    assert got == want
+    return got
+
+
+def _two_owners():
+    # A bystander owner, so a write that touches the wrong owner's rows shows.
+    store.replace_cues("other", [{"start": 0, "text": "bystander", "translations": {"g": "구경꾼"}}])
+    for i in (1, 2, 3):
+        store.save_cue("s", {"id": i, "kind": "final", "t": i, "text": f"line{i} hello"})
+
+
+def test_fts_rows_follow_live_writes():
+    _two_owners()
+    _fts_matches_a_rebuild()
+    store.save_translation("s", 2, "g", "번역 둘")
+    store.save_translation("s", 2, "m", "second")
+    _fts_matches_a_rebuild()
+    # A refined line keeps its rowid and clears its translation.
+    store.save_cue("s", {"id": 2, "kind": "refine", "t": 2, "text": "refined zebra"})
+    rows = _fts_matches_a_rebuild()
+    assert [r for r in rows if r[1] == "s" and r[2] == 2][0][3:] == ("refined zebra", "")
+    store.drop_cues("s", [1, 3])
+    assert len(_fts_matches_a_rebuild()) == 2
+    assert store.search("zebra") and not store.search("line1")
+    assert store.search("bystander")
+
+
+def test_fts_rows_follow_edits_inserts_and_deletes():
+    _two_owners()
+    assert store.update_cue("s", 1, text="quokka")
+    _fts_matches_a_rebuild()
+    assert store.update_cue("s", 1, translations={"g": "쿼카"})
+    _fts_matches_a_rebuild()
+    assert store.update_cue("s", 1, start=9.0)          # timing only
+    _fts_matches_a_rebuild()
+    store.edit_cue("s", 2, text="wombat")
+    _fts_matches_a_rebuild()
+    store.edit_cue("s", 2, tr="웜뱃", backend="g")
+    _fts_matches_a_rebuild()
+    store.edit_cue("s", 2, start=5.0)
+    _fts_matches_a_rebuild()
+    new = store.insert_cue("s", 4.0, "platypus", tr="오리너구리")
+    _fts_matches_a_rebuild()
+    assert store.delete_cue("s", 3)
+    _fts_matches_a_rebuild()
+    assert store.search("quokka") and store.search("wombat") and store.search("platypus")
+    assert not store.search("line3")
+    assert new["id"] == 4
+
+
+def test_fts_rows_follow_whole_owner_writes():
+    _two_owners()
+    store.replace_cues("s", [{"start": 0, "text": "fresh one"}, {"start": 1, "text": "fresh two"}])
+    _fts_matches_a_rebuild()
+    assert not store.search("hello") and store.search("fresh")
+    store.save_session({"id": "s", "state": "stopped"})
+    assert store.delete_session("s")
+    _fts_matches_a_rebuild()
+    store.save_doc("other", {"title": "x"})
+    store.delete_doc("other")
+    assert _fts_matches_a_rebuild() == []
+
+
+def test_start_up_rebuild_repairs_a_stale_row():
+    # The case 2a03d93 reproduced: the cue changed and its FTS row did not, and
+    # the row counts still agree. Only the unconditional rebuild catches it.
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": "hello world"})
+    with store._lock:
+        db = store._connect()
+        db.execute("UPDATE cues SET text = 'zebra quokka' WHERE owner = 's'")
+        db.commit()
+    assert store.search("hello") and not store.search("zebra")    # stale
+    store.init()
+    assert store.search("zebra") and not store.search("hello")
+    _fts_matches_a_rebuild()
+
+
 # ---- The document view -----------------------------------------------------
 
 def test_outline_round_trip():
@@ -161,3 +254,106 @@ def test_deleting_a_recording_takes_its_document_with_it():
     store.save_outline("v9", {"sections": [{"title": "A", "bullets": [], "t": 0}]})
     store.delete_doc("v9")
     assert store.outline("v9") is None
+
+
+# ---- Search: trigram, and LIKE under three characters -------------------------
+
+def _search_corpus():
+    store.replace_cues("jp", [
+        {"start": 1, "text": "今日はみんなで配信を見ていきましょう", "translations": {"g": "오늘은 다 같이 방송을 봅시다"}},
+        {"start": 2, "text": "本当にありがとうございました", "translations": {"g": "Thank you so much"}},
+        {"start": 3, "text": "歌います", "translations": {"g": "노래합니다"}},
+        {"start": 4, "text": "100% 本気、under_score", "translations": {}},
+    ])
+
+
+def test_search_finds_japanese_inside_a_sentence():
+    # Under unicode61 the whole sentence was one token, so this found nothing.
+    _search_corpus()
+    got = store.search("ありがとう")
+    assert [r["start"] for r in got] == [2]
+    assert got[0]["snip"] == "本当に«ありがとう»ございました"
+
+
+def test_search_short_terms_go_to_like():
+    _search_corpus()
+    assert [r["start"] for r in store.search("配信")] == [1]      # 2 chars, Japanese
+    assert [r["start"] for r in store.search("歌")] == [3]        # 1 char
+    hit = store.search("방송")                                    # 2 chars, in the translation
+    assert [r["start"] for r in hit] == [1]
+    assert "«방송»" in hit[0]["snip_tr"] and "«" not in hit[0]["snip"]
+
+
+def test_search_korean_and_english_on_the_trigram_path():
+    _search_corpus()
+    assert [r["start"] for r in store.search("노래합니다")] == [3]
+    got = store.search("THANK")                                   # case-insensitive
+    assert [r["start"] for r in got] == [2] and got[0]["snip_tr"] == "«Thank» you so much"
+
+
+def test_search_mixed_query_ands_every_term():
+    # One term under three characters sends the whole query to LIKE, and the
+    # terms still stand in AND, source or translation.
+    _search_corpus()
+    got = store.search("みんなで 방송")
+    assert [r["start"] for r in got] == [1]
+    assert "«みんなで»" in got[0]["snip"] and "«방송»" in got[0]["snip_tr"]
+    assert store.search("ありがとう 歌") == []
+
+
+def test_search_escapes_like_wildcards():
+    _search_corpus()
+    assert [r["start"] for r in store.search("0%")] == [4]         # not "anything after 0"
+    assert [r["start"] for r in store.search("%")] == [4]
+    assert store.search("_") and [r["start"] for r in store.search("r_")] == [4]
+    assert store.search("\\") == [] and store.search('"') == []
+
+
+def test_snippet_cuts_long_lines_and_marks_every_term():
+    long = "あ" * 60 + "配信" + "い" * 60
+    s = store._snippet(long, ["配信"])
+    assert s.startswith("…") and s.endswith("…") and "«配信»" in s
+    assert len(s) <= store.SNIPPET_CHARS + 4
+    assert store._snippet("a b a", ["a"]) == "«a» b «a»"
+    assert store._snippet("no hit here", ["zzz"]) == "no hit here"
+
+
+def test_unicode61_table_is_migrated_at_start():
+    # A database made before the tokenizer changed: IF NOT EXISTS alone would
+    # keep its unicode61 table for good.
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": "本当にありがとうございました"})
+    with store._lock:
+        db = store._connect()
+        db.execute("DROP TABLE cues_fts")
+        db.execute("CREATE VIRTUAL TABLE cues_fts USING fts5("
+                   "owner UNINDEXED, cue_id UNINDEXED, text, tr_text)")
+        db.execute("INSERT INTO cues_fts (rowid, owner, cue_id, text, tr_text) "
+                   "SELECT rowid, owner, cue_id, text, '' FROM cues")
+        db.commit()
+    assert store.search("ありがとう") == []                      # the old tokenizer
+    _restart()
+    sql = store._connect().execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'cues_fts'").fetchone()[0]
+    assert "trigram" in sql
+    assert store.search("ありがとう")
+    _fts_matches_a_rebuild()
+    # Already migrated: a second start leaves the table alone.
+    assert store._fts_migrate(store._connect()) is False
+
+
+def test_a_database_without_the_fts_table_gets_one():
+    store.save_cue("s", {"id": 1, "kind": "final", "t": 0, "text": "ありがとう"})
+    with store._lock:
+        store._connect().execute("DROP TABLE cues_fts")
+        store._connect().commit()
+    _restart()
+    assert store.search("ありがとう")
+    _fts_matches_a_rebuild()
+
+
+def _restart():
+    """What a process start does: a new connection, then init()."""
+    with store._lock:
+        store._db.close()
+        store._db = None
+    store.init()

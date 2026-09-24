@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -104,13 +105,32 @@ CREATE TABLE IF NOT EXISTS watchers (
   live    INTEGER NOT NULL DEFAULT 0,
   updated REAL NOT NULL
 );
+"""
+
+# The full-text table, defined here and nowhere else: the schema below appends
+# it, every write into it goes through the `_fts_*` helpers at the bottom of
+# this file, and `_fts_migrate` compares an existing table against this text.
+# Its rowid is the cue's rowid (see there).
+#
+# The tokenizer is trigram. With the default unicode61 a run of Japanese is one
+# token up to the next punctuation, so a word inside a sentence was not found:
+# on a copy of the real database (20,290 cues, 73% Japanese) `ありがとう` came
+# back for 34 of the 335 lines that contain it, `おはよう` for 0 of 11
+# (measurements/RESULTS.md section 55). Trigram matches any substring of three
+# characters or more; shorter terms go to LIKE in `search`. Its defaults are
+# kept: case-insensitive, and no diacritic folding -- folding (`remove_diacritics`)
+# leaves kana and hangul alone, so it would only help Latin text and would make
+# the index disagree with the LIKE path, which does not fold.
+FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS cues_fts USING fts5(
   owner UNINDEXED,
   cue_id UNINDEXED,
   text,
-  tr_text
+  tr_text,
+  tokenize='trigram'
 );
 """
+SCHEMA += FTS_SCHEMA
 
 # Column names changed. A file made by an older version has `session` and `t`,
 # and IF NOT EXISTS leaves an existing table alone, so the move happens here.
@@ -135,8 +155,11 @@ def _connect() -> sqlite3.Connection:
         _db.execute("PRAGMA synchronous=NORMAL")
         _db.execute("PRAGMA busy_timeout=5000")
         _migrate_columns(_db)
+        stale_fts = _fts_migrate(_db)
         _db.executescript(SCHEMA)
         _migrate_columns(_db)      # a freshly made table has nothing to move
+        if stale_fts:
+            _fts_fill(_db)         # init() rebuilds again; a caller without it is not left empty
         _db.commit()
     return _db
 
@@ -242,8 +265,8 @@ def delete_session(session_id: str) -> bool:
     """
     with _lock:
         db = _connect()
+        _fts_drop(db, session_id)
         db.execute("DELETE FROM cues WHERE owner = ?", (session_id,))
-        _fts_sync(db, session_id)
         cur = db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         db.execute("DELETE FROM outlines WHERE owner = ?", (session_id,))
         db.commit()
@@ -346,8 +369,8 @@ def save_cue(session_id: str, cue: dict):
     sentence, so the earlier translation is a translation of a sentence that is
     already wrong. The new translation arrives separately, soon.
     """
-    # The insert and the FTS resync sit in one lock: the connection is a
-    # shared object (check_same_thread=False), and a resync running outside
+    # The insert and its FTS row sit in one lock: the connection is a
+    # shared object (check_same_thread=False), and an FTS write outside
     # the lock is a use the translation loop's locked write can land inside
     # -- the same two-handed use of one connection sqlite answers with a
     # "bad parameter" InterfaceError, which ended live sessions in the test
@@ -369,7 +392,7 @@ def save_cue(session_id: str, cue: dict):
                     float(cue.get("t") or 0), float(cue.get("end") or 0),
                     cue.get("text") or "",
                     cue.get("lang") or "", cue.get("speaker") or ""))
-        _fts_sync(db, session_id)
+        _fts_put(db, session_id, cue["id"])
         db.commit()
 
 
@@ -377,14 +400,14 @@ def drop_cues(session_id: str, cue_ids: list[int]):
     if not cue_ids:
         return
     marks = ",".join("?" * len(cue_ids))
-    # One lock around the delete and the resync, for the same reason as
+    # One lock around the delete and the un-indexing, for the same reason as
     # save_cue: the shared connection is not to be used from two places at
     # once, locked or not.
     with _lock:
         db = _connect()
+        _fts_drop(db, session_id, cue_ids)
         db.execute(f"DELETE FROM cues WHERE owner = ? AND cue_id IN ({marks})",
                    (session_id, *[int(i) for i in cue_ids]))
-        _fts_sync(db, session_id)
         db.commit()
 
 
@@ -410,7 +433,7 @@ def save_translation(session_id: str, cue_id: int, backend: str, text: str):
                    "WHERE owner = ? AND cue_id = ?",
                    (json.dumps(tr, ensure_ascii=False), ",".join(sorted(flags)),
                     session_id, int(cue_id)))
-        _fts_sync(db, session_id)
+        _fts_put(db, session_id, cue_id)
         db.commit()
 
 
@@ -449,6 +472,9 @@ def replace_cues(owner: str, rows: list[dict]):
     before has lost its meaning, as when a VOD transcription finishes."""
     with _lock:
         db = _connect()
+        # Every row is deleted and inserted again, so every rowid is new: the
+        # whole owner is re-indexed, which is what this call costs anyway.
+        _fts_drop(db, owner)
         db.execute("DELETE FROM cues WHERE owner = ?", (owner,))
         # `edited` is written along with the rest. While it was left out, the
         # paths through this function (translate everything after switching
@@ -465,7 +491,7 @@ def replace_cues(owner: str, rows: list[dict]):
               json.dumps(c.get("translations") or {}, ensure_ascii=False),
               c.get("edited") or "")
              for i, c in enumerate(rows)])
-        _fts_sync(db, owner)
+        _fts_fill(db, owner)
         db.commit()
 
 
@@ -492,11 +518,13 @@ def update_cue(owner: str, cue_id: int, **fields) -> bool:
         cur = db.execute(f"UPDATE cues SET {', '.join(sets)} "
                          "WHERE owner = ? AND cue_id = ?",
                          (*args, owner, int(cue_id)))
-        db.commit()
-        # Only fields the search reads are worth a resync. A timing fix
-        # (start/end) moves a line, it does not change what it says.
+        # Only fields the search reads are worth re-indexing. A timing fix
+        # (start/end) moves a line, it does not change what it says. It goes
+        # before the commit: after it, a process that died in between kept
+        # the new cue beside the old FTS row (2a03d93).
         if cur.rowcount > 0 and ("text" in cols or tr is not None):
-            _fts_sync(db, owner)
+            _fts_put(db, owner, cue_id)
+        db.commit()
         return cur.rowcount > 0
 
 
@@ -569,7 +597,7 @@ def edit_cue(owner: str, cue_id: int, *, text=None, tr=None, backend="",
                    "WHERE owner = ? AND cue_id = ?", (*args, owner, int(cue_id)))
         # cols here is the list of `col = ?` clauses, so the fields are written out.
         if "text = ?" in cols or "tr = ?" in cols:
-            _fts_sync(db, owner)
+            _fts_put(db, owner, cue_id)
         db.commit()
         got = db.execute("SELECT * FROM cues WHERE owner = ? AND cue_id = ?",
                          (owner, int(cue_id))).fetchone()
@@ -607,7 +635,7 @@ def insert_cue(owner: str, start: float, text: str, *, lang: str = "",
                    "speaker, tr, edited) VALUES (?,?,?,?,?,?,?,?,?,?)",
                    (owner, cue_id, "final", float(start), float(end or 0), text,
                     lang, "", json.dumps(trs, ensure_ascii=False), "tr" if tr else ""))
-        _fts_sync(db, owner)
+        _fts_put(db, owner, cue_id)
         db.commit()
         got = db.execute("SELECT * FROM cues WHERE owner = ? AND cue_id = ?",
                          (owner, cue_id)).fetchone()
@@ -620,9 +648,9 @@ def delete_cue(owner: str, cue_id: int) -> bool:
     identity."""
     with _lock:
         db = _connect()
+        _fts_drop(db, owner, [cue_id])
         cur = db.execute("DELETE FROM cues WHERE owner = ? AND cue_id = ?",
                          (owner, int(cue_id)))
-        _fts_sync(db, owner)
         db.commit()
         return cur.rowcount > 0
 
@@ -685,8 +713,8 @@ def doc_ids() -> list[str]:
 def delete_doc(video_id: str):
     with _lock:
         db = _connect()
+        _fts_drop(db, video_id)
         db.execute("DELETE FROM cues WHERE owner = ?", (video_id,))
-        _fts_sync(db, video_id)
         db.execute("DELETE FROM docs WHERE id = ?", (video_id,))
         db.execute("DELETE FROM outlines WHERE owner = ?", (video_id,))
         db.commit()
@@ -794,27 +822,102 @@ def add_glossary_term(channel_key: str, name: str,
 #
 # `cues_fts` is an ordinary FTS5 table, not an external-content one. An
 # external-content table trusts that the table it mirrors stays in step, and
-# keeping that promise row by row is more code than it is worth. Every cue
-# write path resyncs its owner's whole set instead: an owner's cues are at
-# most a few thousand rows, a rebuild is cheap, and a drifted table would
-# cost a wrong search answer. The `tr` column holds a JSON object keyed by
-# backend, so the translation side is flattened to one string with Python's
-# json, the same way the rest of this file treats the column.
+# FTS5 gives no way to check that it did. The `tr` column holds a JSON object
+# keyed by backend, so the translation side is flattened to one string with
+# Python's json, the same way the rest of this file treats the column.
+#
+# Every cue write used to resync its owner's whole set: delete every FTS row of
+# the owner, read every cue back, insert them all again -- inside `_lock`, and
+# on the live path inside `_publish_locked`, ahead of the cue going out. On a
+# copy of the real database one call cost 5.7 ms at 500 cues, 15.3 ms at 2,000
+# and 55-59 ms at 8,000, and a live line pays it on the final, again on its
+# translation and again on its refinement: 464 s of lock-held store time over
+# an 8,000-line broadcast, growing with the square of its length.
+#
+# So a write now touches only the rows it wrote, keyed by rowid, inside the
+# same transaction as the cue write -- 0.10 ms a row. `cues_fts.rowid` is
+# `cues.rowid`. `cues` has a composite primary key, so its rowid is the
+# implicit one: every UPDATE and `save_cue`'s ON CONFLICT DO UPDATE keep it, and
+# only an INSERT (insert_cue, replace_cues) makes a new one, which the same
+# call then indexes. Nothing in this program runs VACUUM, the one thing that may
+# renumber an implicit rowid; one run outside it is undone by the rebuild at
+# the next start (`_fts_resync`), which stays unconditional -- the incremental
+# start-up resync (014459d) was reverted in 2a03d93 because it left a stale
+# index stale for good.
+#
+# The FTS row is deleted before it is inserted: FTS5 refuses a duplicate
+# explicit rowid rather than replacing it.
 
-def _fts_sync(db: sqlite3.Connection, owner: str) -> None:
-    """Put one owner's cues back into the FTS table. The caller holds the lock.
+_FTS_INSERT = ("INSERT INTO cues_fts (rowid, owner, cue_id, text, tr_text) "
+               "VALUES (?,?,?,?,?)")
 
-    It does not commit: the write that triggered it commits, and a start-up
-    resync commits for all of them at once."""
-    db.execute("DELETE FROM cues_fts WHERE owner = ?", (owner,))
-    rows = db.execute(
-        "SELECT cue_id, text, tr FROM cues WHERE owner = ?",
-        (owner,)).fetchall()
-    db.executemany(
-        "INSERT INTO cues_fts (owner, cue_id, text, tr_text) VALUES (?,?,?,?)",
-        [(owner, r["cue_id"], r["text"] or "",
-          " ".join(str(v) for v in (json.loads(r["tr"] or "{}").values() or []) if v))
-         for r in rows])
+
+def _fts_ddl(sql: str) -> str:
+    """A CREATE statement as sqlite_master keeps it: IF NOT EXISTS dropped,
+    whitespace and the trailing semicolon ignored."""
+    return " ".join(sql.replace("IF NOT EXISTS ", "").split()).rstrip(";").strip()
+
+
+def _fts_migrate(db: sqlite3.Connection) -> bool:
+    """Drop `cues_fts` when it was made from a definition other than
+    FTS_SCHEMA, so SCHEMA makes it again. True when it did.
+
+    IF NOT EXISTS never changes a table that is there, so without this a
+    database made before the tokenizer changed would keep unicode61 for good
+    -- and every row in it is derived from `cues`, so nothing is lost by
+    dropping it: `_fts_resync` refills it at the same start."""
+    row = db.execute("SELECT sql FROM sqlite_master "
+                     "WHERE type = 'table' AND name = 'cues_fts'").fetchone()
+    if row is None or _fts_ddl(row[0]) == _fts_ddl(FTS_SCHEMA):
+        return False
+    db.execute("DROP TABLE cues_fts")
+    return True
+
+
+def _fts_text(tr: str) -> str:
+    """The translation side of an FTS row: every backend's text, one string."""
+    return " ".join(str(v) for v in (json.loads(tr or "{}").values() or []) if v)
+
+
+def _fts_row(r) -> tuple:
+    """The FTS row for one `cues` row (rowid, owner, cue_id, text, tr)."""
+    return (r["rowid"], r["owner"], r["cue_id"], r["text"] or "", _fts_text(r["tr"]))
+
+
+def _fts_put(db: sqlite3.Connection, owner: str, cue_id: int) -> None:
+    """Re-index one cue after it was inserted or changed. The caller holds the
+    lock and commits; this runs before that commit, so the cue and its FTS row
+    land together or not at all."""
+    r = db.execute("SELECT rowid, owner, cue_id, text, tr FROM cues "
+                   "WHERE owner = ? AND cue_id = ?", (owner, int(cue_id))).fetchone()
+    if r is None:
+        return
+    db.execute("DELETE FROM cues_fts WHERE rowid = ?", (r["rowid"],))
+    db.execute(_FTS_INSERT, _fts_row(r))
+
+
+def _fts_drop(db: sqlite3.Connection, owner: str,
+              cue_ids: list[int] | None = None) -> None:
+    """Un-index an owner's cues, or only `cue_ids` of them. It goes by the cue
+    rowids, so it has to run **before** the cues themselves are deleted."""
+    sql = ("DELETE FROM cues_fts WHERE rowid IN "
+           "(SELECT rowid FROM cues WHERE owner = ?")
+    args: list = [owner]
+    if cue_ids is not None:
+        sql += f" AND cue_id IN ({','.join('?' * len(cue_ids))})"
+        args += [int(i) for i in cue_ids]
+    db.execute(sql + ")", args)
+
+
+def _fts_fill(db: sqlite3.Connection, owner: str | None = None) -> None:
+    """Index every cue of `owner`, or every cue there is. The caller has
+    already removed what these rows would collide with."""
+    sql = "SELECT rowid, owner, cue_id, text, tr FROM cues"
+    args: tuple = ()
+    if owner is not None:
+        sql += " WHERE owner = ?"
+        args = (owner,)
+    db.executemany(_FTS_INSERT, [_fts_row(r) for r in db.execute(sql, args)])
 
 
 def _fts_resync(db: sqlite3.Connection) -> None:
@@ -823,35 +926,95 @@ def _fts_resync(db: sqlite3.Connection) -> None:
 
     It runs once at every start: the table a write cut short, or a version
     that did not know the table at all, left half stale cannot outlive one
-    restart. The cost is the size of the subtitle table, which is small."""
+    restart. It is also what moves an index written before rowids were shared
+    onto them. The cost is the size of the subtitle table, which is small."""
     db.execute("DELETE FROM cues_fts")
-    owners = [r["owner"] for r in db.execute("SELECT DISTINCT owner FROM cues")]
-    for owner in owners:
-        _fts_sync(db, owner)
+    _fts_fill(db)
     db.commit()
+
+
+# How much of a line a search result shows around the hit, in characters.
+# FTS5's snippet() counts tokens, and a trigram token is one character, so
+# the 8 it was given under unicode61 (8 words) would have been 8 characters;
+# it also dropped the mark on a phrase that straddled its window
+# ("everyone for" at 24 came back as «everyone»). Both paths build the
+# snippet here instead, the same way.
+SNIPPET_CHARS = 40
+
+
+def _snippet(text: str, terms: list[str]) -> str:
+    """`text` cut to about SNIPPET_CHARS around its first hit, every term in
+    that window marked «» and a cut end marked …, the conventions FTS5's
+    snippet() used. With no hit it is the head of the line, unmarked -- the
+    page takes the side that carries a mark."""
+    text = text or ""
+    pat = re.compile("|".join(re.escape(t) for t in
+                              sorted(set(terms), key=len, reverse=True)),
+                     re.IGNORECASE)
+    hit = pat.search(text)
+    lo = 0 if hit is None else max(0, hit.start() - SNIPPET_CHARS // 4)
+    hi = min(len(text), max(lo + SNIPPET_CHARS, hit.end() if hit else 0))
+    out, at = [], lo
+    for m in pat.finditer(text, lo, hi):
+        if m.end() > hi:
+            break
+        out += [text[at:m.start()], "«", m.group(), "»"]
+        at = m.end()
+    out.append(text[at:hi])
+    return ("…" if lo > 0 else "") + "".join(out) + ("…" if hi < len(text) else "")
+
+
+def _like(term: str) -> str:
+    """A LIKE pattern that matches `term` literally anywhere (ESCAPE '\\')."""
+    return "%" + re.sub(r"([\\%_])", r"\\\1", term) + "%"
 
 
 def search(q: str, limit: int = 50) -> list[dict]:
     """Full-text search over the subtitle source text and its translations.
 
     The query is free text, not FTS5 syntax: each whitespace-separated word
-    is quoted and the words stand in AND. A word that contains a quote is
-    doubled inside, the way a quoted FTS5 term says a literal quote, so
-    nothing the user types can break the statement."""
-    words = ['"' + w.replace('"', '""') + '"' for w in (q or "").split()]
-    if not words:
+    is one term and the terms stand in AND, each found in the source or in
+    the translation.
+
+    A trigram index cannot look up a term shorter than three characters, and
+    in Japanese and Korean those are ordinary words (`配信`, `歌`, `방송`), so
+    such a query is answered by LIKE instead. The rule is per query, not per
+    term: **if any term is shorter than three characters, the whole query goes
+    to LIKE**. Mixing the two would mean ANDing a ranked FTS answer with an
+    unranked scan, and a plain scan over every cue is about 2 ms anyway
+    (section 55). The LIKE answer has no rank, so it is ordered by the most
+    recently touched video or session first, then by time within it -- the
+    order the library list already uses.
+
+    On the MATCH path each term is quoted, a quote inside doubled, the way a
+    quoted FTS5 term says a literal quote; on the LIKE path `%`, `_` and `\\`
+    are escaped. Nothing the user types can break either statement."""
+    terms = (q or "").split()
+    if not terms:
         return []
     # The time and the text come back from the cues table: the FTS table holds
     # the words, the cues table holds the shape of the line.
-    rows = _rows(
-        "SELECT c.owner, c.cue_id, c.start, c.text, "
-        "snippet(cues_fts, 2, '«', '»', '…', 8) AS snip, "
-        "snippet(cues_fts, 3, '«', '»', '…', 8) AS snip_tr "
-        "FROM cues_fts JOIN cues c ON c.owner = cues_fts.owner "
-        " AND c.cue_id = cues_fts.cue_id "
-        "WHERE cues_fts MATCH ? ORDER BY rank LIMIT ?",
-        (" ".join(words), limit))
-    return [dict(r) for r in rows]
+    head = ("SELECT c.owner, c.cue_id, c.start, c.text, "
+            "f.text AS ftext, f.tr_text AS ftr "
+            "FROM cues_fts f JOIN cues c ON c.owner = f.owner "
+            " AND c.cue_id = f.cue_id ")
+    if all(len(t) >= 3 for t in terms):
+        rows = _rows(head + "WHERE cues_fts MATCH ? ORDER BY f.rank LIMIT ?",
+                     (" ".join('"' + t.replace('"', '""') + '"' for t in terms),
+                      limit))
+    else:
+        where = " AND ".join("(f.text LIKE ? ESCAPE '\\' "
+                             "OR f.tr_text LIKE ? ESCAPE '\\')" for _ in terms)
+        args = [p for t in terms for p in (_like(t),) * 2]
+        rows = _rows(head +
+                     "LEFT JOIN sessions s ON s.id = c.owner "
+                     "LEFT JOIN docs d ON d.id = c.owner "
+                     f"WHERE {where} "
+                     "ORDER BY COALESCE(s.updated, d.updated, 0) DESC, "
+                     " c.owner, c.start, c.cue_id LIMIT ?", (*args, limit))
+    return [{"owner": r["owner"], "cue_id": r["cue_id"], "start": r["start"],
+             "text": r["text"], "snip": _snippet(r["ftext"], terms),
+             "snip_tr": _snippet(r["ftr"], terms)} for r in rows]
 
 
 def owner_kind(owner: str) -> str:

@@ -1596,3 +1596,81 @@ per pass, and four of the seventeen passes opened two. 21 sections for 30
 minutes is a heading every 1.4 minutes, which is finer than a document wants.
 Not chased here: the split is legible and the fix is prompt wording, not a
 knob with a measurement behind it.
+
+## 55. Search: an FTS rebuild on every cue write, and a tokenizer that could not see inside Japanese
+
+Two faults in the full-text search (`cues_fts`), both measured on a copy of the
+real database: 20,290 cues, 73% of them Japanese.
+
+**Every cue write re-indexed its owner's whole set.** `store._fts_sync` deleted
+every FTS row of the owner and inserted all of them again, inside `store._lock`,
+and on the live path ahead of the cue going out. A live line pays it on the
+final, again on its translation and again on its refinement. A simulated
+broadcast (`save_cue` + `save_translation` per line, median of the last 50):
+
+| Cues so far | `save_cue` before | `save_translation` before | either, after |
+|---|---|---|---|
+| 500 | 5.66 ms | 5.6 ms | **0.07 ms** |
+| 2,000 | 15.34 ms | 15.19 ms | **0.07 ms** |
+| 8,000 | 54.8 ms | 58.89 ms | **0.07 ms** |
+| Lock-held store time, 8,000 lines | 464 s | | **1.5 s** |
+
+What changed is that a write touches only its own rows: `cues_fts.rowid` is
+`cues.rowid`, and the FTS row is written in the same transaction as the cue
+(2ab4e41). The rebuild at every start stays unconditional -- the incremental one
+(014459d) was reverted in 2a03d93 because it left a stale index stale for good
+-- and it is the path that moves an older index onto the shared rowids.
+
+**The tokenizer did not split Japanese.** unicode61 separates tokens on spaces
+and punctuation, so a run of Japanese up to the next `、` is one token, and a word
+inside a sentence cannot be found. The control is a LIKE count over the same
+strings the index holds (source text and the flattened translations); a correct
+search returns exactly that many lines.
+
+| Term | Lines containing it (LIKE) | unicode61 | trigram | Path after |
+|---|---|---|---|---|
+| `ありがとう` | 335 | 34 | **335** | MATCH, 0.45 ms |
+| `おはよう` | 11 | **0** | **11** | MATCH, 0.08 ms |
+| `ゲーム` | 57 | 2 | **57** | MATCH, 0.23 ms |
+| `thank` | 50 | 45 | **50** | MATCH, 0.27 ms |
+| `안녕하세요` | 29 | 29 | 29 | MATCH, 0.17 ms |
+| `配信` | 29 | **0** | 0 → LIKE **29** | LIKE, 7.1 ms |
+| `歌` | 65 | **0** | 0 → LIKE **65** | LIKE, 7.2 ms |
+| `방송` | 42 | 14 | 0 → LIKE **42** | LIKE, 7.2 ms |
+| `ありがとう 配信` | 1 | 0 | → LIKE **1** | LIKE, 6.9 ms |
+
+Latency is the median of 20 calls at the page's limit of 50. unicode61 answered
+in 0.02~0.19 ms, but mostly with nothing. Korean looked fine only because Korean
+puts spaces between words; `방송` still missed two thirds of its lines, where it
+carries a particle or sits inside a longer word (`방송을`, `생방송`).
+
+**Trigram finds every substring of three characters or more, and nothing
+shorter.** In Japanese and Korean the shorter ones are ordinary words, so a query
+with any term under three characters goes to LIKE over the index's own columns.
+The rule is per query rather than per term: ANDing a ranked FTS answer with an
+unranked scan buys nothing when the scan costs 7 ms. The LIKE answer has no rank,
+so it comes back by the most recently touched video or session first, then by
+time.
+
+The 7 ms is a scan through the FTS5 virtual table. The same LIKE over the plain
+`cues` table is 1.6 ms for the text column and 3.7 ms with the `tr` JSON --
+but the JSON also matches backend names and escape sequences, and filtering those
+back out is more code than 4 ms is worth behind a search box that already waits
+300 ms for typing to stop.
+
+**The snippet is built in Python for both paths.** FTS5's `snippet()` counts
+tokens, and a trigram token is one character, so the width of 8 it was given
+under unicode61 (eight words) becomes eight characters. It also dropped the mark
+on a phrase that straddled its window (`everyone for` at 24 tokens came back as
+`«everyone»`). The two paths now cut about 40 characters around the first hit
+and mark every term inside it, with the same `«»` and `…`.
+
+**What it costs.** The FTS tables (content and index) grow from 7.4 MB to
+10.9 MB. The rebuild at each start goes from 0.22 s to 0.39 s, and the first
+start on an old database pays about 0.6 s once, while it drops the unicode61
+table and builds the trigram one.
+
+**Left at the defaults:** case-insensitive, no diacritic folding.
+`remove_diacritics` leaves kana and hangul alone (`かんば` does not find
+`がんばって`), so it would only help Latin text, and it would make the index
+disagree with the LIKE path, which does not fold.

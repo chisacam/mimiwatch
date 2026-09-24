@@ -189,7 +189,9 @@
   function startTick() {
     stopTick();
     tickTimer = setInterval(() => {
-      if (!ov) return;
+      // A hidden tab shows nothing, so it draws nothing. The first tick after
+      // it comes back draws what is current.
+      if (!ov || document.hidden) return;
       const v = findVideo();
       if (!v) return;
       ov.setData({ cues, backend: trKey, live, receiving, speakers: false });

@@ -279,6 +279,7 @@ function applyCueEdit(got) {
   if (row) refreshScriptRow(row, c);
   resortCue(c);
   state.idx = -1;
+  forgetSpeakers();         // the speaker was written over in place
   renderCue();
 }
 

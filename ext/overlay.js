@@ -58,6 +58,15 @@
       cues: [], backend: "", live: false, receiving: false, speakers: false,
       mode: "both", showPrev: true,
       idx: -1, px: 30, scale: 1, pos: Object.assign({}, DEFAULT_POS),
+      // What the three lines hold now, as one string. Both callers draw ten
+      // times a second, and every draw used to rebuild all three lines and
+      // then read the block's size back to clamp it -- a layout forced on the
+      // host page ten times a second while the words on screen stayed the
+      // same. A draw that would put back what is already there is skipped.
+      // Compared as text rather than by cue: a refined line replaces its
+      // final under the same id and a translation lands on the same object,
+      // both in place, so only the text tells that something changed.
+      drawn: null,
     };
     let drag = null;
     const api = {};
@@ -136,26 +145,45 @@
       const i = api.cueAt(t);
       const cur = i >= 0 ? st.cues[i] : null;
       const prev = i > 0 ? st.cues[i - 1] : null;
-      put(el.main, lineOf(cur), chipFor(cur));
-      put(el.src, st.mode === "both" && trOf(cur) ? cur.text : "");
-      put(el.prev, st.showPrev ? lineOf(prev) : "", chipFor(prev));
+      const main = lineOf(cur), mainChip = chipFor(cur);
+      const src = st.mode === "both" && trOf(cur) ? cur.text : "";
+      const before = st.showPrev ? lineOf(prev) : "", beforeChip = chipFor(prev);
+      const key = [main, mainChip, src, before, beforeChip].join("\u0000");
+      st.idx = i;
+      if (key === st.drawn) return i;
+      st.drawn = key;
+      watchBox();
+      put(el.main, main, mainChip);
+      put(el.src, src);
+      put(el.prev, before, beforeChip);
       // When the sentence changes so does the size of the block. So that a
       // subtitle placed where a short sentence sat does not run outside the box
-      // on a long one, the position is clamped again on every draw.
+      // on a long one, the position is clamped again on every new sentence.
+      // A box that changes size is the caller's to report -- setSize and
+      // setPos both reflow.
       api.reflow();
-      st.idx = i;
       return i;
     };
 
     api.clear = function () {
       put(el.main, ""); put(el.src, ""); put(el.prev, "");
       st.idx = -1;
+      // Forgotten with the text, or the next draw of the same line would
+      // think it is still on screen and leave the overlay blank.
+      st.drawn = null;
     };
 
     /* ---------- putting values in ---------- */
 
     api.setData = function (d) {
-      if (d.cues) { st.cues = d.cues; st.idx = -1; }
+      // Both callers pass the cue array on every draw, and this used to throw
+      // the index away every time, so the walk in cueAt started from line 0
+      // ten times a second -- 97 us a draw at 6,000 cues, against 0.3 us with
+      // the index kept. The stores edit their array in place (cuestore.js),
+      // so the same array is the same list, grown or trimmed; the walk steps
+      // from any index to the right line in a sorted list, and cueAt bounds
+      // the index, so it is kept. A different array is a different video.
+      if (d.cues && d.cues !== st.cues) { st.cues = d.cues; st.idx = -1; }
       if (d.backend !== undefined) st.backend = d.backend;
       if (d.live !== undefined) st.live = !!d.live;
       if (d.receiving !== undefined) st.receiving = !!d.receiving;
@@ -200,6 +228,24 @@
       api.reflow();
       if (api.onPos) api.onPos(api.pos());
     };
+
+    /* A box that changes size with no window resize behind it -- YouTube's
+     * theater mode, the page's script panel closing, a multiview relayout --
+     * used to be caught by the clamp that ran on every draw. Draws that change
+     * nothing are skipped now, so the box is watched instead: the observer
+     * reads sizes after the browser has laid the page out anyway, rather than
+     * forcing a layout of its own. Where there is no ResizeObserver (tests
+     * under node) nothing is watched. */
+    let ro = null, watched = null;
+    function watchBox() {
+      if (typeof ResizeObserver === "undefined") return;
+      const b = boxOf();
+      if (b === watched) return;
+      if (!ro) ro = new ResizeObserver(() => api.reflow());
+      if (watched) ro.unobserve(watched);
+      watched = b || null;
+      if (watched) ro.observe(watched);
+    }
 
     /* Seats the stored ratios as an actual left/bottom. */
     api.reflow = function () {
@@ -291,6 +337,7 @@
     overlay.addEventListener("pointercancel", up);
 
     api.destroy = function () {
+      if (ro) { ro.disconnect(); ro = null; watched = null; }
       overlay.removeEventListener("pointerdown", down);
       overlay.removeEventListener("pointermove", move);
       overlay.removeEventListener("pointerup", up);

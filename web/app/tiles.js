@@ -36,7 +36,10 @@ function initTiles() {
   state.focus = t.id;
   overlay = t.overlay;
   applyLayout();
-  setInterval(renderCue, 100);
+  // Not while the tab is hidden: nothing drawn there is seen, and a draw
+  // still reads the player's clock and walks the cues. The first tick after
+  // the tab comes back draws what is current.
+  setInterval(() => { if (!document.hidden) renderCue(); }, 100);
 }
 
 function makeTile() {

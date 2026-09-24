@@ -36,6 +36,22 @@ MW_I18N.add({
 
   /* popup.js, and the service worker's answers -- those land on the popup's
    * error line, so they are the popup's strings too. */
+  "popup.captureDropped": {
+    en: "Transcription could not keep up with realtime, so {n}s were thrown away. Try a lighter transcription engine.",
+    ko: "전사가 실시간을 따라가지 못해 {n}초를 버렸습니다. 가벼운 전사 엔진으로 바꿔 보십시오.",
+  },
+  "popup.captureEnded": {
+    en: "This tab's sound stopped coming, so transcription stopped. You can resume it from the popup.",
+    ko: "이 탭의 소리가 끊겨 받아 적기를 멈췄습니다. 팝업에서 이어받을 수 있습니다.",
+  },
+  "popup.captureGone": {
+    en: "The subtitle session ended: {error}",
+    ko: "자막 세션이 끝났습니다: {error}",
+  },
+  "popup.captureNoPlayback": {
+    en: "Could not play the sound back: {error}. Transcription goes on.",
+    ko: "소리를 다시 들려주지 못했습니다: {error}. 받아 적기는 계속됩니다.",
+  },
   "popup.dim": {
     en: "Background",
     ko: "배경",

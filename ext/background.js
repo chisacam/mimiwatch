@@ -26,6 +26,11 @@ importScripts("i18n.js", "strings-ext.js");
 
 const BASE_KEY = "serverBase";
 const LANG_KEY = "uiLang";
+// Which tab's sound the offscreen document is capturing, for which session, and
+// the last thing that went wrong with it. In storage, not a variable: the worker
+// is usually asleep when the offscreen document reports, and wakes up with
+// every variable empty.
+const CAP_KEY = "capture";
 const DEFAULT_BASE = "http://localhost:8900";
 const KEEPALIVE_MS = 20000;
 // How long before reattaching after a break. Failing a few times while the
@@ -138,6 +143,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       } else if (msg.type === "stopSession") {
         await stopCapture();
         if (msg.sessionId) await post("/api/live/stop", { id: msg.sessionId });
+        reply({ ok: true });
+      } else if (["captureEnded", "captureError", "captureSlow",
+                  "captureNoPlayback"].includes(msg.type)) {
+        await captureReport(msg);
         reply({ ok: true });
       } else reply({ ok: false, error: t("popup.errUnknownRequest", { type: msg.type }) });
     } catch (e) {
@@ -280,11 +289,15 @@ async function startFromTab(msg) {
   });
   if (res.error) return { ok: false, error: res.error };
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
+  // Written before the capture starts: a failed playback is reported from
+  // inside the start, before the answer below comes back.
+  await chrome.storage.local.set({ [CAP_KEY]: { tabId: msg.tabId, sessionId: res.id, note: "" } });
   const started = await chrome.runtime.sendMessage({
     target: "offscreen", type: "capture",
     streamId, sessionId: res.id, base: await base(),
   });
   if (!started || !started.ok) {
+    await chrome.storage.local.remove(CAP_KEY);
     await post("/api/live/stop", { id: res.id });
     return { ok: false, error: (started && started.error) || t("popup.errNoAudio") };
   }
@@ -316,11 +329,13 @@ async function resumeSession(msg) {
     await stopCapture();                  // release another session's sound if it was held
     await ensureOffscreen();              // a stream id expires in seconds, so the document first
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
+    await chrome.storage.local.set({ [CAP_KEY]: { tabId: msg.tabId, sessionId: res.id, note: "" } });
     const started = await chrome.runtime.sendMessage({
       target: "offscreen", type: "capture",
       streamId, sessionId: res.id, base: await base(),
     });
     if (!started || !started.ok) {
+      await chrome.storage.local.remove(CAP_KEY);
       // The session came back but no sound is going to it. It is not ended --
       // press again and the server says it is already receiving, so then it has
       // to be stopped and resumed again.
@@ -343,10 +358,55 @@ async function ensureOffscreen() {
 }
 
 async function stopCapture() {
+  // A deliberate stop leaves nothing to report, and an old note would otherwise
+  // sit on the popup's status line for a capture that is no longer there.
+  await chrome.storage.local.remove(CAP_KEY);
   if (await chrome.offscreen.hasDocument()) {
     try { await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" }); }
     catch (_) { /* already down */ }
   }
+}
+
+/* What the offscreen document says about a capture it is running.
+ *
+ * These reports used to reach no one. The offscreen document sent them, this
+ * listener answered "unknown request", and a capture that died -- the tab
+ * closed, the session gone from the server, the recognizer falling behind --
+ * left the page showing the last subtitle as though more were coming. They are
+ * handled the way the mimiwatch page handles the same three from the same
+ * module (web/app/capture.js): the sound stopping stops the session, the
+ * session going needs only saying, and falling behind is a warning while
+ * transcription goes on.
+ *
+ * The words go two places. The tab gets a short note over the player; the
+ * popup reads the note back from storage onto its status line, because the
+ * note over the player is gone after a few seconds and the popup is where one
+ * looks to find out why the subtitles stopped. */
+async function captureReport(msg) {
+  const cap = (await chrome.storage.local.get(CAP_KEY))[CAP_KEY];
+  // A report from a capture that has since been replaced or stopped on purpose.
+  if (!cap || (msg.sessionId && cap.sessionId !== msg.sessionId)) return;
+  let text;
+  if (msg.type === "captureEnded") {
+    text = t("popup.captureEnded");
+    // The sound stopped, so the session would go on waiting for sound that is
+    // not coming -- and a session still "receiving" cannot be resumed. Stopping
+    // it also ends the cue stream, which moves the overlay off "receiving".
+    await post("/api/live/stop", { id: cap.sessionId }).catch(() => {});
+  } else if (msg.type === "captureError") {
+    text = t("popup.captureGone", { error: msg.error || "" });
+  } else if (msg.type === "captureSlow") {
+    text = t("popup.captureDropped", { n: Math.round(msg.dropped || 0) });
+  } else {
+    text = t("popup.captureNoPlayback", { error: msg.error || "" });
+  }
+  // A capture that ended or failed has already been let go by the offscreen
+  // document; only the tab and the note are kept, for the popup.
+  const over = msg.type === "captureEnded" || msg.type === "captureError";
+  await chrome.storage.local.set({ [CAP_KEY]: {
+    tabId: cap.tabId, sessionId: over ? "" : cap.sessionId, note: text } });
+  // The tab may be the thing that closed. Then there is no one to tell.
+  await chrome.tabs.sendMessage(cap.tabId, { type: "captureNote", text }).catch(() => {});
 }
 
 /* ---------- the pipe the subtitles flow down ---------- */
@@ -456,6 +516,11 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener(async (tabId) => {
   chrome.storage.local.remove("tab:" + tabId);
+  // The capture note belongs to a tab. Once the tab is gone no popup can show it.
+  // Not while a session is still attached: closing the tab is exactly what
+  // captureEnded reports, and it may arrive after this.
+  const cap = (await chrome.storage.local.get(CAP_KEY))[CAP_KEY];
+  if (cap && cap.tabId === tabId && !cap.sessionId) chrome.storage.local.remove(CAP_KEY);
 });

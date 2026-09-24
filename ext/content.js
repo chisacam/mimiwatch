@@ -285,6 +285,9 @@
       reply({ ok: true });
     }
     else if (msg.type === "detach") { unmount(); reply({ ok: true }); }
+    // The tab's sound capture stopped or is struggling. The service worker has
+    // already worded it; the page only has to show it.
+    else if (msg.type === "captureNote") { note(msg.text || ""); reply({ ok: true }); }
     else if (msg.type === "prefs") {
       Object.assign(prefs, msg.prefs || {});
       savePrefs(); apply(); reply({ ok: true });

@@ -27,8 +27,36 @@ function outlineOwner() {
   return "";
 }
 
+/* Live means **still receiving**, not "a session is on screen". It used to be
+ * the second, and a session that had stopped kept offering "Start writing":
+ * the server has retired that session by then and answers "no such session",
+ * so the button did nothing, and the rebuild -- the path that exists for a
+ * finished session -- was never offered at all. */
 function outlineIsLive() {
-  return !!(state.live && state.live.id);
+  return !!(state.live && state.live.id) && isLiveReceiving();
+}
+
+/* The id the server files a job under (store.owner_of): a picker value can
+ * carry a `live:` prefix the job's owner does not. */
+function outlineKey(v) {
+  return (v || "").startsWith("live:") ? v.slice(5) : (v || "");
+}
+
+/* What the page knows about writing the document besides the document itself.
+ * Each remembers the owner it is about and is only drawn while that owner is
+ * on screen, so a tile switch needs no reset hook of its own.
+ *   outlineJob    -- a rebuild running: {owner, id, done, total}
+ *   outlineBusy   -- the owner a request was just sent for and has not answered.
+ *                    The button is disabled from the click, not from the
+ *                    reply: the gap between the two is a double click too.
+ *   outlineNotice -- why the last request was refused: {owner, error, reason} */
+let outlineJob = null;
+let outlineBusy = "";
+let outlineNotice = null;
+let outlineLastLive = null;
+
+function outlineMine(x) {
+  return !!x && outlineKey(x.owner) === outlineKey(outlineOwner());
 }
 
 /* ---------- showing and hiding ---------- */
@@ -70,6 +98,14 @@ async function loadOutline(owner) {
     // it in then would show one talk's document over another's video.
     if (outlineOwner() !== owner) return;
     state.outline = doc;
+    // A rebuild already under way when this page opened. Its job frames went
+    // out before this page was listening, so this is the only way it learns.
+    if (doc.job && doc.job.id) {
+      outlineJob = { owner, id: doc.job.id, done: doc.job.done || 0,
+                     total: doc.job.total || 0 };
+    } else if (outlineMine(outlineJob) && outlineJob.id) {
+      outlineJob = null;
+    }
   } catch (err) {
     console.error("[outline]", err);
   }
@@ -85,26 +121,84 @@ async function setOutlineRunning(on) {
       body: JSON.stringify({ id: owner, on: !!on }),
     });
     const doc = await res.json();
-    if (outlineOwner() === owner && !doc.error) state.outline = doc;
+    if (outlineOwner() === owner) {
+      // The refusal used to be dropped here, so a press that the server
+      // turned down looked like a press that did nothing.
+      if (doc.error) outlineNotice = { owner, error: doc.error };
+      else { state.outline = doc; outlineNotice = null; }
+    }
   } catch (err) {
     console.error("[outline]", err);
+    if (outlineOwner() === owner) outlineNotice = { owner, error: "", reason: String(err) };
   }
   renderDocView();
 }
 
 async function rebuildOutline() {
   const owner = outlineOwner();
-  if (!owner) return;
+  if (!owner || outlineBusy === owner || outlineMine(outlineJob)) return;
+  outlineBusy = owner;
+  outlineNotice = null;
+  renderDocView();
+  let res = null;
   try {
-    await fetch("/api/outline/rebuild", {
+    const r = await fetch("/api/outline/rebuild", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: owner }),
+    });
+    res = await r.json();
+  } catch (err) {
+    console.error("[outline]", err);
+    res = { error: "", reason: String(err) };
+  }
+  if (outlineBusy === owner) outlineBusy = "";
+  if (outlineOwner() !== owner) return;
+  // The reply used to be thrown away. The server names *why* it refused with
+  // an id (jobs.start_outline) precisely so the screen can say something
+  // different for each, and none of them was ever shown.
+  if (res && res.job) {
+    // A job frame may already have landed and moved the count on; the reply
+    // does not set it back.
+    if (!(outlineMine(outlineJob) && outlineJob.id === res.job)) {
+      outlineJob = { owner, id: res.job, done: 0, total: res.total || 0 };
+    }
+  } else {
+    outlineNotice = { owner, error: (res && res.error) || "", reason: res && res.reason };
+  }
+  // What happens next arrives on the change feed (bus.js) as job frames.
+  renderDocView();
+}
+
+async function cancelOutlineRebuild() {
+  if (!outlineMine(outlineJob)) return;
+  try {
+    await fetch("/api/job/cancel", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: outlineJob.id }),
     });
   } catch (err) {
     console.error("[outline]", err);
   }
-  // What happens next arrives on the change feed (bus.js), the same way a
-  // transcription job reports itself.
+}
+
+/* A refusal id, as a notice. The ids are the ones jobs.start_outline and
+ * live.outline_set answer with; anything else is shown as it came. */
+function outlineRefusal(n) {
+  switch (n.error) {
+    case "backend-cannot-write":
+      return docNotice(t("outline.blocked.title"), t("outline.blocked.body"),
+                       [{ label: t("outline.blocked.action"),
+                          onClick: () => openSettings() }]);
+    case "no-subtitles":
+      return docNotice(t("outline.fail.title"), t("outline.fail.noSubtitles"), []);
+    case "session-still-live":
+      return docNotice(t("outline.fail.title"), t("outline.fail.stillLive"), []);
+    case "no such session":
+      return docNotice(t("outline.fail.title"), t("outline.fail.gone"), []);
+    default:
+      return docNotice(t("outline.fail.title"),
+                       t("outline.fail.other", { reason: n.reason || n.error || "?" }), []);
+  }
 }
 
 /* The `outline` frame on a session's own stream, and the one the rebuild job
@@ -130,8 +224,42 @@ function onOutlineEvent(m, tile) {
  * straight into `state.outline` would put a *number* where the section list
  * belongs. */
 function onOutlineJobEvent(m) {
-  if (!m.owner || m.owner !== outlineOwner()) return;
-  if (state.docView) loadOutline(m.owner);
+  if (!m.owner || outlineKey(m.owner) !== outlineKey(outlineOwner())) return;
+  if (state.docView) loadOutline(outlineOwner());
+}
+
+/* The rebuild job's own state, off the change feed (bus.js routes every job of
+ * kind `outline` here). The `outline` frame above only goes out once a section
+ * exists, so a job that fails before its first one never sends it -- keyed on
+ * that frame alone, "Writing…" would stand for ever. The job frame says how far
+ * it got and how it ended. */
+function onOutlineJobState(st) {
+  if (!st.owner || outlineKey(st.owner) !== outlineKey(outlineOwner())) return;
+  const owner = outlineOwner();
+  if (st.state === "running") {
+    outlineJob = { owner, id: st.id, done: st.done || 0, total: st.total || 0 };
+  } else {
+    if (outlineJob && outlineJob.id === st.id) outlineJob = null;
+    if (st.state === "error" || st.state === "interrupted") {
+      outlineNotice = { owner, error: st.error || "", reason: st.error || st.state };
+    }
+    if (state.docView) loadOutline(owner);
+  }
+  if (state.docView) renderDocView();
+}
+
+/* A session's state changed (live.js renderLiveStatus). The view only has to
+ * be redrawn when that flips it between live and finished -- a session that
+ * stops with the view open would otherwise keep showing "Start writing" -- and
+ * status frames are too frequent to rebuild the view on every one. */
+function syncDocViewLive() {
+  const now = outlineIsLive();
+  if (now === outlineLastLive) return;
+  outlineLastLive = now;
+  if (state.docView) {
+    renderDocView();
+    if (!now) loadOutline(outlineOwner());
+  }
 }
 
 /* ---------- drawing ---------- */
@@ -147,7 +275,8 @@ function docNotice(title, body, actions) {
     const btn = document.createElement("button");
     btn.className = "seg";
     btn.textContent = a.label;
-    btn.onclick = a.onClick;
+    btn.disabled = !!a.disabled;
+    if (!a.disabled) btn.onclick = a.onClick;
     box.append(btn);
   }
   return box;
@@ -238,17 +367,30 @@ function renderDocView() {
                           [{ label: t("outline.start"),
                              onClick: () => setOutlineRunning(true) }]));
   } else if (!outlineIsLive()) {
+    const job = outlineMine(outlineJob) ? outlineJob : null;
+    const busy = !!job || outlineBusy === owner;
+    const label = job
+      ? t("outline.rebuild.running", { done: job.done || 0, total: job.total || 0 })
+      : secs.length ? t("outline.rebuild.again") : t("outline.rebuild");
+    const actions = [{ label, disabled: busy, onClick: () => rebuildOutline() }];
+    if (job) actions.push({ label: t("outline.rebuild.cancel"),
+                            onClick: () => cancelOutlineRebuild() });
     body.append(docNotice(
       secs.length ? t("outline.head") : t("outline.off.title"),
-      t("outline.rebuild.body"),
-      [{ label: secs.length ? t("outline.rebuild.again") : t("outline.rebuild"),
-         onClick: () => rebuildOutline() }]));
+      t("outline.rebuild.body"), actions));
   } else if (!secs.length) {
     body.append(docNotice(t("outline.waiting.title"), t("outline.waiting.body"), []));
   }
   if (doc.error) {
     body.append(docNotice(t("outline.error", { reason: doc.error }),
                           t("outline.error.kept"), []));
+  }
+  // Not when it says what the blocked notice or the stored error above
+  // already says -- one reason on screen twice reads as two failures.
+  const n = outlineMine(outlineNotice) ? outlineNotice : null;
+  if (n && !(n.error === "backend-cannot-write" && doc.can_outline === false)
+        && !(doc.error && ((n.reason || "").startsWith(doc.error) || n.error === doc.error))) {
+    body.append(outlineRefusal(n));
   }
 }
 

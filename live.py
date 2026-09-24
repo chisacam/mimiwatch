@@ -3667,7 +3667,7 @@ def probe_live(url: str) -> bool | None:
     the stream; a stream URL answers in its own `is_live`.
     """
     try:
-        meta = subprocess.run(stream.ytdlp_args("-j", url),
+        meta = subprocess.run(stream.ytdlp_args("-j", url=url),
                               capture_output=True, text=True,
                               timeout=WATCH_PROBE_TIMEOUT_S,
                               **stream.child_io(stderr=False))
@@ -3694,31 +3694,51 @@ def _watcher_tick() -> None:
 
     A pass that raises does not reach the stamp, which is the point: what is
     recorded is a pass that *finished*, not one that was attempted.
+
+    One address that raises is not a pass that raises. `probe_live` called
+    `ytdlp_args` with the address positionally from 0.6.0 on, so every probe
+    was a TypeError; it went straight out of this loop, the first watcher took
+    the whole pass down with it, the stamp never moved and no watcher ever
+    started anything. The tests faked `probe_live` whole and stayed green.
+    Each address is now its own try: what goes wrong with one is printed and
+    the rest are still checked, and the pass still counts as finished.
     """
     global _watcher_last_pass
     for w in store.watchers():
-        if not w["enabled"]:
-            continue
-        live_now = probe_live(w["url"])
-        if live_now is None:
-            continue                    # unknown keeps the finding it had
-        if live_now != w["live"]:
-            store.set_watcher_live(w["url"], live_now)
-            bus.publish({"type": "watchers"})
-        if not live_now:
-            continue
-        with _lock:
-            urls = [s.url for s in _sessions.values()]
-            busy = any(s.state in RUNNING_STATES for s in _sessions.values())
-        if w["url"] in urls or busy:
-            continue                    # the screen is on something else
-        s = start(w["url"], None, config.viewer_lang(), config.active("tr"),
-                  asr_backend_id=config.active("asr"),
-                  title=w["name"])
-        print(f"mimiwatch: watcher {w['name'] or w['url']} is live -- started {s['id']}",
-              flush=True)
-        break                           # one per pass; the rest next time
+        try:
+            if _watcher_check(w):
+                break                   # one per pass; the rest next time
+        except Exception:
+            print(f"mimiwatch: watcher {w['name'] or w['url']} failed its check",
+                  flush=True)
+            traceback.print_exc()
     _watcher_last_pass = time.time()
+
+
+def _watcher_check(w: dict) -> bool:
+    """One address of a pass. True when it started a session, which ends the
+    pass."""
+    if not w["enabled"]:
+        return False
+    live_now = probe_live(w["url"])
+    if live_now is None:
+        return False                # unknown keeps the finding it had
+    if live_now != w["live"]:
+        store.set_watcher_live(w["url"], live_now)
+        bus.publish({"type": "watchers"})
+    if not live_now:
+        return False
+    with _lock:
+        urls = [s.url for s in _sessions.values()]
+        busy = any(s.state in RUNNING_STATES for s in _sessions.values())
+    if w["url"] in urls or busy:
+        return False                # the screen is on something else
+    s = start(w["url"], None, config.viewer_lang(), config.active("tr"),
+              asr_backend_id=config.active("asr"),
+              title=w["name"])
+    print(f"mimiwatch: watcher {w['name'] or w['url']} is live -- started {s['id']}",
+          flush=True)
+    return True
 
 
 def watcher_status() -> dict:

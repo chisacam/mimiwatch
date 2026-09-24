@@ -40,6 +40,8 @@ let start = { lang: "", genre: "general", refine: false, profile: "broadcast",
               // as "My language" on the mimiwatch page.
               viewerLang: "ko" };
 const SKEY = "startPrefs";
+// The service worker's record of this tab's sound capture (background.js CAP_KEY).
+const CAP_KEY = "capture";
 /* The translation target remembered on the server (backends.json). The popup
  * reads it in fillChoices so the last choice made on either surface -- the web
  * page or the extension -- is the default here too. The local start.viewerLang
@@ -299,9 +301,13 @@ function syncResumeButton() {
 
 async function refreshState() {
   if (!tabId) return;
+  // What the service worker last heard about this tab's sound capture. The note
+  // over the player is gone in seconds; this is where it can be read again.
+  const cap = (await chrome.storage.local.get(CAP_KEY))[CAP_KEY];
+  const capNote = cap && cap.tabId === tabId ? cap.note || "" : "";
   chrome.tabs.sendMessage(tabId, { type: "state" }, (r) => {
     if (chrome.runtime.lastError || !r) {
-      $("state").textContent = t("popup.stateNotAttached");
+      $("state").textContent = [t("popup.stateNotAttached"), capNote].filter(Boolean).join(" · ");
       return;
     }
     if (!r.mounted) { $("state").textContent = t("popup.statePickToOverlay"); return; }
@@ -317,9 +323,17 @@ async function refreshState() {
     if (r.stalled) bits.push(t("popup.stateStalled"));
     if (!r.ticking) bits.push(t("popup.stateNoClock"));
     if (r.panel) bits.push(t(r.panelUp ? "popup.statePanelUp" : "popup.statePanelNoRoom"));
+    if (capNote) bits.push(capNote);
     $("state").textContent = bits.join(" · ");
   });
 }
+
+/* A capture report can land while the popup is open -- the tab is closed from
+ * another window, the recognizer falls behind. The service worker writes it
+ * down, and this redraws the status line when it does. */
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes[CAP_KEY]) refreshState();
+});
 
 function syncModes() {
   document.querySelectorAll("[data-mode]").forEach((b) =>

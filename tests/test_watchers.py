@@ -5,6 +5,8 @@ network, no model loaded: the start the poller makes is faked too, and the
 poller only ever reads a session's address and state). The routes are in
 `test_server.py`, which owns the module-scoped server.
 """
+import json
+import subprocess
 import time
 
 import live
@@ -106,6 +108,78 @@ def test_unknown_probe_keeps_the_finding(isolated, monkeypatch):
     started = _run_tick(monkeypatch, {"u1": None})
     assert started == []                        # the screen may be free; the probe did not say
     assert [w for w in store.watchers() if w["url"] == "u1"][0]["live"]
+
+
+# ---- the real probe ------------------------------------------------------
+#
+# Every test above fakes `probe_live` whole, and that is how a probe that
+# raised TypeError on every call (the address went to `ytdlp_args`
+# positionally, and it takes it by keyword only) shipped in 0.6.0 with the
+# suite green. These run the real one with only the child process faked.
+
+def _fake_ytdlp(monkeypatch, payload, returncode=0):
+    """`subprocess.run` answering as yt-dlp would, recording the argv."""
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode,
+                                           stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(live.subprocess, "run", fake_run)
+    return calls
+
+
+def test_probe_builds_the_ytdlp_line_and_reads_is_live(monkeypatch):
+    calls = _fake_ytdlp(monkeypatch, {"is_live": True})
+    assert live.probe_live("https://twitch.tv/a") is True
+    argv = calls[0]
+    # The address goes last, after `--`, so a pasted `--exec` stays an address.
+    assert argv[-2:] == ["--", "https://twitch.tv/a"]
+    assert "-j" in argv[:-2]
+
+    _fake_ytdlp(monkeypatch, {"is_live": False})
+    assert live.probe_live("https://twitch.tv/a") is False
+    _fake_ytdlp(monkeypatch, {"title": "no flag"})
+    assert live.probe_live("https://twitch.tv/a") is None
+    _fake_ytdlp(monkeypatch, {"is_live": True}, returncode=1)
+    assert live.probe_live("https://twitch.tv/a") is None
+
+
+def test_probe_finds_the_live_entry_on_a_channel_page(monkeypatch):
+    _fake_ytdlp(monkeypatch, {"_type": "playlist", "entries": [
+        None, {"is_live": False}, {"is_live": True}]})
+    assert live.probe_live("https://youtube.com/@b") is True
+    _fake_ytdlp(monkeypatch, {"_type": "playlist", "entries": [{"is_live": False}]})
+    assert live.probe_live("https://youtube.com/@b") is None
+
+
+def test_one_probe_that_raises_does_not_end_the_pass(isolated, monkeypatch):
+    """A bad address is printed and skipped: the next is still probed, it can
+    still start, and the pass still counts as finished."""
+    monkeypatch.setattr(live, "_watcher_last_pass", None)
+    store.add_watcher("bad", "b")
+    store.add_watcher("good", "g")
+    # The list comes newest first by a stamp two quick inserts can share, so
+    # the order is pinned: the bad one has to come first to be tested at all.
+    rows = sorted(store.watchers(), key=lambda w: w["url"] != "bad")
+    monkeypatch.setattr(live.store, "watchers", lambda: rows)
+    probed = []
+
+    def probe(url):
+        probed.append(url)
+        if url == "bad":
+            raise TypeError("the probe fell over")
+        return True
+
+    started = []
+    monkeypatch.setattr(live, "probe_live", probe)
+    monkeypatch.setattr(live, "start", lambda url, *a, **kw:
+                        started.append(url) or {"id": "fake"})
+    live._watcher_tick()
+    assert probed == ["bad", "good"]
+    assert started == ["good"]
+    assert live.watcher_status()["last_pass"] is not None
 
 
 # ---- what the poller says about itself -----------------------------------

@@ -255,6 +255,14 @@ class Handler(BaseHTTPRequestHandler):
         owner = urllib.parse.unquote(owner)
         doc = live.outline_of(owner)
         if self._query().get("fmt") != "md":
+            # A rebuild under way rides along. Its progress otherwise reaches
+            # a page only as job frames on the change feed, and a page opened
+            # halfway through has seen none of them -- it would offer to start
+            # a second rebuild of the document it is watching being written.
+            j = jobs.outline_job(owner)
+            if j is not None:
+                doc = {**doc, "job": {"id": j["id"], "done": j.get("done", 0),
+                                      "total": j.get("total", 0)}}
             return self._json(doc)
         st = store.session(owner) or store.doc(owner) or {}
         title = st.get("title") or owner

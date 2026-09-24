@@ -182,6 +182,10 @@ async function onMultiviewChanged(m) {
 /* Progress of a job started in another window (or in the extension). This
  * window's own is drawn by the polling loop, so it is skipped here. */
 function onJobChanged(st) {
+  // A document rebuild reports in the document view, which is where it was
+  // started. The generic job bar would call it "translating" and, in the
+  // window that clicked, claim it came from another window.
+  if (st.kind === "outline") { onOutlineJobState(st); return; }
   if (state.jobId === st.id && state.jobLocal) return;
   renderForeignJob(st);
 }

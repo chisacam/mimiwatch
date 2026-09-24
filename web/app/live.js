@@ -697,6 +697,9 @@ function renderLiveStatus(tile) {
   const el = $("lang-status");
   if (!live) return;
   $("live-badge").hidden = !isLiveReceiving();
+  // A session that stops under an open document view has to trade its
+  // "Start writing" for the rebuild (outline.js).
+  syncDocViewLive();
   const m = live.lastStatus;
   if (!m) { el.className = "status"; el.textContent = ""; return; }
   if (m.state === "error") {

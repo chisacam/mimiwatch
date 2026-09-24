@@ -42,6 +42,7 @@ MW_I18N.add({
   "outline.rebuild": { en: "Write the document", ko: "문서 쓰기" },
   "outline.rebuild.again": { en: "Write it again", ko: "다시 쓰기" },
   "outline.rebuild.running": { en: "Writing… {done}/{total}", ko: "쓰는 중… {done}/{total}" },
+  "outline.rebuild.cancel": { en: "Stop", ko: "멈춤" },
   "outline.rebuild.body": {
     en: "This recording is finished, so the whole transcript is read in one go rather than as it arrives.",
     ko: "끝난 녹화본이라 도착하는 대로가 아니라 전사본 전체를 한 번에 읽습니다.",
@@ -50,6 +51,23 @@ MW_I18N.add({
     en: "There are no subtitles to read yet.",
     ko: "아직 읽을 자막이 없습니다.",
   },
+
+  /* A request to write the document that the server turned down. The ids
+   * behind these are jobs.start_outline's and live.outline_set's. */
+  "outline.fail.title": { en: "The document was not started", ko: "문서를 쓰지 못했습니다" },
+  "outline.fail.noSubtitles": {
+    en: "There are no subtitles stored for this yet, so there is nothing to write from.",
+    ko: "아직 저장된 자막이 없어 문서로 옮길 내용이 없습니다.",
+  },
+  "outline.fail.stillLive": {
+    en: "The session is still closing. Try again in a few seconds.",
+    ko: "세션을 아직 닫는 중입니다. 몇 초 뒤에 다시 해 보세요.",
+  },
+  "outline.fail.gone": {
+    en: "This session is no longer running. Its document can be written from the finished transcript.",
+    ko: "이 세션은 이미 끝났습니다. 문서는 끝난 전사본으로 쓸 수 있습니다.",
+  },
+  "outline.fail.other": { en: "The server answered: {reason}", ko: "서버의 답: {reason}" },
 
   "outline.error": { en: "The last pass failed: {reason}", ko: "마지막 쓰기가 실패했습니다: {reason}" },
   "outline.error.kept": {

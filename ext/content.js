@@ -249,8 +249,18 @@
       else if (m.type === "doc") {
         live = false; receiving = false;
         // A VOD may have several sets of translations, one per engine. It uses
-        // the last of them.
-        trKey = (m.data.backends_done || []).slice(-1)[0] || LIVE_KEY;
+        // the one that covers the most lines. It used to take the last entry of
+        // `backends_done`, which the server keeps sorted -- so a recording
+        // translated by Gemma, with one line that fell back to M2M-100, was
+        // shown in `local-m2m100`: 2,950 of its 2,951 lines had nothing in that
+        // key, and the overlay stood empty as though it had never been put up.
+        // export.py had the same alphabetically-last pick and dropped it.
+        const count = {};
+        for (const c of m.data.cues || []) {
+          for (const k in (c.translations || {})) count[k] = (count[k] || 0) + 1;
+        }
+        trKey = (m.data.backends_done || []).reduce(
+          (best, k) => ((count[k] || 0) > (count[best] || 0) ? k : best), LIVE_KEY);
         store.load(m.data.cues || []);
         log(`VOD, ${cues.length} lines, translation key ${trKey}`);
         MimiPanel.reset();

@@ -3535,9 +3535,17 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     # audio that you want to carry on after closing the browser goes to the address.
     # The subtitles continue by session id, so it is one thread even across a source
     # change. The media time continues from `resume_from` for both sources.
-    tab = (source or st.get("source")) == "tab"
+    #
+    # The microphone is a pushed source like the tab: the browser holds the device
+    # and uploads the sound, and there is no URL to fall back on. This used to test
+    # `== "tab"` alone, so a stopped microphone session had neither and was refused
+    # with "No URL is left" -- and had it got past that, the session below was built
+    # as "hls" with an empty URL. Measured on 2026-09-29: all three conference
+    # sessions of that day were `source: mic, url: ""`, and none could be resumed.
+    src = source or st.get("source") or "hls"
+    pushed = src in ("tab", "mic")
     live_url = (url or "").strip() or (st.get("url") or "")
-    if not tab and not live_url:
+    if not pushed and not live_url:
         return {"error": "No URL is left, so it cannot be resumed. "
                           "Resume with tab audio."}
 
@@ -3556,13 +3564,13 @@ def resume(session_id: str, asr_backend_id: str = "", backend_id: str = "",
     asr_id = (asr_backend_id if config.find("asr", asr_backend_id, cfg)
               else (st.get("asr_backend") or ""))
     tr_id = backend_id if config.find("tr", backend_id, cfg) else (st.get("backend") or "")
-    s = LiveSession(live_url if not tab else (st.get("url") or live_url),
+    s = LiveSession(live_url if not pushed else (st.get("url") or live_url),
                     st.get("source_lang") or None,
                     st.get("viewer_lang") or "ko", tr_id,
                     profile=st.get("profile") or "broadcast",
                     asr_backend_id=asr_id,
                     refine=bool(st.get("refine")), genre=st.get("genre"),
-                    source="tab" if tab else "hls",
+                    source=src if pushed else "hls",
                     # Passing it through at all is the point -- a gate the
                     # resume path forgets is how a setting silently stops
                     # applying, and the session would go on transcribing with

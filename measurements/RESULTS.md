@@ -1674,3 +1674,60 @@ table and builds the trigram one.
 `remove_diacritics` leaves kana and hangul alone (`かんば` does not find
 `がんばって`), so it would only help Latin text, and it would make the index
 disagree with the LIKE path, which does not fold.
+
+## 56. Refined lines that lost their head, and finals that stayed beside them
+
+Measured on the six live microphone sessions of a conference day (2026-09-29,
+Korean, talk profile, SenseVoiceSmall + refinement) and on the five WAVs five of
+them recorded. The symptom: 1,057 stored lines of which 169 were finals that no
+refined line had absorbed, and in the notes written from them the same speech
+appeared twice -- or once, in the rough final only, missing from the refined line
+beside it.
+
+**The refiner got the group's audio with its head torn off.** `AudioHistory`
+kept 30 s. `GROUP_MAX_S` (25 s) is tested when a segment ends, so a group closes
+only after the segment that takes it past 25 s; with max_speech 12 s that overran
+30 s all the time. The refiner then decoded the group's last 30 s, and the refined
+line dropped the words before them. Replaying each WAV through the real Silero VAD
+and `Refiner` with a stub decoder that records how much audio it was handed
+(`keep_s` is the only change between the columns):
+
+| Recording | Groups | Longest | Cut short, 30 s | Audio lost, 30 s | Cut short, 60 s |
+|---|---|---|---|---|---|
+| 10:07 keynote + panel | 275 | 38.3 s | 42 | 151 s | 1 |
+| 13:01 two talks | 113 | 45.1 s | **68 (60 %)** | 386 s | 1 |
+| 15:21 one talk | 105 | 38.4 s | 7 | 29 s | 0 |
+| 15:51 one talk | 79 | 39.0 s | 21 | 109 s | 1 |
+| 16:30 two talks | 141 | 39.8 s | 60 | 286 s | 1 |
+| **All** | **713** | | **198** | **961 s of 14,443 s (6.7 %)** | |
+
+The one group left at 60 s in four files is the first of the file, short by the
+1 s of preroll before a word that has no audio before it. `HISTORY_KEEP_S` is now
+60 s.
+
+Also tried and dropped: running the length test during speech as well as in a
+pause. The group-length distribution came out identical on all five recordings,
+because the test already runs at every segment end; the bound on a group is one
+segment past 25 s either way.
+
+**Finals were judged not covered by lines that covered them.** `_covers` counted
+matching characters across the whole refined line with difflib's default
+`autojunk`, which past 200 characters discards every character making up 1 % of
+the text -- in Korean, the space and the commonest syllables. A final contained
+almost verbatim scored 0.29 against a 244-character refined line (0.93 without the
+heuristic); 274 of the day's 888 refined lines were over 200 characters. Turning
+autojunk off fixes that and breaks the other way: a short line gathers stray
+syllables from anywhere in a long one, and a false hit deletes that line. The
+fix counts only inside the stretch where the final would sit (anchored on the
+longest shared run, the final's length plus half again).
+
+| `_covers` | Leftover finals covered by a refined line within 30 s | Unrelated pairs judged covered (of 4,440) |
+|---|---|---|
+| whole line, autojunk on (before) | 10 | 28 |
+| whole line, autojunk off | 48 | 60 |
+| **local window, autojunk off** | **39** | **13** |
+
+"Unrelated" is a line and a refined line more than five minutes apart, five
+drawn per refined line (seed 0). The left column counts candidates, not verified
+matches; what it shows is the direction. Of the 38 pairs the autojunk switch alone
+flipped, the local window keeps 33.

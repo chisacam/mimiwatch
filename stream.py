@@ -44,7 +44,20 @@ WINDOW_SIZE = 512      # how many samples the VAD looks at at once (about 32ms a
 PREROLL_S = 1.0
 
 GROUP_GAP_S = 2.0      # this much silence is taken as an utterance group being over
-GROUP_MAX_S = 25.0     # cut here even if the talking never pauses (the audio-keeping limit)
+GROUP_MAX_S = 25.0     # cut here even if the talking never pauses
+# How much audio the refiner can reach back into. GROUP_MAX_S is tested when a
+# segment ends, so a group closes only after the segment that carries it past 25 s
+# -- up to one more max_speech segment plus the preroll. It was 30 s, which the
+# talk profile (max_speech 12 s) overran all the time: the refiner got the group's
+# audio with its head torn off and the refined line silently lost those words,
+# while the rough final that still had them, overlapping the refined line only
+# half, was not absorbed either and stayed behind. Replaying five conference
+# recordings of 2026-09-29 (4 h 1 min of speech in groups) through the VAD and the
+# refiner: groups ran to 45.1 s, 198 of 713 were cut short and 961 s of audio
+# (6.7 %) never reached the refinement pass -- 60 % of the groups in one hour-long
+# block. At 60 s nothing was cut but the one second of preroll before a file's
+# first word, which does not exist. measurements/RESULTS.md section 56.
+HISTORY_KEEP_S = 60.0
 
 # If a re-decode comes out this much shorter than the finals joined together it
 # is not trusted. A re-decode polishes the content, it does not lose it, so a
@@ -389,7 +402,7 @@ class AudioHistory:
     """Holds the recent audio and tears off the lead-in region and the source
     audio for refinement."""
 
-    def __init__(self, sample_rate: int = SAMPLE_RATE, keep_s: float = 30.0):
+    def __init__(self, sample_rate: int = SAMPLE_RATE, keep_s: float = HISTORY_KEEP_S):
         self.sr = sample_rate
         self.keep = int(keep_s * sample_rate)
         self.buf = np.zeros(0, dtype=np.float32)

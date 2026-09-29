@@ -40,6 +40,28 @@ def test_short_final_needs_exact_containment():
     assert live._covers("はい", "はい、そうです") is True
     assert live._covers("はい", "いいえ") is False
     assert live._covers("무기도 풀제열이야", "무기도 풀제일이야?") is True   # A few letters apart still counts as covered
+    # A refined line past 200 characters: difflib's autojunk used to throw away the
+    # space and the common syllables, so this final (in it almost word for word)
+    # scored 0.29 and stayed on screen beside its own refined line. Recorded
+    # 2026-09-29, a conference keynote.
+    refined = ("이런 일들이 최근에 있었는데 3년전 한번 돌아놓봅시다 3년 전에에는 저희가 거대 언어 모델들의 개발 비용을 "
+               "따라갈 수가 없기 때문에 이걸 따라가기 위한 전략으로 슬 전략을 이야기를 했었습니다 큰 모델들이 앞뚫고 "
+               "나가면 그 뒤에 붙어서 바로 혁신의 수산 전략이죠 그리고 2년 전에는아에서 이제 뭔가 목적지 없이 꿈을 "
+               "안고 가에 대왕의 시대가 끝나가고 있고 드디어 산업 바로로 접어드는 에아의 분야 이야기를 했었습니다 "
+               "아까 앞에서 말씀드렸던")
+    final = ("그리고 2년 전에 에이아이에서 뭔가 목적지 없이 꿈을 안고 가에 대해대왕의 시대가 끝나가고 있고 "
+             "드디어 산업화로 접어드는의 분야 이야기를 했었습니다 아까 앞에서 말씀드렸던")
+    assert len(refined) > 200
+    assert live._covers(final, refined) is True
+    # And the other way: with the whole long line counted, a short unrelated line
+    # (said 30 minutes apart) gathered enough stray syllables to pass, and a false
+    # hit deletes that line. Only the stretch where the final would sit counts.
+    far = "사실 이거 사용하는 법이 복잡하다고"
+    other = ("행사에서 쌓 결과들을 바탕으로 이제 에이전트의 성능이 실시간으로 측정하고 계산하는 기능이 만들어졌습니다 "
+             "그 일부를 다듬어서 이제 백사를 내야했고 20 이후 버전에 반영할 예정이이고요 다행히 여기서 해커폰에서 "
+             "보통 끝나면 그 해커폰 코드가 거기서 없어지는 경우 많지만 이렇게 해커폰으로 끝나지 않고 제품에 녹여낼 "
+             "수 있는 찬스가 생겨서 굉장히 다행이라고 생각하고 있습니다 그리고 이 팀 또 우승하기도 했죠")
+    assert live._covers(far, other) is False
 
 
 def test_notes_are_not_translation_context(session):

@@ -115,3 +115,32 @@ def test_run_stream_flushes_and_refines_at_end_of_audio():
     stream.run_stream(chunks, vad, FakeASR(), None, stream.AudioHistory(), ref)
     assert vad.flushed == 1
     assert ref.forced[-1] is True                # When the audio ends, the last group is refined too
+
+
+def test_refiner_gets_a_long_group_whole():
+    """A group is closed only after the segment that takes it past GROUP_MAX_S, so it
+    runs past 25 s: 36 s here, three talk-profile segments. The audio the refiner
+    gets has to start where the group did. At 30 s kept the first 6 s were gone,
+    and on the 2026-09-29 conference recordings 198 of 713 groups lost their head
+    that way (measurements/RESULTS.md section 56)."""
+    import numpy as np
+    sr = 16000
+    got = []
+
+    class ASR(FakeASR):
+        def transcribe(self, buf, rate, **k):
+            got.append(len(buf))
+            return {"text": "refined " * 20, "lang": "ko"}
+
+    class Sink:
+        def refine(self, *a):
+            pass
+
+    hist = stream.AudioHistory()
+    hist.push(np.zeros(sr * 40, dtype=np.float32))
+    r = stream.Refiner(ASR(), hist, Sink())
+    for a, b in ((0, 12), (12, 24), (24, 36)):
+        r.add_span(a * sr, b * sr, "fast " * 10, "")
+    r.maybe_refine(38 * sr)                        # the pause after the group
+    r.close()
+    assert got == [36 * sr]                        # the whole group, not its last 30 s

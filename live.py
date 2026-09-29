@@ -705,8 +705,25 @@ def _covers(final_text: str, refined: str) -> bool:
         return False
     if len(a) < COVER_EXACT_BELOW:
         return a in refined
+    # The overlap is counted inside the stretch of the refined line where the final
+    # would sit, not across the whole line. Counting across the whole line, with
+    # difflib's autojunk on, failed both ways at once on the 2026-09-29 conference
+    # sessions (six, 1,057 lines). Past 200 characters -- a talk-profile group is
+    # often longer -- autojunk throws away the space and the commonest syllables,
+    # so a final contained almost verbatim scored 0.29 against a 244-character
+    # line and stayed on screen beside it: of the finals left standing, 10 were
+    # judged covered by a refined line within 30 s. Turning autojunk off alone
+    # found 48, but a short line then collected stray syllables from anywhere in
+    # a long one: unrelated pairs (more than 5 minutes apart) judged covered went
+    # from 28 to 60 of 4,440, and a false hit deletes speech. Anchoring on the
+    # longest shared run and counting only within the final's own length (plus
+    # half again) found 39 and let 13 unrelated pairs through.
+    sm = difflib.SequenceMatcher(None, a, refined, autojunk=False)
+    m = sm.find_longest_match(0, len(a), 0, len(refined))
+    slack = len(a) // 2 + 2
+    window = refined[max(0, m.b - m.a - slack):m.b + (len(a) - m.a) + slack]
     matched = sum(b.size for b in
-                  difflib.SequenceMatcher(None, a, refined).get_matching_blocks())
+                  difflib.SequenceMatcher(None, a, window, autojunk=False).get_matching_blocks())
     return matched / len(a) >= COVER_RATIO
 
 

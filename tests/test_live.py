@@ -312,6 +312,20 @@ def test_resume_can_switch_the_audio_source(monkeypatch):
     live._sessions.clear()
 
 
+def test_resume_keeps_a_microphone_session_on_the_microphone(monkeypatch):
+    """A stopped microphone session has no URL and must still resume, as a microphone
+    session. It was refused with "No URL is left", and would have come back as "hls"."""
+    monkeypatch.setattr(live.LiveSession, "_run", lambda self: None)
+    store.save_session({"id": "mic-1", "state": "stopped", "stopped_by": "user",
+                        "source": "mic", "url": "", "source_lang": "ko", "viewer_lang": "ko",
+                        "backend": "local-m2m100", "asr_backend": "tcpp-lite",
+                        "media_base": 0.0, "audio_s": 30.0, "recv_t": 30.0, "lines": 0}, "")
+    got = live.resume("mic-1")
+    assert "error" not in got and got["source"] == "mic"
+    s = live.get("mic-1")
+    assert s.source == "mic" and s.pushed and s.url == "" and s.resume_from == 30.0
+    live._sessions.clear()
+
 def test_tab_feed_slices_into_frames_and_idle_flushes_once():
     """For a tab session, feed() is the reader. A 2 s block becomes twenty 0.1 s frames in
     the ring; when the sound stops it finalises the pending utterance exactly once (None),

@@ -420,10 +420,6 @@ MW_I18N.add({
     en: "The server could not be stopped ({error}). It may be an older version that does not know this route. Shut it down with Ctrl-C in the terminal.",
     ko: "서버를 멈추지 못했습니다 ({error}). 서버가 이 기능을 모르는 예전 판일 수 있습니다. 터미널에서 Ctrl-C 로 끄십시오.",
   },
-  "engines.shutdown.restart.bundle": {
-    en: "To start it again, run mimiwatch again.",
-    ko: "다시 켜려면 mimiwatch 를 다시 실행하십시오.",
-  },
   "engines.shutdown.restart.repo": {
     en: "To start it again, run ./run.sh in the terminal.",
     ko: "다시 켜려면 터미널에서 ./run.sh 를 실행하십시오.",
@@ -674,83 +670,5 @@ MW_I18N.add({
   "library.watch.add.name": {
     en: "Name (optional)",
     ko: "이름 (선택)",
-  },
-
-  /* update.js -- the notification strip and the Update section */
-  "update.apply.confirm": {
-    en: "Swap in the new version and restart?\nA stream being received is closed properly first.",
-    ko: "새 판으로 갈아 끼우고 다시 시작할까요?\n받는 중인 방송은 먼저 제대로 닫힙니다.",
-  },
-  "update.applying": {
-    en: "Restarting on the new version… this screen opens again once it is up.",
-    ko: "새 판으로 다시 시작하는 중입니다… 켜지면 이 화면이 다시 열립니다.",
-  },
-  "update.available": {
-    en: "A new version {tag} is out.",
-    ko: "새 판 {tag}이 나왔습니다.",
-  },
-  "update.available.repo": {
-    en: "A new version {tag} is out — from the repository, get it with git pull.",
-    ko: "새 판 {tag}이 나왔습니다 — 저장소에서는 git pull 로 받으십시오.",
-  },
-  "update.checking": {
-    en: "Checking…",
-    ko: "확인하는 중…",
-  },
-  "update.downloading": {
-    en: "Taking the new version {tag}…",
-    ko: "새 판 {tag} 받는 중…",
-  },
-  "update.downloading.pct": {
-    en: "Taking the new version {tag}… {pct}%",
-    ko: "새 판 {tag} 받는 중… {pct}%",
-  },
-  "update.failed": {
-    en: "Taking the new version failed: {error}",
-    ko: "새 판 받기 실패: {error}",
-  },
-  "update.hint.available": {
-    en: "a new version is out",
-    ko: "새 판이 있습니다",
-  },
-  "update.hint.available.repo": {
-    en: "a new version is out (git pull from the repository)",
-    ko: "새 판이 있습니다 (저장소에서는 git pull)",
-  },
-  "update.hint.current": {
-    en: "Now {version}",
-    ko: "지금 {version}",
-  },
-  "update.hint.latest": {
-    en: "latest {tag}",
-    ko: "최신 {tag}",
-  },
-  "update.hint.uptodate": {
-    en: "up to date",
-    ko: "최신입니다",
-  },
-  "update.ready": {
-    en: "The new version {tag} is taken. Restart and it is applied.",
-    ko: "새 판 {tag}을 받아 두었습니다. 다시 시작하면 적용됩니다.",
-  },
-  "update.token": {
-    en: "Repository token",
-    ko: "저장소 토큰",
-  },
-  "update.token.ph": {
-    en: "GitHub token (for a private repository)",
-    ko: "GitHub 토큰 (비공개 저장소용)",
-  },
-  "update.token.hint": {
-    en: "Kept in this browser and sent to api.github.com only. The MIMIWATCH_GITHUB_TOKEN environment variable works the same and also covers the automatic once-a-day check.",
-    ko: "이 브라우저에만 두고 api.github.com으로만 보냅니다. MIMIWATCH_GITHUB_TOKEN 환경 변수도 동일하며, 하루 한 번의 자동 검사까지 함께 커버합니다.",
-  },
-  "update.token.saved": {
-    en: "Saved in this browser as you type",
-    ko: "입력하는 대로 이 브라우저에 저장됩니다",
-  },
-  "update.token.none": {
-    en: "Empty — the check runs without a token",
-    ko: "비어 있습니다 — 토큰 없이 검사합니다",
   },
 });

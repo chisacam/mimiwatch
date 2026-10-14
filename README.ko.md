@@ -6,8 +6,7 @@ YouTube 영상과 라이브 방송을 **자신의 언어로 이해하기 위한 
 원본 영상 위에 전사 자막과 번역 자막을 얹어 보여 줍니다.
 
 모델은 전부 이 기계에서 돕니다. 외부로 나가는 것은 영상 오디오를 받아 오는
-요청과, 하루 한 번 깃허브 릴리스에서 새 판이 있는지 묻는 조회뿐입니다
-(끄려면 [사용 안내 › 판올림](docs/GUIDE.ko.md#판올림) 참고).
+요청뿐입니다.
 
 ## 무엇을 하는가
 
@@ -32,7 +31,7 @@ YouTube 영상과 라이브 방송을 **자신의 언어로 이해하기 위한 
 
 - macOS(Apple Silicon·Intel), Linux, 또는 Windows 10 1803 이상
 - 디스크 약 7GB (모델 6.3GB — 가벼운 기본 조합만 쓰면 약 730MB)
-- 저장소에서 돌리려면 Python 3.10 이상. 묶음으로 받으면 파이썬도 필요 없습니다
+- Python 3.10 이상
 
 **아무것도 빌드하지 않습니다.** 전사 런타임(transcribe.cpp)은 맥·리눅스·
 윈도우 모두 미리 만들어진 휠을 쓰고, 맥 휠에는 Metal이 들어 있습니다.
@@ -46,18 +45,10 @@ brew install ffmpeg        # 윈도우: winget install --id Gyan.FFmpeg
 
 `yt-dlp`는 준비물이 아닙니다. 설치 스크립트가 가상환경 안에 최신으로 넣습니다.
 
-## 두 가지 길
-
-**묶음으로.** 릴리스에서 `mimiwatch-*-macos-arm64.zip` 또는
-`mimiwatch-*-windows-x64.zip`을 받아 풀고 두 번 누릅니다. 브라우저에 화면이
-열리고, 첫 실행이면 「초기 설정」이 떠서 엔진을 고르고 그에 맞는 모델을
-받습니다. 처음 열 때 걸리는 게이트키퍼·SmartScreen 안내와 파일이 어디에
-놓이는지는 [docs/PACKAGING.ko.md](docs/PACKAGING.ko.md)에 있습니다.
-
-**저장소에서.** 아래처럼 설치합니다. 코드를 고치거나 실측 스크립트를
-돌리려면 이쪽입니다.
-
 ## 설치
+
+mimiwatch는 이 저장소를 클론해서 돌립니다. 내려받아 바로 쓰는 배포본은 따로
+없습니다.
 
 ```sh
 git clone https://github.com/chisacam/mimiwatch.git
@@ -113,13 +104,12 @@ http://localhost:8900 을 엽니다. 다른 포트는 `PORT=8951 ./run.sh`
    SRT·WebVTT·텍스트·JSON 을 받습니다.
 
 그 밖의 모든 것 — 라이브 선택지, 멀티뷰, 지난 방송 이어받기, 엔진 교체와
-CPU 설정, 멤버십 전용 방송, 브라우저 확장, 판올림, 문제가 생겼을 때 — 는
+CPU 설정, 멤버십 전용 방송, 브라우저 확장, 문제가 생겼을 때 — 는
 **[docs/GUIDE.ko.md](docs/GUIDE.ko.md)**에 있습니다.
 
 ## 문서
 
 - [`docs/GUIDE.ko.md`](docs/GUIDE.ko.md) — 상세 사용 안내
-- [`docs/PACKAGING.ko.md`](docs/PACKAGING.ko.md) — 묶음 배포와 판올림
 - [`docs/WINDOWS.ko.md`](docs/WINDOWS.ko.md) — 윈도우에서 다른 점
 - [`docs/REQUIREMENTS.ko.md`](docs/REQUIREMENTS.ko.md) — 요구사항과 설계 판단
 - [`measurements/RESULTS.ko.md`](measurements/RESULTS.ko.md) — 모델 선정과 성능 실측

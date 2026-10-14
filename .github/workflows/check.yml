@@ -3,9 +3,7 @@
 # (tests/conftest.py). No test loads a model.
 name: check
 
-# Runs on a push to main and on a PR against main. Not on a tag push -- a tag goes on
-# a commit of main that has already been checked, and there is no reason to spend the
-# free minutes twice.
+# Runs on a push to main and on a PR against main.
 on:
   push:
     branches: [main]

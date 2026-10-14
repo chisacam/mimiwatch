@@ -37,10 +37,8 @@ import paths
 import store
 import stream
 import translate
-import update as mw_update
 
-# The screen's files travel with the program -- inside the repo, or inside
-# the PyInstaller bundle.
+# The screen's files travel with the program, inside the repo.
 BASE = paths.BASE
 WEB = os.path.join(BASE, "web")
 
@@ -1248,33 +1246,6 @@ class Handler(BaseHTTPRequestHandler):
             label=body.get("label", ""), engine_id=body.get("id", ""),
             device=body.get("device") or "auto", token=body.get("token") or None))
 
-    # ---- Updates -------------------------------------------------------------
-    # Check GitHub releases for a new version and, in a bundle, fetch it and
-    # swap it in. The rules for checking, downloading and applying are all in
-    # update.py.
-
-    def get_update(self):
-        # It answers with the state only. It does not go out to the network,
-        # so the screen calls it freely.
-        self._json(mw_update.status())
-
-    def post_update_check(self, body):
-        self._json(mw_update.check(force=True, token=(body or {}).get("token") or ""))
-
-    def post_update_download(self, body):
-        self._json(mw_update.download(token=(body or {}).get("token") or ""))
-
-    def post_update_apply(self, body):
-        res = mw_update.apply()
-        if "error" in res:
-            return self._json(res, 400)
-        # The same rule as the shutdown button: close the streams being
-        # received properly, then stop after the response has been flushed
-        # out. The swap script waits for this process to end.
-        _wind_down()
-        self._json(res)
-        threading.Thread(target=_stop_server, daemon=True).start()
-
 
 GET_ROUTES = {
     "/": Handler.get_index,
@@ -1286,7 +1257,6 @@ GET_ROUTES = {
     "/api/models": Handler.get_models,
     "/api/setup": Handler.get_setup,
     "/api/cookies": Handler.get_cookies,
-    "/api/update": Handler.get_update,
     "/api/glossaries": Handler.get_glossaries,
     "/api/search": Handler.get_search,
     "/api/watchers": Handler.get_watchers,
@@ -1350,9 +1320,6 @@ POST_ROUTES = {
     "/api/cookies/youtube": Handler.post_cookies_youtube,
     "/api/cookies/chzzk": Handler.post_cookies_chzzk,
     "/api/cookies/delete": Handler.post_cookies_delete,
-    "/api/update/check": Handler.post_update_check,
-    "/api/update/download": Handler.post_update_download,
-    "/api/update/apply": Handler.post_update_apply,
     "/api/glossaries": Handler.post_glossaries,
     "/api/glossaries/term": Handler.post_glossary_term,
     "/api/burn": Handler.post_burn,
@@ -1455,13 +1422,12 @@ def _wind_down(timeout: float = 8.0):
     """Stop the background work before exit: close the live sessions, cancel
     the jobs, and wait.
 
-    The shutdown button, Ctrl-C and applying an update have to pass the same
-    place for the record to come out the same. While the jobs were not being
-    cancelled, quitting with a transcription running left that thread holding
-    the model, so interpreter shutdown could not let the model go and
-    ggml-metal's exit destructor aborted (see `jobs.cancel_all`). The wait has
-    an upper bound -- an exit that never comes because of a thread that will
-    not stop is worse.
+    The shutdown button and Ctrl-C have to pass the same place for the record
+    to come out the same. While the jobs were not being cancelled, quitting
+    with a transcription running left that thread holding the model, so
+    interpreter shutdown could not let the model go and ggml-metal's exit
+    destructor aborted (see `jobs.cancel_all`). The wait has an upper bound --
+    an exit that never comes because of a thread that will not stop is worse.
     """
     deadline = time.time() + timeout
     # The cancel marks have to go up first so that the jobs stop alongside
@@ -1494,7 +1460,7 @@ def hard_exit(code: int = 0):
     above has been stopped, leaving the rest of the cleanup to the operating
     system is the safer way. SQLite commits on every write, so nothing is lost.
     `main()` is left returning a value so the tests can call it, and only the
-    entry points that come up as a process (`__main__`, app.py) call this.
+    entry point that comes up as a process (`__main__`) calls this.
     """
     for f in (sys.stdout, sys.stderr):
         try:
@@ -1505,12 +1471,12 @@ def hard_exit(code: int = 0):
 
 
 def main(argv: list[str] | None = None):
-    """Bring the server up. `argv` is handed over by the tests and by the
-    bundle's entry point (app.py).
+    """Bring the server up. `argv` is handed over by the tests; run from the
+    command line it is the process's own.
 
-    `--open` opens the screen in the default browser as soon as it is up.
-    Someone who started the bundle with a double click has no terminal and so
-    nowhere to see the address.
+    `--open` opens the screen in the default browser as soon as it is up -- a
+    convenience, so the address does not have to be copied out of the terminal.
+    run.sh and run.ps1 do not pass it.
     """
     import argparse
     ap = argparse.ArgumentParser()
@@ -1542,8 +1508,7 @@ def main(argv: list[str] | None = None):
         _srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     except OSError as exc:
         # A server that is already up (or another program) holds that port.
-        # Double-clicking the bundle is mostly this case, so its screen is
-        # opened and we step back.
+        # With `--open` its screen is opened and we step back.
         print(f"mimiwatch: cannot open port {args.port} ({exc}). "
               "If one is already up, its screen is used.", file=sys.stderr, flush=True)
         if args.open:
@@ -1556,11 +1521,6 @@ def main(argv: list[str] | None = None):
     if args.open:
         import webbrowser
         threading.Timer(0.5, lambda: webbrowser.open(f"http://localhost:{args.port}/")).start()
-    # The check for a new version is once a day, in the background. It can be
-    # turned off with `"update_check": false` in backends.json or with the
-    # environment variable -- the one request that goes out is the release list
-    # lookup.
-    mw_update.start_auto_check()
     try:
         _srv.serve_forever()
     except KeyboardInterrupt:

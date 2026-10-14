@@ -241,21 +241,18 @@ async function shutdownServer() {
   closeWindows(stopped);
 }
 
-/* How to start it again -- one whole sentence per case, because the bundle has
- * no terminal and the repository has no bundle to run. Both the hint and the
- * shutdown screen say it. */
+/* How to start it again, as one whole sentence. Both the hint and the shutdown
+ * screen say it, so it is worded in one place. */
 function restartHint() {
-  return state.models && state.models.frozen
-    ? t("engines.shutdown.restart.bundle") : t("engines.shutdown.restart.repo");
+  return t("engines.shutdown.restart.repo");
 }
 
-/* Closes the window once the server has stopped. For someone running the bundle
- * this tab is all that is left, and stopping only the server while the tab
- * stands there reads as "is it still running?".
+/* Closes the window once the server has stopped. Stopping only the server while
+ * the tab stands there reads as "is it still running?".
  *
  * Chrome lets `window.close()` close even a tab a script did not open **as long
- * as it has a single history entry** -- which is what the tab the bundle opens
- * in the browser is. A tab reached from a bookmark and walked through several
+ * as it has a single history entry** -- a tab that came up on this address and
+ * went nowhere else. A tab reached from a bookmark and walked through several
  * pages does not close, and the screen then says so. */
 function closeWindows(stopped) {
   if (state.scriptWin && !state.scriptWin.closed) {
@@ -463,9 +460,10 @@ function setBackendPickers(id) {
  * The models live outside the program (paths.py). The install script used to
  * fetch them and the screen had nowhere to show what was there -- a missing
  * file ended the session in a FileNotFoundError, leaving nothing but "run
- * ./install.sh". Someone who took the bundle (PyInstaller) does not even have
- * that script, so downloading, deleting and pulling more from Hugging Face all
- * happen here. The server pushes the progress over the bus. */
+ * ./install.sh". That script fetches the default engines' models only, so an
+ * engine picked later, or a fetch that broke off, would mean going back to the
+ * terminal. Downloading, deleting and pulling more from Hugging Face all happen
+ * here instead. The server pushes the progress over the bus. */
 
 function fmtBytes(n) {
   if (!n) return "";

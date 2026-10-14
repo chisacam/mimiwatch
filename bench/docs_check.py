@@ -1,7 +1,7 @@
 """Check the docs against the UI string table.
 
-The docs quote screen labels in double quotes ("Models & Tools", "⚙ Engines
-› Update", "Restart and apply"). Nothing else looks at those quotes. A label
+The docs quote screen labels in double quotes ("Models & Tools", "⚙ Engines",
+"First-time setup"). Nothing else looks at those quotes. A label
 renamed in the string table leaves the docs stale with no warning, and the
 English and the Korean companion can drift apart the same way -- a pair that
 disagrees is a bug (AGENTS.md). This check is the guard.
@@ -16,8 +16,8 @@ Two things are checked.
   [2] The pair agrees. For every entry of the string table, an English doc
       that quotes the English value must have its `.ko.md` carry the Korean
       value. One English value can sit in several entries with different
-      Korean values ("Download" is 내려받기 in the export dialog and 받기 on
-      the update strip), so any one of them counts. Spaces are ignored on the
+      Korean values ("Download" is 내려받기 in the export dialog and 받기 in
+      Models & Tools), so any one of them counts. Spaces are ignored on the
       comparison -- the Korean docs attach a particle to what precedes it
       with no space, and "모델 · 도구" and "모델·도구" are the same label.
 
@@ -55,10 +55,6 @@ QUOTED = [
     ("manage.engines", "⚙ Engines"),
     ("settings.glossary.title", "Glossary"),
     ("settings.models.title", "Models & Tools"),
-    ("settings.update.title", "Update"),
-    ("settings.update.check", "Check for updates"),
-    ("update.download", "Download"),
-    ("update.apply", "Restart and apply"),
     ("header.live.stop", "Stop"),
     ("live.resume.button", "Resume"),
     ("add.title", "Add video"),

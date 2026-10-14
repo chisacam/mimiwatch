@@ -765,14 +765,6 @@ MW_I18N.add({
     en: "Translation backends",
     ko: "번역 백엔드"
   },
-  "settings.update.check": {
-    en: "Check for updates",
-    ko: "새 판 확인"
-  },
-  "settings.update.title": {
-    en: "Update",
-    ko: "판올림"
-  },
   "setup.go": {
     en: "Start with this",
     ko: "이대로 시작"
@@ -834,17 +826,5 @@ MW_I18N.add({
   "tile.sound.title": {
     en: "Sound and subtitles follow this tile",
     ko: "소리와 자막이 이 타일을 따릅니다"
-  },
-  "update.apply": {
-    en: "Restart and apply",
-    ko: "다시 시작하며 적용"
-  },
-  "update.download": {
-    en: "Download",
-    ko: "받기"
-  },
-  "update.later": {
-    en: "Later",
-    ko: "나중에"
   }
 });

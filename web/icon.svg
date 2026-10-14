@@ -1,8 +1,8 @@
 <!-- mimiwatch's mark. 미미 is 耳: the tool listens, and what it leaves behind is
      subtitles, so the drawing is a screen with ears and two caption bars.
 
-     This file is the master. packaging/make-icons.sh renders everything else from
-     it (the .icns, the .ico, the extension PNGs), so a change here is made once.
+     This file is the master. bench/make-icons.sh renders the extension PNGs
+     (ext/icons/) from it, so a change here is made once.
      It is also the page's favicon, served straight out of web/.
 
      Rectangles, ellipses and a radius, and nothing else: fine bezier work is the

@@ -297,12 +297,23 @@ def resolve_audio(url: str, youtube: bool = True) -> tuple[str, dict]:
         # If all three are missing, it is not that one format is absent but
         # that the whole list did not come back. Almost always because yt-dlp
         # is old.
+        # Say how to refresh the copy that is actually called (stream.ytdlp_cmd).
+        # Pointing at the other one only fixes a copy that is not used: the
+        # standalone, when it is there, wins over the virtualenv's. Only the
+        # standalone takes `--update-to` -- yt-dlp declines to update a pip
+        # install itself (upstream behaviour, not checked here).
+        standalone = paths.tool("yt-dlp")
+        if standalone and stream.ytdlp_cmd()[0] == standalone:
+            fix = ('Delete the yt-dlp tool in "Engines › Models & Tools" and '
+                   f"download it again, or run `{standalone} --update-to nightly`")
+        else:
+            fix = ("Re-run the install script (install.sh / install.ps1), which "
+                   "upgrades the yt-dlp in the virtualenv, or download the standalone "
+                   'yt-dlp in "Engines › Models & Tools", which is used ahead of it')
         hint = (f" — not a single format came back. yt-dlp "
                 f"({ver or 'version unknown'}) may be stale"
                 + (" (over 45 days old)" if ytdlp_stale(ver) else "")
-                + ". Download the yt-dlp standalone executable again from "
-                  '"Engines › Models & Tools", or bring it up with '
-                  "`yt-dlp --update-to nightly`, then try again.")
+                + f". {fix}, then try again.")
     raise RuntimeError("yt-dlp could not find any audio at this URL."
                        + hint + " [" + " / ".join(why) + "]")
 

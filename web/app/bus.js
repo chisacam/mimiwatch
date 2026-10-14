@@ -60,8 +60,6 @@ function connectBus() {
     // row is fixed, and once everything needed is in place the notice bar at
     // the top comes down.
     else if (m.type === "model") onModelEvent(m);
-    // Update: a new version found, and its download progress. update.js fixes the bar and the section.
-    else if (m.type === "update") onUpdateEvent(m);
     // A multiview bundle appeared, or its focus or members changed (moved by another window or by the server).
     else if (m.type === "multiview") onMultiviewChanged(m);
     // The watched list changed, or the probe changed a watcher's live finding.

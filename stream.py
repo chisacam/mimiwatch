@@ -69,9 +69,9 @@ def model_dir() -> str:
     """Where the models are kept. Changeable with `MIMIWATCH_MODEL_DIR`.
 
     The rules are in `paths.py` (`%LOCALAPPDATA%` on Windows, `~/.local/share`
-    elsewhere). This used to work it out itself, but the config and the storage
-    have to come out of the same root in a bundle (PyInstaller), so it was
-    gathered into one place. This name has many callers, so it stays.
+    elsewhere). This used to work it out itself; every location was gathered
+    into `paths.py` so that the models, the tools, the config and the store are
+    worked out in one place. This name has many callers, so it stays.
     """
     return paths.model_dir()
 
@@ -111,18 +111,17 @@ def ytdlp_cmd() -> list[str]:
     install looks like.
 
     **A standalone executable fetched into the tools directory comes before all
-    of them.** Shipping as a bundle (PyInstaller) pins the version of the
-    yt-dlp inside, so a few months later it is stale -- the very problem that
-    keeping it in the virtualenv solved comes back in the bundle. The
-    standalone executable yt-dlp ships updates itself with `-U`, so fetching it
-    in "Engine management › Models and tools" means the latest is used without
-    building the bundle again.
+    of them.** It was first added for the PyInstaller bundle, which pinned the
+    yt-dlp inside it and had no install script to re-run; the bundle is gone and
+    the standalone stays. Nothing fetches it unasked (it is not in the default
+    set), so when it is there the user fetched it in "Engines › Models & Tools"
+    to be used. It is refreshed on that same screen, too -- delete it and
+    download it again, which takes yt-dlp's latest release -- without re-running
+    the install script.
 
-    Inside a bundle there is no Python to call `python -m yt_dlp` with.
-    Starting the executable itself again with `--ytdlp` makes `app.py` see that
-    argument and hand it over to yt_dlp's main. The reason for keeping it a
-    child process is unchanged -- it has to be killable under a time limit
-    (when YouTube stalls, it stalls with it).
+    Whichever one it is, it runs as a child process rather than an import: it
+    has to be killable under a time limit (when YouTube stalls, it stalls with
+    it).
     """
     global _YTDLP
     if _YTDLP is None:
@@ -132,8 +131,7 @@ def ytdlp_cmd() -> list[str]:
         # find_spec does not run the module. Importing it takes close to a
         # second, and this function is called often.
         elif importlib.util.find_spec("yt_dlp") is not None:
-            _YTDLP = ([sys.executable, "--ytdlp"] if paths.frozen()
-                      else [sys.executable, "-m", "yt_dlp"])
+            _YTDLP = [sys.executable, "-m", "yt_dlp"]
         else:
             _YTDLP = ["yt-dlp"]
         _YTDLP += _js_runtime_args()
@@ -151,13 +149,14 @@ def _js_runtime_args() -> list[str]:
     """Tell yt-dlp where the JS runtime is.
 
     Since 2025.11 YouTube extraction is only whole with an external JS runtime
-    (deno). On macOS and Linux yt-dlp searches **PATH only**, so a bundle
-    started from Finder (where PATH is short) cannot find a Homebrew deno and
-    knows nothing of one fetched through "Models and tools" -- hence handing
-    the path over directly. `--remote-components ejs:github` is the insurance
-    that has the solver script (yt-dlp-ejs) fetched from GitHub when it is
-    missing or its version does not line up. It is off by default, and the
-    formats just quietly disappear.
+    (deno). On macOS and Linux yt-dlp searches **PATH only**, and the tools
+    directory is not on PATH, so it knows nothing of a deno fetched through
+    "Models & Tools" (nor of one in the usual places `paths.which` also looks
+    at) -- hence handing the path over directly.
+    `--remote-components ejs:github` is the insurance that has the solver
+    script (yt-dlp-ejs) fetched from GitHub when it is missing or its version
+    does not line up. It is off by default, and the formats just quietly
+    disappear.
     """
     deno = deno_path()
     if not deno:
@@ -206,21 +205,22 @@ def child_io(*, stderr: bool = True) -> dict:
 
     before the child is even born. A Windows user on 0.3.1 died exactly this
     way in a live session's `_spawn_ffmpeg` -- a process that came up with an
-    unsound standard error (a bundle started without a console, one started by
-    the task scheduler or as a service, a shell called with its output
-    redirected oddly). The yt-dlp call before it survived because
-    `capture_output=True` was holding stdout and stderr on pipes, and the
-    ffmpeg that had a pipe on stdout only was the one that got caught.
+    unsound standard error (one started by the task scheduler or as a
+    service, a shell called with its output redirected oddly). The yt-dlp call
+    before it survived because `capture_output=True` was holding stdout and
+    stderr on pipes, and the ffmpeg that had a pipe on stdout only was the one
+    that got caught.
 
     stdin is always NUL. There is nothing to feed either ffmpeg or yt-dlp, and
     it also stops the child from taking the keystrokes when running in a
     terminal.
 
     stderr is handed down as it is when there is a sound one -- a line of
-    ffmpeg's error has to be left in the console or in mimiwatch.log for the
-    next report to be diagnosable. If it is not sound it is thrown away. At the
-    call sites that catch stderr themselves (`capture_output`, `stderr=PIPE`)
-    it is called with `stderr=False` -- it cannot be given twice.
+    ffmpeg's error has to be left in the console (or wherever the server's
+    output goes) for the next report to be diagnosable. If it is not sound it
+    is thrown away. At the call sites that catch stderr themselves
+    (`capture_output`, `stderr=PIPE`) it is called with `stderr=False` -- it
+    cannot be given twice.
     """
     kw = {"stdin": subprocess.DEVNULL}
     if stderr:
@@ -232,12 +232,11 @@ def ffmpeg_cmd() -> str:
     """The ffmpeg executable. In the order PATH → the usual places (Homebrew
     and such) → the tools directory.
 
-    The name `"ffmpeg"` used to be handed to Popen as it is. That works in a
-    terminal, but a bundle started from Finder has a short PATH and cannot find
-    the Homebrew one, and someone who took only the bundle without the install
-    script has no ffmpeg at all. In that case it is fetched in "Engine
-    management › Models and tools" and put in the tools directory
-    (modelhub.py).
+    The name `"ffmpeg"` used to be handed to Popen as it is. That finds only
+    what is on PATH, and the install scripts do not install ffmpeg -- they only
+    recommend it. Someone without one fetches it in "Engines › Models & Tools",
+    which puts it in the tools directory (modelhub.py), and the tools directory
+    is not on PATH.
 
     Without it, a FileNotFoundError carrying what to do about it is raised.
     This error is carried straight into the error box of a session or a job.

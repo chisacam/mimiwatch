@@ -7,9 +7,7 @@ language**. It lays transcription subtitles and translation subtitles over the
 original video.
 
 Every model runs on this machine. The only things that leave it are the
-requests that fetch a video's audio, and a once-a-day query asking GitHub
-Releases whether a new version exists (to turn that off, see
-[Guide › Updates](docs/GUIDE.md#updates)).
+requests that fetch a video's audio.
 
 ## What it does
 
@@ -38,7 +36,7 @@ Korean video gets neither translation nor subtitles.
 
 - macOS (Apple Silicon or Intel), Linux, or Windows 10 1803 or later
 - About 7GB of disk (6.3GB of models — about 730MB if you use only the light default pair)
-- Python 3.10 or later to run from the repository. With the bundle you do not even need Python
+- Python 3.10 or later
 
 **Nothing is built.** The transcription runtime (transcribe.cpp) uses prebuilt
 wheels on mac, Linux and Windows alike, and the mac wheel has Metal in it.
@@ -54,19 +52,10 @@ brew install ffmpeg        # Windows: winget install --id Gyan.FFmpeg
 `yt-dlp` is not a prerequisite. The install script puts the latest one inside
 the virtualenv.
 
-## Two paths
-
-**As a bundle.** Download `mimiwatch-*-macos-arm64.zip` or
-`mimiwatch-*-windows-x64.zip` from the releases, unpack it and double-click.
-The UI opens in the browser, and on a first run "Initial setup" comes up, where
-you pick engines and download the models that go with them. The Gatekeeper and
-SmartScreen prompts that catch you on the first open, and where the files are
-put, are in [docs/PACKAGING.md](docs/PACKAGING.md).
-
-**From the repository.** Install as below. This is the side you want if you are
-going to change the code or run the measurement scripts.
-
 ## Installation
+
+mimiwatch runs from a clone of this repository; there is no prebuilt package to
+download.
 
 ```sh
 git clone https://github.com/chisacam/mimiwatch.git
@@ -82,7 +71,7 @@ breaks off, just run it again.
 **The default is the light CPU engines** (SenseVoice Small for transcription,
 M2M-100 for translation). Quality is far better on the heavy side
 (whisper-large-v3-turbo, Gemma 4) — if you have a GPU and memory to spare, move
-up in "Initial setup" on the first run, or in "Manage › ⚙ Engines". To fetch
+up in "First-time setup" on the first run, or in "Manage › ⚙ Engines". To fetch
 Gemma as well at install time:
 
 ```sh
@@ -128,14 +117,13 @@ away — `V` for the library, `S` for the transcript.
    WebVTT, text and JSON.
 
 Everything else — live options, multiview, resuming a past stream, swapping
-engines and CPU settings, members-only streams, the browser extension, updates,
-and what to do when something goes wrong — is in
+engines and CPU settings, members-only streams, the browser extension, and
+what to do when something goes wrong — is in
 **[docs/GUIDE.md](docs/GUIDE.md)**.
 
 ## Documentation
 
 - [`docs/GUIDE.md`](docs/GUIDE.md) — detailed usage guide
-- [`docs/PACKAGING.md`](docs/PACKAGING.md) — bundle distribution and updates
 - [`docs/WINDOWS.md`](docs/WINDOWS.md) — what differs on Windows
 - [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — requirements and design decisions
 - [`measurements/RESULTS.md`](measurements/RESULTS.md) — model selection and performance measurements

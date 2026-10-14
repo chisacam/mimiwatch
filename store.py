@@ -45,8 +45,7 @@ import paths
 BASE = paths.BASE
 # Where things are stored. `MIMIWATCH_DATA_DIR` overrides it -- when a test
 # brings the server up in a temporary directory, or when a large wav belongs on
-# another disk. Running from the repo it is `<repo>/data`; in a bundle it is the
-# user area (paths.py).
+# another disk. Otherwise it is `<repo>/data` (paths.py).
 DATA = paths.data_dir()
 DB = os.path.join(DATA, "mimiwatch.db")
 

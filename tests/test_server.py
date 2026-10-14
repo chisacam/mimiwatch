@@ -81,8 +81,6 @@ def server(tmp_path_factory):
     env = {**os.environ, "MIMIWATCH_DATA_DIR": str(tmp / "data"),
            "MIMIWATCH_CONFIG": str(tmp / "backends.json"),
            "MIMIWATCH_HOME": str(tmp / "home"),
-           # A test must never reach GitHub. Turn the automatic update check off.
-           "MIMIWATCH_NO_UPDATE_CHECK": "1",
            # SSE rotation down to 2 s, so whether the socket really closes after a rotation shows within seconds.
            "MIMIWATCH_SSE_ROTATE_S": "2",
            "PYTHONPATH": stubs + (os.pathsep + os.environ["PYTHONPATH"]
@@ -392,15 +390,6 @@ def test_upload_and_probe_local(server):
 
     # Before transcription there is no media to serve.
     assert req(base, "/api/media/file-doesnotexist")[0] == 404
-
-
-def test_update_status_endpoint(server):
-    """A status query never goes to the network; it answers with the version in hand."""
-    base, port = server
-    code, body = req(base, "/api/update")
-    d = json.loads(body)
-    assert code == 200 and d["state"] == "idle" and d["current"]
-    assert d["available"] is False
 
 
 def test_parse_range():

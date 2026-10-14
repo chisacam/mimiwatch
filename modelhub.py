@@ -4,8 +4,7 @@ The two install scripts (install.sh, install.ps1) each used to carry their own
 list of model URLs, and there was no way to see from the screen what was there
 and what was not. With the model file missing, a session ended in
 `FileNotFoundError` and all that was left was the words
-"./install.sh 를 실행하십시오". Shipped as a bundle (PyInstaller), not even
-those scripts are there.
+"./install.sh 를 실행하십시오".
 
 Three things happen here.
 
@@ -21,8 +20,8 @@ Three things happen here.
     resumes with `Range`.
 
 Models always live in `stream.model_dir()` (= `paths.model_dir()`), tools in
-`paths.tools_dir()`. Outside the repository. Swapping the bundle for a new build
-or deleting the repository does not fetch 6GB again.
+`paths.tools_dir()`. Outside the repository. Deleting the repository, or cloning
+it again, does not fetch 6GB again.
 
 **Fetching straight from Hugging Face.** To use a GGUF outside the default
 catalogue, the repository id and the file name are written down (`add_custom`).
@@ -33,8 +32,8 @@ be checked here, so it shows up the first time it is used after the fetch.
 
 `huggingface_hub` is not used. All that is needed is the one
 `resolve/main/<file>` URL and, for a model made of several files, the file list
-(`api/models/<repo>`), so the standard library is enough and the bundle gets
-that much lighter.
+(`api/models/<repo>`), so the standard library is enough and that is one
+dependency fewer to install.
 """
 from __future__ import annotations
 
@@ -59,8 +58,7 @@ HF = "https://huggingface.co"
 GH_SHERPA = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 # A statically built single-file ffmpeg executable. macOS (arm64·x64), Windows and Linux
 # are in one place and the build is pinned by tag, so the URL does not wobble. It is a
-# GPL build, but we are not the ones distributing it -- the user fetches it. That is why
-# it is not put into the bundle.
+# GPL build, but we are not the ones distributing it -- the user fetches it.
 FFMPEG_STATIC = "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1"
 YTDLP_LATEST = "https://github.com/yt-dlp/yt-dlp/releases/latest/download"
 
@@ -128,8 +126,10 @@ CATALOG: list[dict] = [
      "purpose_ko": "오디오 풀기 · 시스템에 없을 때만 필요", "tool": "ffmpeg",
      "size": 45_000_000, "required": True, "default": False},
     {"id": "yt-dlp", "kind": "tool", "label": "yt-dlp",
-     "purpose_en": "Video URL resolution · the self-updating build. Recommended for the bundle",
-     "purpose_ko": "영상 주소 해석 · 스스로 판올림하는 판. 묶음으로 쓸 때 권장",
+     "purpose_en": "Video URL resolution · standalone build, used ahead of the install "
+                   "script's copy · delete and download again here for the latest",
+     "purpose_ko": "영상 주소 해석 · 독립 실행 판. 설치 스크립트가 넣은 것보다 먼저 쓰임 · "
+                   "여기서 지우고 다시 받으면 최신 판",
      "tool": "yt-dlp", "size": 37_000_000, "required": False, "default": False},
     # The JS runtime YouTube has required since 2025.11. Public live streams (HLS) do
     # without it, but the VOD and cookie (members-only) paths lose their formats when it is
@@ -379,7 +379,7 @@ def overview() -> dict:
             "setup_done": config.setup_done(cfg),
             "asr_active": config.active("asr", cfg), "active": config.active("tr", cfg),
             "model_dir": paths.model_dir(), "tools_dir": paths.tools_dir(),
-            "frozen": paths.frozen(), "platform": f"{sys.platform}/{platform.machine()}",
+            "platform": f"{sys.platform}/{platform.machine()}",
             "hf_token": bool(os.environ.get("HF_TOKEN"))}
 
 
@@ -731,7 +731,7 @@ def _safe_name(name: str) -> str | None:
 
     `os.path.basename` alone must not be trusted -- it returns `..` and `.` as they are.
     That let `delete("file:..")` `rmtree` the model directory's **parent**, that is the
-    whole user area (with a bundle, the config and the subtitle DB too). The name has to
+    whole user area (the tools and the login cookies too). The name has to
     be one piece with no separator, and the real path has to be inside the model
     directory.
     """

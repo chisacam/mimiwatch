@@ -666,37 +666,12 @@ the server, and then **closes this window and the Script window.** Killing it
 outright leaves sessions as "interrupted", and then you cannot tell later
 whether the user shut it down themselves or the server died.
 
-Used as a bundle there is no terminal, so this button is the only way to shut
-down. If the browser will not let a script close the tab (a tab that came in
-from a bookmark and went through several pages), only the shutdown screen is
-left, so close it yourself.
+If the browser will not let a script close the tab (a tab that came in from a
+bookmark and went through several pages), only the shutdown screen is left, so
+close it yourself.
 
-If you are running it from a terminal, `Ctrl-C` takes the same path. To start it
-again, run `./run.sh` or mimiwatch again.
-
-## Updates
-
-The server checks GitHub releases once a day, and if there is a new version it
-raises a notification strip at the top of the screen (also checked by hand in
-"Manage › ⚙ Engines › Update").
-
-- **Used as a bundle**, "Download" on the strip fetches the zip for this
-  platform, and "Restart and apply" closes the streams being received properly,
-  swaps the bundle and comes back up on the new version. The old version stays
-  as `.old` in the same place, so a swap that goes wrong is reverted with it.
-  Models, settings and subtitles live outside the program, so they stay as they
-  are.
-- **Running from the repository** it only tells you — get it with `git pull`.
-- **A private repository** answers 404 to the check and the readout says so
-  ("release not found (404) -- a private repository needs a token"). Put a
-  GitHub token in the field under "Update", or set the environment variable
-  `MIMIWATCH_GITHUB_TOKEN` (it also covers the automatic check). The token is
-  sent to api.github.com and nowhere else; the field's value is kept in this
-  browser only.
-
-To switch it off, put `"update_check": false` into `backends.json` or start it
-with the environment variable `MIMIWATCH_NO_UPDATE_CHECK=1`. Even with the check
-off, the "Check for updates" button under "Update" still works.
+`Ctrl-C` in the terminal takes the same path. To start it again, run `./run.sh`
+again.
 
 ## Measurement summary
 
@@ -749,11 +724,11 @@ Steps already done are skipped and only yt-dlp is brought up to date. Even if
 an old installation is using the system copy, running it once more brings it
 inside the virtualenv. `bench/doctor.py` tells you which one is in use now.
 
-**If you are using a bundle**, the yt-dlp inside has its version baked in and
-this path does not exist. Download the **yt-dlp standalone executable** from
-"Models & Tools" instead — if it is in the tools directory it is used first, and
-that file updates itself with `-U`. For the details see
-[docs/PACKAGING.md](PACKAGING.md).
+The other way is the **yt-dlp standalone executable** from "Models & Tools" —
+the file yt-dlp itself distributes. If it is in the tools directory it is used
+ahead of the copy in the virtualenv, and that file updates itself with `-U`.
+When live says it got no formats at all, downloading it (or downloading it
+again, if it is already there, to get the latest) is all it takes.
 
 **Two months of age is enough to break live.** In the 2026-08 measurement a
 version 7 weeks old already failed to get a single live audio format. The server
@@ -768,11 +743,10 @@ YouTube's signature challenge. Public live (HLS) does without it, but **VODs and
 membership streams fetched with cookies lose their formats without deno.**
 Download deno in "Engines › Models & Tools" (`brew install deno` works too) — if
 it is on the system, that one is used. The server tells yt-dlp the path of the
-deno it found directly (`--js-runtimes`), so it works even in an environment
-with a short PATH, such as a bundle launched from Finder. The solver script
-(`yt-dlp-ejs`) ships inside the bundle and the virtualenv, and if the versions
-do not match it is fetched from GitHub. `bench/doctor.py` (`mimiwatch --doctor`
-for the bundle) shows which one is in use.
+deno it found directly (`--js-runtimes`), so a deno that is not on PATH — the
+one in the tools directory, or `~/.deno/bin` — is used as well. The solver
+script (`yt-dlp-ejs`) ships inside the virtualenv, and if the versions do not
+match it is fetched from GitHub. `bench/doctor.py` shows which one is in use.
 [yt-dlp EJS wiki](https://github.com/yt-dlp/yt-dlp/wiki/EJS)
 
 ## Members-only streams
@@ -963,17 +937,14 @@ subtitle alignment was manual.
 ### Installing
 
 It is not put on the store. It is a thing that needs a local server anyway, so
-it is kept in the repository and attached to releases as `mimiwatch-ext-*.zip` —
-people using a bundle can download and unpack that.
+it is kept in the repository and loaded straight from your clone.
 
 1. Open `chrome://extensions` in Chrome
 2. Switch on **Developer mode** at the top right
-3. **Load unpacked** and pick this repository's `ext/` (or the `ext` folder from
-   the unpacked zip)
+3. **Load unpacked** and pick this repository's `ext/`
 
-To move up a version, overwrite the new files in the same folder and press
-**refresh (⟳)** in `chrome://extensions`. Move the folder and the extension
-disappears.
+To move up a version, `git pull` and press **refresh (⟳)** in
+`chrome://extensions`. Move the folder and the extension disappears.
 
 The server (`./run.sh`) has to be up separately.
 
@@ -1418,8 +1389,13 @@ lsof -ti:8900 | xargs kill
 | `data/mimiwatch.db` | Jobs, sessions and **all the subtitles** (VOD and live). `MIMIWATCH_DATA_DIR` can move the location |
 | `data/recordings/` | The WAV a session wrote, when **Save the audio** was ticked — never otherwise, whatever the source. About 115 MB an hour (16 kHz × 2 bytes = 32 KB/s). And the mp4 of a stream the server fetched, when **Save the video as well** was ticked, in numbered parts and at whatever size the rendition comes to. Never deleted automatically — they are the one artifact that cannot be made again |
 | `data/legacy/` | `<video id>.json` left behind by old versions. Nobody reads them |
-| `~/.local/share/mimiwatch/models` | Models (`%LOCALAPPDATA%\mimiwatch\models` on Windows) |
+| `~/.local/share/mimiwatch/models` | Models (`%LOCALAPPDATA%\mimiwatch\models` on Windows). `MIMIWATCH_MODEL_DIR` can move the location |
+| `~/.local/share/mimiwatch/tools` | ffmpeg, yt-dlp and deno downloaded from "Models & Tools" |
 | `ext/` | The browser extension (loaded unpacked) |
+
+`MIMIWATCH_HOME` moves the whole of `~/.local/share/mimiwatch` (on Windows
+`%LOCALAPPDATA%\mimiwatch`) — the models, the tools and the login cookies — and
+the three variables in the table move one thing at a time.
 
 Deleting `data/` wholesale returns it to the initial state. The models are not
 deleted.

@@ -27,10 +27,9 @@ import paths
 
 BASE = paths.BASE
 # `MIMIWATCH_CONFIG` can point at a different file (the tests use a temporary
-# one). Running as a bundle (PyInstaller) it goes out into the user area,
-# because the inside of a bundle is read-only.
+# one). Otherwise it sits in the repository (paths.py).
 CONFIG = paths.config_path()
-# The example config travels with the program -- inside the repo, or inside the bundle.
+# The example config travels with the program, inside the repo.
 EXAMPLE_CONFIG = os.path.join(BASE, "backends.example.json")
 
 # The key names in the config. Translators are `backends`/`active`, transcribers

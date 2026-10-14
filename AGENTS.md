@@ -22,8 +22,7 @@ Solo hobby project; the owner communicates in Korean.
   final decision and the merge in the coordinating agent.
 - One task, one branch, one worktree. Remove the worktree when merged.
 - Commit only when asked. When you do, one commit per logical change.
-- Do not push, tag or create releases unless explicitly asked. Tags `v*`
-  trigger the release build (`.github/workflows/build.yml`).
+- Do not push, tag or create releases unless explicitly asked.
 
 ## Language and style
 
@@ -45,7 +44,7 @@ reasoning.
 - **Comments and docstrings: English prose, explaining *why*.** They typically
   open with the prior bad behaviour that motivated the code, often citing a
   measurement. Match that. Use `--` as the dash inside code comments (e.g.
-  `# The example config travels with the program -- inside the repo, or inside the bundle.`).
+  `# Default 0 -- translate everything -- and let a metered endpoint opt in.`).
   Module docstrings are long by design. Do not trim them.
 - **Commit message: one English sentence in the present tense** ("Fix …",
   "Add …", "Stop …"), optionally followed by ` -- ` and the reason. Bodies are
@@ -137,7 +136,6 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 | Path | Owns |
 |---|---|
 | `server.py` | HTTP server + API on stdlib `ThreadingHTTPServer`; serves `web/`; localhost-only with Host/Origin check |
-| `app.py` | PyInstaller bundle entry (`--port`, `--ytdlp`, `--doctor`); repo mode runs `server.py` directly |
 | `live.py` | Live sessions: yt-dlp → HLS → ffmpeg → 16kHz PCM, final/refined cue replacement, SSE delivery, multiview groups |
 | `stream.py` | VAD → transcribe → refine loop (ported from hayamimi), yt-dlp cookie config |
 | `tcpp_asr.py` / `asr.py` | transcribe.cpp GGUF adapter; OpenAI-compatible remote ASR (VOD chunked, live per-utterance) |
@@ -151,23 +149,22 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 | `config.py` | The only reader/writer of `backends.json`; atomic, lock-guarded |
 | `models.py` | Process-wide model cache (`shared`/`touch`), `MIMIWATCH_MODEL_IDLE_S` eviction |
 | `modelhub.py` | Model/tool catalog and download queue (`.part` + Range resume); also a CLI |
-| `paths.py` | Every file location for repo mode and frozen bundle; `MIMIWATCH_*` dir overrides |
-| `update.py` | GitHub release check (once a day), download, swap-script apply; repo mode only notifies |
+| `paths.py` | Every file location (repo, user area for models/tools/cookies); `MIMIWATCH_*` dir overrides |
 | `bus.py` | Global SSE change feed `/api/events` (session/video/job/model/multiview) |
 | `speaker_id.py` | CAM++ speaker labels, VOD only |
-| `web/app/` | Front end, load order: state, adapters, tiles, player, script-panel, engines, jobs, live, capture, export, library, bus, update, main |
+| `web/app/` | Front end, load order: state, adapters, tiles, player, script-panel, engines, jobs, live, capture, export, library, bus, main |
 | `ext/` | Chrome MV3 extension: `content.js` overlay + `<video>` clock, `background.js` server I/O, `offscreen.*` tab capture, `panel.js` transcript, `popup.*` |
 | `tests/` | pytest, no models, no network |
-| `bench/` | Measurement and check scripts; `*_check.py` run in CI-equivalent, the rest load models or hit the network |
+| `bench/` | Measurement and check scripts; `*_check.py` run in CI-equivalent, the rest load models or hit the network; `make-icons.sh` renders `ext/icons/` from `web/icon.svg` (macOS) |
 | `docs/`, `measurements/RESULTS.md` | Design decisions and the measurements behind them; cite them, do not contradict them silently. Each `docs/X.md` has a Korean companion `docs/X.ko.md` — change both. Never renumber a RESULTS section |
 
 ## Environment variables the code reads
 
 `MIMIWATCH_HOME`, `MIMIWATCH_MODEL_DIR`, `MIMIWATCH_DATA_DIR`, `MIMIWATCH_CONFIG`
-(locations, `paths.py`); `MIMIWATCH_MODEL_IDLE_S`; `MIMIWATCH_NO_UPDATE_CHECK`,
-`MIMIWATCH_VERSION`; `MIMIWATCH_SSE_ROTATE_S`; `MIMIWATCH_YTDLP_COOKIES`,
-`MIMIWATCH_YTDLP_COOKIES_BROWSER`; `MIMIWATCH_VAD_MODEL`, `MIMIWATCH_VAD_THRESHOLD`;
-`HF_TOKEN`; `PORT` (run.sh). Tests use `MIMIWATCH_TEST_PORT` (8931).
+(locations, `paths.py`); `MIMIWATCH_MODEL_IDLE_S`; `MIMIWATCH_SSE_ROTATE_S`;
+`MIMIWATCH_YTDLP_COOKIES`, `MIMIWATCH_YTDLP_COOKIES_BROWSER`; `MIMIWATCH_VAD_MODEL`,
+`MIMIWATCH_VAD_THRESHOLD`; `HF_TOKEN`; `PORT` (run.sh). Tests use
+`MIMIWATCH_TEST_PORT` (8931).
 
 ## Design facts to keep in mind
 

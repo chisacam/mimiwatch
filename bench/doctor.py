@@ -53,13 +53,13 @@ def main():
     # back to PATH.
     import stream, live
     cmd = stream.ytdlp_cmd()
-    # Which one gets called: tool directory (standalone binary) / bundle / virtualenv / PATH.
+    # Which one gets called: tool directory (standalone binary) / virtualenv / PATH.
     if paths.tool("yt-dlp") and cmd[0] == paths.tool("yt-dlp"):
         where = "tool directory (standalone binary)"
     elif cmd[0] == "yt-dlp":
         where = "PATH (system)"
     else:
-        where = "inside the bundle" if paths.frozen() else "virtualenv"
+        where = "virtualenv"
     v = live.ytdlp_version()
     line(bool(v), f"yt-dlp ({where})", v or "cannot be run")
     # A stale copy gets no formats at all from YouTube. Issue #1 was that --

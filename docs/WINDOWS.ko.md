@@ -2,11 +2,7 @@
 
 *[English](WINDOWS.md)*
 
-**가장 쉬운 길은 묶음입니다.** 릴리스에서 `mimiwatch-*-windows-x64.zip`을 받아
-풀고 `mimiwatch.exe`를 두 번 누르면 콘솔 창이 하나 뜨고 브라우저에 화면이
-열립니다. 파이썬도 이 스크립트도 필요 없고, 모델은 첫 실행 때 화면에서
-받습니다. SmartScreen이 「알 수 없는 게시자」로 막으면 「추가 정보 › 실행」.
-자세한 것은 [PACKAGING.ko.md](PACKAGING.ko.md). 아래는 저장소에서 돌리는 길입니다.
+윈도우에서도 다른 곳과 똑같이 저장소를 클론해서 돌립니다.
 
 ```powershell
 git clone https://github.com/chisacam/mimiwatch.git
@@ -104,16 +100,16 @@ iGPU를 다투는 일을 피할 수 있습니다.
 `asr_backends`에 넣으면 화면의 「전사」 선택기에 나타납니다. 자세한 것은
 [사용 안내의 「CPU로 돌리기」](GUIDE.ko.md#cpu로-돌리기)를 보십시오.
 
-## NVIDIA: CUDA 판은 릴리스에서 뺐습니다
+## NVIDIA: 직접 고르지 않으면 Vulkan입니다
 
-NVIDIA도 릴리스 묶음(`windows-x64`, Vulkan)을 쓰십시오. CUDA 판(`build.ps1 -Backend
-cuda`)을 만들어 봤지만 릴리스에서는 빼기로 했습니다. llama-cpp-python의 cu124 휠은
-**RTX 50(Blackwell, sm_120) 커널을 담지 않아** 최신 카드에서는 열리지 않거나 PTX JIT에
-기대야 하고, 전사(transcribe.cpp)는 어차피 CUDA 휠이 없어 Vulkan이라 얻는 것이 번역
-속도뿐인데 묶음이 726MB로 7배 커집니다. 그 거래는 맞지 않습니다.
+NVIDIA에서도 `install.ps1`은 Vulkan을 씁니다(`-Backend auto`는 GPU와 드라이버의 Vulkan
+로더 `vulkan-1.dll`이 있으면 그것을 고릅니다). CUDA 판은 원하는 사람이 고를 수 있게 남겨 두었지만(`.\install.ps1 -Backend
+cuda`) 기본은 아닙니다. llama-cpp-python의 cu124 휠은 **RTX 50(Blackwell, sm_120)
+커널을 담지 않아** 최신 카드에서는 열리지 않거나 PTX JIT에 기대야 하고, 전사
+(transcribe.cpp)는 어차피 CUDA 휠이 없어 Vulkan이라 얻는 것이 번역 속도뿐인데, 그
+대가로 훨씬 큰 휠과 CUDA 런타임 DLL이 따라옵니다. 기본으로 삼기에는 그 거래가 맞지 않습니다.
 
-직접 만들 수는 있습니다(`.\packaging\build.ps1 -Backend cuda`, 또는 `.\install.ps1
--Backend cuda`). 그때 지원되는 GPU 는 아래 표대로이고, 이것은 휠의 `ggml-cuda.dll`
+`-Backend cuda`로 지원되는 GPU는 아래 표대로이고, 이것은 휠의 `ggml-cuda.dll`
 fatbin 헤더를 열어 확인한 것입니다(llama-cpp-python 0.3.35 cu124).
 
 | 세대 | 대표 제품 | 컴파일된 대상 | 지원 |
@@ -130,8 +126,8 @@ fatbin 헤더를 열어 확인한 것입니다(llama-cpp-python 0.3.35 cu124).
 **드라이버는 551.61 이상**(CUDA 12.4 런타임)이어야 합니다. 더 오래된 드라이버에서는
 번역기가 CUDA 장치를 못 열어 실패합니다 -- 그때는 드라이버를 올리거나 Vulkan 판을
 쓰십시오. CUDA 툴킷은 깔 필요가 없습니다: 필요한 런타임(cudart64_12, cublas64_12,
-cublasLt64_12)은 묶음 안에 들어 있습니다(`nvidia-*-cu12` PyPI 패키지에서 꺼내 llama_cpp
-옆에 둡니다).
+cublasLt64_12)은 `install.ps1`이 `nvidia-*-cu12` PyPI 패키지에서 꺼내
+`llama_cpp\lib`에 둡니다.
 
 ## AMD: whisper.cpp-amd 는 왜 안 쓰는가
 
@@ -193,9 +189,9 @@ $env:MIMIWATCH_YTDLP_COOKIES = "C:\Users\USERNAME\cookies.txt"
 | llama-cpp-python 설치 실패 | 파이썬 판에 맞는 휠이 없음 | `-Backend cpu`로 다시, 그래도 안 되면 파이썬 3.12를 쓰십시오 |
 | 백엔드에 `vulkan`이 없음 | 드라이버가 낡음 | 그래픽 드라이버 갱신. 없어도 CPU로 돕니다 |
 | 내려받다 끊김 | — | 그냥 다시 실행하십시오. 받다 만 것은 `.part`로 남고 이어 받습니다. 화면의 「모델·도구」에서도 됩니다 |
-| `NativeCommandError`로 중간에 멈춤 | 0.1의 결함 (이슈 #1) | 최신 판을 받으십시오. Windows PowerShell 5.1이 명령의 stderr 한 줄을 종료 오류로 바꾸던 문제입니다 |
+| `NativeCommandError`로 중간에 멈춤 | 0.1의 결함 (이슈 #1) | 최신 판을 받으십시오(`git pull`). Windows PowerShell 5.1이 명령의 stderr 한 줄을 종료 오류로 바꾸던 문제입니다 |
 | 전사가 시작되자마자 실패 | GPU에 모델을 못 올렸을 수 있습니다 | `bench/doctor.py`로 확인하고, `device=auto`만 실패하면 `backends.json`에 `"device": "cpu"`를 적으십시오 |
-| 라이브 세션이 `OSError: [WinError 6] 핸들이 잘못되었습니다`로 실패 | 0.3.1의 결함 | 최신 판을 받으십시오. 표준 오류 핸들이 성치 않은 채로 뜬 프로세스(콘솔 없이 띄운 묶음, 작업 스케줄러·서비스)에서 ffmpeg을 세우지 못하던 문제입니다. 0.3.1을 그대로 쓰려면 콘솔 창에서 직접 띄우십시오 |
+| 라이브 세션이 `OSError: [WinError 6] 핸들이 잘못되었습니다`로 실패 | 0.3.1의 결함 | 최신 판을 받으십시오(`git pull`). 표준 오류 핸들이 성치 않은 채로 뜬 프로세스(그 무렵의 배포본처럼 콘솔 없이 띄운 것, 작업 스케줄러·서비스)에서 ffmpeg을 세우지 못하던 문제입니다. 0.3.1을 그대로 쓰려면 콘솔 창에서 직접 띄우십시오 |
 | 라이브에서 "could not find any audio"(예전 판은 「오디오를 찾지 못했습니다」) | **yt-dlp가 낡았습니다** | `.\install.ps1`을 다시 돌리십시오. 가상환경 안의 yt-dlp가 최신으로 올라갑니다 |
 
 ## 무엇을 확인했고 무엇을 확인하지 못했는가

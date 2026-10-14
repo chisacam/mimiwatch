@@ -11,13 +11,12 @@ a bug that was never there. So the first step is not starting anything.
 
 ## Step 0 — say which server this check runs against
 
-State it in one line before touching the browser. Only three answers are valid:
+State it in one line before touching the browser. Only two answers are valid:
 
 | Target | How | When |
 |---|---|---|
 | The repo server | `./run.sh` → `127.0.0.1:8900` | default |
 | A worktree copy | `PORT=8951 ./run.sh` from the worktree | main's server is up and in use |
-| An installed bundle | the app the owner launched | verifying a release |
 
 Never a page the agent serves itself, and never a static copy of `web/`. If the owner is
 already running a server, ask which port rather than starting a second one — two servers

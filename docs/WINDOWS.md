@@ -2,12 +2,7 @@
 
 *[한국어](WINDOWS.ko.md)*
 
-**The easiest path is the bundle.** Download `mimiwatch-*-windows-x64.zip` from
-the releases, unpack it and double-click `mimiwatch.exe`: a console window opens
-and the screen comes up in your browser. You need neither Python nor these
-scripts, and the models are fetched from the screen on first run. If SmartScreen
-blocks it as "unknown publisher", use "More info › Run anyway".
-Details in [PACKAGING.md](PACKAGING.md). Below is the path that runs from the repository.
+On Windows, as everywhere else, mimiwatch runs from a clone of the repository.
 
 ```powershell
 git clone https://github.com/chisacam/mimiwatch.git
@@ -102,18 +97,18 @@ quality is effectively the same as the default, but it refuses other languages.
 Put them in `asr_backends` and they appear in the "Transcription" selector on
 the screen. For details see [Running on the CPU](GUIDE.md#running-on-the-cpu) in the Guide.
 
-## NVIDIA: the CUDA build was dropped from the releases
+## NVIDIA: Vulkan unless you pick CUDA yourself
 
-On NVIDIA too, use the release bundle (`windows-x64`, Vulkan). We did prepare a CUDA
-build (`build.ps1 -Backend cuda`), but decided to drop it from the releases.
-llama-cpp-python's cu124 wheel **carries no RTX 50 (Blackwell, sm_120) kernels**, so
-on the newest cards it either does not open or has to lean on PTX JIT; and since
-transcription (transcribe.cpp) has no CUDA wheel anyway and stays on Vulkan, all
-that is gained is translation speed -- while the bundle grows 7-fold to 726MB.
-That trade does not add up.
+On NVIDIA too, `install.ps1` takes Vulkan (`-Backend auto` picks it when there is
+a GPU and the driver's Vulkan loader, `vulkan-1.dll`). A CUDA build is there for whoever asks for it (`.\install.ps1 -Backend
+cuda`), but it is not the default. llama-cpp-python's cu124 wheel **carries no
+RTX 50 (Blackwell, sm_120) kernels**, so on the newest cards it either does not
+open or has to lean on PTX JIT; and since transcription (transcribe.cpp) has no
+CUDA wheel anyway and stays on Vulkan, all that is gained is translation speed --
+for a much larger wheel plus the CUDA runtime DLLs. That trade does not add up as a
+default.
 
-You can build it yourself (`.\packaging\build.ps1 -Backend cuda`, or `.\install.ps1
--Backend cuda`). The GPUs supported then are as in the table below, which was
+With `-Backend cuda`, the GPUs supported are as in the table below, which was
 confirmed by opening the `ggml-cuda.dll` fatbin header in the wheel
 (llama-cpp-python 0.3.35 cu124).
 
@@ -130,9 +125,9 @@ confirmed by opening the `ggml-cuda.dll` fatbin header in the wheel
 
 **The driver must be 551.61 or newer** (the CUDA 12.4 runtime). On older drivers the
 translator fails to open a CUDA device -- then either update the driver or use the
-Vulkan build. The CUDA toolkit does not need to be installed: the runtimes that are
-needed (cudart64_12, cublas64_12, cublasLt64_12) are inside the bundle (pulled out of
-the `nvidia-*-cu12` PyPI packages and placed next to llama_cpp).
+Vulkan build. The CUDA toolkit does not need to be installed: `install.ps1` pulls the
+runtimes that are needed (cudart64_12, cublas64_12, cublasLt64_12) out of the
+`nvidia-*-cu12` PyPI packages and places them in `llama_cpp\lib`.
 
 ## AMD: why we do not use whisper.cpp-amd
 
@@ -196,9 +191,9 @@ server will not find the models.
 | llama-cpp-python fails to install | No wheel for that Python version | Retry with `-Backend cpu`; if that still fails, use Python 3.12 |
 | No `vulkan` among the backends | The driver is stale | Update the graphics driver. It runs on the CPU without it |
 | The download breaks off | — | Just run it again. A partial download stays as `.part` and resumes. It also works from "Models & Tools" on the screen |
-| It stops midway with `NativeCommandError` | A defect in 0.1 (issue #1) | Get the latest version. This was Windows PowerShell 5.1 turning a single stderr line from a command into a terminating error |
+| It stops midway with `NativeCommandError` | A defect in 0.1 (issue #1) | Get the latest version (`git pull`). This was Windows PowerShell 5.1 turning a single stderr line from a command into a terminating error |
 | Transcription fails right after it starts | The model may have failed to load onto the GPU | Check with `bench/doctor.py`, and if only `device=auto` fails, write `"device": "cpu"` into `backends.json` |
-| A live session fails with `OSError: [WinError 6] The handle is invalid` (in Korean Windows: `핸들이 잘못되었습니다`) | A defect in 0.3.1 | Get the latest version. This was a failure to start ffmpeg in a process launched with a broken standard-error handle (a bundle started without a console, Task Scheduler, a service). To stay on 0.3.1, launch it yourself from a console window |
+| A live session fails with `OSError: [WinError 6] The handle is invalid` (in Korean Windows: `핸들이 잘못되었습니다`) | A defect in 0.3.1 | Get the latest version (`git pull`). This was a failure to start ffmpeg in a process launched with a broken standard-error handle (started without a console, as the packaged build of that time was; Task Scheduler; a service). To stay on 0.3.1, launch it yourself from a console window |
 | "could not find any audio" in live (older versions: "오디오를 찾지 못했습니다") | **yt-dlp is stale** | Run `.\install.ps1` again. The yt-dlp inside the virtual environment is updated to the latest version |
 
 ## What has been verified and what has not

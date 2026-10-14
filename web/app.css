@@ -822,8 +822,6 @@ dialog::backdrop{background:rgba(4,6,10,.7)}
 .settings-form button.seg.danger{border-color:#5a2b2b; color:#e07a7a}
 .settings-form button.seg.danger:hover{background:#2a1616}
 #cookies-error{color:var(--err)}
-#update-token-state{color:var(--dim)}
-#update-token-state.saved{color:var(--accent)}
 /* Back when the transcription and translation pickers stood side by side in the
  * header, their widths had to be pinned -- a long engine name pushed the header
  * out. Now they stand vertically inside the "Manage" menu, where that

@@ -144,6 +144,7 @@ Diagnostics: `.venv/bin/python bench/doctor.py [url]`.
 | `translate.py` | Translation backends behind one interface: local Gemma (default), M2M-100 (CT2, CPU), OpenAI-compatible; genre prompts |
 | `jobs.py` | Background VOD transcription and (re)translation; the single translate loop |
 | `store.py` | SQLite (`data/mimiwatch.db`): jobs/sessions as JSON blobs, cues as a real table; one locked connection |
+| `semsearch.py` | Meaning search over the library: EmbeddingGemma 2 int8 ONNX text encoder (onnxruntime + tokenizers, optional model), each cue's source line embedded by one background pass the first search starts, vectors in `store`'s `cue_vec` |
 | `export.py` | SRT/VTT/TXT/JSON export; synthesizes end times for live cues |
 | `burn.py` | Burns subtitles into a local video file (ffmpeg); the file goes beside the source |
 | `config.py` | The only reader/writer of `backends.json`; atomic, lock-guarded |

@@ -269,9 +269,23 @@ function markVideoRow(value) {
  * opens the owner and moves there. */
 let searchActive = false;
 let searchTimer = null;
+// The meaning toggle. Off is the full-text search exactly as it was; on, the
+// same box asks semsearch.py instead. It is a per-viewer habit, so it lives in
+// this browser rather than in backends.json.
+const SEARCH_MODE_KEY = "mimiwatch.searchMode";
+let searchMeaning = loadSearchMode();
+// What the note under the box is drawn from: {unavailable} out of an answer,
+// or the indexing pass's {running, done, total, error} out of an answer or the
+// change feed. renderSearchNote is the one place that turns it into words.
+let searchIndex = null;
+let searchFeed = null;       // the last pass status the change feed sent
+let searchFeedSeq = 0;       // bumped per feed event, to tell which word is newer
+let searchPartial = false;   // the meaning rows on screen came from a half-built index
+let searchRerunFor = null;   // the query the one automatic re-run was spent on
 
 function onLibrarySearchInput() {
   clearTimeout(searchTimer);
+  searchRerunFor = null;
   searchTimer = setTimeout(runLibrarySearch, 300);
 }
 
@@ -279,25 +293,66 @@ async function runLibrarySearch() {
   const box = $("library-search");
   const list = $("video-list");
   const q = (box.value || "").trim();
+  const meaning = searchMeaning;
   if (!q) {
     searchActive = false;
+    searchIndex = null;
+    renderSearchNote();
     refreshVideoList();
     return;
   }
-  const res = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
+  const seq = searchFeedSeq;
+  let res;
+  if (meaning) {
+    // The rows this answer brings decide whether a re-run is owed, not the
+    // ones still on screen -- otherwise a pass ending while it is on its way
+    // spends the one re-run on a duplicate of this very request.
+    searchPartial = false;
+    // The first meaning search loads the embedding model. A model that fails
+    // comes back as an index error the note shows; a request that fails outright
+    // (the server went away) lands here -- the list should then say nothing came
+    // back, not sit on the previous query.
+    try {
+      res = await (await fetch("/api/search?mode=meaning&q=" + encodeURIComponent(q))).json();
+    } catch { res = { results: [] }; }
+  } else {
+    res = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
+  }
   if (($("library-search").value || "").trim() !== q) return;    // it moved on
+  if (searchMeaning !== meaning) return;                          // or the toggle did
   searchActive = true;
   list.textContent = "";
-  (res.results || []).forEach(r => list.appendChild(searchRow(r)));
-  if (!list.children.length) {
+  if (meaning) {
+    // No «» here: a meaning hit is a whole line, not a matched word. The
+    // translation, when there is one, goes under it as a second line.
+    (res.results || []).forEach(r => list.appendChild(searchRow(r, r.text || "", r.tr_text)));
+  } else {
+    // The server marks the matched word with «». When the match is in the
+    // translation, the source snippet has no mark and the translation side is
+    // the one to show.
+    (res.results || []).forEach(r => {
+      const s = (r.snip && r.snip.indexOf("«") >= 0) ? r.snip
+              : (r.snip_tr && r.snip_tr.indexOf("«") >= 0) ? r.snip_tr
+              : (r.text || "");
+      list.appendChild(searchRow(r, s));
+    });
+  }
+  // "Nothing matches" is not true of a search that could not run at all; the
+  // note says why instead. While the index is still being built the two stand
+  // together: nothing matches *yet*, and the note says how far it has got.
+  if (!list.children.length && !res.unavailable) {
     const e = document.createElement("div");
     e.className = "empty";
     e.textContent = t("library.search.empty");
     list.appendChild(e);
   }
+  if (meaning) meaningAnswered(res, seq, q);
+  else { searchIndex = null; renderSearchNote(); }
 }
 
-function searchRow(r) {
+/* One row of either kind. `meta` is what follows the moment on the second
+ * line; `tr` is a third, for a meaning hit that has a translation. */
+function searchRow(r, meta, tr) {
   const row = document.createElement("div");
   row.className = "video-row search";
   row.dataset.value = r.value;
@@ -312,14 +367,14 @@ function searchRow(r) {
   body.appendChild(tt);
   const m = document.createElement("div");
   m.className = "vm";
-  // The server marks the matched word with «». When the match is in the
-  // translation, the source snippet has no mark and the translation side is
-  // the one to show.
-  const s = (r.snip && r.snip.indexOf("«") >= 0) ? r.snip
-          : (r.snip_tr && r.snip_tr.indexOf("«") >= 0) ? r.snip_tr
-          : (r.text || "");
-  m.textContent = (r.start ? fmt(r.start) + "  ·  " : "") + s;
+  m.textContent = (r.start ? fmt(r.start) + "  ·  " : "") + meta;
   body.appendChild(m);
+  if (tr) {
+    const mt = document.createElement("div");
+    mt.className = "vm";
+    mt.textContent = tr;
+    body.appendChild(mt);
+  }
   row.appendChild(body);
   row.addEventListener("click", () => openSearchResult(r));
   return row;
@@ -350,6 +405,143 @@ async function openSearchResult(r) {
     else p.seekTo(r.start);
   }
 }
+
+/* The meaning half of the search. The server answers from whatever part of the
+ * library is indexed so far and starts a pass over the rest in the background,
+ * so a first search on a big library comes back thin while the pass is still
+ * going. The note under the box says so, the change feed moves its count, and
+ * when the pass ends the search is asked once more so the rows cover
+ * everything. */
+function loadSearchMode() {
+  try { return localStorage.getItem(SEARCH_MODE_KEY) === "meaning"; }
+  catch { return false; }     // private windows and blocked storage both land here
+}
+
+function paintSearchMode() {
+  const b = $("library-search-mode");
+  if (b) b.setAttribute("aria-pressed", searchMeaning ? "true" : "false");
+}
+
+function toggleSearchMode() {
+  searchMeaning = !searchMeaning;
+  try {
+    if (searchMeaning) localStorage.setItem(SEARCH_MODE_KEY, "meaning");
+    else localStorage.removeItem(SEARCH_MODE_KEY);
+  } catch { /* not remembered, but the switch still holds for this page */ }
+  paintSearchMode();
+  searchIndex = null;
+  searchRerunFor = null;
+  renderSearchNote();
+  clearTimeout(searchTimer);
+  if (($("library-search").value || "").trim()) runLibrarySearch();
+}
+
+/* The note under the box. Precedence: cannot run at all, then still indexing,
+ * then the pass died; otherwise it is hidden. Only while meaning mode is on and
+ * the box holds text -- the full-text search has nothing to say here. */
+function renderSearchNote() {
+  const el = $("library-search-note");
+  if (!el) return;
+  const box = $("library-search");
+  const ix = (searchMeaning && box && (box.value || "").trim()) ? searchIndex : null;
+  let text = "", warn = false;
+  if (ix && ix.unavailable) {
+    text = t(ix.unavailable === "model" ? "library.search.need_model"
+                                        : "library.search.need_packages");
+    warn = true;
+  } else if (ix && ix.running) {
+    text = t("library.search.indexing", { done: ix.done || 0, total: ix.total || 0 });
+  } else if (ix && ix.error) {
+    text = t("library.search.index_error", { error: ix.error });
+    warn = true;
+  }
+  el.textContent = text;
+  el.hidden = !text;
+  el.classList.toggle("warn", warn);
+}
+
+function meaningAnswered(res, seq, q) {
+  if (res.unavailable) {
+    searchIndex = { unavailable: res.unavailable };
+    searchPartial = false;
+  } else {
+    const ix = res.index || null;
+    // The answer's pass status is read as the request arrives, before the
+    // query is embedded -- the first time, that includes loading the model --
+    // so a short pass can end, and say so on the feed, before this answer
+    // lands. Taking the answer's word there would leave the note on
+    // "indexing" with no event left to come and clear it. So a feed event
+    // that came in meanwhile wins, unless it is plainly about another pass:
+    // the answer says a pass is running and the event's count differs, which
+    // is the end of the pass before this one, read late.
+    const fed = searchFeedSeq !== seq ? searchFeed : null;
+    searchIndex = (fed && (!ix || !ix.running || fed.total === ix.total)) ? fed : ix;
+    // The rows were ranked against what was indexed when they were asked for;
+    // a pass running then, or since, leaves them short.
+    searchPartial = !!((ix && ix.running) || (searchIndex && searchIndex.running));
+  }
+  renderSearchNote();
+  rerunWhenIndexed(q);
+}
+
+/* Once per query, and only when the rows on screen were drawn from a
+ * half-built index that has since finished. Not after a pass that died: the
+ * next search starts a new pass, so re-running on every failed end would retry
+ * a broken model in a loop. And not more than once: a live session keeps
+ * adding lines, each search starts a small pass for them, and re-running on
+ * each of their ends would poll for as long as the stream runs. */
+function rerunWhenIndexed(q) {
+  const ix = searchIndex;
+  if (!searchPartial || !ix || ix.unavailable || ix.running || ix.error) return;
+  if (searchRerunFor === q) return;
+  searchRerunFor = q;
+  clearTimeout(searchTimer);
+  runLibrarySearch();
+}
+
+/* A {"type": "search"} event off the change feed (bus.js): about once a second
+ * while a pass runs, and once when it ends. */
+function onSearchIndexEvent(m) {
+  searchFeed = { running: !!m.running, done: m.done || 0, total: m.total || 0,
+                 error: m.error || null };
+  searchFeedSeq++;
+  const box = $("library-search");
+  const q = box ? (box.value || "").trim() : "";
+  if (!searchMeaning || !q) return;
+  searchIndex = searchFeed;
+  // A pass that started after the rows were drawn -- another window's search,
+  // new lines from a live session -- leaves them short as well.
+  if (searchFeed.running) searchPartial = true;
+  renderSearchNote();
+  rerunWhenIndexed(q);
+}
+
+/* The note can only move on notices, and a hidden tab stops getting them:
+ * Chrome slows it and then freezes it, and a feed that broke drops whatever
+ * was sent meanwhile. A pass that ended in that gap left the note on
+ * "indexing 5696/28836" for good with the rows still short -- seen with the tab
+ * in the background for the four and a half minutes a first pass takes. When
+ * the tab comes back or the feed reattaches (bus.js), a note still saying a
+ * pass runs is checked by asking once more; the answer carries the status. */
+function refreshSearchIfStale() {
+  const box = $("library-search");
+  const q = box ? (box.value || "").trim() : "";
+  if (searchMeaning && q && searchIndex && searchIndex.running) runLibrarySearch();
+}
+
+// The markup is already in place when this script runs (the <script> tags sit
+// at the end of index.html), so the toggle is wired here rather than in
+// main.js -- the search box's own listener is there.
+(function bindLibrarySearchMode() {
+  const b = $("library-search-mode");
+  if (!b) return;
+  paintSearchMode();
+  b.addEventListener("click", toggleSearchMode);
+})();
+
+// The toggle's label and title are data-i18n, which setLang redraws on its own;
+// the note is written here, so it is redrawn here.
+MW_I18N.onChange(() => renderSearchNote());
 
 /* The bar up top is the place that answers "what am I watching right now". */
 function setNowTitle(title, userRenamed = false) {

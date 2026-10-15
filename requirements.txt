@@ -8,6 +8,12 @@ llama-cpp-python>=0.3.30
 ctranslate2>=4.8
 sentencepiece>=0.2
 numpy>=2.0
+# Meaning search over the subtitle library (semsearch.py): EmbeddingGemma 2's
+# text encoder as an ONNX export. onnxruntime rather than torch -- the same
+# embeddings for 80MB installed instead of 590MB (measurements/RESULTS.md
+# section 57). Only loaded when a meaning search is made.
+onnxruntime>=1.20
+tokenizers>=0.20
 # Model downloads are modelhub.py's job, done with the standard library. The
 # huggingface_hub that used to be here for a multi-file model (M2M-100) is no
 # longer used.

@@ -8,7 +8,9 @@ the "Past streams" list on screen.
 On a machine without the transcription runtimes (transcribe_cpp, sherpa_onnx),
 such as CI, stub modules are installed so that an import still works. A test
 that actually calls into them fails on the spot -- that means the test tried to
-load a model, and the test is what needs fixing.
+load a model, and the test is what needs fixing. The meaning search's runtime
+(onnxruntime, tokenizers) is stubbed the same way, and where it is installed its
+model-loading calls are replaced with ones that fail the same way.
 """
 from __future__ import annotations
 
@@ -29,10 +31,10 @@ sys.path.insert(0, ROOT)
 _STUBBED: set[str] = set()
 
 
-def _dies(name):
+def _dies(name, module="sherpa_onnx"):
     """A stand-in that imports and dies if it is ever really called."""
     def boom(*a, **k):
-        raise RuntimeError(f"tests do not load models: sherpa_onnx.{name}")
+        raise RuntimeError(f"tests do not load models: {module}.{name}")
     return boom
 
 
@@ -75,6 +77,42 @@ def _stub_native():
             setattr(so, _name, _dies(_name))
         sys.modules["sherpa_onnx"] = so
         _STUBBED.add("sherpa_onnx")
+    # The meaning search's runtime (semsearch.py). Stubbed where it is missing,
+    # like the two above, and where it is installed the two calls that load
+    # something get the same dying stand-ins: a test that forgot the stand-in
+    # embedder fails on the spot instead of loading EmbeddingGemma from
+    # whatever model directory it was pointed at. Where it is missing (CI), the
+    # stub also makes `semsearch.unavailable()` go on to ask about the model
+    # files rather than stop at "packages", so a test of that answer reads the
+    # same on every machine. Nothing a child process runs imports these at
+    # import time, so `_write_native_stubs` has no file for them.
+    try:
+        import onnxruntime
+    except ImportError:
+        ort = types.ModuleType("onnxruntime")
+
+        class SessionOptions:
+            pass
+
+        ort.SessionOptions = SessionOptions
+        ort.InferenceSession = _dies("InferenceSession", "onnxruntime")
+        sys.modules["onnxruntime"] = ort
+        _STUBBED.add("onnxruntime")
+    else:
+        onnxruntime.InferenceSession = _dies("InferenceSession", "onnxruntime")
+    try:
+        import tokenizers
+    except ImportError:
+        tk = types.ModuleType("tokenizers")
+
+        class Tokenizer:
+            from_file = staticmethod(_dies("Tokenizer.from_file", "tokenizers"))
+
+        tk.Tokenizer = Tokenizer
+        sys.modules["tokenizers"] = tk
+        _STUBBED.add("tokenizers")
+    else:
+        tokenizers.Tokenizer.from_file = staticmethod(_dies("Tokenizer.from_file", "tokenizers"))
 
 
 _stub_native()
@@ -132,7 +170,7 @@ def _write_native_stubs(d):
         pkg.mkdir(exist_ok=True)
         (pkg / "__init__.py").write_text(_TCPP_STUB, encoding="utf-8")
         (pkg / "errors.py").write_text(_TCPP_ERRORS_STUB, encoding="utf-8")
-    return d if _STUBBED else None
+    return d if _STUBBED & {"sherpa_onnx", "transcribe_cpp"} else None
 
 import pytest  # noqa: E402
 

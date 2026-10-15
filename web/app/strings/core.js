@@ -467,6 +467,30 @@ MW_I18N.add({
     en: "Nothing matches.",
     ko: "맞는 줄이 없습니다."
   },
+  "library.search.meaning": {
+    en: "Meaning",
+    ko: "의미"
+  },
+  "library.search.meaning.title": {
+    en: "Find lines by what they mean rather than by the words typed",
+    ko: "입력한 글자가 아니라 뜻이 가까운 자막을 찾습니다"
+  },
+  "library.search.indexing": {
+    en: "Indexing for meaning search {done}/{total} — results come from what is indexed so far",
+    ko: "의미 검색 색인 중 {done}/{total} — 지금까지 색인된 자막에서 찾은 결과입니다"
+  },
+  "library.search.need_model": {
+    en: "To search by meaning, download EmbeddingGemma 2 in Models & Tools.",
+    ko: "의미로 찾으려면 「모델·도구」에서 EmbeddingGemma 2를 받으십시오."
+  },
+  "library.search.need_packages": {
+    en: "Meaning search needs onnxruntime and tokenizers. Run the install script again.",
+    ko: "의미 검색에 필요한 패키지(onnxruntime, tokenizers)가 없습니다. 설치 스크립트를 다시 실행하십시오."
+  },
+  "library.search.index_error": {
+    en: "Indexing stopped: {error}",
+    ko: "색인이 멈췄습니다: {error}"
+  },
   "library.watch": {
     en: "Watching",
     ko: "감시"

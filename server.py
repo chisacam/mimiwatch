@@ -34,6 +34,7 @@ import live
 import modelhub
 import outline
 import paths
+import semsearch
 import store
 import stream
 import translate
@@ -1046,7 +1047,11 @@ class Handler(BaseHTTPRequestHandler):
         self._json(store.all_glossaries())
 
     def get_search(self):
-        q = (self._query().get("q") or "").strip()
+        qs = self._query()
+        q = (qs.get("q") or "").strip()
+        if qs.get("mode") == "meaning":
+            self._json(self._meaning_search(q))
+            return
         results = []
         for r in store.search(q) if q else []:
             kind = store.owner_kind(r["owner"])
@@ -1057,6 +1062,27 @@ class Handler(BaseHTTPRequestHandler):
                 "snip": r["snip"], "snip_tr": r["snip_tr"],
             })
         self._json({"q": q, "results": results})
+
+    def _meaning_search(self, q: str) -> dict:
+        """The meaning half of the library search (semsearch.py). The answer
+        carries the indexing pass's progress, since the first search starts it
+        and answers from what is indexed so far; "unavailable" says why it
+        cannot run at all ("packages" or "model") without touching the
+        full-text path."""
+        got = semsearch.search(q) if q else {"results": [], "index": semsearch.status()}
+        if got.get("unavailable"):
+            return {"q": q, "mode": "meaning", "unavailable": got["unavailable"],
+                    "results": []}
+        results = []
+        for r in got["results"]:
+            kind = store.owner_kind(r["owner"])
+            results.append({
+                "value": ("live:" + r["owner"]) if kind == "live" else r["owner"],
+                "title": store.owner_title(r["owner"]),
+                "start": r["start"], "text": r["text"], "tr_text": r["tr_text"],
+                "score": r["score"],
+            })
+        return {"q": q, "mode": "meaning", "results": results, "index": got["index"]}
 
     # ---- Watchers -----------------------------------------------------------
     # The list the server polls for a start of stream. The rule for when

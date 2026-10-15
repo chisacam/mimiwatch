@@ -1731,3 +1731,90 @@ longest shared run, the final's length plus half again).
 drawn per refined line (seed 0). The left column counts candidates, not verified
 matches; what it shows is the direction. Of the 38 pairs the autojunk switch alone
 flipped, the local window keeps 33.
+
+## 57. Meaning search: one cue per vector finds the line more often than a window of three, and the int8 ONNX encoder gives sentence-transformers' answer at a seventh of the install
+
+`semsearch.py` ranks cues by meaning with EmbeddingGemma 2's text encoder
+(271M). Measured on 2026-10-14 on an Apple M5 Pro (18 cores, 64GB), macOS
+26.7.1, Python 3.14.8, onnxruntime 1.31.0, tokenizers 0.23.3, over the real
+store read-only: 28,836 cues in 88 videos and sessions (source 19,305 ja,
+7,272 ko, 2,259 en). `bench/semsearch_bench.py` does [1]-[3]; the parity in [0]
+was run once in a separate virtualenv holding torch.
+
+**[0] Which runtime.** llama-cpp-python, which already runs Gemma here, cannot
+load it: its newest release (0.3.36) vendors llama.cpp `0c1e570`, 140 commits
+older than the merge that added the `gemma-embedding2` architecture (PR #30054).
+sentence-transformers 6.1.0 runs it but brings torch (590MB installed, plus
+torchvision). The ONNX export `onnx-community/embeddinggemma-2-ONNX` runs on
+onnxruntime (80MB) with the `tokenizers` package. Against sentence-transformers
+(torch 2.14.1, float32) on 400 random cues as documents and 100 of their
+translations as queries, documented prefixes on both sides:
+
+| ONNX file | Cosine to sentence-transformers, docs (mean / min) | queries (mean / min) | Same top 10 | ms per cue (4 threads) |
+|---|---|---|---|---|
+| `model_quantized` (int8, 314MB) | **1.0000 / 0.9997** | **1.0000 / 0.9998** | **98.5%** | **17.1** |
+| `model_q4` (174MB) | 0.9868 / 0.9468 | 0.9865 / 0.9640 | 81.3% | 59.3 |
+
+The tokenizer ids from `tokenizers` matched sentence-transformers' own for all
+50 cues compared. int8 it is; q4 is smaller and both worse and slower here.
+
+**[1] Cost.** The model loads in 0.3 s and the process's peak RSS goes from 50
+to 471MB. A query embeds in 32.7 ms (8 threads). Indexing, window of three,
+batch 32:
+
+| onnxruntime threads | ms per window | Whole store |
+|---|---|---|
+| 2 | 51.1 | 24.6 min |
+| 4 | 35.5 | 17.1 min |
+| 8 | 30.9 | 14.9 min |
+| 12 | 32.6 | 15.6 min |
+
+One cue per vector is cheaper because the text is shorter: the whole store took
+4.0 min at 8 threads (window of three 6.9 min, five 8.8 min). `THREADS` is 4:
+past it the gain is 13%, and a pass started by a search can share the machine
+with a live transcriber.
+
+| Dimensions | Vector table (float32, whole store) | Matrix product over it |
+|---|---|---|
+| 768 | 88.6MB | 0.69 ms |
+| 256 | 29.5MB | 0.19 ms |
+| 128 | 14.8MB | 0.06 ms |
+
+**[2][3] Window and dimensions.** A known-item search across languages: the
+query is a cue's stored translation in a language other than its source, the
+index holds source text only, top 10 over all 28,836 cues. 300 queries (seed 0):
+274 Korean queries for Japanese lines, 25 for English, 1 unclassified. "Its
+passage" counts any window that contains the cue, which is what opening a hit
+would show.
+
+| Window | Dim | hit@1 (the cue) | hit@10 (the cue) | hit@10 (its passage) | MRR@10 (passage) |
+|---|---|---|---|---|---|
+| **1** | 768 | 62% | 82% | 82% | 0.685 |
+| **1** | **256** | **58%** | **79%** | **79%** | **0.654** |
+| 1 | 128 | 57% | 74% | 74% | 0.622 |
+| 3 | 768 | 26% | 53% | 64% | 0.518 |
+| 3 | 256 | 23% | 50% | 60% | 0.480 |
+| 3 | 128 | 22% | 43% | 54% | 0.419 |
+| 5 | 768 | 23% | 46% | 55% | 0.445 |
+| 5 | 256 | 19% | 40% | 50% | 0.394 |
+| 5 | 128 | 15% | 34% | 45% | 0.345 |
+
+The window was expected to help, since a cue is often a few words, and it did the
+opposite at every dimension: joining two more lines adds meaning the query does
+not have. `WINDOW` is 1. 768 dimensions find 3 points more than 256 (9 of 300
+queries) for three times the table; `DIM` is 256. A random pick would find the
+cue with probability 10 in 28,836.
+
+**What this does not measure.**
+- **The full-text search is no control here.** Every query is a translation the
+  FTS index holds, so a substring search finds all of them. The table says how
+  the meaning search's own knobs behave, not that it beats the word search.
+- **The case the feature exists for** -- a query that paraphrases a line or
+  describes what a stretch of a broadcast was about -- has no answer key yet and
+  is not measured. A query about a whole passage is exactly where a window could
+  win; the decision above rests on single-line queries only.
+- The queries are machine translations (M2M-100 for most), almost all Korean,
+  and the targets mostly Japanese. Japanese or English queries, and human
+  phrasing, were not tried.
+- No score threshold was studied. The search always returns its top 50; whether
+  a score could say "nothing here" is open.

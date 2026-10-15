@@ -69,9 +69,15 @@ function connectBus() {
     // rather than on a session stream because the job that writes it belongs
     // to no session -- the recording is finished.
     else if (m.type === "outline") onOutlineJobEvent(m);
+    // The meaning-search index pass moved on or ended. The note under the
+    // search box follows it, and an end re-asks a search drawn while it ran.
+    else if (m.type === "search") onSearchIndexEvent(m);
   };
   bus.onopen = () => {
-    if (busWasDown) scheduleListRefresh(0);   // fill in what changed while it was down
+    if (busWasDown) {                         // fill in what changed while it was down
+      scheduleListRefresh(0);
+      refreshSearchIfStale();
+    }
     busWasDown = false;
   };
   bus.onerror = () => {
@@ -84,7 +90,9 @@ function connectBus() {
   // once to fill in what changed since -- watching YouTube in another tab and
   // coming back is the ordinary use of this screen.
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) scheduleListRefresh(0);
+    if (document.hidden) return;
+    scheduleListRefresh(0);
+    refreshSearchIfStale();
   });
 }
 

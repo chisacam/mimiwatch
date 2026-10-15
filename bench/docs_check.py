@@ -61,6 +61,7 @@ QUOTED = [
     ("add.start", "Start"),
     ("setup.notice.start", "First-time setup"),
     ("library.add", "＋ Add"),
+    ("library.search.meaning", "Meaning"),
     ("capture.tabAudio", "Tab audio"),
     ("settings.cookies.title", "YouTube login cookies"),
     ("settings.cookies.delete", "Delete"),

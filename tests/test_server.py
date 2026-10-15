@@ -25,6 +25,16 @@ SERVER_HOME = None
 SERVER_DATA = None
 
 
+def _real(name: str) -> bool:
+    """Whether the real module is installed, as a child process would see it.
+    A stub module installed by conftest has no __spec__, so find_spec raises
+    ValueError. That counts as "the real one is missing" too."""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ValueError:
+        return False
+
+
 def _stub_dir(tmp) -> str:
     """A directory of stub modules for a machine without the transcription runtimes (CI).
 
@@ -35,18 +45,9 @@ def _stub_dir(tmp) -> str:
     """
     d = tmp / "stubs"
     d.mkdir(exist_ok=True)
-
-    def real(name: str) -> bool:
-        # A stub module installed by conftest has no __spec__, so find_spec raises
-        # ValueError. That counts as "the real one is missing" too.
-        try:
-            return importlib.util.find_spec(name) is not None
-        except ValueError:
-            return False
-
-    if not real("sherpa_onnx"):
+    if not _real("sherpa_onnx"):
         (d / "sherpa_onnx.py").write_text("# A fake module for CI. The server only imports it.\n")
-    if not real("transcribe_cpp"):
+    if not _real("transcribe_cpp"):
         pkg = d / "transcribe_cpp"
         pkg.mkdir(exist_ok=True)
         (pkg / "__init__.py").write_text(
@@ -81,6 +82,10 @@ def server(tmp_path_factory):
     env = {**os.environ, "MIMIWATCH_DATA_DIR": str(tmp / "data"),
            "MIMIWATCH_CONFIG": str(tmp / "backends.json"),
            "MIMIWATCH_HOME": str(tmp / "home"),
+           # Spelled out rather than left to follow MIMIWATCH_HOME: a value in the
+           # environment pytest was started from would win, and the server would
+           # find whatever models are really there.
+           "MIMIWATCH_MODEL_DIR": str(tmp / "home" / "models"),
            # SSE rotation down to 2 s, so whether the socket really closes after a rotation shows within seconds.
            "MIMIWATCH_SSE_ROTATE_S": "2",
            "PYTHONPATH": stubs + (os.pathsep + os.environ["PYTHONPATH"]
@@ -244,6 +249,23 @@ def test_pushed_cookies_are_stored_privately_and_used(server):
     # With no site named, everything goes.
     s, b = req(base, "/api/cookies/delete", body={})
     assert json.loads(b)["sites"]["youtube"]["present"] is False and not os.path.exists(path)
+
+
+def test_search_answers_by_meaning_only_when_asked(server):
+    """`mode=meaning` goes to semsearch; without it the full-text answer is as
+    before. The server's model directory is empty, so the meaning side says why
+    it cannot run -- "model" here, "packages" where onnxruntime is not installed
+    (CI): the child process has no stub for it, and should not, since that
+    answer is the one a user without the packages gets."""
+    base, _ = server
+    want = "model" if _real("onnxruntime") and _real("tokenizers") else "packages"
+    s, b = req(base, "/api/search?q=cat&mode=meaning")
+    assert s == 200 and json.loads(b) == {"q": "cat", "mode": "meaning",
+                                          "unavailable": want, "results": []}
+    s, b = req(base, "/api/search?q=cat")
+    assert s == 200 and json.loads(b) == {"q": "cat", "results": []}
+    s, b = req(base, "/api/search?q=cat&mode=words")
+    assert s == 200 and json.loads(b) == {"q": "cat", "results": []}
 
 
 def test_static_and_index(server):

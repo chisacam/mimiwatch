@@ -290,3 +290,47 @@ def test_add_custom_rejects_catalog_names_and_bad_paths(monkeypatch):
     assert "error" in modelhub.add_custom("asr", "a/b", "whisper-large-v3-turbo-Q8_0.gguf")
     assert "error" in modelhub.add_custom("asr", "a/b", "x\\..\\y.gguf")
     assert "error" in modelhub.add_custom("asr", "a/b", "..gguf/z.gguf")
+
+
+def test_the_embedding_model_fetches_the_files_the_search_reads(model_dir, monkeypatch):
+    """The meaning search's model is a directory entry that names its `files`.
+    Its repository holds the text, vision and audio encoders in five precisions
+    (over 6GB); listing it and fetching everything is what `files` is there to
+    stop. Done when semsearch, reading the same directory, says it can run."""
+    import semsearch
+
+    entry = modelhub.find(semsearch.MODEL_ID)
+    assert entry["dir"] == semsearch.MODEL_DIR
+    want = {semsearch.ONNX_FILE, semsearch.ONNX_FILE + "_data", semsearch.TOKENIZER_FILE}
+    assert want <= set(entry["files"])
+    assert not entry["required"] and not entry["default"]
+    assert semsearch.unavailable() == "model"
+
+    # The files sit in a subdirectory of the repository, so they are told apart
+    # by base name.
+    files = {os.path.basename(n): f"{n}:".encode() * 7 for n in entry["files"]}
+    listed, fetched = [], []
+
+    def no_listing(repo, headers):
+        listed.append(repo)
+        raise AssertionError("a directory entry with `files` must not list the repository")
+
+    def fake_open(url, headers=None, timeout=60.0):
+        fetched.append(url)
+        body = files[url.rsplit("/", 1)[1]]
+        return FakeResponse(body, 200, {"Content-Length": str(len(body))})
+
+    monkeypatch.setattr(modelhub, "_hf_files", no_listing)
+    monkeypatch.setattr(modelhub, "_hf_size",
+                        lambda repo, file, headers: len(files[os.path.basename(file)]))
+    monkeypatch.setattr(modelhub, "_open", fake_open)
+    modelhub.download([semsearch.MODEL_ID])
+    assert _wait(lambda: modelhub.status(entry)["state"] == "ready"), modelhub.status(entry)
+
+    assert listed == []
+    assert fetched == [f"{modelhub.HF}/{entry['repo']}/resolve/main/{n}" for n in entry["files"]]
+    base = model_dir / semsearch.MODEL_DIR
+    for n in entry["files"]:
+        assert (base / n).read_bytes() == files[os.path.basename(n)]
+    assert not (base / ".incomplete").exists()
+    assert semsearch.unavailable() is None

@@ -408,6 +408,16 @@ main.library-hidden .library{opacity:0; pointer-events:none}
   width:100%; box-sizing:border-box; appearance:none; -webkit-appearance:none;
 }
 .panel-search input::placeholder{color:var(--dim); opacity:1}
+/* The meaning toggle shares the row with the box. Without min-width:0 the box
+ * keeps its intrinsic width and pushes the button out of the panel. The pressed
+ * look is .seg.on's, keyed off aria-pressed so the attribute screen readers
+ * hear is the only state there is to keep in sync. */
+.panel-search-row{display:flex; gap:.4rem; align-items:stretch}
+.panel-search-row input{flex:1 1 auto; min-width:0}
+.panel-search-row .seg{flex:none}
+.panel-search .seg[aria-pressed="true"]{background:var(--accent); border-color:var(--accent); color:#04211b; font-weight:700}
+.search-note{margin-top:.35rem; font-size:.7rem; line-height:1.5; color:var(--dim)}
+.search-note.warn{color:var(--warn)}
 .script{
   flex:1; overflow-y:auto; padding:.5rem 0 3rem; scrollbar-width:thin;
   --script-size:13px;

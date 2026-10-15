@@ -116,8 +116,17 @@
               data-i18n-attr="title:library.add.title"></button>
     </div>
     <div class="panel-search">
-      <input id="library-search" type="search" autocomplete="off"
-             data-i18n-attr="placeholder:library.search.ph">
+      <!-- Off, the box is the full-text search it always was. On, the same box
+           asks for lines by meaning (semsearch.py); the note under it says why
+           that cannot run here, or how far the index has got. library.js. -->
+      <div class="panel-search-row">
+        <input id="library-search" type="search" autocomplete="off"
+               data-i18n-attr="placeholder:library.search.ph">
+        <button id="library-search-mode" type="button" class="seg" aria-pressed="false"
+                data-i18n="library.search.meaning"
+                data-i18n-attr="title:library.search.meaning.title"></button>
+      </div>
+      <div id="library-search-note" class="search-note" hidden></div>
     </div>
     <!-- Not hidden while empty any more: the head carries the one button that
          adds a first address, so hiding it hid the way in. library.js says why. -->

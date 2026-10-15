@@ -316,6 +316,49 @@ holds all of them matches), and the marked stretch shows the place it stood.
 That is how you find the line half remembered — "the one where they said
 mimi".
 
+### Searching by meaning
+
+The **"Meaning"** switch beside the search box changes what the box looks for.
+Off, it is the word search above, unchanged. On, the list becomes the lines
+whose meaning is closest to what you typed, closest first, whether or not they
+share a word with it — for the line you remember only as "the part where she
+talked about her cat". This browser remembers which way the switch was left.
+
+Three things differ from the word search.
+
+- **Only the source line is searched**, not its translation. The model puts
+  Korean, Japanese and English into one space, so a query in one language
+  reaches a line in another without going through a translation, and
+  translating the library again does not make the index stale.
+- **Each line is searched on its own**, and a hit opens at that line. Reading a
+  line together with the ones after it looked like it would give the model more
+  to go on, since a subtitle line is often a few words; on the real library it
+  found the line less often, not more ([measurement section 57][m]).
+- **Nothing is marked**, since there is no one word to point at. The
+  translation is shown under the source line when there is one.
+
+It needs a model that is not downloaded by default: **EmbeddingGemma 2 (ONNX
+int8)** in "Models & Tools", about 346MB (two ONNX files and the tokenizer).
+Without it, the note under the box says where to get it.
+
+**Nothing is indexed until the first meaning search.** That search starts one
+pass over every subtitle line in the background and answers from what is
+indexed so far, and a line under the box shows how far the pass has got. When
+the pass ends, the search runs once more by itself, and the list then covers
+the whole library. Later searches only catch up with the lines added or changed
+since. If a pass stops on an error, the note says so and the next search tries
+again. The model loads on that first search like every other model and is
+released by the same idle rule (see *Models stay resident* below).
+
+**An install from before this needs two more packages**, `onnxruntime` and
+`tokenizers`. Running `./install.sh` (Windows: `.\install.ps1`) again puts them
+in — on every run it installs whatever `requirements.txt` lists that the
+virtualenv lacks. Until then the note under the box says the packages are
+missing.
+
+The word search keeps working either way, with or without the packages and the
+model.
+
 ### Re-transcribing
 
 Hovering a VOD row in the list shows **⟳**. Pressing it opens the "Add video"

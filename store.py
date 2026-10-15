@@ -131,6 +131,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS cues_fts USING fts5(
 """
 SCHEMA += FTS_SCHEMA
 
+# One embedding per cue for the meaning search (semsearch.py). Keyed by
+# (owner, cue_id) rather than rowid: a refined line replaces finals under the
+# same cue id and the covered finals are deleted, so rowids churn while the key
+# the panel and the search result use stays put. `h` is a hash of the text that
+# was embedded -- a refinement, an edit or a neighbour changing it is what makes
+# the line due again. `v` is float32 bytes. Rows whose cue is gone are pruned by
+# the next indexing pass rather than by every delete path here.
+VEC_SCHEMA = """
+CREATE TABLE IF NOT EXISTS cue_vec (
+  owner   TEXT NOT NULL,
+  cue_id  INTEGER NOT NULL,
+  h       TEXT NOT NULL,
+  v       BLOB NOT NULL,
+  PRIMARY KEY (owner, cue_id)
+);
+"""
+SCHEMA += VEC_SCHEMA
+
 # Column names changed. A file made by an older version has `session` and `t`,
 # and IF NOT EXISTS leaves an existing table alone, so the move happens here.
 #
@@ -1014,6 +1032,64 @@ def search(q: str, limit: int = 50) -> list[dict]:
     return [{"owner": r["owner"], "cue_id": r["cue_id"], "start": r["start"],
              "text": r["text"], "snip": _snippet(r["ftext"], terms),
              "snip_tr": _snippet(r["ftr"], terms)} for r in rows]
+
+
+# ---- Meaning-search vectors (semsearch.py) ---------------------------------
+
+def cue_texts() -> list[sqlite3.Row]:
+    """Every cue's key and source text in reading order -- what the indexer
+    builds its windows from. 20,290 rows read in a few milliseconds, so a pass
+    reads them all rather than tracking what changed."""
+    return _rows("SELECT owner, cue_id, text FROM cues ORDER BY owner, start, cue_id")
+
+
+def vec_hashes() -> dict[tuple[str, int], str]:
+    return {(r["owner"], r["cue_id"]): r["h"]
+            for r in _rows("SELECT owner, cue_id, h FROM cue_vec")}
+
+
+def vec_put(rows: list[tuple[str, int, str, bytes]]) -> None:
+    """(owner, cue_id, hash, float32 bytes), written in one transaction."""
+    if not rows:
+        return
+    with _lock:
+        db = _connect()
+        db.executemany("INSERT OR REPLACE INTO cue_vec (owner, cue_id, h, v) "
+                       "VALUES (?, ?, ?, ?)", rows)
+        db.commit()
+
+
+def vec_drop(keys: list[tuple[str, int]]) -> None:
+    if not keys:
+        return
+    with _lock:
+        db = _connect()
+        db.executemany("DELETE FROM cue_vec WHERE owner = ? AND cue_id = ?", keys)
+        db.commit()
+
+
+def vec_all() -> list[sqlite3.Row]:
+    return _rows("SELECT owner, cue_id, v FROM cue_vec")
+
+
+def cues_at(keys: list[tuple[str, int]]) -> dict[tuple[str, int], sqlite3.Row]:
+    """The cues behind a ranked list of keys. A key whose cue was deleted
+    after it was indexed is simply absent."""
+    out = {}
+    with _lock:
+        db = _connect()
+        for owner, cue_id in keys:
+            r = db.execute("SELECT owner, cue_id, start, text, tr FROM cues "
+                           "WHERE owner = ? AND cue_id = ?", (owner, cue_id)).fetchone()
+            if r is not None:
+                out[(owner, cue_id)] = r
+    return out
+
+
+def tr_text(tr: str) -> str:
+    """A cue's translations flattened to one string, the same text the FTS
+    index holds."""
+    return _fts_text(tr)
 
 
 def owner_kind(owner: str) -> str:

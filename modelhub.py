@@ -120,6 +120,17 @@ CATALOG: list[dict] = [
      "url": f"{GH_SHERPA}/speaker-recongition-models/"
             "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
      "size": 28_281_164, "required": False, "default": True},
+    # The meaning search over the subtitle library (semsearch.py). A directory entry
+    # fetches every file of its repository unless it names `files`; this repository
+    # carries the text, vision and audio encoders in five precisions each (over 6GB),
+    # and the search needs the int8 text encoder and the tokenizer.
+    {"id": "embeddinggemma-2", "kind": "aux", "label": "EmbeddingGemma 2 (ONNX int8)",
+     "purpose_en": "Meaning search in the library (optional) · text encoder only",
+     "purpose_ko": "도서관 의미 검색 (선택) · 텍스트 인코더만",
+     "dir": "embeddinggemma-2-onnx", "repo": "onnx-community/embeddinggemma-2-ONNX",
+     "files": ["onnx/model_quantized.onnx", "onnx/model_quantized.onnx_data",
+               "tokenizer.json"],
+     "size": 346_390_603, "required": False, "default": False},
     # Tools. There is no need to fetch one the system has -- the state says so.
     {"id": "ffmpeg", "kind": "tool", "label": "ffmpeg",
      "purpose_en": "Audio extraction · needed only when the system has none",
@@ -572,7 +583,7 @@ def _download_one(entry: dict, token: str | None):
         os.makedirs(dest, exist_ok=True)
         marker = os.path.join(dest, ".incomplete")
         open(marker, "w").close()
-        files = _hf_files(entry["repo"], headers)
+        files = entry.get("files") or _hf_files(entry["repo"], headers)
         if not files:
             raise RuntimeError(f"{entry['repo']} has no files")
         sizes = {}
